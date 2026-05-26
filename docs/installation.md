@@ -28,8 +28,19 @@ Verify:
 
 ```bash
 exo --help
-exo list-motions
+exo motion list
+exo profiles list
 ```
+
+## Shared State For Multiple Agent Shells
+
+If multiple Claude/Codex conversations should operate on the same Exo state store, pin it explicitly:
+
+```bash
+export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
+```
+
+Then all shells can run Exo against the same local state even if their working directories differ.
 
 ## Why `npm link` Matters
 
@@ -49,11 +60,11 @@ Exo stores workspace-local state in:
 .exo/exo.db
 ```
 
-That path is resolved from the current working directory. So if you want multiple shells or chats to operate on the same Exo state, run them from the same repo root:
+That path is resolved from the current working directory unless `EXO_STATE_DIR` is set. So if you want multiple shells or chats to operate on the same Exo state, either run them from the same repo root or set `EXO_STATE_DIR` explicitly:
 
 ```bash
 cd /Users/williamflanagan/Projects/omalab/exo
-exo list-motions
+exo motion list
 ```
 
 If you run `exo` from another folder, it will create and use a different `.exo` directory there.
@@ -61,7 +72,7 @@ If you run `exo` from another folder, it will create and use a different `.exo` 
 ## Example
 
 ```bash
-exo define-motion \
+exo motion add \
   --url https://example.com/product \
   --geo "United States" \
   --icp "regulated-enterprise" \
@@ -77,9 +88,33 @@ exo define-motion \
 Then inspect it:
 
 ```bash
-exo list-motions
-exo show-motion <motion-id>
+exo motion list
+exo motion show <motion-id>
 ```
+
+## Browser Profile Setup
+
+Because Exo will drive real browser-backed work, you should register the browser profile you expect it to use:
+
+```bash
+exo profiles add \
+  --browser chrome \
+  --label work-linkedin \
+  --profile-directory "Profile 2" \
+  --capability linkedin \
+  --capability sales-navigator
+```
+
+Then verify it:
+
+```bash
+exo profiles list
+exo profiles test <profile-id>
+```
+
+That check is intentionally local and conservative. It verifies that Exo can resolve the browser executable, the user-data directory, the specific profile directory, and the expected Chrome-style session files before any real browser work is attempted.
+
+The built-in default paths are currently macOS-oriented. If you are on another environment, pass explicit `--user-data-dir` and `--browser-command` values instead of relying on defaults.
 
 ## Common Failure Mode
 

@@ -12,6 +12,10 @@ But the first motion to implement sits upstream of that loop:
 
 `offer -> signal-set -> target map -> motion plan`
 
+Because most execution will happen through user-owned browser sessions, the MVP also needs a first-class browser-profile layer:
+
+`browser profile -> verification -> browser-backed action`
+
 That upstream motion must support explicit targeting inputs, not just open-ended summarization.
 
 The first delivery model is headless:
@@ -31,6 +35,7 @@ What they do not have is:
 - a clean review surface for AI-proposed outreach and follow-up
 - durable memory of what happened across accounts and contacts
 - an exception-oriented control room instead of a pile of tools
+- a trustworthy way to resolve and verify the right browser identity before action starts
 
 The MVP exists to solve that, and nothing else.
 
@@ -93,6 +98,7 @@ The reviewer exists to approve sensitive actions, not to run the whole system.
 ### Functional jobs
 
 - turn a product or offer URL into a usable market motion
+- register and test the exact browser profile Exo should use for browser-backed work
 - let the operator constrain that motion by geolocation, ICP type, industry, company type, company shape, company size, segment, and target title
 - let the operator explicitly suppress accounts, domains, contacts, and do-not-contact entries before the target map is built
 - monitor a defined set of accounts for meaningful change
@@ -108,6 +114,7 @@ The reviewer exists to approve sensitive actions, not to run the whole system.
 - trust that the system knows what happened
 - know what needs judgment right now
 - avoid embarrassing or duplicated actions
+- avoid running under the wrong browser identity
 
 ## Replacement objective
 
@@ -133,6 +140,7 @@ That means Exo must take over:
 The MVP must produce these concrete outputs:
 
 - offer theses
+- browser profile records
 - targeting profiles
 - suppression policies
 - custom signal sets
@@ -145,6 +153,7 @@ The MVP must produce these concrete outputs:
 - reply decision artifacts
 - CRM commit records
 - prediction checks comparing expected and observed outcomes
+- browser-profile test results
 
 If one of these outputs is weak, the experience breaks.
 
@@ -165,6 +174,7 @@ If Exo works, a strong operator should feel:
 - one workspace
 - one primary operator
 - optional one reviewer
+- browser-profile registration and local verification
 - LinkedIn and email as action channels
 - HubSpot as the only CRM target
 - lightweight alert delivery to an external operator surface
@@ -191,6 +201,24 @@ If Exo works, a strong operator should feel:
 - generic agent platform features
 - building a full collaboration product inside Slack
 - automatic CRM customer suppression during motion creation in the first cut
+- public bug-reporting and feature-request intake in the first cut
+
+## Alpha feedback intake
+
+This is a future feature, not part of the current build.
+
+The likely shape later is:
+
+- `exo report-bug`
+- `exo request-feature`
+- one canonical intake object for human and agent-submitted feedback
+- optional public web form as another front door
+
+The important rule is:
+
+- do not build a second support surface before the core CLI and motion logic are stable
+- do not let the website become a separate support system from the CLI/agent path
+- keep alpha feedback routed into one canonical queue when we are ready
 
 ## Reconciliation scope
 
@@ -202,6 +230,7 @@ Sources of drift include:
 - operator actions taken directly in email
 - inbound replies or reactions not initiated from Exo
 - CRM changes made outside Exo
+- browser actions launched under the wrong local profile
 
 The MVP should support a recurring audit and reconciliation loop for:
 

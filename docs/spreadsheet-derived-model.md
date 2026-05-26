@@ -285,7 +285,7 @@ They should reproduce the operator motions the spreadsheet is currently encoding
 
 The trackers imply these early commands:
 
-- `exo define-motion`
+- `exo motion add`
 - `exo build-target-map`
 - `exo show-target <account>`
 - `exo verify-stakeholder <person>`

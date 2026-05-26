@@ -237,19 +237,19 @@ This motion should be exposed identically in CLI and MCP.
 ### CLI
 
 ```bash
-exo define-motion --url https://example.com/product --geo "USA,Canada" --industry "banking,lending" --titles "CRO,VP Sales Development"
-exo define-motion --url https://example.com/product --geo "EMEA" --icp "regulated-enterprise" --company-shape "multi-brand,high-compliance"
-exo define-motion --url https://example.com/product --segment "traditional-fi" --segment "bnpl"
-exo define-motion --url https://example.com/product --exclude-account "Known Customer Co" --exclude-domain "customer.com" --dnc-file ./dnc.csv
-exo refresh-motion motion_123
-exo show-motion motion_123
+exo motion add --url https://example.com/product --geo "USA,Canada" --industry "banking,lending" --titles "CRO,VP Sales Development"
+exo motion add --url https://example.com/product --geo "EMEA" --icp "regulated-enterprise" --company-shape "multi-brand,high-compliance"
+exo motion add --url https://example.com/product --segment "traditional-fi" --segment "bnpl"
+exo motion add --url https://example.com/product --exclude-account "Known Customer Co" --exclude-domain "customer.com" --dnc-file ./dnc.csv
+exo motion refresh motion_123
+exo motion show motion_123
 ```
 
 ### MCP
 
 - `exo.define_motion`
-- `exo.refresh_motion`
-- `exo.show_motion`
+- `exo.motion_refresh`
+- `exo.motion_show`
 
 ## State objects added by this motion
 

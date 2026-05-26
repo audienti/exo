@@ -68,6 +68,7 @@ The MVP nouns should be:
 - `offer`
 - `targeting-profile`
 - `suppression-policy`
+- `browser-profile`
 - `signal-set`
 - `target-map`
 - `motion-plan`
@@ -89,8 +90,16 @@ Everything else is implementation detail.
 
 The MVP verbs should be:
 
-- `define-motion`
-- `refresh-motion`
+- `what-is-this`
+- `motion add`
+- `motion list`
+- `motion show`
+- `profiles add`
+- `profiles list`
+- `profiles show`
+- `profiles test`
+- `profiles remove`
+- `motion refresh`
 - `inbox`
 - `brief`
 - `propose`
@@ -111,8 +120,16 @@ Every public CLI command should have a matching MCP tool.
 
 Examples:
 
-- `exo define-motion --url <product-url> --geo ... --icp ... --industry ... --company-shape ... --titles ... --segment ... --exclude-account ... --exclude-domain ... --dnc-file ...` <-> `exo.define_motion`
-- `exo refresh-motion <motion>` <-> `exo.refresh_motion`
+- `exo what-is-this --json` <-> `exo.what_is_this`
+- `exo motion add --url <product-url> --geo ... --icp ... --industry ... --company-shape ... --titles ... --segment ... --exclude-account ... --exclude-domain ... --dnc-file ...` <-> `exo.define_motion`
+- `exo motion list` <-> `exo.motion_list`
+- `exo motion show <motion>` <-> `exo.motion_show`
+- `exo profiles add --browser chrome --profile-directory "Profile 2" --capability linkedin --capability sales-navigator` <-> `exo.profiles_add`
+- `exo profiles list` <-> `exo.profiles_list`
+- `exo profiles show <profile>` <-> `exo.profiles_show`
+- `exo profiles test <profile>` <-> `exo.profiles_test`
+- `exo profiles remove <profile>` <-> `exo.profiles_remove`
+- `exo motion refresh <motion>` <-> `exo.motion_refresh`
 - `exo inbox` <-> `exo.inbox`
 - `exo brief <account>` <-> `exo.brief`
 - `exo propose <account>` <-> `exo.propose`
@@ -135,7 +152,7 @@ Each command or tool should return:
 
 Examples:
 
-- `define-motion` returns an offer-driven motion plan with ICP profile, geolocation filters, company-type and company-shape filters, suppression policy, custom signals, grouped accounts, target people, segment variants, and recommended action logic
+- `motion add` returns an offer-driven motion plan with ICP profile, geolocation filters, company-type and company-shape filters, suppression policy, custom signals, grouped accounts, target people, segment variants, and recommended action logic
 - `inbox` returns a ranked list of accounts needing attention
 - `brief` returns an account brief artifact
 - `propose` returns a next-action proposal with prediction
@@ -171,6 +188,12 @@ The intended runtime is:
 - customer owns the retrieval surfaces such as Sales Navigator and browser sessions
 - Exo provides GTM state, actions, and outputs
 
+The intended operating model is also concurrent:
+
+- multiple agent conversations should be able to access the same Exo store
+- Exo should support parallel reads and serialized writes
+- shared state should be explicit, not accidental
+
 So Exo must be useful even when the model provider changes.
 
 If Exo only works with one provider's UI or one provider's memory model, it is too thin.
@@ -183,11 +206,25 @@ The same rule applies to data retrieval:
 
 That keeps Exo out of the expensive proprietary-data business.
 
+The same rule applies to browser identity:
+
+- Exo must know which browser profile is being used
+- Exo must be able to test that profile locally
+- browser-backed work should fail closed if the required profile is missing or invalid
+- Claude/Codex should not guess which logged-in browser identity to use
+
+The same rule applies to local state:
+
+- agents should share one explicit Exo store
+- `EXO_STATE_DIR` should be available for pinning that store across shells
+- current working directory alone is too fragile for serious parallel operation
+
 ## MVP success test
 
 The contract is good if all of the following are true:
 
 - William can define a new offer-driven motion from a product URL using `exo`
+- William can register and test the exact browser profile Exo should use for browser-backed work
 - William can constrain that motion by geolocation, ICP type, industry, company type, company shape, company size, segment, stakeholder title, and explicit suppression rules
 - William can drive the motion directly from `exo`
 - Claude can drive the same motion through MCP

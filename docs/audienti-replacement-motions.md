@@ -57,12 +57,12 @@ And needs Exo to derive:
 
 ### CLI / MCP
 
-- `exo define-motion --url <product-url>`
-- `exo refresh-motion <motion>`
-- `exo show-motion <motion>`
+- `exo motion add --url <product-url>`
+- `exo motion refresh <motion>`
+- `exo motion show <motion>`
 - `exo.define_motion`
-- `exo.refresh_motion`
-- `exo.show_motion`
+- `exo.motion_refresh`
+- `exo.motion_show`
 
 ## Motion 2: Prioritize accounts that need action now
 
@@ -275,7 +275,7 @@ Once a conversation turns into a meeting, the operator needs a clean handoff art
 
 Exo should replace Audienti in this order:
 
-1. `define-motion`
+1. `motion add`
 2. `inbox`
 3. `brief`
 4. `propose`
