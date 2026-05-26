@@ -213,6 +213,98 @@ test("motion add accepts structured config input for premise, audience hypothese
   }
 });
 
+test("motion start checks URL reuse before creating, continuing, or cloning motions", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-start-"));
+
+  try {
+    const created = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "start",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when lenders enter more complex credit-decision environments.",
+          "--audience",
+          "Traditional FI risk owners",
+          "--signal",
+          "company::Is there recent evidence that this company expanded into a more complex lending segment?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(created.status, "created");
+    assert.equal(created.motion.offer.sourceUrl, offerUrl);
+    assert.match(created.motion.name, generatedMotionNamePattern);
+
+    const decision = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "start", "--url", offerUrl, "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(decision.status, "decision-required");
+    assert.equal(decision.existingMotions.length, 1);
+    assert.equal(decision.existingMotions[0].id, created.motion.id);
+
+    const continued = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "start", "--url", offerUrl, "--existing", "continue", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(continued.status, "continued");
+    assert.equal(continued.motion.id, created.motion.id);
+
+    const cloned = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "start",
+          "--url",
+          offerUrl,
+          "--existing",
+          "clone",
+          "--audience",
+          "BNPL modernization leaders",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(cloned.status, "cloned");
+    assert.notEqual(cloned.motion.id, created.motion.id);
+    assert.equal(cloned.motion.offer.sourceUrl, created.motion.offer.sourceUrl);
+    assert.equal(cloned.motion.audienceHypotheses[0].name, "BNPL modernization leaders");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("motion add preserves commas inside a signal sentence instead of splitting it into multiple signals", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-signal-commas-"));
 
@@ -1584,6 +1676,8 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
           offerUrl,
           "--premise",
           "This offer matters when BNPL operators widen merchant and credit-decision complexity.",
+          "--audience",
+          "Philippine BNPL risk leaders",
           "--stakeholder-count",
           "2",
           "--signal-json",
@@ -1624,6 +1718,23 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
           encoding: "utf8"
         }
       )
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "update",
+        company.id,
+        "--linkedin-company-url",
+        "https://www.linkedin.com/company/billease/",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
     );
 
     const recordedSignalMatch = JSON.parse(
@@ -2003,6 +2114,33 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
       shownMotion.nextSteps.some((step) => /opening plans/i.test(step)),
       "expected next steps to surface the remaining opening-plan work for the second prospect"
     );
+
+    const targeting = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "target", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(targeting.overallStage, "needs-through-line");
+    assert.equal(targeting.readyToTarget, false);
+    assert.equal(targeting.readyToEngage, false);
+    assert.equal(targeting.browserGate.status, "blocked");
+    assert.equal(targeting.companyLoop.companyCount, 1);
+    assert.equal(targeting.companyLoop.items[0].stage, "needs-through-line");
+    assert.equal(targeting.companyLoop.items[0].signalMatchCount, 1);
+    assert.equal(targeting.companyLoop.items[0].prospectCount, 2);
+    assert.equal(targeting.companyLoop.items[0].readyThroughLineCount, 1);
+    assert.equal(targeting.companyLoop.items[0].readyOpeningPlanCount, 1);
+    assert.equal(targeting.companyLoop.items[0].readyCadenceCount, 1);
+    assert.ok(
+      targeting.nextActions.some((step) => /trusted browser profile/i.test(step)),
+      "expected targeting loop to surface the missing trusted browser gate"
+    );
+    assert.ok(
+      targeting.nextActions.some((step) => /remaining prospect through-lines/i.test(step)),
+      "expected targeting loop to point at the missing through-line work"
+    );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2351,7 +2489,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected companies surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo motion add/clone/update/refresh/list/show/remove"),
+    about.currentCapabilities.some((item) => item.command === "exo motion start/add/target/clone/update/refresh/list/show/remove"),
     "expected motion write surface to be listed in current capabilities"
   );
   assert.ok(

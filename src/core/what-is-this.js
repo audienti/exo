@@ -135,8 +135,8 @@ export function describeExo() {
         purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, and pin a sticky engagement profile when outreach starts."
       },
       {
-        command: "exo motion add/clone/update/refresh/list/show/remove",
-        purpose: "Create, branch, refine, refresh, enumerate, inspect, and remove offer-driven motion state built around premise, audience hypotheses, and motion-specific signals."
+        command: "exo motion start/add/target/clone/update/refresh/list/show/remove",
+        purpose: "Start a motion from an offer URL, force reuse-or-branch decisions when that URL already exists, evaluate targeting readiness, and then create, branch, refine, refresh, enumerate, inspect, and remove offer-driven motion state built around premise, audience hypotheses, and motion-specific signals."
       },
       {
         command: "exo profiles discover/add/claim/list/show/capabilities/resolve/test/remove",
@@ -187,15 +187,16 @@ export function describeExo() {
             commands: [
               "exo motion list --json",
               "exo motion show <motion-id> --json",
+              "exo motion target <motion-id> --json",
               "exo motion update <motion-id> --audience \"Primary ICP\" --title \"Chief Risk Officer\" --json",
               "exo motion clone <motion-id> --audience \"Secondary ICP\" --segment alt-segment --json"
             ]
           },
           {
             name: "create-motion",
-            when: "Use this when the operator has an offer and wants to define a new premise, audience hypothesis, and signal model.",
+            when: "Use this when the operator has an offer URL and wants Exo to check for existing motions before creating anything new.",
             commands: [
-              "exo motion add --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
+              "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
             ]
           },
           {
@@ -332,6 +333,7 @@ function buildGettingStarted(stateSummary) {
       commands: [
         "exo motion list --json",
         `exo motion show ${firstMotion.id} --json`,
+        `exo motion target ${firstMotion.id} --json`,
         `exo motion update ${firstMotion.id} --audience "Primary ICP" --title "Chief Risk Officer" --json`,
         `exo motion clone ${firstMotion.id} --audience "Secondary ICP" --segment alt-segment --json`
       ]
@@ -340,9 +342,9 @@ function buildGettingStarted(stateSummary) {
     steps.push({
       title: "Create the first motion",
       reason:
-        "Exo is motion-first. If there is no motion yet, define the premise, audience hypothesis, and first signal before doing anything else.",
+        "Exo is motion-first. If there is no motion yet, start from the offer URL so Exo can confirm what is being promoted and check for reuse before creating state.",
       commands: [
-        "exo motion add --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
+        "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
       ]
     });
   }
@@ -432,7 +434,7 @@ function buildRecommendedPath(stateSummary) {
       focusMotionName: null,
       blockers: [],
       commands: [
-        "exo motion add --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
+        "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
       ]
     };
   }
@@ -467,6 +469,7 @@ function buildRecommendedPath(stateSummary) {
     commands: [
       "exo motion list --json",
       `exo motion show ${focusMotion.id} --json`,
+      `exo motion target ${focusMotion.id} --json`,
       `exo motion update ${focusMotion.id} --audience "Primary ICP" --title "Chief Risk Officer" --json`,
       `exo motion clone ${focusMotion.id} --audience "Secondary ICP" --segment alt-segment --json`
     ]

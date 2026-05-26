@@ -61,7 +61,9 @@ Exo is:
 Exo is now being built as a local CLI first. The current scaffold supports:
 
 - `exo what-is-this`
+- `exo motion start`
 - `exo motion add`
+- `exo motion target`
 - `exo motion clone`
 - `exo motion update`
 - `exo motion refresh`
@@ -154,7 +156,7 @@ Then every agent shell can point at the same Exo state store even if its working
 ### First Real Command
 
 ```bash
-exo motion add \
+exo motion start \
   --url https://example.com/product \
   --premise "This offer matters when regulated lenders enter more complex credit-decision environments." \
   --audience "Traditional FI risk owners" \
@@ -167,6 +169,12 @@ exo motion add \
   --title "Chief Risk Officer"
 ```
 
+That URL-first motion start does the minimum governed intake:
+
+- fetch a lightweight preview of what is being promoted
+- check whether one or more motions already exist for the same URL
+- force a continue / clone / new decision instead of silently duplicating state
+
 The motion object now starts with:
 
 - a short human-friendly `name`
@@ -176,6 +184,13 @@ The motion object now starts with:
 - targeting and suppression inputs
 
 Signals are not global defaults. They are custom to the motion and should be talkable: question plus observation method plus match rule.
+
+If the URL already exists, choose the path explicitly:
+
+```bash
+exo motion start --url https://example.com/product --existing continue --json
+exo motion start --url https://example.com/product --existing clone --from <motion-id> --audience "Secondary ICP" --json
+```
 
 ### Company Research
 
@@ -214,6 +229,22 @@ exo companies signal-matches show <company-id> --motion <motion-id> --json
 ```
 
 Do not treat that as a dumping ground. Persist only the strongest recent signals, and synthesize the stored line so it is concise and impactful enough that the writer can reuse it directly.
+
+## Motion targeting loop
+
+Once a motion exists, use the targeting loop to see whether the motion is still blocked on setup, still gathering targets, or ready to launch:
+
+```bash
+exo motion target <motion-id> --json
+```
+
+That evaluates:
+
+- motion preflight: offer URL, premise, audience hypotheses, signals
+- browser gate: whether a trusted profile exists for the required capability
+- company loop: canonical identity, signal matches, prospects, through-lines, opening plans, cadence
+
+It stops at `targeting-ready`. Exo does not draft messages and it does not send anything.
 
 When the agent has enough evidence to choose prospects, persist them:
 

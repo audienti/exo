@@ -121,18 +121,22 @@ If no native browser-control surface is available in the current session, say th
 
 ### Motion setup
 
-1. `exo motion add ... --json`
-2. Persist the returned `motion.id`
-3. `exo motion show <motion-id> --json` when the full stored object is needed later
+1. `exo motion start ... --json`
+2. If the result is `decision-required`, choose `continue`, `clone`, or `new` explicitly instead of guessing
+3. Persist the returned `motion.id`
+4. `exo motion show <motion-id> --json` when the full stored object is needed later
+5. `exo motion target <motion-id> --json` when you need one governed answer about targeting readiness
 
 The motion setup call should usually define:
 
+- `offer URL`
 - `premise`
 - one or more `audience hypotheses`
 - motion-specific `signals`
 - targeting and suppression inputs
 
 Agents should not assume a motion can be meaningfully retrieved or ranked if the premise is still missing and no signals have been defined.
+Agents should also not silently create a new motion when the same offer URL already exists in Exo.
 
 ### Company registry
 

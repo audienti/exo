@@ -170,6 +170,155 @@ export function renderMotionSummary(motion) {
 }
 
 /**
+ * @param {{
+ *   status: "decision-required" | "continued" | "cloned" | "created",
+ *   offerPreview: {
+ *     sourceUrl: string,
+ *     sourceTitle: string | null,
+ *     sourceDescription: string | null,
+ *     sourceSummary: string
+ *   },
+ *   existingMotions: Array<{
+ *     id: string,
+ *     name: string,
+ *     status: string,
+ *     premiseStatus: string,
+ *     audienceCount: number,
+ *     signalCount: number,
+ *     companyCount: number,
+ *     prospectCount: number
+ *   }>,
+ *   motion?: import("../schema/motion.js").motionSchema._type
+ * }} result
+ */
+export function renderMotionStartResult(result) {
+  const lines = [
+    `Motion Start: ${result.status}`,
+    `URL: ${result.offerPreview.sourceUrl}`,
+    `Offer Title: ${result.offerPreview.sourceTitle ?? "none"}`,
+    `Offer Description: ${result.offerPreview.sourceDescription ?? "none"}`,
+    `Offer Summary: ${result.offerPreview.sourceSummary}`
+  ];
+
+  if (result.existingMotions.length) {
+    lines.push("", "Existing URL Matches");
+    for (const motion of result.existingMotions) {
+      lines.push(`  ${motion.name}  ${motion.id}  ${motion.status}  premise:${motion.premiseStatus}  audiences:${motion.audienceCount}  signals:${motion.signalCount}  companies:${motion.companyCount}  prospects:${motion.prospectCount}`);
+    }
+  }
+
+  if (result.status === "decision-required") {
+    lines.push("", "Decision Required");
+    lines.push("  Existing motions already use this URL. Choose whether to continue one, clone one, or create a fresh motion from the same offer.");
+    return lines.join("\n");
+  }
+
+  if (result.motion) {
+    lines.push("", `Motion: ${result.motion.name}`, `Motion ID: ${result.motion.id}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {{
+ *   motion: {
+ *     id: string,
+ *     name: string,
+ *     status: string,
+ *     sourceUrl: string,
+ *     premiseStatus: string,
+ *     audienceCount: number,
+ *     signalCount: number,
+ *     stakeholderTargetCount: number
+ *   },
+ *   motionPreflight: { status: "ready" | "blocked", blockers: string[] },
+ *   browserGate: {
+ *     status: "ready" | "blocked",
+ *     capability: string,
+ *     blocksEngagement: boolean,
+ *     message: string,
+ *     resolvedProfile: null | {
+ *       id: string,
+ *       label: string,
+ *       browser: string,
+ *       profileDirectory: string,
+ *       verifiedCapabilities: string[]
+ *     },
+ *     trustedProfileCount: number
+ *   },
+ *   companyLoop: {
+ *     companyCount: number,
+ *     readyCount: number,
+ *     items: Array<{
+ *       companyId: string,
+ *       companyName: string,
+ *       stage: string,
+ *       signalMatchCount: number,
+ *       prospectCount: number,
+ *       readyThroughLineCount: number,
+ *       readyOpeningPlanCount: number,
+ *       readyCadenceCount: number,
+ *       missingEmailFallbackCount: number,
+ *       executionIdentity: {
+ *         status: string,
+ *         message: string
+ *       },
+ *       nextCommand: string
+ *     }>
+ *   },
+ *   overallStage: string,
+ *   readyToTarget: boolean,
+ *   readyToEngage: boolean,
+ *   nextActions: string[]
+ * }} result
+ */
+export function renderMotionTargetingSummary(result) {
+  const lines = [
+    `Motion Targeting: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Stage: ${result.overallStage}`,
+    `Ready To Target: ${result.readyToTarget ? "yes" : "no"}`,
+    `Ready To Engage: ${result.readyToEngage ? "yes" : "no"}`,
+    `Browser Gate: ${result.browserGate.status} (${result.browserGate.capability})`,
+    `  ${result.browserGate.message}`
+  ];
+
+  if (result.browserGate.resolvedProfile) {
+    lines.push(`  Profile: ${result.browserGate.resolvedProfile.label} (${result.browserGate.resolvedProfile.browser} / ${result.browserGate.resolvedProfile.profileDirectory})`);
+  }
+
+  if (result.motionPreflight.blockers.length) {
+    lines.push("", "Motion Preflight Blockers");
+    for (const blocker of result.motionPreflight.blockers) {
+      lines.push(`  - ${blocker}`);
+    }
+  }
+
+  lines.push("", "Company Loop");
+
+  if (!result.companyLoop.items.length) {
+    lines.push("  none");
+  } else {
+    for (const company of result.companyLoop.items) {
+      lines.push(`  ${company.companyName}  [${company.stage}]  signals:${company.signalMatchCount}  prospects:${company.prospectCount}  through-lines:${company.readyThroughLineCount}  opening-plans:${company.readyOpeningPlanCount}  cadence:${company.readyCadenceCount}`);
+      lines.push(`    Execution Identity: ${company.executionIdentity.status} — ${company.executionIdentity.message}`);
+      if (company.missingEmailFallbackCount > 0) {
+        lines.push(`    Missing Email Fallbacks: ${company.missingEmailFallbackCount}`);
+      }
+      lines.push(`    Next Command: ${company.nextCommand}`);
+    }
+  }
+
+  lines.push("", "Next Actions");
+  for (const action of result.nextActions) {
+    lines.push(`  - ${action}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * @param {string[]} values
  * @returns {string}
  */

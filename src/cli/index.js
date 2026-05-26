@@ -27,7 +27,9 @@ Operating rules:
 
 Common patterns:
   exo what-is-this --json
-  exo motion add --url https://example.com/product --premise "This offer matters when regulated lenders enter more complex credit-decision environments." --audience "Traditional FI risk owners" --signal "company::Is there recent evidence that this company expanded into a more complex lending segment?"
+  exo motion start --url https://example.com/product --premise "This offer matters when regulated lenders enter more complex credit-decision environments." --audience "Traditional FI risk owners" --signal "company::Is there recent evidence that this company expanded into a more complex lending segment?" --json
+  exo motion start --url https://example.com/product --existing continue --json
+  exo motion target <motion-id> --json
   exo motion clone <motion-id> --audience "BNPL modernization leaders" --segment bnpl --json
   exo motion update <motion-id> --audience "Traditional FI risk owners" --title "Chief Risk Officer" --segment traditional-fi --json
   exo motion add --config ./actico.motion.json --json

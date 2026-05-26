@@ -5,12 +5,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { cloneMotionDefinition } from "../../core/clone-motion.js";
 import { defineMotion } from "../../core/define-motion.js";
+import { evaluateMotionTargeting } from "../../core/evaluate-motion-targeting.js";
 import { refreshMotion } from "../../core/refresh-motion.js";
+import { startMotion } from "../../core/start-motion.js";
 import { updateMotionDefinition } from "../../core/update-motion.js";
 import {
   deleteMotion,
   findMotionById,
   insertMotion,
+  listBrowserProfiles,
   listCompanies,
   listMotions,
   updateCompany,
@@ -18,7 +21,7 @@ import {
 } from "../../db/database.js";
 import { normalizeStringList } from "../../lib/collections.js";
 import { loadDoNotContactEntries } from "../../lib/dnc.js";
-import { renderMotionSummary } from "../../artifacts/render-motion.js";
+import { renderMotionStartResult, renderMotionSummary, renderMotionTargetingSummary } from "../../artifacts/render-motion.js";
 import { companySchema } from "../../schema/company.js";
 import { motionSchema } from "../../schema/motion.js";
 
@@ -33,7 +36,9 @@ export function registerMotion(program) {
       "after",
       `
 Canonical motion interface:
+  exo motion start
   exo motion add
+  exo motion target
   exo motion clone
   exo motion update
   exo motion refresh
@@ -43,39 +48,74 @@ Canonical motion interface:
 `
     );
 
-  motion
-    .command("add")
-    .description("Create a new offer-driven motion from a product URL, premise, audience hypotheses, and targeting profile.")
-    .option("--config <path>", "Path to a JSON motion seed file")
-    .option("--name <name>", "Optional custom motion name")
-    .option("--url <url>", "Product or offer URL")
-    .option("--notes <notes>", "Offer notes")
-    .option("--premise <text>", "Operator premise to test in this motion")
-    .option("--premise-notes <notes>", "Optional notes about the premise")
-    .option("--audience <value>", "Audience hypothesis name; repeat for multiple", collect, [])
-    .option("--audience-json <json>", "Structured audience hypothesis as JSON; repeat for multiple", collect, [])
-    .option(
-      "--signal <value>",
-      "Signal definition as question text or scope::question, for example company::Is there recent evidence that this company launched a new offering?",
-      collect,
-      []
+  addMotionSeedOptions(
+    motion
+      .command("start")
+      .description("Start an outreach motion from an offer URL, checking for existing motions on the same URL before creating anything new.")
+      .option("--existing <strategy>", "continue | clone | new")
+      .option("--from <motion-id>", "Existing motion id to continue or clone when multiple motions share the same URL")
+  )
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Fetches a lightweight page snapshot from the offer URL so the operator and agent can confirm what is being promoted.
+  - Checks whether Exo already has one or more motions for the same URL.
+  - If the URL is new, creates a fresh motion using the same seed inputs as exo motion add.
+  - If the URL already exists, returns a decision-required result unless you explicitly pass --existing continue|clone|new.
+
+Decision rules:
+  - continue: reuse one existing motion for this URL
+  - clone: branch one existing motion into a fresh draft
+  - new: create a fresh motion from the same URL without reusing the existing one
+  - if multiple motions share the URL, pass --from <motion-id> with continue or clone
+
+Examples:
+  exo motion start --url https://example.com/product --premise "This offer matters when ..." --audience "Primary ICP" --signal "company::Is there recent evidence that ...?" --json
+  exo motion start --url https://example.com/product --existing continue --json
+  exo motion start --url https://example.com/product --existing clone --from <motion-id> --audience "Secondary ICP" --json
+`
     )
-    .option("--signal-json <json>", "Structured signal definition as JSON; repeat for multiple", collect, [])
-    .option("--geo <value>", "Geolocation filter", collect, [])
-    .option("--icp <value>", "ICP type", collect, [])
-    .option("--industry <value>", "Industry or sub-industry", collect, [])
-    .option("--company-type <value>", "Company type", collect, [])
-    .option("--company-shape <value>", "Company shape", collect, [])
-    .option("--company-size <value>", "Company size band", collect, [])
-    .option("--title <value>", "Target title", collect, [])
-    .option("--role-family <value>", "Target role family", collect, [])
-    .option("--segment <value>", "Segment variant", collect, [])
-    .option("--stakeholder-count <number>", "Maximum number of stakeholders to carry into the first outreach pass")
-    .option("--exclude-account <value>", "Excluded account", collect, [])
-    .option("--exclude-domain <value>", "Excluded domain", collect, [])
-    .option("--exclude-contact <value>", "Excluded contact", collect, [])
-    .option("--dnc-file <path>", "Path to a simple do-not-contact file")
-    .option("--json", "Emit machine-readable JSON")
+    .action(async (options) => {
+      let input;
+      try {
+        input = buildMotionDefinitionInput(options);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      let result;
+      try {
+        result = await startMotion({
+          ...input,
+          existingStrategy: normalizeExistingStrategy(options.existing),
+          sourceMotionId: options.from ?? null
+        }, listMotions());
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      if (result.status === "created" || result.status === "cloned") {
+        result.motion = insertMotion(result.motion);
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderMotionStartResult(result));
+    });
+
+  addMotionSeedOptions(
+    motion
+      .command("add")
+    .description("Create a new offer-driven motion from a product URL, premise, audience hypotheses, and targeting profile.")
+  )
     .addHelpText(
       "after",
       `
@@ -107,56 +147,16 @@ Examples:
 `
     )
     .action(async (options) => {
-      const configInput = loadMotionSeedConfig(options.config);
-      const dncEntries = loadDoNotContactEntries(options.dncFile);
-      const url = options.url ?? configInput.url ?? configInput.offer?.sourceUrl;
-
-      if (!url) {
-        console.error("Motion URL is required. Pass --url or include url in --config.");
+      let input;
+      try {
+        input = buildMotionDefinitionInput(options);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
         return;
       }
 
-      const motion = await defineMotion({
-        url,
-        name: options.name ?? configInput.name ?? null,
-        offerNotes: options.notes ?? configInput.offerNotes ?? configInput.offer?.offerNotes ?? null,
-        premise: {
-          ...configInput.premise,
-          statement: options.premise ?? configInput.premise?.statement ?? null,
-          notes: options.premiseNotes ?? configInput.premise?.notes ?? null
-        },
-        audienceHypotheses: buildAudienceInputs(configInput, options),
-        signals: buildSignalInputs(configInput, options),
-        targetingProfile: {
-          geolocations: mergeStringInputs(configInput.targetingProfile?.geolocations, options.geo),
-          icpTypes: mergeStringInputs(configInput.targetingProfile?.icpTypes, options.icp),
-          industries: mergeStringInputs(configInput.targetingProfile?.industries, options.industry),
-          companyTypes: mergeStringInputs(configInput.targetingProfile?.companyTypes, options.companyType),
-          companyShapes: mergeStringInputs(configInput.targetingProfile?.companyShapes, options.companyShape),
-          companySizes: mergeStringInputs(configInput.targetingProfile?.companySizes, options.companySize),
-          targetTitles: mergeStringInputs(configInput.targetingProfile?.targetTitles, options.title),
-          roleFamilies: mergeStringInputs(configInput.targetingProfile?.roleFamilies, options.roleFamily),
-          segmentVariants: mergeStringInputs(configInput.targetingProfile?.segmentVariants, options.segment),
-          stakeholderTargetCount: options.stakeholderCount ?? configInput.targetingProfile?.stakeholderTargetCount
-        },
-        suppressionPolicy: {
-          excludedAccounts: mergeStringInputs(configInput.suppressionPolicy?.excludedAccounts, options.excludeAccount),
-          excludedDomains: mergeStringInputs(configInput.suppressionPolicy?.excludedDomains, options.excludeDomain),
-          excludedContacts: mergeStringInputs(configInput.suppressionPolicy?.excludedContacts, options.excludeContact),
-          doNotContactEntries: [
-            ...(configInput.suppressionPolicy?.doNotContactEntries ?? []),
-            ...dncEntries
-          ],
-          doNotContactSources: [
-            ...(configInput.suppressionPolicy?.doNotContactSources ?? []),
-            ...(options.dncFile ? [options.dncFile] : [])
-          ],
-          crmCustomerSuppressionEnabled: configInput.suppressionPolicy?.crmCustomerSuppressionEnabled ?? false,
-          crmOpportunitySuppressionEnabled:
-            configInput.suppressionPolicy?.crmOpportunitySuppressionEnabled ?? false
-        }
-      });
+      const motion = await defineMotion(input);
 
       const storedMotion = insertMotion(motion);
 
@@ -166,6 +166,53 @@ Examples:
       }
 
       console.log(renderMotionSummary(storedMotion));
+    });
+
+  motion
+    .command("target")
+    .description("Evaluate one motion's targeting loop from preflight through company and prospect readiness.")
+    .argument("<motion-id>", "Motion identifier")
+    .option("--capability <capability>", "Browser capability required for engagement readiness. Defaults to linkedin.")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Checks the motion preflight: offer URL, premise, audience hypotheses, and signals.
+  - Evaluates whether a trusted browser identity exists for engagement.
+  - Walks the linked companies through the targeting loop: company identity, signal matches, prospects, through-lines, opening plans, and cadence.
+  - Stops at targeting-ready. It does not draft or send messages.
+
+Use this when:
+  - you want one governed answer to "how far did this motion get?"
+  - you want to know the next missing step before launch
+  - you want to see whether the motion is ready to target or ready to engage
+
+Examples:
+  exo motion target <motion-id>
+  exo motion target <motion-id> --json
+  exo motion target <motion-id> --capability linkedin --json
+`
+    )
+    .action((motionId, options) => {
+      const raw = findMotionById(motionId);
+
+      if (!raw) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const result = evaluateMotionTargeting(raw, listCompanies(), listBrowserProfiles(), {
+        capability: options.capability
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderMotionTargetingSummary(result));
     });
 
   motion
@@ -555,6 +602,114 @@ function loadMotionSeedConfig(filePath) {
 
   const resolvedPath = path.resolve(process.cwd(), filePath);
   return JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
+}
+
+/**
+ * @param {import("commander").Command} command
+ */
+function addMotionSeedOptions(command) {
+  return command
+    .option("--config <path>", "Path to a JSON motion seed file")
+    .option("--name <name>", "Optional custom motion name")
+    .option("--url <url>", "Product or offer URL")
+    .option("--notes <notes>", "Offer notes")
+    .option("--premise <text>", "Operator premise to test in this motion")
+    .option("--premise-notes <notes>", "Optional notes about the premise")
+    .option("--audience <value>", "Audience hypothesis name; repeat for multiple", collect, [])
+    .option("--audience-json <json>", "Structured audience hypothesis as JSON; repeat for multiple", collect, [])
+    .option(
+      "--signal <value>",
+      "Signal definition as question text or scope::question, for example company::Is there recent evidence that this company launched a new offering?",
+      collect,
+      []
+    )
+    .option("--signal-json <json>", "Structured signal definition as JSON; repeat for multiple", collect, [])
+    .option("--geo <value>", "Geolocation filter", collect, [])
+    .option("--icp <value>", "ICP type", collect, [])
+    .option("--industry <value>", "Industry or sub-industry", collect, [])
+    .option("--company-type <value>", "Company type", collect, [])
+    .option("--company-shape <value>", "Company shape", collect, [])
+    .option("--company-size <value>", "Company size band", collect, [])
+    .option("--title <value>", "Target title", collect, [])
+    .option("--role-family <value>", "Target role family", collect, [])
+    .option("--segment <value>", "Segment variant", collect, [])
+    .option("--stakeholder-count <number>", "Maximum number of stakeholders to carry into the first outreach pass")
+    .option("--exclude-account <value>", "Excluded account", collect, [])
+    .option("--exclude-domain <value>", "Excluded domain", collect, [])
+    .option("--exclude-contact <value>", "Excluded contact", collect, [])
+    .option("--dnc-file <path>", "Path to a simple do-not-contact file")
+    .option("--json", "Emit machine-readable JSON");
+}
+
+/**
+ * @param {Record<string, any>} options
+ * @returns {Parameters<typeof defineMotion>[0]}
+ */
+function buildMotionDefinitionInput(options) {
+  const configInput = loadMotionSeedConfig(options.config);
+  const dncEntries = loadDoNotContactEntries(options.dncFile);
+  const url = options.url ?? configInput.url ?? configInput.offer?.sourceUrl;
+
+  if (!url) {
+    throw new Error("Motion URL is required. Pass --url or include url in --config.");
+  }
+
+  return {
+    url,
+    name: options.name ?? configInput.name ?? null,
+    offerNotes: options.notes ?? configInput.offerNotes ?? configInput.offer?.offerNotes ?? null,
+    premise: {
+      ...configInput.premise,
+      statement: options.premise ?? configInput.premise?.statement ?? null,
+      notes: options.premiseNotes ?? configInput.premise?.notes ?? null
+    },
+    audienceHypotheses: buildAudienceInputs(configInput, options),
+    signals: buildSignalInputs(configInput, options),
+    targetingProfile: {
+      geolocations: mergeStringInputs(configInput.targetingProfile?.geolocations, options.geo),
+      icpTypes: mergeStringInputs(configInput.targetingProfile?.icpTypes, options.icp),
+      industries: mergeStringInputs(configInput.targetingProfile?.industries, options.industry),
+      companyTypes: mergeStringInputs(configInput.targetingProfile?.companyTypes, options.companyType),
+      companyShapes: mergeStringInputs(configInput.targetingProfile?.companyShapes, options.companyShape),
+      companySizes: mergeStringInputs(configInput.targetingProfile?.companySizes, options.companySize),
+      targetTitles: mergeStringInputs(configInput.targetingProfile?.targetTitles, options.title),
+      roleFamilies: mergeStringInputs(configInput.targetingProfile?.roleFamilies, options.roleFamily),
+      segmentVariants: mergeStringInputs(configInput.targetingProfile?.segmentVariants, options.segment),
+      stakeholderTargetCount: options.stakeholderCount ?? configInput.targetingProfile?.stakeholderTargetCount
+    },
+    suppressionPolicy: {
+      excludedAccounts: mergeStringInputs(configInput.suppressionPolicy?.excludedAccounts, options.excludeAccount),
+      excludedDomains: mergeStringInputs(configInput.suppressionPolicy?.excludedDomains, options.excludeDomain),
+      excludedContacts: mergeStringInputs(configInput.suppressionPolicy?.excludedContacts, options.excludeContact),
+      doNotContactEntries: [
+        ...(configInput.suppressionPolicy?.doNotContactEntries ?? []),
+        ...dncEntries
+      ],
+      doNotContactSources: [
+        ...(configInput.suppressionPolicy?.doNotContactSources ?? []),
+        ...(options.dncFile ? [options.dncFile] : [])
+      ],
+      crmCustomerSuppressionEnabled: configInput.suppressionPolicy?.crmCustomerSuppressionEnabled ?? false,
+      crmOpportunitySuppressionEnabled:
+        configInput.suppressionPolicy?.crmOpportunitySuppressionEnabled ?? false
+    }
+  };
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"continue" | "clone" | "new" | null}
+ */
+function normalizeExistingStrategy(value) {
+  if (value === undefined) {
+    return null;
+  }
+
+  if (value === "continue" || value === "clone" || value === "new") {
+    return value;
+  }
+
+  throw new Error(`Invalid --existing strategy: ${value}`);
 }
 
 /**

@@ -110,12 +110,18 @@ exo motion show <motion-id> --json
 If you need to create a new motion:
 
 ```bash
-exo motion add \
+exo motion start \
   --url https://example.com/product \
   --premise "This offer matters when ..." \
   --audience "Primary ICP" \
   --signal "company::Is there recent evidence that ...?" \
   --json
+```
+
+If you need to see how far an existing motion got before launch:
+
+```bash
+exo motion target <motion-id> --json
 ```
 
 If the motion is richer than a few flags, use:

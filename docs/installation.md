@@ -30,6 +30,7 @@ Verify:
 
 ```bash
 exo --help
+exo motion start --url https://example.com/product --premise "This offer matters when ..." --audience "Primary ICP" --signal "company::Is there recent evidence that ...?" --json
 exo motion list
 exo companies list
 exo profiles discover --json
@@ -79,7 +80,7 @@ If you run `exo` from another folder, it will create and use a different `.exo` 
 ## Example
 
 ```bash
-exo motion add \
+exo motion start \
   --url https://example.com/product \
   --premise "This offer matters when regulated lenders enter more complex credit-decision environments." \
   --audience "Traditional FI risk owners" \
@@ -97,6 +98,7 @@ Then inspect it:
 ```bash
 exo motion list
 exo motion show <motion-id>
+exo motion target <motion-id> --json
 ```
 
 Add a company and link it later if needed:

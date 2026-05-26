@@ -97,10 +97,10 @@ The claimed profile is also where weekly outreach pacing lives. In Exo, that mir
 - `connection requests` / `invitations`
 - `messages`
 
-### 2. Define a motion
+### 2. Start a motion from the offer URL
 
 ```bash
-exo motion add \
+exo motion start \
   --url https://example.com/product \
   --premise "This offer matters when regulated lenders enter more complex credit-decision environments." \
   --audience "Traditional FI risk owners" \
@@ -111,6 +111,15 @@ exo motion add \
   --icp regulated-enterprise \
   --industry banking,lending \
   --title "Chief Risk Officer"
+```
+
+Use `motion start` as the default path because it checks whether Exo already has motions for the same URL before it creates anything new.
+
+If the URL already exists, choose the branch explicitly:
+
+```bash
+exo motion start --url https://example.com/product --existing continue --json
+exo motion start --url https://example.com/product --existing clone --from <motion-id> --audience "BNPL modernization leaders" --json
 ```
 
 The important distinction is:
@@ -168,12 +177,25 @@ Example motion seed:
 }
 ```
 
-### 3. Inspect the stored motion
+### 3. Inspect the stored motion and targeting loop
 
 ```bash
 exo motion list
 exo motion show <motion-id>
+exo motion target <motion-id> --json
 ```
+
+`exo motion target` is the governed readiness check. It walks the motion through:
+
+- motion preflight
+- browser gate
+- company targeting
+- prospect readiness
+- through-lines
+- opening plans
+- cadence
+
+It stops at `targeting-ready`. Exo does not write the message and it does not send the touch.
 
 ### 4. Add or inspect canonical companies
 
@@ -244,7 +266,9 @@ The CLI currently checks local browser artifacts, not live SaaS auth. That is en
 
 ## Current command set
 
+- `exo motion start`
 - `exo motion add`
+- `exo motion target`
 - `exo motion clone`
 - `exo motion update`
 - `exo motion refresh`
