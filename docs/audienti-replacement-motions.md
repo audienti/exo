@@ -51,13 +51,14 @@ And needs Exo to derive:
 ### Exo output
 
 - `offer thesis`
-- `signal-set`
+- `premise`
+- `signals`
 - `target map`
 - `motion plan`
 
 ### CLI / MCP
 
-- `exo motion add --url <product-url>`
+- `exo motion add --url <product-url> --premise ... --audience ... --signal ...`
 - `exo motion refresh <motion>`
 - `exo motion show <motion>`
 - `exo.define_motion`
@@ -293,7 +294,7 @@ That sequence mirrors the booked-meeting motion more honestly than trying to reb
 Exo has replaced the motion if William can do the following for a live design partner account using Claude/Codex plus Exo:
 
 - define a new motion from an offer URL
-- get a useful signal-set and target map
+- get a useful premise, signal model, and target map
 - identify the next account worth attention
 - see the account truth quickly
 - request a proposed move

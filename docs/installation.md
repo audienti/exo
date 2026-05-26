@@ -24,12 +24,19 @@ npm install
 npm link
 ```
 
+Exo applies versioned local database migrations automatically when it opens the state store. A new Exo version should upgrade `.exo/exo.db` before motion or company commands try to parse older payloads.
+
 Verify:
 
 ```bash
 exo --help
 exo motion list
+exo companies list
+exo profiles discover --json
 exo profiles list
+exo profiles capabilities --json
+exo profiles resolve --capability linkedin --json
+exo config export --json
 ```
 
 ## Shared State For Multiple Agent Shells
@@ -74,15 +81,15 @@ If you run `exo` from another folder, it will create and use a different `.exo` 
 ```bash
 exo motion add \
   --url https://example.com/product \
+  --premise "This offer matters when regulated lenders enter more complex credit-decision environments." \
+  --audience "Traditional FI risk owners" \
+  --signal "company::Is there recent evidence that this company expanded into a more complex lending segment?" \
   --geo "United States" \
   --icp "regulated-enterprise" \
   --industry "banking,lending" \
   --company-type "public-company" \
   --company-shape "high-compliance,multi-brand" \
-  --company-size "enterprise" \
-  --title "Chief Risk Officer" \
-  --title "VP Vendor Management" \
-  --segment "traditional-fi"
+  --title "Chief Risk Officer"
 ```
 
 Then inspect it:
@@ -92,9 +99,22 @@ exo motion list
 exo motion show <motion-id>
 ```
 
+Add a company and link it later if needed:
+
+```bash
+exo companies add --name Chainguard --domain chainguard.dev
+exo companies find chainguard
+```
+
 ## Browser Profile Setup
 
 Because Exo will drive real browser-backed work, you should register the browser profile you expect it to use:
+
+```bash
+exo profiles discover --json
+```
+
+Then register the right one:
 
 ```bash
 exo profiles add \
@@ -105,16 +125,45 @@ exo profiles add \
   --capability sales-navigator
 ```
 
+Then claim it:
+
+```bash
+exo profiles claim <profile-id> \
+  --label audienti-main \
+  --owner william \
+  --workspace audienti \
+  --account linkedin:wflanagan@audienti.com
+```
+
 Then verify it:
 
 ```bash
 exo profiles list
+exo profiles capabilities --json
+exo profiles resolve --capability linkedin --json
 exo profiles test <profile-id>
 ```
 
-That check is intentionally local and conservative. It verifies that Exo can resolve the browser executable, the user-data directory, the specific profile directory, and the expected Chrome-style session files before any real browser work is attempted.
+Exo now distinguishes between declared capabilities and verified capabilities. The verification pass is intentionally local and conservative. It verifies that Exo can resolve the browser executable, the user-data directory, the specific profile directory, the expected Chrome-style session files, and capability-specific evidence from local browser artifacts before any real browser work is attempted.
 
 The built-in default paths are currently macOS-oriented. If you are on another environment, pass explicit `--user-data-dir` and `--browser-command` values instead of relying on defaults.
+
+## Config Export / Import
+
+Use config export/import when you want to move Exo setup without copying the SQLite file directly:
+
+```bash
+exo config export --out ./exo-config.json
+exo config import ./exo-config.json
+```
+
+That bundle currently carries:
+
+- motions
+- companies
+- browser profiles
+
+Browser profiles are re-tested on import.
 
 ## Common Failure Mode
 

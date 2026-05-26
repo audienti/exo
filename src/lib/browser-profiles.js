@@ -3,7 +3,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { browserKeySchema, browserProfileTestResultSchema } from "../schema/browser-profile.js";
+import crypto from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import {
+  browserKeySchema,
+  browserProfileCapabilitySchema,
+  browserProfileTestResultSchema
+} from "../schema/browser-profile.js";
 
 const DEFAULTS = {
   chrome: {
@@ -31,6 +37,8 @@ const DEFAULTS = {
     browserCommand: "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
   }
 };
+
+export const supportedBrowserProfileCapabilities = browserProfileCapabilitySchema.options;
 
 /**
  * @param {string} value
@@ -91,10 +99,60 @@ export function resolveBrowserProfilePaths(input) {
 /**
  * @param {{
  *   browser: unknown,
+ *   userDataDir?: string | null,
+ *   browserCommand?: string | null
+ * }} input
+ */
+export function discoverBrowserProfiles(input) {
+  const browser = parseBrowser(input.browser);
+  const defaults = browserDefaults(browser);
+  const userDataDir = expandPath(input.userDataDir || defaults.userDataDir);
+  const browserCommand = input.browserCommand ? expandPath(input.browserCommand) : defaults.browserCommand;
+  const localStatePath = path.join(userDataDir, "Local State");
+  const profileDirectories = discoverProfileDirectories(userDataDir, localStatePath);
+
+  return profileDirectories.map((profileDirectory) => {
+    const profilePath = path.join(userDataDir, profileDirectory);
+    const structural = testBrowserProfile({
+      browser,
+      userDataDir,
+      profileDirectory,
+      browserCommand,
+      profilePath,
+      capabilities: ["generic-web"]
+    });
+    const capabilityChecks = supportedBrowserProfileCapabilities.map((capability) =>
+      verifyCapability(capability, {
+        cookiesPath: path.join(profilePath, "Cookies"),
+        historyPath: path.join(profilePath, "History"),
+        profileStatus: structural.result.status === "invalid" ? "invalid" : "ready"
+      })
+    );
+
+    return {
+      browser,
+      browserCommand,
+      userDataDir,
+      profileDirectory,
+      profilePath,
+      label: `${browser}:${profileDirectory}`,
+      detectedProfileName: structural.detectedProfileName,
+      structuralStatus: structural.result.status,
+      structuralSummary: structural.result.summary,
+      observedCapabilities: capabilityChecks.filter((check) => check.verified).map((check) => check.capability),
+      capabilityChecks
+    };
+  });
+}
+
+/**
+ * @param {{
+ *   browser: unknown,
  *   userDataDir: string,
  *   profileDirectory: string,
  *   browserCommand: string | null,
- *   profilePath: string
+ *   profilePath: string,
+ *   capabilities?: string[]
  * }} input
  */
 export function testBrowserProfile(input) {
@@ -171,11 +229,20 @@ export function testBrowserProfile(input) {
 
   const criticalChecks = ["user_data_dir_exists", "profile_path_exists", "preferences_exists"];
   const criticalFailures = checks.filter((check) => criticalChecks.includes(check.name) && !check.ok);
+  const declaredCapabilities = normalizeCapabilities(input.capabilities);
+  const capabilityChecks = declaredCapabilities.map((capability) =>
+    verifyCapability(capability, {
+      cookiesPath,
+      historyPath,
+      profileStatus: criticalFailures.length ? "invalid" : "ready"
+    })
+  );
+  const unverifiedCapabilities = capabilityChecks.filter((check) => !check.verified);
 
   let status = "ready";
   if (criticalFailures.length) {
     status = "invalid";
-  } else if (!browserCommandExists || !cookiesExists || !historyExists || warnings.length) {
+  } else if (!browserCommandExists || !cookiesExists || !historyExists || warnings.length || unverifiedCapabilities.length) {
     status = "warning";
   }
 
@@ -183,16 +250,18 @@ export function testBrowserProfile(input) {
     status === "invalid"
       ? "Profile registration is incomplete. Exo should not try to drive this browser context yet."
       : status === "warning"
-        ? "Profile is present but not fully trusted yet. Browser-driven work should be cautious until warnings are cleared."
+        ? buildWarningSummary(unverifiedCapabilities)
         : "Profile looks usable for browser-backed Exo work.";
 
   return {
     browser,
     detectedProfileName,
+    verifiedCapabilities: capabilityChecks.filter((check) => check.verified).map((check) => check.capability),
     result: browserProfileTestResultSchema.parse({
       status,
       summary,
       checks,
+      capabilityChecks,
       warnings
     })
   };
@@ -234,6 +303,89 @@ function readProfileNameFromLocalState(localStatePath, profileDirectory) {
 }
 
 /**
+ * @param {string} userDataDir
+ * @param {string} localStatePath
+ * @returns {string[]}
+ */
+function discoverProfileDirectories(userDataDir, localStatePath) {
+  if (!fs.existsSync(userDataDir)) {
+    return [];
+  }
+
+  const directories = new Set();
+  const localState = readJsonFile(localStatePath);
+  if (localState && typeof localState === "object") {
+    const infoCache = localState.profile?.info_cache;
+    if (infoCache && typeof infoCache === "object") {
+      for (const key of Object.keys(infoCache)) {
+        directories.add(key);
+      }
+    }
+  }
+
+  try {
+    const entries = fs.readdirSync(userDataDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+
+      if (entry.name === "Default" || entry.name.startsWith("Profile ")) {
+        directories.add(entry.name);
+      }
+    }
+  } catch {
+    return [];
+  }
+
+  return [...directories]
+    .filter((profileDirectory) => profileDirectory && isUsableProfileDirectory(userDataDir, profileDirectory))
+    .sort(compareProfileDirectories);
+}
+
+/**
+ * @param {string} userDataDir
+ * @param {string} profileDirectory
+ */
+function isUsableProfileDirectory(userDataDir, profileDirectory) {
+  const profilePath = path.join(userDataDir, profileDirectory);
+  if (!fs.existsSync(profilePath)) {
+    return false;
+  }
+
+  try {
+    if (!fs.statSync(profilePath).isDirectory()) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return ["Preferences", "History", "Cookies"].some((fileName) => fs.existsSync(path.join(profilePath, fileName)));
+}
+
+/**
+ * @param {string} left
+ * @param {string} right
+ */
+function compareProfileDirectories(left, right) {
+  if (left === "Default" && right !== "Default") {
+    return -1;
+  }
+  if (left !== "Default" && right === "Default") {
+    return 1;
+  }
+
+  const leftMatch = left.match(/^Profile (\d+)$/);
+  const rightMatch = right.match(/^Profile (\d+)$/);
+  if (leftMatch && rightMatch) {
+    return Number(leftMatch[1]) - Number(rightMatch[1]);
+  }
+
+  return left.localeCompare(right);
+}
+
+/**
  * @param {string} filePath
  * @returns {any | null}
  */
@@ -244,4 +396,195 @@ function readJsonFile(filePath) {
   } catch {
     return null;
   }
+}
+
+/**
+ * @param {string[] | undefined} capabilities
+ */
+function normalizeCapabilities(capabilities) {
+  const values = capabilities?.length ? capabilities : ["generic-web"];
+  return [...new Set(values)];
+}
+
+/**
+ * @param {string} capability
+ * @param {{ cookiesPath: string, historyPath: string, profileStatus: "invalid" | "ready" }} input
+ */
+function verifyCapability(capability, input) {
+  if (input.profileStatus === "invalid") {
+    return {
+      capability,
+      verified: false,
+      details: "Profile is structurally invalid, so capability verification is blocked."
+    };
+  }
+
+  switch (capability) {
+    case "generic-web":
+      return {
+        capability,
+        verified: true,
+        details: "Profile artifacts exist and the browser context is structurally usable."
+      };
+    case "linkedin":
+      return verifyDomainCapability(capability, input, {
+        cookies: [/\.linkedin\.com$/i],
+        history: [/linkedin\.com/i]
+      });
+    case "sales-navigator":
+      return verifyDomainCapability(capability, input, {
+        cookies: [],
+        history: [/linkedin\.com\/sales\b/i]
+      });
+    case "gmail":
+      return verifyDomainCapability(capability, input, {
+        cookies: [/\.google\.com$/i, /^mail\.google\.com$/i],
+        history: [/mail\.google\.com/i]
+      });
+    case "hubspot":
+      return verifyDomainCapability(capability, input, {
+        cookies: [/\.hubspot\.com$/i, /^app\.hubspot\.com$/i],
+        history: [/app\.hubspot\.com/i]
+      });
+    default:
+      return {
+        capability,
+        verified: false,
+        details: "Unsupported capability."
+      };
+  }
+}
+
+/**
+ * @param {string} capability
+ * @param {{ cookiesPath: string, historyPath: string }} input
+ * @param {{ cookies: RegExp[], history: RegExp[] }} matchers
+ */
+function verifyDomainCapability(capability, input, matchers) {
+  const cookieMatch = matchSqliteFile(
+    input.cookiesPath,
+    "SELECT host_key AS value FROM cookies",
+    "value",
+    matchers.cookies
+  );
+  const historyMatch = matchSqliteFile(
+    input.historyPath,
+    "SELECT url AS value FROM urls",
+    "value",
+    matchers.history
+  );
+
+  if (historyMatch.matched) {
+    return {
+      capability,
+      verified: true,
+      details: `Verified from browser history: ${historyMatch.evidence}`
+    };
+  }
+
+  if (cookieMatch.matched) {
+    return {
+      capability,
+      verified: true,
+      details: `Verified from browser cookies: ${cookieMatch.evidence}`
+    };
+  }
+
+  const failureParts = [historyMatch.reason, cookieMatch.reason].filter(Boolean);
+  return {
+    capability,
+    verified: false,
+    details: failureParts.length
+      ? failureParts.join(" ")
+      : `No local evidence found for ${capability}.`
+  };
+}
+
+/**
+ * @param {string} filePath
+ * @param {string} query
+ * @param {string} field
+ * @param {RegExp[]} patterns
+ */
+function matchSqliteFile(filePath, query, field, patterns) {
+  if (!patterns.length) {
+    return {
+      matched: false,
+      evidence: null,
+      reason: ""
+    };
+  }
+
+  if (!fs.existsSync(filePath)) {
+    return {
+      matched: false,
+      evidence: null,
+      reason: `Missing SQLite file: ${filePath}`
+    };
+  }
+
+  return withCopiedDatabase(filePath, (database) => {
+    try {
+      const rows = database.prepare(query).all();
+      for (const row of rows) {
+        const value = typeof row[field] === "string" ? row[field].trim() : "";
+        if (!value) {
+          continue;
+        }
+
+        if (patterns.some((pattern) => pattern.test(value))) {
+          return {
+            matched: true,
+            evidence: value,
+            reason: ""
+          };
+        }
+      }
+
+      return {
+        matched: false,
+        evidence: null,
+        reason: `No matching local evidence found in ${path.basename(filePath)}.`
+      };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return {
+        matched: false,
+        evidence: null,
+        reason: `Could not read ${path.basename(filePath)}: ${reason}`
+      };
+    }
+  });
+}
+
+/**
+ * @template T
+ * @param {string} filePath
+ * @param {(database: DatabaseSync) => T} reader
+ * @returns {T}
+ */
+function withCopiedDatabase(filePath, reader) {
+  const tempPath = path.join(os.tmpdir(), `exo-profile-${crypto.randomUUID()}.sqlite`);
+  fs.copyFileSync(filePath, tempPath);
+  const database = new DatabaseSync(tempPath);
+
+  try {
+    return reader(database);
+  } finally {
+    database.close();
+    fs.rmSync(tempPath, { force: true });
+  }
+}
+
+/**
+ * @param {Array<{ capability: string, verified: boolean }>} unverifiedCapabilities
+ */
+function buildWarningSummary(unverifiedCapabilities) {
+  if (!unverifiedCapabilities.length) {
+    return "Profile is present but not fully trusted yet. Browser-driven work should be cautious until warnings are cleared.";
+  }
+
+  return `Profile is present, but Exo could not verify these declared capabilities yet: ${unverifiedCapabilities
+    .map((check) => check.capability)
+    .join(", ")}.`;
 }

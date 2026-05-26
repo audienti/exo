@@ -66,10 +66,13 @@ If an action behaves differently in CLI vs MCP, the product is drifting.
 The MVP nouns should be:
 
 - `offer`
+- `premise`
+- `audience-hypothesis`
 - `targeting-profile`
 - `suppression-policy`
 - `browser-profile`
-- `signal-set`
+- `company`
+- `signal`
 - `target-map`
 - `motion-plan`
 - `account`
@@ -91,12 +94,25 @@ Everything else is implementation detail.
 The MVP verbs should be:
 
 - `what-is-this`
+- `config export`
+- `config import`
 - `motion add`
 - `motion list`
 - `motion show`
+- `companies add`
+- `companies list`
+- `companies find`
+- `companies show`
+- `companies motions`
+- `companies profile show`
+- `companies profile assign`
 - `profiles add`
+- `profiles discover`
+- `profiles claim`
 - `profiles list`
 - `profiles show`
+- `profiles capabilities`
+- `profiles resolve`
 - `profiles test`
 - `profiles remove`
 - `motion refresh`
@@ -121,12 +137,25 @@ Every public CLI command should have a matching MCP tool.
 Examples:
 
 - `exo what-is-this --json` <-> `exo.what_is_this`
-- `exo motion add --url <product-url> --geo ... --icp ... --industry ... --company-shape ... --titles ... --segment ... --exclude-account ... --exclude-domain ... --dnc-file ...` <-> `exo.define_motion`
+- `exo config export --out ./exo-config.json` <-> `exo.config_export`
+- `exo config import ./exo-config.json` <-> `exo.config_import`
+- `exo motion add --url <product-url> --premise ... --audience ... --signal ... --geo ... --icp ... --industry ... --company-shape ... --title ... --segment ... --exclude-account ... --exclude-domain ... --dnc-file ...` <-> `exo.define_motion`
 - `exo motion list` <-> `exo.motion_list`
 - `exo motion show <motion>` <-> `exo.motion_show`
+- `exo companies add --name <company> --domain <domain> --motion <motion-id>` <-> `exo.companies_add`
+- `exo companies list` <-> `exo.companies_list`
+- `exo companies find <term>` <-> `exo.companies_find`
+- `exo companies show <company>` <-> `exo.companies_show`
+- `exo companies motions <company>` <-> `exo.companies_motions`
+- `exo companies profile show <company>` <-> `exo.companies_profile_show`
+- `exo companies profile assign <company> --profile <profile-id>` <-> `exo.companies_profile_assign`
 - `exo profiles add --browser chrome --profile-directory "Profile 2" --capability linkedin --capability sales-navigator` <-> `exo.profiles_add`
+- `exo profiles discover [--browser chrome]` <-> `exo.profiles_discover`
+- `exo profiles claim <profile> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com` <-> `exo.profiles_claim`
 - `exo profiles list` <-> `exo.profiles_list`
 - `exo profiles show <profile>` <-> `exo.profiles_show`
+- `exo profiles capabilities [profile]` <-> `exo.profiles_capabilities`
+- `exo profiles resolve --capability linkedin [--browser chrome]` <-> `exo.profiles_resolve`
 - `exo profiles test <profile>` <-> `exo.profiles_test`
 - `exo profiles remove <profile>` <-> `exo.profiles_remove`
 - `exo motion refresh <motion>` <-> `exo.motion_refresh`
@@ -152,7 +181,8 @@ Each command or tool should return:
 
 Examples:
 
-- `motion add` returns an offer-driven motion plan with ICP profile, geolocation filters, company-type and company-shape filters, suppression policy, custom signals, grouped accounts, target people, segment variants, and recommended action logic
+- `motion add` returns an offer-driven motion object with premise, audience hypotheses, motion-specific signals, ICP profile, geolocation filters, company-type and company-shape filters, suppression policy, grouped accounts, target people, segment variants, and recommended action logic
+- `companies show` returns the canonical company object and its motion links
 - `inbox` returns a ranked list of accounts needing attention
 - `brief` returns an account brief artifact
 - `propose` returns a next-action proposal with prediction

@@ -13,6 +13,6 @@ export const targetingProfileSchema = z.object({
   companySizes: stringArray,
   targetTitles: stringArray,
   roleFamilies: stringArray,
-  segmentVariants: stringArray
+  segmentVariants: stringArray,
+  stakeholderTargetCount: z.coerce.number().int().min(1).max(10).default(3)
 });
-

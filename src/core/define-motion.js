@@ -6,11 +6,44 @@ import { suppressionPolicySchema } from "../schema/suppression-policy.js";
 import { offerThesisSchema } from "../schema/offer-thesis.js";
 import { motionSchema } from "../schema/motion.js";
 import { fetchPageSnapshot } from "../lib/web.js";
+import {
+  buildAudienceHypotheses,
+  buildMotionName,
+  buildNextSteps,
+  buildPremise,
+  buildSignals,
+  buildSourceSummary
+} from "./motion-support.js";
 
 /**
  * @param {{
  *   url: string,
+ *   name?: string | null,
  *   offerNotes: string | null,
+ *   premise?: { statement?: string | null, notes?: string | null, source?: "operator" | "inferred" | "mixed" } | null,
+ *   audienceHypotheses?: Array<string | {
+ *     id?: string,
+ *     name: string,
+ *     companyCriteria?: string[],
+ *     roleCriteria?: string[],
+ *     notes?: string | null,
+ *     confidence?: "low" | "moderate" | "high" | "unknown"
+ *   }>,
+ *   signals?: Array<string | {
+ *     id?: string,
+ *     name?: string,
+ *     question: string,
+ *     scope?: "company" | "person" | "both",
+ *     whyItMatters?: string | null,
+ *     matchRule?: string | null,
+ *     audienceIds?: string[],
+ *     observationMethods?: Array<{
+ *       surface: "google" | "sales-navigator" | "linkedin" | "company-site" | "news" | "manual" | "other",
+ *       query?: string | null,
+ *       notes?: string | null
+ *     }>,
+ *     status?: "draft" | "ready"
+ *   }>,
  *   targetingProfile: unknown,
  *   suppressionPolicy: unknown
  * }} input
@@ -18,6 +51,9 @@ import { fetchPageSnapshot } from "../lib/web.js";
 export async function defineMotion(input) {
   const targetingProfile = targetingProfileSchema.parse(input.targetingProfile);
   const suppressionPolicy = suppressionPolicySchema.parse(input.suppressionPolicy);
+  const premise = buildPremise(input.premise);
+  const audienceHypotheses = buildAudienceHypotheses(input.audienceHypotheses ?? []);
+  const signals = buildSignals(input.signals ?? []);
 
   const pageSnapshot = await fetchPageSnapshot(input.url);
   const now = new Date().toISOString();
@@ -36,9 +72,14 @@ export async function defineMotion(input) {
     likelySegmentThesis: null,
     status: "needs_inference"
   });
+  const motionName = buildMotionName({
+    explicitName: input.name ?? null,
+    seed: motionId
+  });
 
   return motionSchema.parse({
     id: motionId,
+    name: motionName,
     createdAt: now,
     updatedAt: now,
     status: "draft",
@@ -46,13 +87,12 @@ export async function defineMotion(input) {
       sourceUrl: input.url,
       offerNotes: input.offerNotes
     },
+    premise,
     targetingProfile,
     suppressionPolicy,
     offerThesis,
-    signalSet: {
-      status: "pending",
-      items: []
-    },
+    audienceHypotheses,
+    signals,
     targetMap: {
       status: "pending",
       accounts: [],
@@ -66,46 +106,6 @@ export async function defineMotion(input) {
       status: "pending",
       variants: []
     },
-    nextSteps: buildNextSteps(targetingProfile, suppressionPolicy)
+    nextSteps: buildNextSteps(targetingProfile, suppressionPolicy, premise, audienceHypotheses, signals)
   });
 }
-
-/**
- * @param {string | null} title
- * @param {string | null} description
- * @returns {string}
- */
-function buildSourceSummary(title, description) {
-  const parts = [title, description].filter(Boolean);
-  if (!parts.length) {
-    return "Source page fetched, but no reliable title or description was available yet.";
-  }
-
-  return parts.join(" — ");
-}
-
-/**
- * @param {import("../schema/targeting-profile.js").targetingProfileSchema._type} targetingProfile
- * @param {import("../schema/suppression-policy.js").suppressionPolicySchema._type} suppressionPolicy
- * @returns {string[]}
- */
-function buildNextSteps(targetingProfile, suppressionPolicy) {
-  const steps = [
-    "Generate offer thesis from the seeded source snapshot.",
-    "Define the top externally verifiable custom signals for this offer.",
-    "Use Sales Navigator retrieval against the targeting profile to build the target map.",
-    "Resolve stakeholders by title and role family for each target account.",
-    "Create segment-specific through-lines and first-move logic."
-  ];
-
-  if (suppressionPolicy.excludedAccounts.length || suppressionPolicy.excludedDomains.length || suppressionPolicy.doNotContactEntries.length) {
-    steps.splice(2, 0, "Apply suppression policy before building the target map.");
-  }
-
-  if (targetingProfile.segmentVariants.length > 1) {
-    steps.push("Create distinct motion branches for each declared segment variant.");
-  }
-
-  return steps;
-}
-

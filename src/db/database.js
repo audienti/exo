@@ -2,6 +2,9 @@
 
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { buildMotionName } from "../core/motion-support.js";
+import { rehydrateMotion } from "../core/rehydrate-motion.js";
+import { applyMigrations } from "./migrations.js";
 import { getDatabasePath, getStateDir } from "./paths.js";
 
 let db = null;
@@ -22,29 +25,7 @@ function getDatabase() {
   db = new DatabaseSync(dbPath);
   db.exec("PRAGMA busy_timeout = 5000;");
   safelyEnableWal(db);
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS motions (
-      id TEXT PRIMARY KEY,
-      status TEXT NOT NULL,
-      source_url TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      payload_json TEXT NOT NULL
-    );
-  `);
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS browser_profiles (
-      id TEXT PRIMARY KEY,
-      status TEXT NOT NULL,
-      browser TEXT NOT NULL,
-      label TEXT NOT NULL,
-      profile_path TEXT NOT NULL UNIQUE,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      payload_json TEXT NOT NULL
-    );
-  `);
+  applyMigrations(db);
 
   return db;
 }
@@ -64,21 +45,53 @@ function safelyEnableWal(database) {
 
 /**
  * @param {import("../schema/motion.js").motionSchema._type} motion
+ * @returns {import("../schema/motion.js").motionSchema._type}
  */
 export function insertMotion(motion) {
-  const statement = getDatabase().prepare(`
+  const database = getDatabase();
+  const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
+  const statement = database.prepare(`
     INSERT INTO motions (id, status, source_url, created_at, updated_at, payload_json)
     VALUES (@id, @status, @sourceUrl, @createdAt, @updatedAt, @payloadJson)
   `);
 
   statement.run({
-    id: motion.id,
-    status: motion.status,
-    sourceUrl: motion.offer.sourceUrl,
-    createdAt: motion.createdAt,
-    updatedAt: motion.updatedAt,
-    payloadJson: JSON.stringify(motion, null, 2)
+    id: storedMotion.id,
+    status: storedMotion.status,
+    sourceUrl: storedMotion.offer.sourceUrl,
+    createdAt: storedMotion.createdAt,
+    updatedAt: storedMotion.updatedAt,
+    payloadJson: JSON.stringify(storedMotion, null, 2)
   });
+
+  return storedMotion;
+}
+
+/**
+ * @param {import("../schema/motion.js").motionSchema._type} motion
+ * @returns {import("../schema/motion.js").motionSchema._type}
+ */
+export function updateMotion(motion) {
+  const database = getDatabase();
+  const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
+  const statement = database.prepare(`
+    UPDATE motions
+    SET status = @status,
+        source_url = @sourceUrl,
+        updated_at = @updatedAt,
+        payload_json = @payloadJson
+    WHERE id = @id
+  `);
+
+  statement.run({
+    id: storedMotion.id,
+    status: storedMotion.status,
+    sourceUrl: storedMotion.offer.sourceUrl,
+    updatedAt: storedMotion.updatedAt,
+    payloadJson: JSON.stringify(storedMotion, null, 2)
+  });
+
+  return storedMotion;
 }
 
 /**
@@ -91,7 +104,13 @@ export function findMotionById(id) {
     .get(id);
 
   if (!row) return null;
-  return JSON.parse(row.payload_json);
+
+  const { motion, repaired } = rehydrateMotion(JSON.parse(row.payload_json));
+  if (repaired) {
+    persistNormalizedMotion(motion);
+  }
+
+  return motion;
 }
 
 /**
@@ -106,7 +125,23 @@ export function listMotions() {
     `)
     .all();
 
-  return rows.map((row) => JSON.parse(row.payload_json));
+  return rows.map((row) => {
+    const { motion, repaired } = rehydrateMotion(JSON.parse(row.payload_json));
+    if (repaired) {
+      persistNormalizedMotion(motion);
+    }
+
+    return motion;
+  });
+}
+
+/**
+ * @param {string} id
+ */
+export function deleteMotion(id) {
+  getDatabase()
+    .prepare(`DELETE FROM motions WHERE id = ?`)
+    .run(id);
 }
 
 /**
@@ -204,4 +239,199 @@ export function deleteBrowserProfile(id) {
   getDatabase()
     .prepare(`DELETE FROM browser_profiles WHERE id = ?`)
     .run(id);
+}
+
+/**
+ * @param {import("../schema/company.js").companySchema._type} company
+ */
+export function insertCompany(company) {
+  const statement = getDatabase().prepare(`
+    INSERT INTO companies (id, name, search_name, domain, created_at, updated_at, payload_json)
+    VALUES (@id, @name, @searchName, @domain, @createdAt, @updatedAt, @payloadJson)
+  `);
+
+  statement.run({
+    id: company.id,
+    name: company.name,
+    searchName: company.name.trim().toLowerCase(),
+    domain: company.domain ? company.domain.trim().toLowerCase() : null,
+    createdAt: company.createdAt,
+    updatedAt: company.updatedAt,
+    payloadJson: JSON.stringify(company, null, 2)
+  });
+}
+
+/**
+ * @param {import("../schema/company.js").companySchema._type} company
+ */
+export function updateCompany(company) {
+  const statement = getDatabase().prepare(`
+    UPDATE companies
+    SET name = @name,
+        search_name = @searchName,
+        domain = @domain,
+        updated_at = @updatedAt,
+        payload_json = @payloadJson
+    WHERE id = @id
+  `);
+
+  statement.run({
+    id: company.id,
+    name: company.name,
+    searchName: company.name.trim().toLowerCase(),
+    domain: company.domain ? company.domain.trim().toLowerCase() : null,
+    updatedAt: company.updatedAt,
+    payloadJson: JSON.stringify(company, null, 2)
+  });
+}
+
+/**
+ * @param {string} id
+ * @returns {unknown | null}
+ */
+export function findCompanyById(id) {
+  const row = getDatabase()
+    .prepare(`SELECT payload_json FROM companies WHERE id = ?`)
+    .get(id);
+
+  if (!row) return null;
+  return JSON.parse(row.payload_json);
+}
+
+/**
+ * @param {string} name
+ * @param {string | null | undefined} domain
+ * @returns {unknown | null}
+ */
+export function findCompanyByIdentity(name, domain) {
+  const normalizedName = name.trim().toLowerCase();
+  const normalizedDomain = domain ? domain.trim().toLowerCase() : null;
+
+  const row = getDatabase()
+    .prepare(`
+      SELECT payload_json
+      FROM companies
+      WHERE search_name = @searchName
+         OR (@domain IS NOT NULL AND domain = @domain)
+      LIMIT 1
+    `)
+    .get({
+      searchName: normalizedName,
+      domain: normalizedDomain
+    });
+
+  if (!row) return null;
+  return JSON.parse(row.payload_json);
+}
+
+/**
+ * @returns {unknown[]}
+ */
+export function listCompanies() {
+  const rows = getDatabase()
+    .prepare(`
+      SELECT payload_json
+      FROM companies
+      ORDER BY created_at DESC
+    `)
+    .all();
+
+  return rows.map((row) => JSON.parse(row.payload_json));
+}
+
+/**
+ * @param {import("../schema/motion.js").motionSchema._type} motion
+ */
+function persistNormalizedMotion(motion) {
+  getDatabase()
+    .prepare(`
+      UPDATE motions
+      SET status = @status,
+          source_url = @sourceUrl,
+          payload_json = @payloadJson
+      WHERE id = @id
+    `)
+    .run({
+      id: motion.id,
+      status: motion.status,
+      sourceUrl: motion.offer.sourceUrl,
+      payloadJson: JSON.stringify(motion, null, 2)
+    });
+}
+
+/**
+ * @param {import("../schema/motion.js").motionSchema._type} motion
+ * @param {DatabaseSync} database
+ * @returns {import("../schema/motion.js").motionSchema._type}
+ */
+function ensureUniqueGeneratedMotionName(motion, database) {
+  const generatedBaseName = buildMotionName({
+    seed: motion.id
+  });
+
+  if (motion.name !== generatedBaseName) {
+    return motion;
+  }
+
+  let attempt = 0;
+  let candidate = generatedBaseName;
+
+  while (motionNameExists(candidate, motion.id, database)) {
+    attempt += 1;
+    candidate = buildMotionName({
+      seed: motion.id,
+      attempt
+    });
+  }
+
+  if (candidate === motion.name) {
+    return motion;
+  }
+
+  return {
+    ...motion,
+    name: candidate
+  };
+}
+
+/**
+ * @param {string} name
+ * @param {string} motionId
+ * @param {DatabaseSync} database
+ * @returns {boolean}
+ */
+function motionNameExists(name, motionId, database) {
+  const row = database
+    .prepare(`
+      SELECT id
+      FROM motions
+      WHERE id != @id
+        AND json_extract(payload_json, '$.name') = @name
+      LIMIT 1
+    `)
+    .get({
+      id: motionId,
+      name
+    });
+
+  return Boolean(row);
+}
+
+/**
+ * @param {string} term
+ * @returns {unknown[]}
+ */
+export function searchCompanies(term) {
+  const normalizedTerm = `%${term.trim().toLowerCase()}%`;
+  const rows = getDatabase()
+    .prepare(`
+      SELECT payload_json
+      FROM companies
+      WHERE search_name LIKE @term
+         OR (domain IS NOT NULL AND domain LIKE @term)
+      ORDER BY created_at DESC
+    `)
+    .all({ term: normalizedTerm });
+
+  return rows.map((row) => JSON.parse(row.payload_json));
 }

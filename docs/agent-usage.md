@@ -2,17 +2,32 @@
 
 This is the short guide for Claude, Codex, or any other agent using Exo from the command line.
 
+Exo is not mainly a thing to query. It is mainly a thing that should shape your behavior:
+
+- hold durable GTM state
+- govern what actions are allowed or safe
+- tell you what object or motion you are operating on
+- make browser-backed work and handoff work less reckless
+- act as the GTM system of record for durable findings
+
+When you answer the operator, translate Exo state into a normal operating judgment. Do not answer by reciting JSON fields or internal property names unless the operator explicitly asks for them.
+
 ## Do not treat Exo like a shell script bag
 
-Exo is a stateful local operating layer. The important thing is not just running a command. The important thing is running it from the right workspace and consuming its structured outputs correctly.
+Exo is a stateful local operating layer. The important thing is not just running a command. The important thing is running it from the right workspace and consuming its structured outputs correctly so your next action stays inside the governed Exo state model.
 
 ## Hard rules for agents
 
 1. `cd` to the Exo repo root before calling the CLI if shared local state matters.
 2. Prefer `--json` whenever Exo output will feed another step.
 3. Resolve browser profile state before browser-backed work.
-4. Fail closed if the required browser profile is missing, `warning`, or `invalid` and the action is sensitive or unattended.
-5. Use Exo nouns and verbs. Do not invent horizontal actions as if they are Exo features.
+4. Once a company is being worked, prefer its pinned browser identity over fresh profile resolution.
+5. Fail closed if the required browser profile is missing, `warning`, or `invalid` and the action is sensitive or unattended.
+6. Use Exo nouns and verbs. Do not invent horizontal actions as if they are Exo features.
+7. Prefer `exo config export --json` over copying `.exo/exo.db` when the goal is handoff or portability.
+8. Treat `company` as canonical identity and `motion` linkage as why it matters now.
+9. Assume Exo may run local state migrations on open; if a command suddenly starts working after a version bump, that is the intended repair path, not a mystery side effect.
+10. Treat Exo as the system of record. If you find a durable signal, website, stakeholder, or assignment that Exo can store, write it back before you summarize.
 
 ## Shared state rule
 
@@ -57,23 +72,128 @@ When multiple agents will operate at the same time:
 
 1. point them at the same Exo store with `EXO_STATE_DIR` or the same repo root
 2. call `exo what-is-this --json`
-3. call `exo profiles list --json`
-4. call `exo motion list --json`
+3. call `exo companies list --json`
+4. call `exo profiles list --json`
+5. call `exo profiles discover --json`
+6. call `exo profiles capabilities --json`
+7. call `exo motion list --json`
 
 The current concurrency model is shared-state, parallel-read, serialized-write.
+
+### Handoff or portability
+
+When an agent needs to hand durable Exo state to another chat, machine, or alpha user:
+
+1. `exo config export --json` for in-band structured handoff
+2. or `exo config export --out ./exo-config.json` for a file-based transfer
+3. on the receiving side, `exo config import ./exo-config.json`
+
+Do not default to copying the SQLite file directly unless the task is explicitly low-level state migration.
 
 ### Browser-backed work
 
 1. `exo profiles list --json`
-2. If needed, `exo profiles add ... --json`
-3. `exo profiles test <profile-id> --json`
-4. Refuse browser-backed work if the result is not trustworthy
+2. `exo profiles discover --json`
+3. `exo profiles capabilities --json`
+4. `exo profiles resolve --capability <capability> --json`
+5. If needed, `exo profiles add ... --json`
+6. `exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json`
+7. `exo profiles test <profile-id> --json`
+8. Refuse browser-backed work if the result is not trustworthy
+
+### Browser harness preference
+
+Exo governs browser identity. It does not choose the control harness for the session.
+
+When the session needs live browser work:
+
+1. resolve the identity in Exo
+2. prefer the native browser-control surface of the current runtime
+3. only fall back if that native surface is unavailable
+
+Concrete preference:
+
+- in Codex, prefer the Chrome skill / native Chrome connector for Chrome-backed authenticated work
+- in Claude, prefer the native browser-use/browser-control surface available in that runtime
+- do not default to Playwriter just because it exists
+
+If no native browser-control surface is available in the current session, say that explicitly before choosing any fallback path.
 
 ### Motion setup
 
 1. `exo motion add ... --json`
 2. Persist the returned `motion.id`
 3. `exo motion show <motion-id> --json` when the full stored object is needed later
+
+The motion setup call should usually define:
+
+- `premise`
+- one or more `audience hypotheses`
+- motion-specific `signals`
+- targeting and suppression inputs
+
+Agents should not assume a motion can be meaningfully retrieved or ranked if the premise is still missing and no signals have been defined.
+
+### Company registry
+
+1. `exo companies list --json`
+2. `exo companies find <term> --json`
+3. if needed, `exo companies add ... --json`
+4. `exo companies motions <company-id> --json` to see motion linkage
+5. `exo companies update <company-id> --website-url https://example.com --json` when canonical company-site identity becomes clear
+6. `exo companies research-brief <company-id> --json` before live account research
+7. `exo companies signal-matches add <company-id> --signal <signal-id> --summary "Stored reason to talk" --json` when a real signal is found
+8. `exo companies signal-matches show <company-id> --json` before writing or follow-up planning
+9. `exo companies prospects add <company-id> --name "Person Name" --title "Director Title" --email person@example.com --profile-viewed-at <iso-datetime> --live-signal-summary "Recent post shows channel activity" --why-relevant "Why this person matters now" --json` after choosing the people of record
+10. `exo companies prospects show <company-id> --json` before writing or follow-up planning
+11. `exo companies through-line set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them "Specific to them" --shared-problem "Shared problem" --why-now "Why now" --legitimate-wedge "Why they would reply" --compression-line "One sentence" --json`
+12. `exo companies opening-plan set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --why-now "Reason to talk now" --angle "Opening angle" --reply-path "Why this person would legitimately reply now" --primary-channel connection-request --fallback-channel email --fallback-trigger "Use email if LinkedIn is blocked or there is no reply." --preflight-action "View the prospect profile" --first-move "First move" --first-message-goal "Desired response" --json`
+13. `exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action "Send the first touch" --json` before execution or drafting
+14. `exo companies profile assign <company-id> --profile <profile-id> --json` when engagement starts
+15. `exo companies profile show <company-id> --json` to inspect the pinned identity
+
+### Company research
+
+The governed research loop for a motion-linked company is:
+
+1. confirm or find the canonical company website and store it in Exo
+2. inspect the company site first, especially newsroom, press, merchant, product, and company pages
+3. search Google and recent web/news results against the motion's signal questions
+4. keep only evidence recent enough to use naturally in outreach
+5. choose a tight stakeholder set instead of stopping at one exact title match
+6. persist the chosen people and first outreach plan back into Exo
+
+When you find a usable signal, do not leave it as a browser-side note. Persist it into Exo with:
+
+- signal id
+- short writer-ready summary
+- source URL
+- observed date
+- confidence
+- optional person name/title when the match is person-scoped
+
+That stored signal-match layer is what later writing should read from.
+
+Important filter:
+
+- do not persist every interesting fact as a signal match
+- only store the few strongest signals that are recent, specific, and usable in writing
+- synthesize the stored signal line into something concise and impactful enough that the writer can reuse it directly without summarizing again
+
+Practical rule:
+
+- prefer signal evidence from roughly the last 180 days
+- use 181-365 day evidence only when the change is clearly still active
+- do not use older than 365 day evidence as the primary why-now trigger
+
+Practical stakeholder rule:
+
+- start with exact target-title matches when they exist
+- if they do not, move to the closest best-fit owner whose function matches the signal and premise
+- keep the chosen set tight and inside the motion's stakeholder count
+- store one likely primary owner plus only the strongest adjacent stakeholders or sponsors
+- persist the first outreach plan using stored signal matches as the why-now spine
+- persist the most likely legitimate reply path for the primary stakeholder, not just a channel choice
 
 ## Current profile semantics
 
@@ -85,6 +205,28 @@ Browser profiles are first-class because the wrong local browser context means:
 - the wrong HubSpot org
 
 Agents should treat profile resolution as execution identity, not local preference.
+
+The claimed profile is also where weekly outreach pacing lives. In Exo this mirrors the Audienti shape:
+
+- `profile visits`
+- `connection requests` / `invitations`
+- `messages`
+
+For LinkedIn work, `messages` covers direct messages and InMail. Fresh InMail credits are still a separate live observation, not a static config value.
+
+The important distinction is:
+
+- `capabilities` are declared intent
+- `verifiedCapabilities` are what Exo can currently back with local evidence
+
+Agents should prefer `verifiedCapabilities` and `profiles resolve` when deciding which browser identity to use.
+
+Once a company has a pinned profile, agents should prefer:
+
+- `exo companies profile show <company-id> --json`
+- `exo profiles resolve --capability <capability> --company <company-id> --json`
+
+That is the current stickiness model for keeping outreach on one identity.
 
 ## Current limitations
 

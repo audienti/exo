@@ -8,7 +8,7 @@ That is downstream.
 
 The first Exo motion is:
 
-`offer -> custom signals -> target accounts -> impacted people -> action logic`
+`offer -> premise -> audience hypotheses -> motion-specific signals -> target accounts -> impacted people -> action logic`
 
 This is the motion that triggered the Audienti crisis.
 It is also the first Exo surface worth building.
@@ -20,10 +20,12 @@ The operator starts with a product, offer, or URL.
 They need Exo to answer:
 
 1. What problems does this offer actually solve?
-2. What externally verifiable signals suggest a company has that problem now?
-3. Which companies match those signals?
-4. Which people inside those companies are most affected?
-5. What is the correct opening motion for each cluster?
+2. What premise are we actually testing?
+3. Which audience or ICP hypotheses are we testing that premise against?
+4. What externally verifiable motion-specific signals suggest a company has that problem now?
+5. Which companies match those signals?
+6. Which people inside those companies are most affected?
+7. What is the correct opening motion for each cluster?
 
 That is not "generate a message."
 That is define the market motion.
@@ -34,6 +36,9 @@ The MVP should accept:
 
 - product or offer URL
 - optional offer notes
+- optional operator premise
+- optional audience hypotheses
+- optional motion-specific signals
 - optional geolocation constraints
 - optional ICP profile
 - optional industry or sub-industry constraints
@@ -96,7 +101,7 @@ The output should be a working `offer thesis`:
 
 ## Step 2: Custom signal definition
 
-Exo should then generate the top custom externally verifiable signals that suggest need.
+Exo should then generate or accept the top custom externally verifiable signals that suggest need.
 
 These signals should be:
 
@@ -104,6 +109,7 @@ These signals should be:
 - externally observable
 - plausibly recent
 - tied to the problem, not generic growth fluff
+- strong enough to support a real conversation
 
 Examples of signal classes:
 
@@ -115,11 +121,21 @@ Examples of signal classes:
 - expansion into a harder segment
 - leadership change in a relevant function
 
-The output should be a `signal-set`.
+The important rule is:
+
+- if we cannot talk to someone about it, it is not a real signal
+
+A signal is:
+
+- a question
+- a way to observe it
+- a match rule
+
+The output should be `signals`, owned by the motion itself.
 
 ## Step 3: Target map generation
 
-Given the signal-set, Exo should generate a ranked `target map`.
+Given the premise, audience hypotheses, and signals, Exo should generate a ranked `target map`.
 
 That means:
 
@@ -155,6 +171,14 @@ The important distinction is:
 - Exo defines what to look for
 - the harness uses the user's paid tools and sessions to go get it
 - Exo stores the resulting target map and evidence
+- matched companies should become first-class canonical company records, not just rows buried in a motion payload
+
+At the company-research layer, the retrieval rules should be:
+
+- confirm the canonical corporate website and store it
+- inspect the company site first for newsroom, product, merchant, and company evidence
+- check Google and recent web/news results against the motion's signal questions
+- prefer evidence recent enough to support a live conversation, not stale historical trivia
 
 ## Step 4: Impacted people
 
@@ -178,9 +202,17 @@ This step should also be able to use the operator's Sales Navigator interface to
 - capture profile evidence
 - collect likely owner and adjacent stakeholder candidates
 
+It should not stop at exact-title purity.
+
+The rule should be:
+
+- start with exact requested titles when they exist
+- if they do not, move to the best-fit director-plus owner whose function matches the signal and premise
+- collect more than one person so the motion has a realistic stakeholder surface instead of a single brittle prospect guess
+
 ## Step 5: Action logic
 
-Given the offer thesis, signal-set, target map, and role map, Exo should produce a `motion plan`.
+Given the offer thesis, premise, audience hypotheses, signals, target map, and role map, Exo should produce a `motion plan`.
 
 The motion plan should include:
 
@@ -207,12 +239,13 @@ It is better described as a `motion plan` than a campaign, because the important
 
 ## Outputs
 
-The first motion should produce four durable artifacts:
+The first motion should produce five durable artifacts:
 
 1. `offer thesis`
-2. `signal-set`
-3. `target map`
-4. `motion plan`
+2. `premise`
+3. `signals`
+4. `target map`
+5. `motion plan`
 
 Those artifacts should preserve the targeting assumptions that created them:
 
@@ -237,9 +270,9 @@ This motion should be exposed identically in CLI and MCP.
 ### CLI
 
 ```bash
-exo motion add --url https://example.com/product --geo "USA,Canada" --industry "banking,lending" --titles "CRO,VP Sales Development"
-exo motion add --url https://example.com/product --geo "EMEA" --icp "regulated-enterprise" --company-shape "multi-brand,high-compliance"
-exo motion add --url https://example.com/product --segment "traditional-fi" --segment "bnpl"
+exo motion add --url https://example.com/product --premise "This offer matters when lenders enter more complex credit-decision environments." --audience "Traditional FI risk owners" --signal "company::Is there recent evidence that this company expanded into a more complex lending segment?"
+exo motion add --url https://example.com/product --geo "EMEA" --icp "regulated-enterprise" --company-shape "multi-brand,high-compliance" --signal "person::Is there recent evidence that a senior risk owner was hired or promoted at this company?"
+exo motion add --config ./actico.motion.json
 exo motion add --url https://example.com/product --exclude-account "Known Customer Co" --exclude-domain "customer.com" --dnc-file ./dnc.csv
 exo motion refresh motion_123
 exo motion show motion_123
@@ -253,12 +286,19 @@ exo motion show motion_123
 
 ## State objects added by this motion
 
-The current Exo model needs four upstream objects:
+The current Exo model needs these upstream objects:
 
 - `offer`
-- `signal-set`
+- `premise`
+- `audience hypotheses`
+- `signals`
 - `target-map`
 - `motion-plan`
+
+The next layer after that is also clear:
+
+- `company` as canonical identity
+- later `motion_account` as the motion-specific company state
 
 And each motion should preserve its `targeting profile`:
 

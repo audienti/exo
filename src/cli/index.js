@@ -2,6 +2,8 @@
 // @ts-check
 
 import { Command } from "commander";
+import { registerCompanies } from "./commands/companies.js";
+import { registerConfig } from "./commands/config.js";
 import { registerMotion } from "./commands/motion.js";
 import { registerProfiles } from "./commands/profiles.js";
 import { registerWhatIsThis } from "./commands/what-is-this.js";
@@ -25,19 +27,42 @@ Operating rules:
 
 Common patterns:
   exo what-is-this --json
-  exo motion add --url https://example.com/product --geo "United States" --title "Chief Risk Officer"
-  exo motion add --url https://example.com/product --icp regulated-enterprise --industry banking,lending --json
+  exo motion add --url https://example.com/product --premise "This offer matters when regulated lenders enter more complex credit-decision environments." --audience "Traditional FI risk owners" --signal "company::Is there recent evidence that this company expanded into a more complex lending segment?"
+  exo motion clone <motion-id> --audience "BNPL modernization leaders" --segment bnpl --json
+  exo motion update <motion-id> --audience "Traditional FI risk owners" --title "Chief Risk Officer" --segment traditional-fi --json
+  exo motion add --config ./actico.motion.json --json
   exo motion list
   exo motion show <motion-id>
+  exo motion remove <motion-id>
+  exo companies list
+  exo companies find chainguard
+  exo companies update <company-id> --website-url https://example.com
+  exo companies motions <company-id>
+  exo companies research-brief <company-id> --json
+  exo companies signal-matches add <company-id> --signal <signal-id> --summary "Stored reason to talk"
+  exo companies signal-matches show <company-id> --json
+  exo companies prospects add <company-id> --name "Person Name" --title "Director Title" --email person@example.com --profile-viewed-at <iso-datetime> --live-signal-summary "Recent post shows channel activity" --why-relevant "Why this person matters now"
+  exo companies through-line set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them "Specific to them" --shared-problem "Shared problem" --why-now "Why now" --legitimate-wedge "Why they would reply" --compression-line "One sentence"
+  exo companies opening-plan set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --why-now "Reason to talk now" --angle "Opening angle" --reply-path "Why this person would legitimately reply now" --primary-channel connection-request --fallback-channel email --fallback-trigger "Use email if LinkedIn is blocked or there is no reply." --preflight-action "View the prospect profile" --first-move "First move" --first-message-goal "Desired response"
+  exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action "Send the first touch"
+  exo companies profile assign <company-id> --profile <profile-id> --reason "Use one identity consistently"
+  exo profiles discover --json
   exo profiles add --browser chrome --label work-linkedin --profile-directory "Profile 2" --capability linkedin --capability sales-navigator
+  exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20
   exo profiles list
+  exo profiles capabilities --json
+  exo profiles resolve --capability linkedin --json
   exo profiles test <profile-id>
+  exo config export --out ./exo-config.json
+  exo config import ./exo-config.json
 
 Current state location:
   EXO_STATE_DIR/exo.db or ./.exo/exo.db
 `
   );
 
+registerCompanies(program);
+registerConfig(program);
 registerMotion(program);
 registerProfiles(program);
 registerWhatIsThis(program);

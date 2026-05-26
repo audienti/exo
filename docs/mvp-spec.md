@@ -10,7 +10,7 @@ The MVP is a narrow operator system for one core loop:
 
 But the first motion to implement sits upstream of that loop:
 
-`offer -> signal-set -> target map -> motion plan`
+`offer -> premise -> audience hypotheses -> signals -> target map -> motion plan`
 
 Because most execution will happen through user-owned browser sessions, the MVP also needs a first-class browser-profile layer:
 
@@ -140,10 +140,12 @@ That means Exo must take over:
 The MVP must produce these concrete outputs:
 
 - offer theses
+- premises
+- audience hypotheses
 - browser profile records
 - targeting profiles
 - suppression policies
-- custom signal sets
+- motion-specific signals
 - target maps
 - motion plans
 - ranked signal items
@@ -178,7 +180,7 @@ If Exo works, a strong operator should feel:
 - LinkedIn and email as action channels
 - HubSpot as the only CRM target
 - lightweight alert delivery to an external operator surface
-- a bounded set of signals
+- a bounded set of motion-specific signals
 - explicit targeting constraints on motion creation
 - explicit excludes and do-not-contact suppression on motion creation
 - support for multiple segment variants inside one motion
@@ -490,8 +492,10 @@ Suppression constraints can include:
 Output:
 
 - offer thesis
+- premise
+- audience hypotheses
 - targeting profile
-- custom signal-set
+- motion-specific signals
 - grouped target map
 - motion plan
 

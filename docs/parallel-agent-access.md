@@ -96,7 +96,9 @@ Each agent shell should start with:
 export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
 cd /Users/williamflanagan/Projects/omalab/exo
 exo what-is-this --json
+exo companies list --json
 exo profiles list --json
+exo profiles capabilities --json
 exo motion list --json
 ```
 
@@ -116,3 +118,10 @@ This does not yet solve:
 - background coordination primitives
 
 It only establishes the minimum viable concurrency contract: separate agent processes can safely share one Exo state store.
+
+If agents are not sharing one store and the goal is handoff instead of live shared access, use:
+
+```bash
+exo config export --out ./exo-config.json
+exo config import ./exo-config.json
+```

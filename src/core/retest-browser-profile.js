@@ -14,13 +14,15 @@ export function retestBrowserProfile(rawProfile) {
     userDataDir: profile.userDataDir,
     profileDirectory: profile.profileDirectory,
     browserCommand: profile.browserCommand,
-    profilePath: profile.profilePath
+    profilePath: profile.profilePath,
+    capabilities: profile.capabilities
   });
 
   return browserProfileSchema.parse({
     ...profile,
     updatedAt: now,
     detectedProfileName: test.detectedProfileName,
+    verifiedCapabilities: test.verifiedCapabilities,
     status: test.result.status,
     lastTestedAt: now,
     lastTestResult: test.result

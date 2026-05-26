@@ -23,7 +23,8 @@ export function addBrowserProfile(input) {
     userDataDir: resolved.userDataDir,
     profileDirectory: resolved.profileDirectory,
     browserCommand: resolved.browserCommand,
-    profilePath: resolved.profilePath
+    profilePath: resolved.profilePath,
+    capabilities: input.capabilities ?? ["generic-web"]
   });
 
   return browserProfileSchema.parse({
@@ -38,6 +39,7 @@ export function addBrowserProfile(input) {
     profilePath: resolved.profilePath,
     detectedProfileName: test.detectedProfileName,
     capabilities: input.capabilities?.length ? input.capabilities : ["generic-web"],
+    verifiedCapabilities: test.verifiedCapabilities,
     notes: input.notes ?? null,
     status: test.result.status,
     lastTestedAt: now,
