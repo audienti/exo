@@ -5,9 +5,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { cloneMotionDefinition } from "../../core/clone-motion.js";
 import { defineMotion } from "../../core/define-motion.js";
+import { buildMotionDraftView } from "../../core/build-motion-draft-view.js";
+import { buildMotionProspectView } from "../../core/build-motion-prospect-view.js";
 import { evaluateMotionTargeting } from "../../core/evaluate-motion-targeting.js";
 import { refreshMotion } from "../../core/refresh-motion.js";
 import { startMotion } from "../../core/start-motion.js";
+import { transitionMotionStatus } from "../../core/transition-motion-status.js";
 import { updateMotionDefinition } from "../../core/update-motion.js";
 import {
   deleteMotion,
@@ -21,7 +24,14 @@ import {
 } from "../../db/database.js";
 import { normalizeStringList } from "../../lib/collections.js";
 import { loadDoNotContactEntries } from "../../lib/dnc.js";
-import { renderMotionStartResult, renderMotionSummary, renderMotionTargetingSummary } from "../../artifacts/render-motion.js";
+import {
+  renderMotionDraftCases,
+  renderMotionProspectList,
+  renderMotionStartResult,
+  renderMotionSummary,
+  renderMotionTargetingSummary,
+  renderMotionWritingBrief
+} from "../../artifacts/render-motion.js";
 import { companySchema } from "../../schema/company.js";
 import { motionSchema } from "../../schema/motion.js";
 
@@ -39,8 +49,14 @@ Canonical motion interface:
   exo motion start
   exo motion add
   exo motion target
+  exo motion prospects
+  exo motion drafts
   exo motion clone
   exo motion update
+  exo motion pause
+  exo motion resume
+  exo motion archive
+  exo motion restart
   exo motion refresh
   exo motion list
   exo motion show
@@ -216,6 +232,114 @@ Examples:
     });
 
   motion
+    .command("prospects")
+    .description("Show the targeted prospects stored on one motion, including recent-post warmup and writing-test readiness.")
+    .argument("<motion-id>", "Motion identifier")
+    .option("--company <company-id>", "Filter to one targeted company")
+    .option("--prospect <prospect-id>", "Show one targeted prospect in writing-brief detail")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Flattens the motion's targeted prospects across all linked target accounts.
+  - Shows whether each prospect has enough stored state to test a message outside Exo.
+  - Shows whether there is a recent-post warmup worth using, instead of forcing the operator to infer that from a raw live-signal blob.
+  - Does not generate or send messages. It exposes the stored writing inputs the agent should use.
+
+Examples:
+  exo motion prospects <motion-id>
+  exo motion prospects <motion-id> --company <company-id> --json
+  exo motion prospects <motion-id> --prospect <prospect-id>
+`
+    )
+    .action((motionId, options) => {
+      const raw = findMotionById(motionId);
+
+      if (!raw) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let result;
+      try {
+        result = buildMotionProspectView(raw, {
+          companyId: options.company ?? null,
+          prospectId: options.prospect ?? null
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      if (options.prospect) {
+        console.log(renderMotionWritingBrief(result));
+        return;
+      }
+
+      console.log(renderMotionProspectList(result));
+    });
+
+  motion
+    .command("drafts")
+    .description("Show Audienti-style draft cases for one targeted prospect without generating or sending the message text.")
+    .argument("<motion-id>", "Motion identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
+    .option("--company <company-id>", "Filter to one targeted company")
+    .option("--surface <surface>", "Draft surface: connection_request, post_accept_message, follow_up_direct_message, email, inbound_reply, public_comment, or comment_reply")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Maps one targeted prospect into the same high-level touch surfaces Audienti uses.
+  - Reads the stored through-line, opening plan, cadence, signal matches, recent-post state, and prior touches.
+  - Returns draft cases the agent can write from locally.
+  - Does not generate or send the actual message text.
+
+Examples:
+  exo motion drafts <motion-id> --prospect <prospect-id>
+  exo motion drafts <motion-id> --prospect <prospect-id> --surface connection_request --json
+`
+    )
+    .action((motionId, options) => {
+      const raw = findMotionById(motionId);
+
+      if (!raw) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let result;
+      try {
+        result = buildMotionDraftView(raw, {
+          companyId: options.company ?? null,
+          prospectId: options.prospect,
+          surface: options.surface ?? null
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderMotionDraftCases(result));
+    });
+
+  motion
     .command("clone")
     .description("Clone an existing motion into a new draft, optionally retargeted to a new audience or targeting profile.")
     .argument("<motion-id>", "Source motion identifier")
@@ -363,6 +487,62 @@ Examples:
       console.log(renderMotionSummary(storedMotion));
     });
 
+  registerMotionLifecycleCommand(motion, {
+    name: "pause",
+    description: "Pause a motion without deleting any of its state.",
+    successVerb: "Paused",
+    unchangedVerb: "already paused",
+    helpText: `
+Use this when the motion should stop being worked for now but keep all existing research and targeting state.
+
+Examples:
+  exo motion pause <motion-id>
+  exo motion pause <motion-id> --json
+`
+  });
+
+  registerMotionLifecycleCommand(motion, {
+    name: "resume",
+    description: "Resume a paused motion and mark it active again.",
+    successVerb: "Resumed",
+    unchangedVerb: "already active",
+    helpText: `
+Use this when a paused motion should become the live working motion again.
+
+Examples:
+  exo motion resume <motion-id>
+  exo motion resume <motion-id> --json
+`
+  });
+
+  registerMotionLifecycleCommand(motion, {
+    name: "archive",
+    description: "Archive a motion while keeping it readable and reusable later.",
+    successVerb: "Archived",
+    unchangedVerb: "already archived",
+    helpText: `
+Use this when the motion should stop being an active working object but should remain in history.
+
+Examples:
+  exo motion archive <motion-id>
+  exo motion archive <motion-id> --json
+`
+  });
+
+  registerMotionLifecycleCommand(motion, {
+    name: "restart",
+    description: "Restart a draft, paused, or archived motion and mark it active.",
+    successVerb: "Restarted",
+    unchangedVerb: "already active",
+    helpText: `
+Use this when an older motion should become active again without cloning or rebuilding it.
+
+Examples:
+  exo motion restart <motion-id>
+  exo motion restart <motion-id> --json
+`
+  });
+
   motion
     .command("refresh")
     .description("Refresh a stored motion from its source URL and persisted targeting inputs.")
@@ -429,7 +609,7 @@ Examples:
       }
 
       for (const item of motions) {
-        console.log(`${item.name}  ${item.id}  ${item.status}  ${item.offer.sourceUrl}`);
+        console.log(`${item.name}  ${item.id}  ${item.status}  created:${item.createdAt}  updated:${item.updatedAt}  ${item.offer.sourceUrl}`);
       }
     });
 
@@ -539,6 +719,68 @@ function collect(value, previous) {
   }
   previous.push(value);
   return previous;
+}
+
+/**
+ * @param {import("commander").Command} motion
+ * @param {{
+ *   name: "pause" | "resume" | "archive" | "restart",
+ *   description: string,
+ *   successVerb: string,
+ *   unchangedVerb: string,
+ *   helpText: string
+ * }} input
+ */
+function registerMotionLifecycleCommand(motion, input) {
+  motion
+    .command(input.name)
+    .description(input.description)
+    .argument("<motion-id>", "Motion identifier")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText("after", input.helpText)
+    .action((motionId, options) => {
+      const raw = findMotionById(motionId);
+
+      if (!raw) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let result;
+      try {
+        result = transitionMotionStatus(raw, input.name);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      const storedMotion = result.changed ? updateMotion(result.motion) : result.motion;
+
+      if (options.json) {
+        console.log(
+          JSON.stringify(
+            {
+              action: input.name,
+              changed: result.changed,
+              motion: storedMotion
+            },
+            null,
+            2
+          )
+        );
+        return;
+      }
+
+      if (result.changed) {
+        console.log(`${input.successVerb} motion ${storedMotion.name} (${storedMotion.id}).`);
+      } else {
+        console.log(`Motion ${storedMotion.name} (${storedMotion.id}) is ${input.unchangedVerb}.`);
+      }
+      console.log("");
+      console.log(renderMotionSummary(storedMotion));
+    });
 }
 
 /**

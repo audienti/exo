@@ -9,7 +9,7 @@ import { audienceHypothesisSchema } from "./audience-hypothesis.js";
 import { signalSchema } from "./signal.js";
 import { targetAccountSchema } from "./target-account.js";
 
-const statusSchema = z.enum(["draft", "active", "archived"]);
+const statusSchema = z.enum(["draft", "active", "paused", "archived"]);
 
 export const motionSchema = z.object({
   id: z.string().min(1),

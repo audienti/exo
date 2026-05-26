@@ -131,12 +131,12 @@ export function describeExo() {
         purpose: "Export and import motions, companies, and browser profiles as portable Exo configuration."
       },
       {
-        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/through-line show/set/opening-plan show/set/cadence show/set/profile show/assign",
-        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, and pin a sticky engagement profile when outreach starts."
+        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign",
+        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, and pin a sticky engagement profile when outreach starts."
       },
       {
-        command: "exo motion start/add/target/clone/update/refresh/list/show/remove",
-        purpose: "Start a motion from an offer URL, force reuse-or-branch decisions when that URL already exists, evaluate targeting readiness, and then create, branch, refine, refresh, enumerate, inspect, and remove offer-driven motion state built around premise, audience hypotheses, and motion-specific signals."
+        command: "exo motion start/add/target/prospects/drafts/clone/update/pause/resume/archive/restart/refresh/list/show/remove",
+        purpose: "Start a motion from an offer URL, force reuse-or-branch decisions when that URL already exists, evaluate targeting readiness, inspect targeted prospects and writing inputs, inspect Audienti-style draft cases, and then create, branch, refine, pause, resume, archive, restart, refresh, enumerate, inspect, and remove offer-driven motion state built around premise, audience hypotheses, and motion-specific signals."
       },
       {
         command: "exo profiles discover/add/claim/list/show/capabilities/resolve/test/remove",
@@ -188,8 +188,15 @@ export function describeExo() {
               "exo motion list --json",
               "exo motion show <motion-id> --json",
               "exo motion target <motion-id> --json",
+              "exo motion prospects <motion-id> --json",
+              "exo motion prospects <motion-id> --prospect <prospect-id> --json",
+              "exo motion drafts <motion-id> --prospect <prospect-id> --json",
               "exo motion update <motion-id> --audience \"Primary ICP\" --title \"Chief Risk Officer\" --json",
-              "exo motion clone <motion-id> --audience \"Secondary ICP\" --segment alt-segment --json"
+              "exo motion clone <motion-id> --audience \"Secondary ICP\" --segment alt-segment --json",
+              "exo motion pause <motion-id> --json",
+              "exo motion resume <motion-id> --json",
+              "exo motion archive <motion-id> --json",
+              "exo motion restart <motion-id> --json"
             ]
           },
           {

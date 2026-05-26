@@ -15,6 +15,16 @@ const cadenceStepSchema = z.enum([
   "quarterly-retouch",
   "done"
 ]);
+const touchSurfaceSchema = z.enum([
+  "connection_request",
+  "post_accept_message",
+  "follow_up_direct_message",
+  "email",
+  "inbound_reply",
+  "public_comment",
+  "comment_reply"
+]);
+const touchDirectionSchema = z.enum(["outbound", "inbound", "system"]);
 const touchOutcomeSchema = z.enum([
   "pending",
   "sent",
@@ -198,6 +208,19 @@ export const cadenceStateSchema = z.object({
   updatedAt: z.string().datetime().nullable().default(null)
 });
 
+export const touchSchema = z.object({
+  id: z.string().min(1),
+  surface: touchSurfaceSchema,
+  direction: touchDirectionSchema,
+  outcome: touchOutcomeSchema,
+  occurredAt: z.string().datetime(),
+  summary: z.string().trim().min(1).max(240),
+  subject: nullableString.default(null),
+  body: nullableString.default(null),
+  sourceUrl: z.string().url().nullable().default(null),
+  notes: nullableString.default(null)
+});
+
 export const prospectSchema = z.object({
   id: z.string().min(1),
   name: z.string().trim().min(1),
@@ -217,6 +240,7 @@ export const prospectSchema = z.object({
   liveSignal: liveSignalSchema.default({}),
   notes: nullableString.default(null),
   signalMatchIds: stringArray,
+  touches: z.array(touchSchema).default([]),
   throughLine: throughLineSchema.default({}),
   openingPlan: openingPlanSchema.default({}),
   cadenceState: cadenceStateSchema.default({})
@@ -298,6 +322,7 @@ function buildProspectsFromLegacy(source, signalMatches) {
     },
     notes: stakeholder.notes,
     signalMatchIds: stakeholder.signalMatchIds,
+    touches: [],
     throughLine: {},
     openingPlan: {},
     cadenceState: {}

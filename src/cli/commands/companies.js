@@ -11,6 +11,7 @@ import { addCompany } from "../../core/add-company.js";
 import { assignCompanyProfile } from "../../core/assign-company-profile.js";
 import { buildCompanyResearchBrief } from "../../core/build-company-research-brief.js";
 import { recordMotionProspect } from "../../core/record-prospect.js";
+import { recordMotionProspectTouch } from "../../core/record-prospect-touch.js";
 import { recordMotionSignalMatch } from "../../core/record-signal-match.js";
 import { setMotionProspectCadence } from "../../core/set-prospect-cadence.js";
 import { setMotionProspectOpeningPlan } from "../../core/set-prospect-opening-plan.js";
@@ -60,6 +61,8 @@ Canonical companies interface:
   exo companies opening-plan set <company-id>
   exo companies cadence show <company-id>
   exo companies cadence set <company-id>
+  exo companies touches show <company-id>
+  exo companies touches add <company-id>
   exo companies profile show <company-id>
   exo companies profile assign <company-id> --profile <profile-id>
 
@@ -70,6 +73,7 @@ Rules:
   - Use exo companies research-brief before live account research so the agent works from signals, recent evidence, and best-fit prospect fallback.
   - Persist signal matches on the motion-owned target account, not on the canonical company itself.
   - Persist the chosen prospects, their through-lines, their opening plans, and their cadence state on the same motion-owned target account.
+  - Persist the real engagement touch history on the same prospect record so later draft cases can stay contextually grounded.
   - Treat stored signal matches, prospect through-lines, and opening plans as the writing and engagement source of truth.
   - Richer motion-account state comes later; this surface is the first real company registry.
 `
@@ -1085,6 +1089,123 @@ Rules:
       }
     });
 
+  const touches = companies
+    .command("touches")
+    .description("Inspect or append stored prospect touch history for one company in one motion.");
+
+  touches
+    .command("show")
+    .description("Show stored touch history for one prospect.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--json", "Emit machine-readable JSON")
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, motion, account } = context;
+      const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
+      const result = {
+        company,
+        motion: { id: motion.id, name: motion.name },
+        prospect,
+        touches: prospect?.touches ?? []
+      };
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      if (!prospect) {
+        console.log(`No stored prospect ${options.prospect} on ${company.name} in motion ${motion.name}.`);
+        return;
+      }
+
+      console.log(renderTouchList(company.name, motion.name, prospect));
+    });
+
+  touches
+    .command("add")
+    .description("Append one stored touchpoint to a motion prospect.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
+    .requiredOption("--surface <surface>", "Touch surface: connection_request, post_accept_message, follow_up_direct_message, email, inbound_reply, public_comment, or comment_reply")
+    .requiredOption("--direction <direction>", "Touch direction: outbound, inbound, or system")
+    .requiredOption("--outcome <outcome>", "Touch outcome: pending, sent, accepted, ignored, opened-no-reply, replied, blocked, or nurture")
+    .requiredOption("--occurred-at <datetime>", "When the touch happened")
+    .requiredOption("--summary <text>", "Short summary of what happened")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--subject <text>", "Subject line when the touch used one")
+    .option("--body <text>", "Body snippet or note about the touch")
+    .option("--source-url <url>", "Source URL for the touch context")
+    .option("--notes <notes>", "Optional notes")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies touches add <company-id> --motion <motion-id> --prospect <prospect-id> --surface connection_request --direction outbound --outcome sent --occurred-at 2026-05-26T17:00:00.000Z --summary "Sent first connection request"
+  exo companies touches add <company-id> --motion <motion-id> --prospect <prospect-id> --surface post_accept_message --direction outbound --outcome sent --occurred-at 2026-05-29T17:00:00.000Z --summary "Sent first DM after acceptance" --body "Short DM text"
+
+Rules:
+  - Store what actually happened, not what you hoped to send.
+  - Touch history is the prospect-level memory the later draft case should read from.
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, rawMotion } = context;
+
+      try {
+        const updatedMotion = recordMotionProspectTouch(rawMotion, company, {
+          prospectId: options.prospect,
+          surface: normalizeTouchSurface(options.surface),
+          direction: normalizeTouchDirection(options.direction),
+          outcome: normalizeCadenceOutcome(options.outcome),
+          occurredAt: options.occurredAt,
+          summary: options.summary,
+          subject: options.subject,
+          body: options.body,
+          sourceUrl: options.sourceUrl,
+          notes: options.notes
+        });
+        const storedMotion = updateMotion(updatedMotion);
+        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+        const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
+        const result = {
+          company,
+          motion: { id: storedMotion.id, name: storedMotion.name },
+          prospect,
+          touches: prospect?.touches ?? []
+        };
+
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        if (!prospect) {
+          console.log(`No touch history was stored for prospect ${options.prospect}.`);
+          return;
+        }
+
+        console.log(renderTouchList(company.name, storedMotion.name, prospect));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
   companyProfile
     .command("show")
     .description("Show the sticky browser profile assignment for a company.")
@@ -1395,6 +1516,48 @@ function normalizeCadenceStep(value) {
 
 /**
  * @param {string | undefined} value
+ * @returns {"connection_request" | "post_accept_message" | "follow_up_direct_message" | "email" | "inbound_reply" | "public_comment" | "comment_reply" | undefined}
+ */
+function normalizeTouchSurface(value) {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "connection_request"
+    || normalized === "post_accept_message"
+    || normalized === "follow_up_direct_message"
+    || normalized === "email"
+    || normalized === "inbound_reply"
+    || normalized === "public_comment"
+    || normalized === "comment_reply"
+  ) {
+    return normalized;
+  }
+
+  throw new Error(`Invalid touch surface: ${value}`);
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"outbound" | "inbound" | "system" | undefined}
+ */
+function normalizeTouchDirection(value) {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "outbound" || normalized === "inbound" || normalized === "system") {
+    return normalized;
+  }
+
+  throw new Error(`Invalid touch direction: ${value}`);
+}
+
+/**
+ * @param {string | undefined} value
  * @returns {"under-6-months" | "6-to-24-months" | "24-to-60-months" | "60-plus-months" | "unknown" | undefined}
  */
 function normalizeTenureBand(value) {
@@ -1606,6 +1769,37 @@ function renderCadenceDetail(companyName, motionName, prospect) {
     `Blocked Channels: ${prospect.cadenceState.blockedChannels.join(", ") || "none"}`,
     `Require New Hook: ${prospect.cadenceState.requireNewHook ? "yes" : "no"}`
   ].join("\n");
+}
+
+/**
+ * @param {string} companyName
+ * @param {string} motionName
+ * @param {import("../../schema/target-account.js").prospectSchema._type} prospect
+ */
+function renderTouchList(companyName, motionName, prospect) {
+  const lines = [
+    `Touches: ${companyName}`,
+    `Motion: ${motionName}`,
+    `Prospect: ${prospect.name} (${prospect.title})`
+  ];
+
+  if (!prospect.touches.length) {
+    lines.push("No stored touches.");
+    return lines.join("\n");
+  }
+
+  for (const touch of prospect.touches) {
+    lines.push(`- ${touch.occurredAt}  ${touch.surface}  ${touch.direction}  ${touch.outcome}`);
+    lines.push(`  Summary: ${touch.summary}`);
+    if (touch.subject) {
+      lines.push(`  Subject: ${touch.subject}`);
+    }
+    if (touch.body) {
+      lines.push(`  Body: ${touch.body}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 /**

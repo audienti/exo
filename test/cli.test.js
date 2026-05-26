@@ -133,6 +133,110 @@ test("motion add seeds a motion, motion refresh updates it, and motion list sees
     assert.match(listOutput, new RegExp(motion.name));
     assert.match(listOutput, new RegExp(motion.id));
     assert.match(listOutput, /draft/);
+    assert.match(listOutput, /created:/);
+    assert.match(listOutput, /updated:/);
+
+    const showOutput = execFileSync("node", [cliPath, "motion", "show", motion.id], {
+      cwd: tempDir,
+      encoding: "utf8"
+    });
+    assert.match(showOutput, /Created:/);
+    assert.match(showOutput, /Updated:/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("motion lifecycle commands transition status cleanly and targeting respects paused and archived motions", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-lifecycle-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when regulated lenders enter more complex credit-decision environments.",
+          "--audience",
+          "Traditional FI risk owners",
+          "--signal",
+          "company::Is there recent evidence that this company expanded into a more complex lending segment?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const paused = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "pause", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(paused.action, "pause");
+    assert.equal(paused.changed, true);
+    assert.equal(paused.motion.status, "paused");
+    assert.notEqual(paused.motion.updatedAt, motion.updatedAt);
+
+    const pausedTargeting = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "target", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(pausedTargeting.overallStage, "paused");
+    assert.equal(pausedTargeting.motionPreflight.status, "blocked");
+    assert.ok(pausedTargeting.motionPreflight.blockers.some((blocker) => /paused/i.test(blocker)));
+    assert.ok(pausedTargeting.nextActions.some((step) => /motion resume/i.test(step)));
+
+    const resumed = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "resume", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(resumed.action, "resume");
+    assert.equal(resumed.changed, true);
+    assert.equal(resumed.motion.status, "active");
+
+    const archived = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "archive", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(archived.action, "archive");
+    assert.equal(archived.changed, true);
+    assert.equal(archived.motion.status, "archived");
+
+    const archivedTargeting = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "target", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(archivedTargeting.overallStage, "archived");
+    assert.equal(archivedTargeting.motionPreflight.status, "blocked");
+    assert.ok(archivedTargeting.motionPreflight.blockers.some((blocker) => /archived/i.test(blocker)));
+    assert.ok(archivedTargeting.nextActions.some((step) => /motion restart/i.test(step)));
+
+    const restarted = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(restarted.action, "restart");
+    assert.equal(restarted.changed, true);
+    assert.equal(restarted.motion.status, "active");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2006,6 +2110,22 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
     assert.equal(prospects.prospects[0].identityTells.aboutQuotes[0], "Risk leader focused on portfolio quality, portfolio performance, and control.");
     assert.equal(prospects.prospects[0].liveSignal.channel, "linkedin");
 
+    const motionProspectsBeforePlanning = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "prospects", motion.id, "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(motionProspectsBeforePlanning.counts.prospectCount, 2);
+    assert.equal(motionProspectsBeforePlanning.counts.messageTestReadyCount, 0);
+    assert.equal(motionProspectsBeforePlanning.counts.recentPostReadyCount, 1);
+    assert.equal(motionProspectsBeforePlanning.prospects[0].recentPost.engageable, true);
+
     const throughLineResult = JSON.parse(
       execFileSync(
         "node",
@@ -2147,6 +2267,151 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
     assert.equal(cadenceResult.cadence.lastTouchOutcome, "sent");
     assert.equal(cadenceResult.cadence.blockedChannels[0], "inmail");
 
+    const firstTouch = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "touches",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          primaryProspectId,
+          "--surface",
+          "connection_request",
+          "--direction",
+          "inbound",
+          "--outcome",
+          "accepted",
+          "--occurred-at",
+          "2026-05-28T17:00:00.000Z",
+          "--summary",
+          "Accepted the initial connection request.",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    assert.equal(firstTouch.touches.length, 1);
+    assert.equal(firstTouch.touches[0].surface, "connection_request");
+
+    const secondTouch = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "touches",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          primaryProspectId,
+          "--surface",
+          "post_accept_message",
+          "--direction",
+          "outbound",
+          "--outcome",
+          "sent",
+          "--occurred-at",
+          "2026-05-29T17:00:00.000Z",
+          "--summary",
+          "Sent the first direct message after acceptance.",
+          "--body",
+          "Short direct message draft that was actually sent.",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    assert.equal(secondTouch.touches.length, 2);
+
+    const thirdTouch = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "touches",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          primaryProspectId,
+          "--surface",
+          "public_comment",
+          "--direction",
+          "outbound",
+          "--outcome",
+          "sent",
+          "--occurred-at",
+          "2026-05-30T17:00:00.000Z",
+          "--summary",
+          "Left a public comment on the recent LinkedIn post.",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    assert.equal(thirdTouch.touches.length, 3);
+
+    const motionProspectBrief = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "prospects", motion.id, "--prospect", primaryProspectId, "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(motionProspectBrief.writingBrief.messageTestReady, true);
+    assert.equal(motionProspectBrief.writingBrief.recentPost.engageable, true);
+    assert.equal(motionProspectBrief.writingBrief.touches.length, 3);
+    assert.equal(motionProspectBrief.writingBrief.signalMatches.length, 1);
+
+    const motionDraftCases = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "drafts", motion.id, "--prospect", primaryProspectId, "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const connectionRequestCard = motionDraftCases.surfaces.find((surface) => surface.key === "connection_request");
+    const firstDirectMessageCard = motionDraftCases.surfaces.find((surface) => surface.key === "post_accept_message");
+    const followUpCard = motionDraftCases.surfaces.find((surface) => surface.key === "follow_up_direct_message");
+    const emailCard = motionDraftCases.surfaces.find((surface) => surface.key === "email");
+    const publicCommentCard = motionDraftCases.surfaces.find((surface) => surface.key === "public_comment");
+    const commentReplyCard = motionDraftCases.surfaces.find((surface) => surface.key === "comment_reply");
+
+    assert.equal(connectionRequestCard.available, false);
+    assert.match(connectionRequestCard.missingReason, /already recorded/i);
+    assert.equal(firstDirectMessageCard.available, true);
+    assert.equal(followUpCard.available, true);
+    assert.equal(emailCard.available, true);
+    assert.equal(publicCommentCard.available, true);
+    assert.equal(commentReplyCard.available, true);
+    assert.equal(firstDirectMessageCard.priorTouches.length, 3);
+
     const shownMotion = JSON.parse(
       execFileSync("node", [cliPath, "motion", "show", motion.id, "--json"], {
         cwd: tempDir,
@@ -2158,6 +2423,7 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
     assert.equal(shownMotion.targetMap.accounts[0].prospects.length, 2);
     assert.equal(shownMotion.targetMap.accounts[0].prospects[0].email, "minh@example.com");
     assert.equal(shownMotion.targetMap.accounts[0].prospects[0].liveSignal.channel, "linkedin");
+    assert.equal(shownMotion.targetMap.accounts[0].prospects[0].touches.length, 3);
     assert.equal(shownMotion.targetMap.accounts[0].prospects[0].throughLine.status, "ready");
     assert.equal(shownMotion.targetMap.accounts[0].prospects[0].openingPlan.status, "ready");
     assert.equal(shownMotion.targetMap.accounts[0].prospects[0].cadenceState.status, "ready");
@@ -2504,6 +2770,8 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   assert.match(companiesHelp, /exo companies opening-plan set <company-id>/);
   assert.match(companiesHelp, /exo companies cadence show <company-id>/);
   assert.match(companiesHelp, /exo companies cadence set <company-id>/);
+  assert.match(companiesHelp, /exo companies touches show <company-id>/);
+  assert.match(companiesHelp, /exo companies touches add <company-id>/);
   assert.match(companiesHelp, /exo companies profile show <company-id>/);
   assert.match(companiesHelp, /exo companies profile assign <company-id> --profile <profile-id>/);
   assert.match(companiesHelp, /Keep the noun consistent/);
@@ -2523,6 +2791,12 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   });
   assert.match(motionRootHelp, /exo motion clone/);
   assert.match(motionRootHelp, /exo motion update/);
+  assert.match(motionRootHelp, /exo motion prospects/);
+  assert.match(motionRootHelp, /exo motion drafts/);
+  assert.match(motionRootHelp, /exo motion pause/);
+  assert.match(motionRootHelp, /exo motion resume/);
+  assert.match(motionRootHelp, /exo motion archive/);
+  assert.match(motionRootHelp, /exo motion restart/);
   assert.match(motionRootHelp, /exo motion refresh/);
 });
 
@@ -2546,11 +2820,11 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected config portability surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/through-line show/set/opening-plan show/set/cadence show/set/profile show/assign"),
+    about.currentCapabilities.some((item) => item.command === "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign"),
     "expected companies surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo motion start/add/target/clone/update/refresh/list/show/remove"),
+    about.currentCapabilities.some((item) => item.command === "exo motion start/add/target/prospects/drafts/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
     "expected motion write surface to be listed in current capabilities"
   );
   assert.ok(

@@ -11,6 +11,7 @@ export function renderMotionSummary(motion) {
     `Status: ${motion.status}`,
     `URL: ${motion.offer.sourceUrl}`,
     `Created: ${motion.createdAt}`,
+    `Updated: ${motion.updatedAt}`,
     "",
     "Premise",
     `  Statement: ${motion.premise.statement ?? "none"}`,
@@ -316,6 +317,290 @@ export function renderMotionTargetingSummary(result) {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * @param {{
+ *   motion: {
+ *     id: string,
+ *     name: string,
+ *     status: string,
+ *     sourceUrl: string,
+ *     createdAt: string,
+ *     updatedAt: string
+ *   },
+ *   counts: {
+ *     companyCount: number,
+ *     prospectCount: number,
+ *     messageTestReadyCount: number,
+ *     recentPostReadyCount: number,
+ *     emailFallbackCount: number
+ *   },
+ *   prospects: Array<{
+ *     companyId: string,
+ *     companyName: string,
+ *     prospectId: string,
+ *     name: string,
+ *     title: string,
+ *     buyingCommitteeRole: string,
+ *     decisionAuthority: string,
+ *     fitConfidence: string,
+ *     messageTestReady: boolean,
+ *     recentPost: { engageable: boolean },
+ *     hasEmailFallback: boolean,
+ *     primaryChannel: string | null,
+ *     compressionLine: string | null
+ *   }>
+ * }} result
+ */
+export function renderMotionProspectList(result) {
+  const lines = [
+    `Motion Prospects: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Status: ${result.motion.status}`,
+    `Created: ${result.motion.createdAt}`,
+    `Updated: ${result.motion.updatedAt}`,
+    `Companies: ${result.counts.companyCount}`,
+    `Prospects: ${result.counts.prospectCount}`,
+    `Message-Test Ready: ${result.counts.messageTestReadyCount}`,
+    `Recent Post Warmups: ${result.counts.recentPostReadyCount}`,
+    `Email Fallbacks: ${result.counts.emailFallbackCount}`
+  ];
+
+  if (!result.prospects.length) {
+    lines.push("", "No targeted prospects are stored on this motion yet.");
+    return lines.join("\n");
+  }
+
+  lines.push("", "Prospects");
+  for (const prospect of result.prospects) {
+    lines.push(
+      `  ${prospect.prospectId}  ${prospect.companyName}  ${prospect.name} — ${prospect.title}  [${prospect.buyingCommitteeRole}, ${prospect.decisionAuthority}, ${prospect.fitConfidence}]`
+    );
+    lines.push(
+      `    Message-Test: ${prospect.messageTestReady ? "ready" : "not-ready"}  Recent Post Warmup: ${prospect.recentPost.engageable ? "ready" : "not-ready"}  Email: ${prospect.hasEmailFallback ? "yes" : "no"}  Channel: ${prospect.primaryChannel ?? "none"}`
+    );
+    if (prospect.compressionLine) {
+      lines.push(`    Compression: ${prospect.compressionLine}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {{
+ *   motion: {
+ *     id: string,
+ *     name: string,
+ *     status: string
+ *   },
+ *   writingBrief: {
+ *     company: {
+ *       id: string,
+ *       name: string,
+ *       websiteUrl: string | null,
+ *       linkedinCompanyUrl: string | null
+ *     },
+ *     prospect: {
+ *       prospectId: string,
+ *       name: string,
+ *       title: string,
+ *       buyingCommitteeRole: string,
+ *       decisionAuthority: string,
+ *       fitConfidence: string,
+ *       whyRelevant: string,
+ *       linkedinProfileUrl: string | null,
+ *       email: string | null,
+ *       profileViewedAt: string | null,
+ *       roleTruth: { summary: string | null },
+ *       triggerWindow: { summary: string | null, whyNowAnchor: string | null },
+ *       identityTells: { summary: string | null, headline: string | null },
+ *       liveSignal: {
+ *         channel: string | null,
+ *         activityType: string | null,
+ *         summary: string | null,
+ *         url: string | null,
+ *         observedAt: string | null,
+ *         freshnessBand: string | null,
+ *         hookStrength: string | null,
+ *         engagementRationale: string | null
+ *       },
+ *       recentPost: { engageable: boolean, reason: string },
+ *       signalMatches: Array<{ signalName: string, summary: string, sourceUrl: string | null, observedAt: string | null, confidence: string }>,
+ *       throughLine: {
+ *         specificToThem: string | null,
+ *         sharedProblem: string | null,
+ *         whyNow: string | null,
+ *         legitimateWedge: string | null,
+ *         compressionLine: string | null
+ *       },
+ *       openingPlan: {
+ *         whyNow: string | null,
+ *         angle: string | null,
+ *         replyPath: string | null,
+ *         primaryChannel: string | null,
+ *         fallbackChannel: string | null,
+ *         fallbackTrigger: string | null,
+ *         firstMove: string | null,
+ *         firstMessageGoal: string | null,
+ *         preflightActions: string[]
+ *       },
+ *       cadenceState: {
+ *         currentStep: string | null,
+ *         nextAction: string | null,
+ *         nextActionDueAt: string | null
+ *       },
+ *       touches: Array<{
+ *         occurredAt: string,
+ *         surface: string,
+ *         direction: string,
+ *         outcome: string,
+ *         summary: string
+ *       }>
+ *     },
+ *     messageTestReady: boolean,
+ *     recentPost: { engageable: boolean, reason: string }
+ *   } | null
+ * }} result
+ */
+export function renderMotionWritingBrief(result) {
+  if (!result.writingBrief) {
+    return `No writing brief is available for motion ${result.motion.name}.`;
+  }
+
+  const { company, prospect, messageTestReady, recentPost } = result.writingBrief;
+  const lines = [
+    `Motion Writing Brief: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Company: ${company.name} (${company.id})`,
+    `Prospect: ${prospect.name} (${prospect.title})`,
+    `Prospect ID: ${prospect.prospectId}`,
+    `Message-Test Ready: ${messageTestReady ? "yes" : "no"}`,
+    `Recent Post Warmup: ${recentPost.engageable ? "ready" : "not-ready"}`,
+    `Recent Post Reason: ${recentPost.reason}`,
+    `Primary Channel: ${prospect.openingPlan.primaryChannel ?? "none"}`,
+    `Fallback Channel: ${prospect.openingPlan.fallbackChannel ?? "none"}`,
+    `First Message Goal: ${prospect.openingPlan.firstMessageGoal ?? "none"}`,
+    `Reply Path: ${prospect.openingPlan.replyPath ?? "none"}`,
+    "",
+    "Prospect Context",
+    `  Why Relevant: ${prospect.whyRelevant}`,
+    `  Role Truth: ${prospect.roleTruth.summary ?? "none"}`,
+    `  Trigger Window: ${prospect.triggerWindow.summary ?? "none"}`,
+    `  Identity Tells: ${prospect.identityTells.summary ?? "none"}`,
+    `  Live Signal: ${prospect.liveSignal.summary ?? "none"}`,
+    `  Live Signal URL: ${prospect.liveSignal.url ?? "none"}`,
+    `  Live Signal Freshness: ${prospect.liveSignal.freshnessBand ?? "unknown"}`,
+    `  Live Signal Hook Strength: ${prospect.liveSignal.hookStrength ?? "unknown"}`,
+    "",
+    "Through-Line",
+    `  Specific To Them: ${prospect.throughLine.specificToThem ?? "none"}`,
+    `  Shared Problem: ${prospect.throughLine.sharedProblem ?? "none"}`,
+    `  Why Now: ${prospect.throughLine.whyNow ?? "none"}`,
+    `  Legitimate Wedge: ${prospect.throughLine.legitimateWedge ?? "none"}`,
+    `  Compression Line: ${prospect.throughLine.compressionLine ?? "none"}`,
+    "",
+    "Opening Plan",
+    `  Angle: ${prospect.openingPlan.angle ?? "none"}`,
+    `  First Move: ${prospect.openingPlan.firstMove ?? "none"}`,
+    `  Fallback Trigger: ${prospect.openingPlan.fallbackTrigger ?? "none"}`,
+    `  Preflight Actions: ${prospect.openingPlan.preflightActions.join(" | ") || "none"}`,
+    "",
+    "Cadence",
+    `  Current Step: ${prospect.cadenceState.currentStep ?? "none"}`,
+    `  Next Action: ${prospect.cadenceState.nextAction ?? "none"}`,
+    `  Next Action Due At: ${prospect.cadenceState.nextActionDueAt ?? "none"}`,
+    "",
+    "Prior Touches"
+  ];
+
+  if (!prospect.touches.length) {
+    lines.push("  none");
+  } else {
+    for (const touch of prospect.touches) {
+      lines.push(`  - ${touch.occurredAt}  ${touch.surface}  ${touch.direction}  ${touch.outcome}`);
+      lines.push(`    Summary: ${touch.summary}`);
+    }
+  }
+
+  lines.push(
+    "",
+    "Signal Matches"
+  );
+
+  if (!prospect.signalMatches.length) {
+    lines.push("  none");
+  } else {
+    for (const match of prospect.signalMatches) {
+      lines.push(`  - ${match.signalName} [${match.confidence}]`);
+      lines.push(`    Writing Signal: ${match.summary}`);
+      if (match.observedAt) {
+        lines.push(`    Observed: ${match.observedAt}`);
+      }
+      if (match.sourceUrl) {
+        lines.push(`    Source: ${match.sourceUrl}`);
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {{
+ *   motion: { id: string, name: string },
+ *   prospect: { name: string, title: string },
+ *   company: { name: string },
+ *   surfaces: Array<{
+ *     key: string,
+ *     stage: string,
+ *     channel: string,
+ *     available: boolean,
+ *     missingReason: string | null,
+ *     priorTouches: Array<{ occurredAt: string, surface: string, outcome: string, summary: string }>,
+ *     contextSummary: {
+ *       compressionLine: string | null,
+ *       whyNow: string | null,
+ *       angle: string | null,
+ *       replyPath: string | null,
+ *       firstMessageGoal: string | null,
+ *       recentPostReady: boolean
+ *     }
+ *   }>
+ * }} result
+ */
+export function renderMotionDraftCases(result) {
+  const lines = [
+    `Motion Draft Cases: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Company: ${result.company.name}`,
+    `Prospect: ${result.prospect.name} (${result.prospect.title})`,
+    ""
+  ];
+
+  for (const surface of result.surfaces) {
+    lines.push(`${surface.stage}  [${surface.key}]  ${surface.available ? "available" : "unavailable"}`);
+    lines.push(`  Channel: ${surface.channel}`);
+    lines.push(`  Recent Post Warmup: ${surface.contextSummary.recentPostReady ? "ready" : "not-ready"}`);
+    lines.push(`  Compression: ${surface.contextSummary.compressionLine ?? "none"}`);
+    lines.push(`  Why Now: ${surface.contextSummary.whyNow ?? "none"}`);
+    lines.push(`  Angle: ${surface.contextSummary.angle ?? "none"}`);
+    lines.push(`  Reply Path: ${surface.contextSummary.replyPath ?? "none"}`);
+    lines.push(`  First Message Goal: ${surface.contextSummary.firstMessageGoal ?? "none"}`);
+    if (!surface.available) {
+      lines.push(`  Missing Reason: ${surface.missingReason ?? "unknown"}`);
+    }
+    if (surface.priorTouches.length) {
+      lines.push("  Prior Touches:");
+      for (const touch of surface.priorTouches) {
+        lines.push(`    - ${touch.occurredAt}  ${touch.surface}  ${touch.outcome}: ${touch.summary}`);
+      }
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n").trimEnd();
 }
 
 /**

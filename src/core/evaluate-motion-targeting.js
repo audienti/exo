@@ -62,6 +62,15 @@ export function evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, op
 function buildMotionPreflight(motion) {
   /** @type {string[]} */
   const blockers = [];
+  let blockerType = null;
+
+  if (motion.status === "paused") {
+    blockers.push("Motion is paused. Resume or restart it before targeting.");
+    blockerType = "lifecycle";
+  } else if (motion.status === "archived") {
+    blockers.push("Motion is archived. Restart it or clone it before targeting.");
+    blockerType = "lifecycle";
+  }
 
   if (!motion.offer.sourceUrl) {
     blockers.push("Set the offer source URL first.");
@@ -81,7 +90,8 @@ function buildMotionPreflight(motion) {
 
   return {
     status: blockers.length ? "blocked" : "ready",
-    blockers
+    blockers,
+    blockerType
   };
 }
 
@@ -210,6 +220,16 @@ function resolveCompanyExecutionIdentity(company, profiles, capability, globalRe
  */
 function deriveOverallStage(motionPreflight, companyLoop) {
   if (motionPreflight.status === "blocked") {
+    if (motionPreflight.blockerType === "lifecycle") {
+      if (motionPreflight.blockers.some((blocker) => blocker.includes("paused"))) {
+        return "paused";
+      }
+
+      if (motionPreflight.blockers.some((blocker) => blocker.includes("archived"))) {
+        return "archived";
+      }
+    }
+
     return "needs-motion-definition";
   }
 
@@ -251,6 +271,18 @@ function buildNextActions(motion, motionPreflight, browserGate, companyLoop) {
   const actions = [];
 
   if (motionPreflight.status === "blocked") {
+    if (motionPreflight.blockerType === "lifecycle") {
+      if (motion.status === "paused") {
+        actions.push(`Resume the motion with exo motion resume ${motion.id} or restart it with exo motion restart ${motion.id}.`);
+        return actions;
+      }
+
+      if (motion.status === "archived") {
+        actions.push(`Restart the archived motion with exo motion restart ${motion.id} or branch it with exo motion clone ${motion.id} ... .`);
+        return actions;
+      }
+    }
+
     actions.push(...motionPreflight.blockers.map((blocker) => `${blocker} Use exo motion update ${motion.id} ... to fix it.`));
     return actions;
   }
