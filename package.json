@@ -1,0 +1,21 @@
+{
+  "name": "@omalab/exo",
+  "version": "0.1.0",
+  "description": "Exo GTM operating kernel CLI",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "bin": {
+    "exo": "./src/cli/index.js"
+  },
+  "scripts": {
+    "dev": "node ./src/cli/index.js",
+    "check": "node --check ./src/cli/index.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "commander": "^14.0.1",
+    "zod": "^3.25.76"
+  }
+}
