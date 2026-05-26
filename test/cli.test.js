@@ -1792,10 +1792,56 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
           "high",
           "--signal-match",
           signalMatchId,
+          "--role-description",
+          "Leads risk and credit policy across BillEase lending surfaces.",
+          "--role-summary",
+          "Owns the control implications of wider merchant and borrower data coverage.",
+          "--operating-mode",
+          "leading",
+          "--scope",
+          "company-wide risk",
+          "--role-evidence",
+          "Current role description references risk leadership, policy ownership, and direct operator accountability.",
+          "--trigger-summary",
+          "BillEase is broadening decisioning complexity through new data and merchant surfaces.",
+          "--tenure-band",
+          "6-to-24-months",
+          "--why-now-anchor",
+          "LenderLink creates a current reason to revisit decisioning ownership.",
+          "--person-trigger",
+          "Current research surfaced Minh as the visible risk owner.",
+          "--company-trigger",
+          "Joined a cross-lender intelligence network.",
+          "--identity-summary",
+          "Presents as the operating risk owner rather than a generic executive sponsor.",
+          "--headline",
+          "Head of Risk",
+          "--about-quote",
+          "Risk leader focused on portfolio quality, portfolio performance, and control.",
+          "--framework",
+          "Risk governance",
+          "--self-image-verb",
+          "leading",
           "--why-relevant",
           "Best-fit owner for the data-sharing and decisioning-complexity story.",
           "--source-url",
           "https://www.linkedin.com/in/minh-le",
+          "--active-channel",
+          "linkedin",
+          "--activity-type",
+          "own-post",
+          "--live-signal-summary",
+          "Recent post on merchant-risk growth suggests active LinkedIn use.",
+          "--live-signal-url",
+          "https://www.linkedin.com/posts/minh-example",
+          "--live-signal-observed-at",
+          "2026-05-24T00:00:00.000Z",
+          "--freshness-band",
+          "15-30-days",
+          "--hook-strength",
+          "high",
+          "--engagement-rationale",
+          "Recent public posting is positive evidence this channel is live enough for legitimate engagement.",
           "--json"
         ],
         {
@@ -1806,6 +1852,18 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
     );
 
     const primaryProspectId = primaryProspectResult.prospects[0].id;
+    assert.equal(primaryProspectResult.prospects[0].roleTruth.currentRoleDescription, "Leads risk and credit policy across BillEase lending surfaces.");
+    assert.equal(primaryProspectResult.prospects[0].roleTruth.operatingMode, "leading");
+    assert.equal(primaryProspectResult.prospects[0].triggerWindow.tenureBand, "6-to-24-months");
+    assert.equal(primaryProspectResult.prospects[0].identityTells.headline, "Head of Risk");
+    assert.deepEqual(primaryProspectResult.prospects[0].roleTruth.evidence, [
+      "Current role description references risk leadership, policy ownership, and direct operator accountability."
+    ]);
+    assert.deepEqual(primaryProspectResult.prospects[0].identityTells.aboutQuotes, [
+      "Risk leader focused on portfolio quality, portfolio performance, and control."
+    ]);
+    assert.equal(primaryProspectResult.prospects[0].liveSignal.channel, "linkedin");
+    assert.equal(primaryProspectResult.prospects[0].liveSignal.freshnessBand, "15-30-days");
 
     const enrichedPrimaryProspectResult = JSON.parse(
       execFileSync(
@@ -1943,6 +2001,9 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
     assert.equal(prospects.prospects[0].signalMatchIds[0], signalMatchId);
     assert.equal(prospects.prospects[0].email, "minh@example.com");
     assert.equal(prospects.prospects[0].profileViewedAt, "2026-05-26T16:00:00.000Z");
+    assert.equal(prospects.prospects[0].roleTruth.currentRoleDescription, "Leads risk and credit policy across BillEase lending surfaces.");
+    assert.equal(prospects.prospects[0].triggerWindow.summary, "BillEase is broadening decisioning complexity through new data and merchant surfaces.");
+    assert.equal(prospects.prospects[0].identityTells.aboutQuotes[0], "Risk leader focused on portfolio quality, portfolio performance, and control.");
     assert.equal(prospects.prospects[0].liveSignal.channel, "linkedin");
 
     const throughLineResult = JSON.parse(

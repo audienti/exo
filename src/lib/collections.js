@@ -15,3 +15,16 @@ export function normalizeStringList(values) {
   )];
 }
 
+/**
+ * @param {string[] | undefined} values
+ * @returns {string[]}
+ */
+export function normalizeRepeatedStringList(values) {
+  if (!values) return [];
+
+  return [...new Set(
+    values
+      .map((value) => value.trim())
+      .filter(Boolean)
+  )];
+}

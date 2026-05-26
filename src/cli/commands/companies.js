@@ -28,7 +28,7 @@ import {
   updateMotion
 } from "../../db/database.js";
 import { browserProfileSchema } from "../../schema/browser-profile.js";
-import { normalizeStringList } from "../../lib/collections.js";
+import { normalizeRepeatedStringList, normalizeStringList } from "../../lib/collections.js";
 import { companySchema } from "../../schema/company.js";
 import { motionSchema } from "../../schema/motion.js";
 
@@ -683,25 +683,25 @@ Rules:
             summary: options.roleSummary,
             operatingMode: options.operatingMode,
             scope: options.scope,
-            evidence: normalizeStringList(options.roleEvidence)
+            evidence: normalizeRepeatedStringList(options.roleEvidence)
           },
           triggerWindow: {
             summary: options.triggerSummary,
             tenureMonths: options.tenureMonths !== undefined ? Number(options.tenureMonths) : undefined,
             tenureBand: normalizeTenureBand(options.tenureBand),
             whyNowAnchor: options.whyNowAnchor,
-            personTriggers: normalizeStringList(options.personTrigger),
-            companyTriggers: normalizeStringList(options.companyTrigger)
+            personTriggers: normalizeRepeatedStringList(options.personTrigger),
+            companyTriggers: normalizeRepeatedStringList(options.companyTrigger)
           },
           identityTells: {
             summary: options.identitySummary,
             headline: options.headline,
-            aboutQuotes: normalizeStringList(options.aboutQuote),
-            frameworks: normalizeStringList(options.framework),
-            certifications: normalizeStringList(options.certification),
-            quantifiedReceipts: normalizeStringList(options.quantifiedReceipt),
-            selfImageVerbs: normalizeStringList(options.selfImageVerb),
-            metaphors: normalizeStringList(options.metaphor)
+            aboutQuotes: normalizeRepeatedStringList(options.aboutQuote),
+            frameworks: normalizeRepeatedStringList(options.framework),
+            certifications: normalizeRepeatedStringList(options.certification),
+            quantifiedReceipts: normalizeRepeatedStringList(options.quantifiedReceipt),
+            selfImageVerbs: normalizeRepeatedStringList(options.selfImageVerb),
+            metaphors: normalizeRepeatedStringList(options.metaphor)
           },
           liveSignal: {
             channel: options.activeChannel,
@@ -947,10 +947,10 @@ Rules:
           primaryChannel: normalizeOutreachChannel(options.primaryChannel),
           fallbackChannel: normalizeOutreachChannel(options.fallbackChannel),
           fallbackTrigger: options.fallbackTrigger,
-          preflightActions: normalizeStringList(options.preflightAction),
+          preflightActions: normalizeRepeatedStringList(options.preflightAction),
           firstMove: options.firstMove,
           firstMessageGoal: options.firstMessageGoal,
-          talkingPoints: normalizeStringList(options.talkingPoint),
+          talkingPoints: normalizeRepeatedStringList(options.talkingPoint),
           notes: options.notes
         });
         const storedMotion = updateMotion(updatedMotion);
