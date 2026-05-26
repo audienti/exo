@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exo Control Room Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-block">
+        <div class="eyebrow">EXO</div>
+        <h1>Control room for GTM bets.</h1>
+        <p>Prediction, review, reconciliation, and learning for one operator running high-value outbound.</p>
+      </div>
+
+      <nav class="nav">
+        <button class="nav-item is-active" data-view="inbox">
+          <span>Inbox</span>
+          <small>06</small>
+        </button>
+        <button class="nav-item" data-view="account">
+          <span>Account</span>
+          <small>Live brief</small>
+        </button>
+        <button class="nav-item" data-view="review">
+          <span>Review</span>
+          <small>03 waiting</small>
+        </button>
+        <button class="nav-item" data-view="replies">
+          <span>Replies</span>
+          <small>02 active</small>
+        </button>
+        <button class="nav-item" data-view="history">
+          <span>History</span>
+          <small>Ledger</small>
+        </button>
+        <button class="nav-item" data-view="alerts">
+          <span>Alerts</span>
+          <small>Slack layer</small>
+        </button>
+      </nav>
+
+      <div class="status-stack">
+        <section>
+          <span class="label">Operator</span>
+          <strong>William Flanagan</strong>
+          <p>1 operator, 1 reviewer, 112 tracked accounts.</p>
+        </section>
+        <section>
+          <span class="label">Today</span>
+          <strong>09 bets</strong>
+          <p>6 new signals, 3 approvals waiting, 2 prediction checks due.</p>
+        </section>
+        <section>
+          <span class="label">Reconciliation</span>
+          <strong class="good">Healthy</strong>
+          <p>Last audit 8 min ago. One LinkedIn reply repaired automatically.</p>
+        </section>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <span class="eyebrow">EXO / MVP PROTOTYPE</span>
+          <h2 id="view-title">Inbox</h2>
+        </div>
+        <div class="topbar-meta">
+          <div class="pill">
+            <span class="pill-label">Prediction hit rate</span>
+            <strong>63%</strong>
+          </div>
+          <div class="pill">
+            <span class="pill-label">Observed drift</span>
+            <strong>1 open</strong>
+          </div>
+          <div class="pill accent">
+            <span class="pill-label">Learning loop</span>
+            <strong>Active</strong>
+          </div>
+        </div>
+      </header>
+
+      <section class="view is-active" data-view-panel="inbox">
+        <div class="view-header">
+          <div>
+            <span class="label">Question 1</span>
+            <h3>What changed?</h3>
+          </div>
+          <p>Ranked signals with just enough context to decide whether to ignore, inspect, or convert into a next move.</p>
+        </div>
+        <div class="split-layout">
+          <div class="list-panel">
+            <button class="signal-row is-selected" data-signal="0">
+              <div>
+                <strong>Actico / Wintrust</strong>
+                <p>Chief Compliance Officer changed roles 19 days ago.</p>
+              </div>
+              <div class="row-meta">
+                <span class="tag hot">High fit</span>
+                <small>8m</small>
+              </div>
+            </button>
+            <button class="signal-row" data-signal="1">
+              <div>
+                <strong>Knit / Target Account Cluster A</strong>
+                <p>Revisited product page twice after prior outreach.</p>
+              </div>
+              <div class="row-meta">
+                <span class="tag warm">Watch</span>
+                <small>24m</small>
+              </div>
+            </button>
+            <button class="signal-row" data-signal="2">
+              <div>
+                <strong>Actico / Valley National</strong>
+                <p>Hiring open for AML modernization program lead.</p>
+              </div>
+              <div class="row-meta">
+                <span class="tag hot">Trigger</span>
+                <small>31m</small>
+              </div>
+            </button>
+            <button class="signal-row" data-signal="3">
+              <div>
+                <strong>New Prospect Set</strong>
+                <p>Contact replied directly in LinkedIn, bypassing Exo flow.</p>
+              </div>
+              <div class="row-meta">
+                <span class="tag drift">Drift</span>
+                <small>52m</small>
+              </div>
+            </button>
+          </div>
+          <div class="detail-panel" id="signal-detail"></div>
+        </div>
+      </section>
+
+      <section class="view" data-view-panel="account">
+        <div class="view-header">
+          <div>
+            <span class="label">Question 2</span>
+            <h3>Why does this account matter?</h3>
+          </div>
+          <p>One live mission brief: recent change, account hypothesis, predicted outcome, and the next move worth reviewing.</p>
+        </div>
+        <div class="account-grid">
+          <section class="account-hero">
+            <div class="hero-main">
+              <span class="label">Active account</span>
+              <h3>Wintrust Financial</h3>
+              <p>Federated banking structure, compliance complexity, and recent executive change create a strong timing window for Actico.</p>
+            </div>
+            <div class="hero-status">
+              <div>
+                <span class="label">Account state</span>
+                <strong>Priority / Review-ready</strong>
+              </div>
+              <div>
+                <span class="label">Reconciliation health</span>
+                <strong class="good">Aligned</strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="account-card">
+            <span class="label">What changed</span>
+            <ul>
+              <li>Chief Compliance Officer changed 19 days ago.</li>
+              <li>Public comments on consistency across multiple charters.</li>
+              <li>Compliance transformation burden visible in role history and team shape.</li>
+            </ul>
+          </section>
+
+          <section class="account-card">
+            <span class="label">What we believe</span>
+            <p>The new leader is likely consolidating policy, control, and remediation priorities across a complex structure. Messaging should frame decision consistency and explainability, not generic automation.</p>
+          </section>
+
+          <section class="account-card emphasis">
+            <span class="label">What we predict</span>
+            <p>If we send a signal-tied LinkedIn note this week, we expect either a direct reply or profile engagement within 7 days.</p>
+            <div class="metric-line">
+              <span>Confidence</span>
+              <strong>Moderate</strong>
+            </div>
+            <div class="metric-line">
+              <span>Time horizon</span>
+              <strong>7 days</strong>
+            </div>
+          </section>
+
+          <section class="account-card">
+            <span class="label">Who matters</span>
+            <ul>
+              <li>Jacqueline Adams — Chief Compliance Officer</li>
+              <li>Regional operating model stakeholders across charter groups</li>
+              <li>Risk transformation and AML modernization peers</li>
+            </ul>
+          </section>
+
+          <section class="account-card">
+            <span class="label">Next move</span>
+            <p>Review the proposed LinkedIn opener focused on compliance consistency across a federated model, then monitor for reply or profile engagement.</p>
+            <div class="action-row">
+              <button class="secondary-button" data-view-jump="review">Open review item</button>
+              <button class="ghost-button">Mark not now</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" data-view-panel="review">
+        <div class="view-header">
+          <div>
+            <span class="label">Question 3</span>
+            <h3>What should we do next?</h3>
+          </div>
+          <p>Review is the center of the workflow. Each action proposal carries evidence, draft language, and an explicit expected outcome.</p>
+        </div>
+        <div class="split-layout review-layout">
+          <div class="list-panel">
+            <button class="proposal-row is-selected" data-proposal="0">
+              <strong>LinkedIn opener / Wintrust</strong>
+              <p>Prediction: reply or profile engagement within 7 days.</p>
+            </button>
+            <button class="proposal-row" data-proposal="1">
+              <strong>Email follow-up / Valley National</strong>
+              <p>Prediction: positive response unlikely; use no-action recommendation unless stronger signal lands.</p>
+            </button>
+            <button class="proposal-row" data-proposal="2">
+              <strong>Manual takeover / Drifted thread</strong>
+              <p>Prediction: operator should handle directly after off-platform LinkedIn reply.</p>
+            </button>
+          </div>
+          <div class="detail-panel" id="proposal-detail"></div>
+        </div>
+      </section>
+
+      <section class="view" data-view-panel="replies">
+        <div class="view-header">
+          <div>
+            <span class="label">Question 4</span>
+            <h3>What actually happened?</h3>
+          </div>
+          <p>Replies and reactions are where Exo stops being pre-send theater and starts proving whether the bet was worth taking.</p>
+        </div>
+        <div class="split-layout reply-layout">
+          <div class="list-panel">
+            <button class="reply-row is-selected" data-reply="0">
+              <strong>Wintrust / Profile engagement</strong>
+              <p>Contact viewed profile after note. No written reply yet.</p>
+            </button>
+            <button class="reply-row" data-reply="1">
+              <strong>Legacy thread / Manual LinkedIn reply</strong>
+              <p>Operator responded outside Exo. Reconciliation flagged and repaired state.</p>
+            </button>
+          </div>
+          <div class="detail-panel" id="reply-detail"></div>
+        </div>
+      </section>
+
+      <section class="view" data-view-panel="history">
+        <div class="view-header">
+          <div>
+            <span class="label">Question 5</span>
+            <h3>Did the prediction hold up?</h3>
+          </div>
+          <p>History is a ledger, not a vanity analytics dashboard. It shows what Exo predicted, what happened, what drifted, and what improved.</p>
+        </div>
+        <div class="history-grid">
+          <section class="history-card">
+            <span class="label">Prediction checks</span>
+            <div class="timeline">
+              <article>
+                <small>09:14</small>
+                <div>
+                  <strong>Prediction recorded</strong>
+                  <p>Wintrust opener expected reply or profile engagement within 7 days.</p>
+                </div>
+              </article>
+              <article>
+                <small>11:38</small>
+                <div>
+                  <strong>Observed outcome</strong>
+                  <p>Profile engagement occurred within 2 hours. No written reply yet.</p>
+                </div>
+              </article>
+              <article>
+                <small>11:39</small>
+                <div>
+                  <strong>Prediction check</strong>
+                  <p class="good">Directionally useful. Signal confirmed timing relevance, but response depth still uncertain.</p>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="history-card">
+            <span class="label">Reconciliation ledger</span>
+            <div class="timeline">
+              <article>
+                <small>10:02</small>
+                <div>
+                  <strong>Drift detected</strong>
+                  <p>LinkedIn thread updated manually outside Exo.</p>
+                </div>
+              </article>
+              <article>
+                <small>10:04</small>
+                <div>
+                  <strong>Repair applied</strong>
+                  <p>Observed message matched account thread, pending proposal closed, manual takeover assigned.</p>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="history-card wide">
+            <span class="label">Operator learning note</span>
+            <p>The system was right about timing but too optimistic about direct reply depth. Similar executive-change signals should continue to trigger outreach, but expected outcomes should split into profile engagement vs written response instead of collapsing them into one generic “reply likelihood” bucket.</p>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" data-view-panel="alerts">
+        <div class="view-header">
+          <div>
+            <span class="label">Interrupt layer</span>
+            <h3>How Exo should alert outside the app</h3>
+          </div>
+          <p>Slack is a thin control extension: enough context to route attention, not enough surface area to become the product.</p>
+        </div>
+        <div class="alerts-layout">
+          <section class="slack-frame">
+            <div class="slack-header">
+              <span># exo-alerts</span>
+              <span>11:42 AM</span>
+            </div>
+            <article class="slack-card">
+              <span class="slack-chip">Prediction check due</span>
+              <h4>Wintrust opener showed profile engagement</h4>
+              <p>Exo predicted reply or engagement within 7 days. Observed outcome arrived in 2 hours. Review whether the predicted outcome should be refined.</p>
+              <div class="slack-actions">
+                <button>Open in Exo</button>
+                <button>Acknowledge</button>
+                <button>Snooze</button>
+              </div>
+            </article>
+            <article class="slack-card drift">
+              <span class="slack-chip">Drift detected</span>
+              <h4>Manual LinkedIn reply repaired</h4>
+              <p>Observed external thread activity did not match Exo’s expected state. Repair succeeded automatically. Human takeover still recommended.</p>
+              <div class="slack-actions">
+                <button>Open in Exo</button>
+                <button>Assign takeover</button>
+              </div>
+            </article>
+          </section>
+
+          <section class="alerts-rules">
+            <span class="label">Alerting rules</span>
+            <ul>
+              <li>Alert only on change that needs judgment, not raw activity exhaust.</li>
+              <li>Every alert should say why it matters, what Exo predicts, and what action is needed.</li>
+              <li>Simple actions may happen in Slack, but history and state still belong to Exo.</li>
+              <li>If alerts become a feed, the system has failed.</li>
+            </ul>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
