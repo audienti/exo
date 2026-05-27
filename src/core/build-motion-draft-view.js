@@ -47,6 +47,44 @@ export function buildMotionDraftView(rawMotion, options) {
 }
 
 /**
+ * @param {unknown} rawMotion
+ * @param {{
+ *   companyId?: string | null,
+ *   prospectId: string,
+ *   surface: string
+ * }} options
+ */
+export function buildMotionDraftBrief(rawMotion, options) {
+  const draftView = buildMotionDraftView(rawMotion, options);
+  const surface = draftView.surfaces[0];
+
+  return {
+    motion: draftView.motion,
+    company: draftView.company,
+    prospect: {
+      prospectId: draftView.prospect.prospectId,
+      name: draftView.prospect.name,
+      title: draftView.prospect.title,
+      linkedinProfileUrl: draftView.prospect.linkedinProfileUrl,
+      email: draftView.prospect.email,
+      profileViewedAt: draftView.prospect.profileViewedAt
+    },
+    surface,
+    draftRequest: {
+      doNotSend: true,
+      task: `Write one unsent ${surface.stage.toLowerCase()} draft for ${draftView.prospect.name} at ${draftView.company.name}.`,
+      rules: buildDraftRules(surface.key),
+      sourceOfTruth: [
+        "Use the stored through-line as the narrative spine.",
+        "Stay inside the stored signal matches and live-signal evidence.",
+        "Respect prior touches so the message fits what already happened.",
+        "If the surface is unavailable, explain why instead of drafting."
+      ]
+    }
+  };
+}
+
+/**
  * @param {NonNullable<ReturnType<typeof buildMotionProspectView>["writingBrief"]>} brief
  * @param {{ key: string, stage: string, channel: string }} definition
  */
@@ -92,6 +130,58 @@ function buildDraftCard(brief, definition) {
       profileViewedAt: brief.prospect.profileViewedAt
     }
   };
+}
+
+/**
+ * @param {string} surface
+ */
+function buildDraftRules(surface) {
+  switch (surface) {
+    case "connection_request":
+      return [
+        "Keep it short and low-friction.",
+        "Do not ask for a meeting.",
+        "Anchor on the stored why-now and the strongest relevant signal."
+      ];
+    case "post_accept_message":
+      return [
+        "Thank them briefly for connecting.",
+        "Ask one genuine, easy-to-answer question.",
+        "Do not jump straight into a meeting ask."
+      ];
+    case "follow_up_direct_message":
+      return [
+        "Assume they saw the earlier touch and stayed silent.",
+        "Add one fresh angle or useful clarification.",
+        "Keep the follow-up tighter than the first DM."
+      ];
+    case "email":
+      return [
+        "Write for direct inbox reading, not LinkedIn.",
+        "Use the stored through-line and why-now as the spine.",
+        "Keep the ask narrow and concrete."
+      ];
+    case "inbound_reply":
+      return [
+        "Respond conversationally to the inbound context.",
+        "Advance the conversation without overexplaining.",
+        "Match the prospect's apparent level of interest."
+      ];
+    case "public_comment":
+      return [
+        "Keep it native to the post.",
+        "Do not pitch in the comment.",
+        "React to the public signal in a way that would look normal to a peer."
+      ];
+    case "comment_reply":
+      return [
+        "Reply inside the existing thread context.",
+        "Keep it short, natural, and non-promotional.",
+        "Advance the thread without hijacking it."
+      ];
+    default:
+      return ["Write from the stored context and do not invent facts."];
+  }
 }
 
 /**

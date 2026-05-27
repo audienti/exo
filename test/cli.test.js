@@ -2412,6 +2412,29 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
     assert.equal(commentReplyCard.available, true);
     assert.equal(firstDirectMessageCard.priorTouches.length, 3);
 
+    const motionDraftBrief = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "draft-brief", motion.id, "--prospect", primaryProspectId, "--surface", "public_comment", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(motionDraftBrief.surface.key, "public_comment");
+    assert.equal(motionDraftBrief.surface.available, true);
+    assert.match(motionDraftBrief.draftRequest.task, /unsent public comment draft/i);
+    assert.ok(
+      motionDraftBrief.draftRequest.rules.some((rule) => /do not pitch/i.test(rule)),
+      "expected public-comment draft brief to include the no-pitch rule"
+    );
+    assert.ok(
+      motionDraftBrief.draftRequest.sourceOfTruth.some((rule) => /prior touches/i.test(rule)),
+      "expected draft brief to remind the chat to respect prior touches"
+    );
+
     const shownMotion = JSON.parse(
       execFileSync("node", [cliPath, "motion", "show", motion.id, "--json"], {
         cwd: tempDir,
@@ -2793,6 +2816,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   assert.match(motionRootHelp, /exo motion update/);
   assert.match(motionRootHelp, /exo motion prospects/);
   assert.match(motionRootHelp, /exo motion drafts/);
+  assert.match(motionRootHelp, /exo motion draft-brief/);
   assert.match(motionRootHelp, /exo motion pause/);
   assert.match(motionRootHelp, /exo motion resume/);
   assert.match(motionRootHelp, /exo motion archive/);
@@ -2824,7 +2848,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected companies surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo motion start/add/target/prospects/drafts/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
+    about.currentCapabilities.some((item) => item.command === "exo motion start/add/target/prospects/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
     "expected motion write surface to be listed in current capabilities"
   );
   assert.ok(

@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cloneMotionDefinition } from "../../core/clone-motion.js";
 import { defineMotion } from "../../core/define-motion.js";
-import { buildMotionDraftView } from "../../core/build-motion-draft-view.js";
+import { buildMotionDraftBrief, buildMotionDraftView } from "../../core/build-motion-draft-view.js";
 import { buildMotionProspectView } from "../../core/build-motion-prospect-view.js";
 import { evaluateMotionTargeting } from "../../core/evaluate-motion-targeting.js";
 import { refreshMotion } from "../../core/refresh-motion.js";
@@ -26,6 +26,7 @@ import { normalizeStringList } from "../../lib/collections.js";
 import { loadDoNotContactEntries } from "../../lib/dnc.js";
 import {
   renderMotionDraftCases,
+  renderMotionDraftBrief,
   renderMotionProspectList,
   renderMotionStartResult,
   renderMotionSummary,
@@ -51,6 +52,7 @@ Canonical motion interface:
   exo motion target
   exo motion prospects
   exo motion drafts
+  exo motion draft-brief
   exo motion clone
   exo motion update
   exo motion pause
@@ -337,6 +339,62 @@ Examples:
       }
 
       console.log(renderMotionDraftCases(result));
+    });
+
+  motion
+    .command("draft-brief")
+    .description("Show one compact single-surface draft brief the chat can write from locally without sending anything.")
+    .argument("<motion-id>", "Motion identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
+    .requiredOption("--surface <surface>", "Draft surface: connection_request, post_accept_message, follow_up_direct_message, email, inbound_reply, public_comment, or comment_reply")
+    .option("--company <company-id>", "Filter to one targeted company")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Pulls one stored prospect plus one stored draft surface into a compact writing brief.
+  - Gives the chat a smaller payload than exo motion drafts when you already know which surface you want.
+  - Still does not generate or send the message text.
+
+Use this when:
+  - you want the chat to write one draft now
+  - you want one narrow source-of-truth payload for a single surface
+  - you do not want to wade through every other surface on the prospect
+
+Examples:
+  exo motion draft-brief <motion-id> --prospect <prospect-id> --surface connection_request
+  exo motion draft-brief <motion-id> --prospect <prospect-id> --surface public_comment --json
+`
+    )
+    .action((motionId, options) => {
+      const raw = findMotionById(motionId);
+
+      if (!raw) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let result;
+      try {
+        result = buildMotionDraftBrief(raw, {
+          companyId: options.company ?? null,
+          prospectId: options.prospect,
+          surface: options.surface
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderMotionDraftBrief(result));
     });
 
   motion

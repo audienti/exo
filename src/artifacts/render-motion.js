@@ -604,6 +604,122 @@ export function renderMotionDraftCases(result) {
 }
 
 /**
+ * @param {{
+ *   motion: { id: string, name: string },
+ *   company: { name: string },
+ *   prospect: {
+ *     prospectId: string,
+ *     name: string,
+ *     title: string,
+ *     linkedinProfileUrl: string | null,
+ *     email: string | null,
+ *     profileViewedAt: string | null
+ *   },
+ *   surface: {
+ *     key: string,
+ *     stage: string,
+ *     channel: string,
+ *     available: boolean,
+ *     missingReason: string | null,
+ *     contextSummary: {
+ *       compressionLine: string | null,
+ *       whyNow: string | null,
+ *       angle: string | null,
+ *       replyPath: string | null,
+ *       firstMessageGoal: string | null,
+ *       recentPostReady: boolean
+ *     },
+ *     priorTouches: Array<{ occurredAt: string, surface: string, outcome: string, summary: string }>,
+ *     signalMatches: Array<{ signalName: string, summary: string, observedAt: string | null, sourceUrl: string | null }>,
+ *     writingInputs: {
+ *       openingPlan: { firstMove: string | null, preflightActions: string[], talkingPoints: string[] },
+ *       recentPost: { reason: string }
+ *     }
+ *   },
+ *   draftRequest: {
+ *     doNotSend: boolean,
+ *     task: string,
+ *     rules: string[],
+ *     sourceOfTruth: string[]
+ *   }
+ * }} result
+ */
+export function renderMotionDraftBrief(result) {
+  const lines = [
+    `Motion Draft Brief: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Company: ${result.company.name}`,
+    `Prospect: ${result.prospect.name} (${result.prospect.title})`,
+    `Prospect ID: ${result.prospect.prospectId}`,
+    `Surface: ${result.surface.stage} [${result.surface.key}]`,
+    `Channel: ${result.surface.channel}`,
+    `Available: ${result.surface.available ? "yes" : "no"}`,
+    `Do Not Send: ${result.draftRequest.doNotSend ? "yes" : "no"}`,
+    `Task: ${result.draftRequest.task}`,
+    `Profile Viewed At: ${result.prospect.profileViewedAt ?? "none"}`,
+    `LinkedIn URL: ${result.prospect.linkedinProfileUrl ?? "none"}`,
+    `Email: ${result.prospect.email ?? "none"}`,
+    ""
+  ];
+
+  if (!result.surface.available) {
+    lines.push(`Missing Reason: ${result.surface.missingReason ?? "unknown"}`, "");
+  }
+
+  lines.push(
+    "Context",
+    `  Compression: ${result.surface.contextSummary.compressionLine ?? "none"}`,
+    `  Why Now: ${result.surface.contextSummary.whyNow ?? "none"}`,
+    `  Angle: ${result.surface.contextSummary.angle ?? "none"}`,
+    `  Reply Path: ${result.surface.contextSummary.replyPath ?? "none"}`,
+    `  First Message Goal: ${result.surface.contextSummary.firstMessageGoal ?? "none"}`,
+    `  Recent Post Warmup: ${result.surface.contextSummary.recentPostReady ? "ready" : "not-ready"}`,
+    `  Recent Post Reason: ${result.surface.writingInputs.recentPost.reason}`,
+    `  First Move: ${result.surface.writingInputs.openingPlan.firstMove ?? "none"}`,
+    `  Preflight Actions: ${result.surface.writingInputs.openingPlan.preflightActions.join(" | ") || "none"}`,
+    `  Talking Points: ${result.surface.writingInputs.openingPlan.talkingPoints.join(" | ") || "none"}`,
+    "",
+    "Rules"
+  );
+
+  for (const rule of result.draftRequest.rules) {
+    lines.push(`  - ${rule}`);
+  }
+
+  lines.push("", "Source Of Truth");
+  for (const item of result.draftRequest.sourceOfTruth) {
+    lines.push(`  - ${item}`);
+  }
+
+  lines.push("", "Signal Matches");
+  if (!result.surface.signalMatches.length) {
+    lines.push("  none");
+  } else {
+    for (const match of result.surface.signalMatches) {
+      lines.push(`  - ${match.signalName}`);
+      lines.push(`    Signal: ${match.summary}`);
+      if (match.observedAt) {
+        lines.push(`    Observed: ${match.observedAt}`);
+      }
+      if (match.sourceUrl) {
+        lines.push(`    Source: ${match.sourceUrl}`);
+      }
+    }
+  }
+
+  lines.push("", "Prior Touches");
+  if (!result.surface.priorTouches.length) {
+    lines.push("  none");
+  } else {
+    for (const touch of result.surface.priorTouches) {
+      lines.push(`  - ${touch.occurredAt}  ${touch.surface}  ${touch.outcome}: ${touch.summary}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * @param {string[]} values
  * @returns {string}
  */
