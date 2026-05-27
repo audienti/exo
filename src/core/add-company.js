@@ -28,7 +28,8 @@ export function addCompany(input) {
     notes: normalizeNullableString(input.notes),
     tags: input.tags ?? [],
     motionIds: input.motionIds ?? [],
-    engagementProfileAssignment: null
+    engagementProfileAssignment: null,
+    engagementUserAssignment: null
   });
 }
 

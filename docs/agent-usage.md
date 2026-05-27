@@ -184,6 +184,47 @@ Important filter:
 - only store the few strongest signals that are recent, specific, and usable in writing
 - synthesize the stored signal line into something concise and impactful enough that the writer can reuse it directly without summarizing again
 
+## Action Execution
+
+Exo now has a canonical action catalog and a prospect-scoped action brief layer.
+
+Use:
+
+1. `exo actions list --json`
+2. `exo actions show <action-key> --json`
+3. `exo motion actions <motion-id> --prospect <prospect-id> --json`
+4. `exo motion action-brief <motion-id> --prospect <prospect-id> --action <action-key> --json`
+
+This is the correct execution loop:
+
+1. inspect which canonical actions exist
+2. inspect which actions are actually available for the current prospect
+3. pull one action brief
+4. if the action needs copy, pull `exo motion draft-brief ...` for the mapped draft surface
+5. have the chat write the copy from that stored context
+6. perform the action in the native browser harness
+7. immediately write back what really happened with `exo companies touches add ...`
+
+Important execution rule:
+
+- action briefs now inject editable repo docs like `docs/linkedin/connection_request.md`
+- treat those as ranked hints and proof checks, not as one universal UI recipe
+- use them to shorten the normal path, then fall back cleanly when the live UI drifts
+
+Important distinction:
+
+- `action type` is the governed business move
+- `draft surface` is the writing stage
+
+Example:
+
+- `send_direct_message` may map to:
+  - `post_accept_message`
+  - `follow_up_direct_message`
+  - `inbound_reply`
+
+Do not collapse those concepts.
+
 Practical rule:
 
 - prefer signal evidence from roughly the last 180 days

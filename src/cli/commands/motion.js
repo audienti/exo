@@ -4,6 +4,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { cloneMotionDefinition } from "../../core/clone-motion.js";
+import { buildMotionActionBrief, buildMotionActionView } from "../../core/build-motion-action-view.js";
+import { buildMotionIntake } from "../../core/build-motion-intake.js";
 import { defineMotion } from "../../core/define-motion.js";
 import { buildMotionDraftBrief, buildMotionDraftView } from "../../core/build-motion-draft-view.js";
 import { buildMotionProspectView } from "../../core/build-motion-prospect-view.js";
@@ -14,17 +16,21 @@ import { transitionMotionStatus } from "../../core/transition-motion-status.js";
 import { updateMotionDefinition } from "../../core/update-motion.js";
 import {
   deleteMotion,
+  findCompanyById,
   findMotionById,
   insertMotion,
   listBrowserProfiles,
   listCompanies,
   listMotions,
+  listUsers,
   updateCompany,
   updateMotion
 } from "../../db/database.js";
 import { normalizeStringList } from "../../lib/collections.js";
 import { loadDoNotContactEntries } from "../../lib/dnc.js";
 import {
+  renderMotionActionBrief,
+  renderMotionActionList,
   renderMotionDraftCases,
   renderMotionDraftBrief,
   renderMotionProspectList,
@@ -47,10 +53,13 @@ export function registerMotion(program) {
       "after",
       `
 Canonical motion interface:
+  exo motion intake
   exo motion start
   exo motion add
   exo motion target
   exo motion prospects
+  exo motion actions
+  exo motion action-brief
   exo motion drafts
   exo motion draft-brief
   exo motion clone
@@ -65,6 +74,77 @@ Canonical motion interface:
   exo motion remove
 `
     );
+
+  addMotionSeedOptions(
+    motion
+      .command("intake")
+      .description("Inspect partial new-motion input and return the next question the agent should ask before launch.")
+      .option("--existing <strategy>", "continue | clone | new")
+      .option("--from <motion-id>", "Existing motion id to continue or clone when multiple motions share the same URL")
+  )
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Looks at the specifics already known for a new motion.
+  - Checks whether the URL already exists in Exo.
+  - Returns the next missing required or useful question the agent should ask.
+  - Does not create or modify the motion.
+
+Use this when:
+  - the operator said "set up a new motion"
+  - you want to ask one question at a time instead of dumping a whole questionnaire
+  - you want a governed point where the agent knows whether it is ready to launch exo motion start
+
+Examples:
+  exo motion intake --json
+  exo motion intake --url https://example.com/product --json
+  exo motion intake --url https://example.com/product --premise "This matters when ..." --audience "Primary ICP" --json
+`
+    )
+    .action((options) => {
+      let input;
+      let existingStrategy;
+      try {
+        input = buildMotionDefinitionInput(options, { requireUrl: false });
+        existingStrategy = normalizeExistingStrategy(options.existing);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      const result = buildMotionIntake(
+        {
+          ...input,
+          existingStrategy,
+          sourceMotionId: options.from ?? null
+        },
+        listMotions()
+      );
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(`Motion Intake: ${result.status}`);
+      if (result.nextQuestion) {
+        console.log(`Next Question: ${result.nextQuestion.prompt}`);
+      }
+      if (result.launchCommandHint) {
+        console.log(`Launch Command: ${result.launchCommandHint}`);
+      }
+      if (result.existingMotions.length) {
+        console.log("");
+        console.log("Existing URL Matches");
+        for (const existingMotion of result.existingMotions) {
+          console.log(
+            `  ${existingMotion.name}  ${existingMotion.id}  ${existingMotion.status}  premise:${existingMotion.premiseStatus}  audiences:${existingMotion.audienceCount}  signals:${existingMotion.signalCount}`
+          );
+        }
+      }
+    });
 
   addMotionSeedOptions(
     motion
@@ -221,7 +301,7 @@ Examples:
         return;
       }
 
-      const result = evaluateMotionTargeting(raw, listCompanies(), listBrowserProfiles(), {
+      const result = evaluateMotionTargeting(raw, listCompanies(), listBrowserProfiles(), listUsers(), {
         capability: options.capability
       });
 
@@ -287,6 +367,127 @@ Examples:
       }
 
       console.log(renderMotionProspectList(result));
+    });
+
+  motion
+    .command("actions")
+    .description("Show the canonical Audienti-style actions for one targeted prospect, including current availability.")
+    .argument("<motion-id>", "Motion identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
+    .option("--company <company-id>", "Filter to one targeted company")
+    .option("--available-only", "Show only currently-available actions")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Loads the canonical GTM action catalog against one targeted prospect.
+  - Tells you which actions are available, blocked, already done, or still unsupported.
+  - Keeps action type separate from writing stage, so direct-message and comment actions still point back to the right draft surface.
+  - Does not perform anything. It is the readiness and execution-planning layer.
+
+Examples:
+  exo motion actions <motion-id> --prospect <prospect-id>
+  exo motion actions <motion-id> --prospect <prospect-id> --available-only --json
+`
+    )
+    .action((motionId, options) => {
+      const raw = findMotionById(motionId);
+
+      if (!raw) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const prospectView = buildMotionProspectView(raw, {
+          companyId: options.company ?? null,
+          prospectId: options.prospect
+        });
+        const rawCompany = prospectView.writingBrief
+          ? findCompanyById(prospectView.writingBrief.company.id)
+          : null;
+        const result = buildMotionActionView(
+          raw,
+          {
+            companyId: options.company ?? null,
+            prospectId: options.prospect,
+            includeUnavailable: !options.availableOnly
+          },
+          rawCompany
+        );
+
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        console.log(renderMotionActionList(result));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  motion
+    .command("action-brief")
+    .description("Show one compact execution brief for one canonical prospect action.")
+    .argument("<motion-id>", "Motion identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
+    .requiredOption("--action <action-key>", "Canonical action key")
+    .option("--company <company-id>", "Filter to one targeted company")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Loads one canonical action against one targeted prospect.
+  - Returns readiness, the matching draft surface when one exists, execution hints, and the writeback command.
+  - Gives the chat enough structure to execute the action outside Exo and then persist the real outcome back.
+
+Examples:
+  exo motion action-brief <motion-id> --prospect <prospect-id> --action connection_request --json
+  exo motion action-brief <motion-id> --prospect <prospect-id> --action profile_view
+`
+    )
+    .action((motionId, options) => {
+      const raw = findMotionById(motionId);
+
+      if (!raw) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const prospectView = buildMotionProspectView(raw, {
+          companyId: options.company ?? null,
+          prospectId: options.prospect
+        });
+        const rawCompany = prospectView.writingBrief
+          ? findCompanyById(prospectView.writingBrief.company.id)
+          : null;
+        const result = buildMotionActionBrief(
+          raw,
+          {
+            companyId: options.company ?? null,
+            prospectId: options.prospect,
+            action: options.action
+          },
+          rawCompany
+        );
+
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        console.log(renderMotionActionBrief(result));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
     });
 
   motion
@@ -943,19 +1144,20 @@ function addMotionSeedOptions(command) {
 
 /**
  * @param {Record<string, any>} options
+ * @param {{ requireUrl?: boolean }} [settings]
  * @returns {Parameters<typeof defineMotion>[0]}
  */
-function buildMotionDefinitionInput(options) {
+function buildMotionDefinitionInput(options, settings = {}) {
   const configInput = loadMotionSeedConfig(options.config);
   const dncEntries = loadDoNotContactEntries(options.dncFile);
   const url = options.url ?? configInput.url ?? configInput.offer?.sourceUrl;
 
-  if (!url) {
+  if (settings.requireUrl !== false && !url) {
     throw new Error("Motion URL is required. Pass --url or include url in --config.");
   }
 
   return {
-    url,
+    url: url ?? null,
     name: options.name ?? configInput.name ?? null,
     offerNotes: options.notes ?? configInput.offerNotes ?? configInput.offer?.offerNotes ?? null,
     premise: {

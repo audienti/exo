@@ -2,10 +2,13 @@
 // @ts-check
 
 import { Command } from "commander";
+import { registerActions } from "./commands/actions.js";
 import { registerCompanies } from "./commands/companies.js";
 import { registerConfig } from "./commands/config.js";
 import { registerMotion } from "./commands/motion.js";
 import { registerProfiles } from "./commands/profiles.js";
+import { registerReport } from "./commands/report.js";
+import { registerUsers } from "./commands/users.js";
 import { registerWhatIsThis } from "./commands/what-is-this.js";
 
 const program = new Command();
@@ -24,18 +27,25 @@ Operating rules:
   - Prefer --json when Claude/Codex is calling Exo and needs structured output.
   - Register and test a browser profile before any browser-backed work.
   - Treat profile status as a gate, not a hint.
+  - Use exo motion intake when an agent should ask one setup question at a time before launching a new motion.
 
 Common patterns:
   exo what-is-this --json
+  exo motion intake --json
   exo motion start --url https://example.com/product --premise "This offer matters when regulated lenders enter more complex credit-decision environments." --audience "Traditional FI risk owners" --signal "company::Is there recent evidence that this company expanded into a more complex lending segment?" --json
   exo motion start --url https://example.com/product --existing continue --json
   exo motion target <motion-id> --json
+  exo report motion <motion-id>
   exo motion clone <motion-id> --audience "BNPL modernization leaders" --segment bnpl --json
   exo motion update <motion-id> --audience "Traditional FI risk owners" --title "Chief Risk Officer" --segment traditional-fi --json
   exo motion add --config ./actico.motion.json --json
   exo motion list
   exo motion show <motion-id>
+  exo motion actions <motion-id> --prospect <prospect-id> --json
+  exo motion action-brief <motion-id> --prospect <prospect-id> --action connection_request --json
   exo motion remove <motion-id>
+  exo actions list
+  exo actions show connection_request
   exo companies list
   exo companies find chainguard
   exo companies update <company-id> --website-url https://example.com
@@ -55,6 +65,10 @@ Common patterns:
   exo profiles capabilities --json
   exo profiles resolve --capability linkedin --json
   exo profiles test <profile-id>
+  exo users add --label william-main --owner william
+  exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred
+  exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred
+  exo users resolve <user-id> --capability gmail --json
   exo config export --out ./exo-config.json
   exo config import ./exo-config.json
 
@@ -63,10 +77,13 @@ Current state location:
 `
   );
 
+registerActions(program);
 registerCompanies(program);
 registerConfig(program);
 registerMotion(program);
 registerProfiles(program);
+registerReport(program);
+registerUsers(program);
 registerWhatIsThis(program);
 
 await program.parseAsync(process.argv);

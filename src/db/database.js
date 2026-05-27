@@ -242,6 +242,94 @@ export function deleteBrowserProfile(id) {
 }
 
 /**
+ * @param {import("../schema/user.js").userSchema._type} user
+ */
+export function insertUser(user) {
+  const statement = getDatabase().prepare(`
+    INSERT INTO users (id, label, created_at, updated_at, payload_json)
+    VALUES (@id, @label, @createdAt, @updatedAt, @payloadJson)
+  `);
+
+  statement.run({
+    id: user.id,
+    label: user.label,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+    payloadJson: JSON.stringify(user, null, 2)
+  });
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type} user
+ */
+export function updateUser(user) {
+  const statement = getDatabase().prepare(`
+    UPDATE users
+    SET label = @label,
+        updated_at = @updatedAt,
+        payload_json = @payloadJson
+    WHERE id = @id
+  `);
+
+  statement.run({
+    id: user.id,
+    label: user.label,
+    updatedAt: user.updatedAt,
+    payloadJson: JSON.stringify(user, null, 2)
+  });
+}
+
+/**
+ * @param {string} id
+ * @returns {unknown | null}
+ */
+export function findUserById(id) {
+  const row = getDatabase()
+    .prepare(`SELECT payload_json FROM users WHERE id = ?`)
+    .get(id);
+
+  if (!row) return null;
+  return JSON.parse(row.payload_json);
+}
+
+/**
+ * @param {string} label
+ * @returns {unknown | null}
+ */
+export function findUserByLabel(label) {
+  const row = getDatabase()
+    .prepare(`SELECT payload_json FROM users WHERE lower(label) = lower(?)`)
+    .get(label);
+
+  if (!row) return null;
+  return JSON.parse(row.payload_json);
+}
+
+/**
+ * @returns {unknown[]}
+ */
+export function listUsers() {
+  const rows = getDatabase()
+    .prepare(`
+      SELECT payload_json
+      FROM users
+      ORDER BY created_at DESC
+    `)
+    .all();
+
+  return rows.map((row) => JSON.parse(row.payload_json));
+}
+
+/**
+ * @param {string} id
+ */
+export function deleteUser(id) {
+  getDatabase()
+    .prepare(`DELETE FROM users WHERE id = ?`)
+    .run(id);
+}
+
+/**
  * @param {import("../schema/company.js").companySchema._type} company
  */
 export function insertCompany(company) {

@@ -9,6 +9,7 @@ import {
 } from "../../artifacts/render-company.js";
 import { addCompany } from "../../core/add-company.js";
 import { assignCompanyProfile } from "../../core/assign-company-profile.js";
+import { assignCompanyUser } from "../../core/assign-company-user.js";
 import { buildCompanyResearchBrief } from "../../core/build-company-research-brief.js";
 import { recordMotionProspect } from "../../core/record-prospect.js";
 import { recordMotionProspectTouch } from "../../core/record-prospect-touch.js";
@@ -22,7 +23,9 @@ import {
   findCompanyById,
   findCompanyByIdentity,
   findMotionById,
+  findUserById,
   insertCompany,
+  listBrowserProfiles,
   listCompanies,
   searchCompanies,
   updateCompany,
@@ -65,11 +68,13 @@ Canonical companies interface:
   exo companies touches add <company-id>
   exo companies profile show <company-id>
   exo companies profile assign <company-id> --profile <profile-id>
+  exo companies user show <company-id>
+  exo companies user assign <company-id> --user <user-id>
 
 Rules:
   - Keep the noun consistent. Use exo companies ..., not mixed singular/plural command paths.
   - A company is canonical identity. Motion linkage explains why it matters right now.
-  - Once outreach starts, pin one browser identity to the company so follow-up work stays consistent.
+  - Once outreach starts, pin one execution user or browser identity to the company so follow-up work stays consistent.
   - Use exo companies research-brief before live account research so the agent works from signals, recent evidence, and best-fit prospect fallback.
   - Persist signal matches on the motion-owned target account, not on the canonical company itself.
   - Persist the chosen prospects, their through-lines, their opening plans, and their cadence state on the same motion-owned target account.
@@ -188,6 +193,10 @@ Examples:
     .command("profile")
     .description("Inspect or assign the sticky browser profile for a company.");
 
+  const companyUser = companies
+    .command("user")
+    .description("Inspect or assign the sticky execution user for a company.");
+
   companyProfile
     .command("assign")
     .description("Pin one registered browser profile to a company for sticky engagement identity.")
@@ -233,6 +242,57 @@ Rules:
       const updated = assignCompanyProfile(rawCompany, profile, {
         assignedBy: options.by ?? null,
         reason: options.reason ?? null
+      });
+      updateCompany(updated);
+
+      if (options.json) {
+        console.log(JSON.stringify(updated, null, 2));
+        return;
+      }
+
+      console.log(renderCompanySummary(updated));
+    });
+
+  companyUser
+    .command("assign")
+    .description("Pin one execution user to a company so each capability can resolve through the right account.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--user <user-id>", "Execution user identifier")
+    .option("--browser-capability <capability>", "Browser capability to project onto the legacy company profile pin. Defaults to linkedin.")
+    .option("--by <actor>", "Who made the assignment")
+    .option("--reason <reason>", "Why this user is being pinned")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies user assign <company-id> --user <user-id> --reason "Use one human identity across LinkedIn and email"
+
+Rules:
+  - The user must already exist in Exo.
+  - The user can own multiple accounts backed by different browser profiles or harness connectors.
+  - Exo will still project the chosen browser capability into the legacy sticky profile field when possible.
+`
+    )
+    .action((companyId, options) => {
+      const rawCompany = findCompanyById(companyId);
+      if (!rawCompany) {
+        console.error(`Company not found: ${companyId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const rawUser = findUserById(options.user);
+      if (!rawUser) {
+        console.error(`User not found: ${options.user}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const updated = assignCompanyUser(rawCompany, rawUser, listBrowserProfiles(), {
+        assignedBy: options.by ?? null,
+        reason: options.reason ?? null,
+        browserCapability: options.browserCapability ?? "linkedin"
       });
       updateCompany(updated);
 
@@ -1134,7 +1194,7 @@ Rules:
     .description("Append one stored touchpoint to a motion prospect.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--prospect <prospect-id>", "Prospect identifier")
-    .requiredOption("--surface <surface>", "Touch surface: connection_request, post_accept_message, follow_up_direct_message, email, inbound_reply, public_comment, or comment_reply")
+    .requiredOption("--surface <surface>", "Touch surface: connection_request, post_accept_message, follow_up_direct_message, email, inbound_reply, public_comment, comment_reply, profile_view, follow, unfollow, like_post, unlike_post, share_post, in_mail_message, withdraw_connection, accept_connection, decline_connection, create_comment_reaction, voicemail_outreach, or video_outreach")
     .requiredOption("--direction <direction>", "Touch direction: outbound, inbound, or system")
     .requiredOption("--outcome <outcome>", "Touch outcome: pending, sent, accepted, ignored, opened-no-reply, replied, blocked, or nurture")
     .requiredOption("--occurred-at <datetime>", "When the touch happened")
@@ -1151,10 +1211,12 @@ Rules:
 Examples:
   exo companies touches add <company-id> --motion <motion-id> --prospect <prospect-id> --surface connection_request --direction outbound --outcome sent --occurred-at 2026-05-26T17:00:00.000Z --summary "Sent first connection request"
   exo companies touches add <company-id> --motion <motion-id> --prospect <prospect-id> --surface post_accept_message --direction outbound --outcome sent --occurred-at 2026-05-29T17:00:00.000Z --summary "Sent first DM after acceptance" --body "Short DM text"
+  exo companies touches add <company-id> --motion <motion-id> --prospect <prospect-id> --surface profile_view --direction outbound --outcome sent --occurred-at 2026-05-26T16:00:00.000Z --summary "Viewed the LinkedIn profile before outreach"
 
 Rules:
   - Store what actually happened, not what you hoped to send.
-  - Touch history is the prospect-level memory the later draft case should read from.
+  - Touch history is the prospect-level memory the later draft case and action brief should read from.
+  - Use warmup and mechanical surfaces too. Profile views, likes, follows, withdrawals, and similar actions belong here once they happen.
 `
     )
     .action((companyId, options) => {
@@ -1256,6 +1318,62 @@ Examples:
           `Browser: ${assignment.browser}`,
           `Profile Directory: ${assignment.profileDirectory}`,
           `Workspace: ${assignment.workspace ?? "unknown"}`,
+          `Owner: ${assignment.owner ?? "unknown"}`,
+          `Accounts: ${assignment.accountRefs.length ? assignment.accountRefs.join(", ") : "none"}`,
+          `Assigned At: ${assignment.assignedAt}`,
+          `Assigned By: ${assignment.assignedBy ?? "unknown"}`,
+          `Reason: ${assignment.reason ?? "none"}`
+        ].join("\n")
+      );
+    });
+
+  companyUser
+    .command("show")
+    .description("Show the sticky execution-user assignment for a company.")
+    .argument("<company-id>", "Company identifier")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies user show <company-id>
+  exo companies user show <company-id> --json
+`
+    )
+    .action((companyId, options) => {
+      const raw = findCompanyById(companyId);
+      if (!raw) {
+        console.error(`Company not found: ${companyId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const company = companySchema.parse(raw);
+      const user = company.engagementUserAssignment
+        ? findUserById(company.engagementUserAssignment.userId)
+        : null;
+
+      const result = {
+        company,
+        assignment: company.engagementUserAssignment,
+        user
+      };
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      if (!company.engagementUserAssignment) {
+        console.log(`No sticky execution user assignment for ${company.name}.`);
+        return;
+      }
+
+      const assignment = company.engagementUserAssignment;
+      console.log(
+        [
+          `Company User: ${company.name}`,
+          `User: ${assignment.label}`,
           `Owner: ${assignment.owner ?? "unknown"}`,
           `Accounts: ${assignment.accountRefs.length ? assignment.accountRefs.join(", ") : "none"}`,
           `Assigned At: ${assignment.assignedAt}`,
@@ -1516,7 +1634,7 @@ function normalizeCadenceStep(value) {
 
 /**
  * @param {string | undefined} value
- * @returns {"connection_request" | "post_accept_message" | "follow_up_direct_message" | "email" | "inbound_reply" | "public_comment" | "comment_reply" | undefined}
+ * @returns {"connection_request" | "post_accept_message" | "follow_up_direct_message" | "email" | "inbound_reply" | "public_comment" | "comment_reply" | "profile_view" | "follow" | "unfollow" | "like_post" | "unlike_post" | "share_post" | "in_mail_message" | "withdraw_connection" | "accept_connection" | "decline_connection" | "create_comment_reaction" | "voicemail_outreach" | "video_outreach" | undefined}
  */
 function normalizeTouchSurface(value) {
   if (!value) {
@@ -1532,6 +1650,19 @@ function normalizeTouchSurface(value) {
     || normalized === "inbound_reply"
     || normalized === "public_comment"
     || normalized === "comment_reply"
+    || normalized === "profile_view"
+    || normalized === "follow"
+    || normalized === "unfollow"
+    || normalized === "like_post"
+    || normalized === "unlike_post"
+    || normalized === "share_post"
+    || normalized === "in_mail_message"
+    || normalized === "withdraw_connection"
+    || normalized === "accept_connection"
+    || normalized === "decline_connection"
+    || normalized === "create_comment_reaction"
+    || normalized === "voicemail_outreach"
+    || normalized === "video_outreach"
   ) {
     return normalized;
   }

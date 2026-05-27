@@ -10,6 +10,7 @@ import {
   findBrowserProfileByPath,
   insertBrowserProfile,
   findCompanyById,
+  findUserById,
   listBrowserProfiles,
   updateBrowserProfile
 } from "../../db/database.js";
@@ -24,6 +25,7 @@ import {
   renderDiscoveredBrowserProfiles,
   renderBrowserProfileSummary
 } from "../../artifacts/render-browser-profile.js";
+import { resolveUserConnection } from "../../core/resolve-user-connection.js";
 import { discoverBrowserProfiles, resolveBrowserProfilePaths } from "../../lib/browser-profiles.js";
 
 /**
@@ -395,21 +397,35 @@ Examples:
         process.exitCode = 1;
         return;
       }
-      const assigned = company?.engagementProfileAssignment
-        ? profiles.find((profile) => profile.id === company.engagementProfileAssignment.profileId) ?? null
+      const assignedUser = company?.engagementUserAssignment
+        ? findUserById(company.engagementUserAssignment.userId)
         : null;
+      const assignedUserResolution = assignedUser
+        ? resolveUserConnection(assignedUser, profiles, { capability: options.capability }).resolved
+        : null;
+      const assigned = assignedUserResolution?.browserProfile
+        ? profiles.find((profile) => profile.id === assignedUserResolution.browserProfile.id) ?? null
+        : company?.engagementProfileAssignment
+          ? profiles.find((profile) => profile.id === company.engagementProfileAssignment.profileId) ?? null
+          : null;
       const candidates = profiles
         .filter((profile) => profile.verifiedCapabilities.includes(options.capability))
         .filter((profile) => (options.browser ? profile.browser === options.browser : true))
         .sort((a, b) => compareProfilesForResolution(a, b));
 
-      const assignedSatisfies =
-        assigned &&
-        assigned.verifiedCapabilities.includes(options.capability) &&
-        (!options.browser || assigned.browser === options.browser);
-
-      const resolvedProfile = assignedSatisfies ? assigned : assigned ? null : (candidates[0] ?? null);
-      const resolutionMode = assigned
+      const assignedSatisfies = Boolean(
+        assigned
+        && assigned.verifiedCapabilities.includes(options.capability)
+        && (!options.browser || assigned.browser === options.browser)
+      );
+      const resolvedProfile = assignedUserResolution
+        ? assignedSatisfies ? assigned : null
+        : assigned ? assignedSatisfies ? assigned : null : (candidates[0] ?? null);
+      const resolutionMode = assignedUserResolution
+        ? assignedSatisfies
+          ? "company-user-assignment"
+          : "blocked-by-company-user-assignment"
+        : assigned
         ? assignedSatisfies
           ? "company-assignment"
           : "blocked-by-company-assignment"
@@ -420,6 +436,14 @@ Examples:
         browserPreference: options.browser ?? null,
         companyId: options.company ?? null,
         resolutionMode,
+        assignedUser: assignedUser
+          ? {
+              id: assignedUser.id,
+              label: assignedUser.label,
+              owner: assignedUser.owner,
+              resolvedAccount: assignedUserResolution
+            }
+          : null,
         assignedProfile: assigned
           ? {
               id: assigned.id,
@@ -442,9 +466,13 @@ Examples:
             }
           : null,
         blocker:
-          assigned && !assignedSatisfies
-            ? `Company is pinned to ${assigned.label}, but that profile is not verified for ${options.capability}.`
-            : null,
+          assignedUserResolution && assignedUserResolution.sourceType === "harness-connection"
+            ? `Company is pinned to ${assignedUser.label}, but ${options.capability} resolves through a harness connection instead of a browser profile.`
+            : assignedUserResolution && assignedUserResolution.sourceType === "browser-profile" && !assignedUserResolution.browserProfile
+              ? `Company is pinned to ${assignedUser.label}, but the assigned browser-profile account is missing its registered profile.`
+            : assigned && !assignedSatisfies
+              ? `Company is pinned to ${assigned.label}, but that profile is not verified for ${options.capability}.`
+              : null,
         candidates: candidates.map((profile) => ({
           id: profile.id,
           label: profile.label,
@@ -470,7 +498,7 @@ Examples:
         return;
       }
 
-      if (result.resolutionMode === "company-assignment") {
+      if (result.resolutionMode === "company-assignment" || result.resolutionMode === "company-user-assignment") {
         console.log(
           `Use pinned profile ${result.resolved.label} (${result.resolved.browser} / ${result.resolved.profileDirectory}) for ${options.capability}.`
         );

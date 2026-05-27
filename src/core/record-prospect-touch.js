@@ -90,6 +90,10 @@ function deriveCadenceChannel(surface) {
     return "connection-request";
   }
 
+  if (surface === "in_mail_message") {
+    return "inmail";
+  }
+
   if (surface === "post_accept_message" || surface === "follow_up_direct_message" || surface === "inbound_reply") {
     return "direct-message";
   }

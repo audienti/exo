@@ -16,6 +16,7 @@ export function assignCompanyProfile(rawCompany, rawProfile, input) {
   return companySchema.parse({
     ...company,
     updatedAt: now,
+    engagementUserAssignment: null,
     engagementProfileAssignment: {
       profileId: profile.id,
       label: profile.label,

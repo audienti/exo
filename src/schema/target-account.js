@@ -22,7 +22,20 @@ const touchSurfaceSchema = z.enum([
   "email",
   "inbound_reply",
   "public_comment",
-  "comment_reply"
+  "comment_reply",
+  "profile_view",
+  "follow",
+  "unfollow",
+  "like_post",
+  "unlike_post",
+  "share_post",
+  "in_mail_message",
+  "withdraw_connection",
+  "accept_connection",
+  "decline_connection",
+  "create_comment_reaction",
+  "voicemail_outreach",
+  "video_outreach"
 ]);
 const touchDirectionSchema = z.enum(["outbound", "inbound", "system"]);
 const touchOutcomeSchema = z.enum([

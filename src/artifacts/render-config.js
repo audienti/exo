@@ -12,7 +12,8 @@ export function renderConfigExportSummary(bundle) {
     `Exported At: ${bundle.exportedAt}`,
     `Motions: ${bundle.motions.length}`,
     `Browser Profiles: ${bundle.browserProfiles.length}`,
-    `Companies: ${bundle.companies.length}`
+    `Companies: ${bundle.companies.length}`,
+    `Users: ${bundle.users.length}`
   ].join("\n");
 }
 
@@ -23,7 +24,8 @@ export function renderConfigExportSummary(bundle) {
  *   counts: {
  *     motions: { inserted: number, updated: number, total: number },
  *     browserProfiles: { inserted: number, updated: number, total: number },
- *     companies: { inserted: number, updated: number, total: number }
+ *     companies: { inserted: number, updated: number, total: number },
+ *     users: { inserted: number, updated: number, total: number }
  *   }
  * }} result
  * @returns {string}
@@ -38,6 +40,7 @@ export function renderConfigImportSummary(result) {
     `Motions: inserted ${result.counts.motions.inserted}, updated ${result.counts.motions.updated}, total ${result.counts.motions.total}`,
     `Browser Profiles: inserted ${result.counts.browserProfiles.inserted}, updated ${result.counts.browserProfiles.updated}, total ${result.counts.browserProfiles.total}`,
     `Companies: inserted ${result.counts.companies.inserted}, updated ${result.counts.companies.updated}, total ${result.counts.companies.total}`,
+    `Users: inserted ${result.counts.users.inserted}, updated ${result.counts.users.updated}, total ${result.counts.users.total}`,
     "Browser profiles are re-tested on import."
   ].join("\n");
 }

@@ -13,6 +13,9 @@ export function renderCompanySummary(company) {
     `LinkedIn Company URL: ${company.linkedinCompanyUrl ?? "none"}`,
     `Tags: ${joinOrNone(company.tags)}`,
     `Motions: ${joinOrNone(company.motionIds)}`,
+    company.engagementUserAssignment
+      ? `Engagement User: ${company.engagementUserAssignment.label}`
+      : "Engagement User: none",
     company.engagementProfileAssignment
       ? `Engagement Profile: ${company.engagementProfileAssignment.label} (${company.engagementProfileAssignment.browser} / ${company.engagementProfileAssignment.profileDirectory})`
       : "Engagement Profile: none",
@@ -184,8 +187,9 @@ export function renderCompanyList(companies) {
   return companies
     .map((company) => {
       const domain = company.domain ?? "no-domain";
-      const assignment = company.engagementProfileAssignment?.label ?? "none";
-      return `${company.id}  ${company.name}  ${domain}  [motions: ${company.motionIds.length}]  [profile: ${assignment}]`;
+      const profileAssignment = company.engagementProfileAssignment?.label ?? "none";
+      const userAssignment = company.engagementUserAssignment?.label ?? "none";
+      return `${company.id}  ${company.name}  ${domain}  [motions: ${company.motionIds.length}]  [user: ${userAssignment}]  [profile: ${profileAssignment}]`;
     })
     .join("\n");
 }

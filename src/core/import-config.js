@@ -6,17 +6,22 @@ import {
   findCompanyById,
   findCompanyByIdentity,
   findMotionById,
+  findUserById,
+  findUserByLabel,
   insertBrowserProfile,
   insertCompany,
   insertMotion,
+  insertUser,
   updateBrowserProfile,
   updateCompany,
-  updateMotion
+  updateMotion,
+  updateUser
 } from "../db/database.js";
 import { browserProfileSchema } from "../schema/browser-profile.js";
 import { companySchema } from "../schema/company.js";
 import { configBundleSchema } from "../schema/config-bundle.js";
 import { motionSchema } from "../schema/motion.js";
+import { userSchema } from "../schema/user.js";
 import { retestBrowserProfile } from "./retest-browser-profile.js";
 
 /**
@@ -31,6 +36,8 @@ export function importConfigBundle(rawConfigBundle) {
   let updatedBrowserProfiles = 0;
   let insertedCompanies = 0;
   let updatedCompanies = 0;
+  let insertedUsers = 0;
+  let updatedUsers = 0;
 
   for (const rawMotion of bundle.motions) {
     const motion = motionSchema.parse(rawMotion);
@@ -94,6 +101,32 @@ export function importConfigBundle(rawConfigBundle) {
     insertedCompanies += 1;
   }
 
+  for (const rawUser of bundle.users) {
+    const user = userSchema.parse(rawUser);
+
+    if (findUserById(user.id)) {
+      updateUser(user);
+      updatedUsers += 1;
+      continue;
+    }
+
+    if (findUserByLabel(user.label)) {
+      const localUser = userSchema.parse(findUserByLabel(user.label));
+      updateUser(
+        userSchema.parse({
+          ...user,
+          id: localUser.id,
+          createdAt: localUser.createdAt
+        })
+      );
+      updatedUsers += 1;
+      continue;
+    }
+
+    insertUser(user);
+    insertedUsers += 1;
+  }
+
   return {
     importedAt: new Date().toISOString(),
     source: {
@@ -116,6 +149,11 @@ export function importConfigBundle(rawConfigBundle) {
         inserted: insertedCompanies,
         updated: updatedCompanies,
         total: bundle.companies.length
+      },
+      users: {
+        inserted: insertedUsers,
+        updated: updatedUsers,
+        total: bundle.users.length
       }
     }
   };

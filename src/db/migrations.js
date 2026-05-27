@@ -80,6 +80,21 @@ const migrations = [
     up(database) {
       normalizeMotionPayloads(database);
     }
+  },
+  {
+    version: 6,
+    name: "add-users-table",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+          id TEXT PRIMARY KEY,
+          label TEXT NOT NULL UNIQUE,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          payload_json TEXT NOT NULL
+        );
+      `);
+    }
   }
 ];
 

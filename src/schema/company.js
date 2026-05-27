@@ -18,6 +18,17 @@ export const companyEngagementProfileAssignmentSchema = z.object({
   sticky: z.boolean().default(true)
 });
 
+export const companyEngagementUserAssignmentSchema = z.object({
+  userId: z.string().min(1),
+  label: z.string().trim().min(1),
+  owner: z.string().trim().min(1).nullable(),
+  accountRefs: stringArray,
+  assignedAt: z.string().datetime(),
+  assignedBy: z.string().trim().min(1).nullable(),
+  reason: z.string().trim().min(1).nullable(),
+  sticky: z.boolean().default(true)
+});
+
 export const companySchema = z.object({
   id: z.string().min(1),
   createdAt: z.string().datetime(),
@@ -29,5 +40,6 @@ export const companySchema = z.object({
   notes: z.string().nullable(),
   tags: stringArray,
   motionIds: stringArray,
-  engagementProfileAssignment: companyEngagementProfileAssignmentSchema.nullable().default(null)
+  engagementProfileAssignment: companyEngagementProfileAssignmentSchema.nullable().default(null),
+  engagementUserAssignment: companyEngagementUserAssignmentSchema.nullable().default(null)
 });

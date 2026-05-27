@@ -1,6 +1,6 @@
 // @ts-check
 
-import { listBrowserProfiles, listCompanies, listMotions } from "../db/database.js";
+import { listBrowserProfiles, listCompanies, listMotions, listUsers } from "../db/database.js";
 import { describeStatePathRule } from "../db/paths.js";
 
 /**
@@ -87,7 +87,8 @@ export function describeExo() {
   const motions = listMotions();
   const companies = listCompanies();
   const browserProfiles = listBrowserProfiles();
-  const stateSummary = buildStateSummary(motions, companies, browserProfiles);
+  const users = listUsers();
+  const stateSummary = buildStateSummary(motions, companies, browserProfiles, users);
   const recommendedPath = buildRecommendedPath(stateSummary);
   const operatorInterface = buildOperatorInterface(recommendedPath);
 
@@ -127,20 +128,32 @@ export function describeExo() {
         purpose: "Return the product identity, operating rules, capabilities, and limitations."
       },
       {
+        command: "exo actions list/show",
+        purpose: "Inspect the canonical Audienti-style GTM action catalog that Exo uses for action readiness and execution briefs."
+      },
+      {
+        command: "exo report motion",
+        purpose: "Render one unified motion report that combines setup, readiness, company progress, prospect progress, and next actions."
+      },
+      {
         command: "exo config export/import",
-        purpose: "Export and import motions, companies, and browser profiles as portable Exo configuration."
+        purpose: "Export and import motions, companies, browser profiles, and execution users as portable Exo configuration."
       },
       {
-        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign",
-        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, and pin a sticky engagement profile when outreach starts."
+        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign",
+        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, and pin either a sticky engagement profile or a cross-capability execution user when outreach starts."
       },
       {
-        command: "exo motion start/add/target/prospects/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove",
-        purpose: "Start a motion from an offer URL, force reuse-or-branch decisions when that URL already exists, evaluate targeting readiness, inspect targeted prospects and writing inputs, inspect Audienti-style draft cases, inspect one compact single-surface draft brief for chat writing, and then create, branch, refine, pause, resume, archive, restart, refresh, enumerate, inspect, and remove offer-driven motion state built around premise, audience hypotheses, and motion-specific signals."
+        command: "exo motion intake/start/add/target/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove",
+        purpose: "Ask one intake question at a time before launch, start a motion from an offer URL, force reuse-or-branch decisions when that URL already exists, evaluate targeting readiness, inspect targeted prospects and writing inputs, inspect prospect-scoped action readiness and execution briefs, inspect Audienti-style draft cases, inspect one compact single-surface draft brief for chat writing, and then create, branch, refine, pause, resume, archive, restart, refresh, enumerate, inspect, and remove offer-driven motion state built around premise, audience hypotheses, and motion-specific signals."
       },
       {
         command: "exo profiles discover/add/claim/list/show/capabilities/resolve/test/remove",
         purpose: "Discover local browser profiles, claim them as business identities, store account-level weekly outreach quotas, verify claimed capabilities, resolve the right browser identity, and query capability coverage for browser-backed Exo work."
+      },
+      {
+        command: "exo users add/list/show/harness add/accounts add/resolve",
+        purpose: "Manage human execution identities that own connected accounts across browser profiles and harness connectors, then resolve the right account for each capability."
       }
     ],
     browserProfileRules: [
@@ -159,6 +172,7 @@ export function describeExo() {
         "exo profiles discover --json",
         "exo profiles list --json",
         "exo profiles capabilities --json",
+        "exo users list --json",
         "exo profiles resolve --capability linkedin --json",
         "exo motion list --json"
       ],
@@ -186,10 +200,13 @@ export function describeExo() {
             when: "Use this when motions already exist and the operator is trying to inspect or continue one.",
             commands: [
               "exo motion list --json",
+              "exo report motion <motion-id> --json",
               "exo motion show <motion-id> --json",
               "exo motion target <motion-id> --json",
               "exo motion prospects <motion-id> --json",
               "exo motion prospects <motion-id> --prospect <prospect-id> --json",
+              "exo motion actions <motion-id> --prospect <prospect-id> --json",
+              "exo motion action-brief <motion-id> --prospect <prospect-id> --action connection_request --json",
               "exo motion drafts <motion-id> --prospect <prospect-id> --json",
               "exo motion draft-brief <motion-id> --prospect <prospect-id> --surface connection_request --json",
               "exo motion update <motion-id> --audience \"Primary ICP\" --title \"Chief Risk Officer\" --json",
@@ -202,8 +219,11 @@ export function describeExo() {
           },
           {
             name: "create-motion",
-            when: "Use this when the operator has an offer URL and wants Exo to check for existing motions before creating anything new.",
+            when: "Use this when the operator wants to set up a new motion and you need to ask for specifics one at a time before launch.",
             commands: [
+              "exo motion intake --json",
+              "exo motion intake --url https://example.com/product --json",
+              "exo motion intake --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --json",
               "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
             ]
           },
@@ -213,8 +233,12 @@ export function describeExo() {
             commands: [
               "exo profiles discover --json",
               "exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json",
+              "exo users add --label william-main --owner william --json",
+              "exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred --json",
+              "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred --json",
               "exo profiles list --json",
               "exo profiles capabilities --json",
+              "exo users list --json",
               "exo profiles resolve --capability linkedin --json",
               "exo profiles test <profile-id> --json"
             ]
@@ -233,7 +257,8 @@ export function describeExo() {
               "exo companies through-line set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them \"Specific to them\" --shared-problem \"Shared problem\" --why-now \"Why now\" --legitimate-wedge \"Why they would reply\" --compression-line \"One sentence\" --json",
               "exo companies opening-plan set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --why-now \"Reason to talk now\" --angle \"Opening angle\" --reply-path \"Why this person would legitimately reply now\" --primary-channel connection-request --fallback-channel email --fallback-trigger \"Use email if LinkedIn is blocked or there is no reply.\" --preflight-action \"View the prospect profile\" --first-move \"First move\" --first-message-goal \"Desired response\" --json",
               "exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action \"Send the first touch\" --json",
-              "exo companies profile assign <company-id> --profile <profile-id> --reason \"Use one identity consistently\" --json"
+              "exo companies profile assign <company-id> --profile <profile-id> --reason \"Use one identity consistently\" --json",
+              "exo companies user assign <company-id> --user <user-id> --reason \"Use one human identity across LinkedIn and email\" --json"
             ]
           }
         ]
@@ -259,7 +284,7 @@ export function describeExo() {
       "No real Sales Navigator retrieval yet.",
       "No automatic target-map or stakeholder-map generation yet, even though Exo can now persist manual target-account signal matches, prospects, through-lines, opening plans, and cadence state.",
       "No automatic prospect selection, through-line synthesis, or opening-plan generation yet. Agents still need to choose and write back the people, the reply-path hypothesis, and the first move explicitly.",
-      "No execution-harness registry yet. Exo governs browser identity, but does not yet model Chrome-vs-Playwriter-vs-other harness preference as a first-class object.",
+      "No runtime auto-discovery for harness connectors yet. Exo can now store user-level harness connections, but it still does not inspect Codex-vs-Claude runtime availability by itself.",
       "No public bug-reporting or feature-request intake yet. That is a future alpha feature, not current scope."
     ],
     docs: [
@@ -268,6 +293,7 @@ export function describeExo() {
       { label: "Agent Usage", path: "docs/agent-usage.md" },
       { label: "Companies", path: "docs/companies.md" },
       { label: "Browser Profiles", path: "docs/browser-profiles.md" },
+      { label: "Action Catalog", path: "docs/action-catalog.md" },
       { label: "Config Portability", path: "docs/config-portability.md" },
       { label: "CLI and MCP Contract", path: "docs/cli-mcp-contract.md" }
     ]
@@ -278,8 +304,9 @@ export function describeExo() {
  * @param {unknown[]} motions
  * @param {unknown[]} companies
  * @param {unknown[]} browserProfiles
+ * @param {unknown[]} users
  */
-function buildStateSummary(motions, companies, browserProfiles) {
+function buildStateSummary(motions, companies, browserProfiles, users) {
   const rankedMotions = motions
     .map((motion) => ({
       id: motion.id,
@@ -317,6 +344,14 @@ function buildStateSummary(motions, companies, browserProfiles) {
         status: profile.status,
         capabilities: Array.isArray(profile.verifiedCapabilities) ? profile.verifiedCapabilities : []
       }))
+    },
+    users: {
+      count: users.length,
+      preview: users.slice(0, 3).map((user) => ({
+        id: user.id,
+        label: user.label,
+        accountCount: Array.isArray(user.accounts) ? user.accounts.length : 0
+      }))
     }
   };
 }
@@ -352,6 +387,7 @@ function buildGettingStarted(stateSummary) {
       reason:
         "Exo is motion-first. If there is no motion yet, start from the offer URL so Exo can confirm what is being promoted and check for reuse before creating state.",
       commands: [
+        "exo motion intake --json",
         "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
       ]
     });

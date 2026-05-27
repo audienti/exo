@@ -30,7 +30,7 @@ Rules:
 
   config
     .command("export")
-    .description("Export motions, companies, and browser profiles as a portable Exo config bundle.")
+    .description("Export motions, companies, browser profiles, and users as a portable Exo config bundle.")
     .option("--out <path>", "Write the bundle to a file instead of stdout")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
@@ -41,7 +41,7 @@ Examples:
   exo config export --out ./exo-config.json
 
 Notes:
-  - The export bundle includes motions, companies, and browser profiles.
+  - The export bundle includes motions, companies, browser profiles, and users.
   - Browser profile paths are preserved exactly as stored.
   - Use this to move Exo state between chats, shells, or alpha-user setups.
 `
@@ -79,7 +79,7 @@ Examples:
   exo config import ./exo-config.json --json
 
 Notes:
-  - Import upserts motions, companies, and browser profiles by id or local identity.
+  - Import upserts motions, companies, browser profiles, and users by id or local identity.
   - Browser profiles are always re-tested on import.
   - Import does not delete local state that is absent from the bundle.
 `

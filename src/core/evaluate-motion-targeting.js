@@ -3,16 +3,19 @@
 import { browserProfileCapabilitySchema, browserProfileSchema } from "../schema/browser-profile.js";
 import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
+import { userSchema } from "../schema/user.js";
+import { resolveUserConnection } from "./resolve-user-connection.js";
 
 /**
  * @param {unknown} rawMotion
  * @param {unknown[]} rawCompanies
  * @param {unknown[]} rawProfiles
+ * @param {unknown[]} rawUsers
  * @param {{
  *   capability?: import("../schema/browser-profile.js").browserProfileCapabilitySchema._type
  * }} [options]
  */
-export function evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, options = {}) {
+export function evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, rawUsers, options = {}) {
   const motion = motionSchema.parse(rawMotion);
   const capability = browserProfileCapabilitySchema.parse(options.capability ?? "linkedin");
   const companies = rawCompanies
@@ -22,9 +25,10 @@ export function evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, op
   const profiles = rawProfiles
     .map((profile) => browserProfileSchema.parse(profile))
     .sort(compareProfilesForResolution);
+  const users = rawUsers.map((user) => userSchema.parse(user));
   const motionPreflight = buildMotionPreflight(motion);
   const browserGate = buildBrowserGate(profiles, capability);
-  const companyLoop = companies.map((company) => buildCompanyTargetingState(company, motion, profiles, capability, browserGate));
+  const companyLoop = companies.map((company) => buildCompanyTargetingState(company, motion, profiles, users, capability, browserGate));
   const overallStage = deriveOverallStage(motionPreflight, companyLoop);
   const readyToTarget = overallStage === "targeting-ready";
   const readyToEngage = readyToTarget
@@ -131,10 +135,11 @@ function buildBrowserGate(profiles, capability) {
  * @param {import("../schema/company.js").companySchema._type} company
  * @param {import("../schema/motion.js").motionSchema._type} motion
  * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
+ * @param {import("../schema/user.js").userSchema._type[]} users
  * @param {import("../schema/browser-profile.js").browserProfileCapabilitySchema._type} capability
  * @param {ReturnType<typeof buildBrowserGate>} browserGate
  */
-function buildCompanyTargetingState(company, motion, profiles, capability, browserGate) {
+function buildCompanyTargetingState(company, motion, profiles, users, capability, browserGate) {
   const account = motion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
   const prospects = account?.prospects ?? [];
   const readyThroughLineCount = prospects.filter((prospect) => prospect.throughLine.status === "ready").length;
@@ -143,7 +148,7 @@ function buildCompanyTargetingState(company, motion, profiles, capability, brows
   const missingEmailFallbackCount = prospects.filter(
     (prospect) => !prospect.email && (!prospect.openingPlan.fallbackChannel || prospect.openingPlan.fallbackChannel === "none")
   ).length;
-  const executionIdentity = resolveCompanyExecutionIdentity(company, profiles, capability, browserGate.resolvedProfile);
+  const executionIdentity = resolveCompanyExecutionIdentity(company, profiles, users, capability, browserGate.resolvedProfile);
 
   let stage = "targeting-ready";
   if (!company.websiteUrl || !company.linkedinCompanyUrl) {
@@ -180,10 +185,48 @@ function buildCompanyTargetingState(company, motion, profiles, capability, brows
 /**
  * @param {import("../schema/company.js").companySchema._type} company
  * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
+ * @param {import("../schema/user.js").userSchema._type[]} users
  * @param {import("../schema/browser-profile.js").browserProfileCapabilitySchema._type} capability
  * @param {{ id: string, label: string, browser: string, profileDirectory: string, verifiedCapabilities: string[] } | null} globalResolvedProfile
  */
-function resolveCompanyExecutionIdentity(company, profiles, capability, globalResolvedProfile) {
+function resolveCompanyExecutionIdentity(company, profiles, users, capability, globalResolvedProfile) {
+  const assignedUser = company.engagementUserAssignment
+    ? users.find((user) => user.id === company.engagementUserAssignment.userId) ?? null
+    : null;
+  const assignedUserResolution = assignedUser
+    ? resolveUserConnection(assignedUser, profiles, { capability }).resolved
+    : null;
+
+  if (assignedUserResolution) {
+    if (assignedUserResolution.browserProfile) {
+      const profile = profiles.find((candidate) => candidate.id === assignedUserResolution.browserProfile.id) ?? null;
+      const trusted = Boolean(profile && profile.status === "ready" && profile.verifiedCapabilities.includes(capability));
+      return {
+        status: trusted ? "pinned-ready" : "pinned-untrusted",
+        message: trusted
+          ? `Company is pinned to user ${assignedUser.label} for ${capability} through ${profile.label}.`
+          : `Company is pinned to user ${assignedUser.label}, but the resolved browser profile is not trusted for ${capability}.`,
+        profile: profile ? buildProfilePreview(profile) : null,
+        user: {
+          id: assignedUser.id,
+          label: assignedUser.label
+        }
+      };
+    }
+
+    return {
+      status: assignedUserResolution.status === "ready" ? "pinned-ready" : "pinned-untrusted",
+      message: assignedUserResolution.status === "ready"
+        ? `Company is pinned to user ${assignedUser.label} for ${capability} through ${assignedUserResolution.harnessConnection.runtime}:${assignedUserResolution.harnessConnection.connector}.`
+        : `Company is pinned to user ${assignedUser.label}, but the resolved harness connection is not ready for ${capability}.`,
+      profile: null,
+      user: {
+        id: assignedUser.id,
+        label: assignedUser.label
+      }
+    };
+  }
+
   const assigned = company.engagementProfileAssignment
     ? profiles.find((profile) => profile.id === company.engagementProfileAssignment.profileId) ?? null
     : null;
@@ -195,7 +238,8 @@ function resolveCompanyExecutionIdentity(company, profiles, capability, globalRe
       message: trusted
         ? `Company is pinned to ${assigned.label} for ${capability}.`
         : `Company is pinned to ${assigned.label}, but that profile is not trusted for ${capability}.`,
-      profile: buildProfilePreview(assigned)
+      profile: buildProfilePreview(assigned),
+      user: null
     };
   }
 
@@ -203,14 +247,16 @@ function resolveCompanyExecutionIdentity(company, profiles, capability, globalRe
     return {
       status: "unassigned-global-ready",
       message: `A trusted ${capability} profile exists, but it is not pinned to this company yet.`,
-      profile: globalResolvedProfile
+      profile: globalResolvedProfile,
+      user: null
     };
   }
 
   return {
     status: "unassigned-no-global-profile",
     message: `No trusted ${capability} browser identity is available for this company yet.`,
-    profile: null
+    profile: null,
+    user: null
   };
 }
 

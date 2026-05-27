@@ -94,6 +94,8 @@ Everything else is implementation detail.
 The MVP verbs should be:
 
 - `what-is-this`
+- `actions list`
+- `actions show`
 - `config export`
 - `config import`
 - `motion add`
@@ -137,6 +139,8 @@ Every public CLI command should have a matching MCP tool.
 Examples:
 
 - `exo what-is-this --json` <-> `exo.what_is_this`
+- `exo actions list --json` <-> `exo.actions_list`
+- `exo actions show connection_request --json` <-> `exo.actions_show`
 - `exo config export --out ./exo-config.json` <-> `exo.config_export`
 - `exo config import ./exo-config.json` <-> `exo.config_import`
 - `exo motion add --url <product-url> --premise ... --audience ... --signal ... --geo ... --icp ... --industry ... --company-shape ... --title ... --segment ... --exclude-account ... --exclude-domain ... --dnc-file ...` <-> `exo.define_motion`

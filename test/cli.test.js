@@ -409,6 +409,92 @@ test("motion start checks URL reuse before creating, continuing, or cloning moti
   }
 });
 
+test("motion intake returns the next one-at-a-time setup question before launch and becomes ready when the required specifics exist", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-intake-"));
+
+  try {
+    const firstQuestion = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "intake", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(firstQuestion.status, "needs-question");
+    assert.equal(firstQuestion.nextQuestion.key, "url");
+
+    const urlQuestion = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "intake", "--url", offerUrl, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(urlQuestion.nextQuestion.key, "premise");
+
+    const created = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "start",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when lenders enter more complex credit-decision environments.",
+          "--audience",
+          "Traditional FI risk owners",
+          "--signal",
+          "company::Is there recent evidence that this company expanded into a more complex lending segment?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    assert.equal(created.status, "created");
+
+    const existingQuestion = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "intake", "--url", offerUrl, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(existingQuestion.nextQuestion.key, "existing-strategy");
+    assert.equal(existingQuestion.existingMotions.length, 1);
+
+    const ready = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "intake",
+          "--url",
+          "https://example.com/another-offer",
+          "--premise",
+          "This offer matters when lenders widen risk and decisioning complexity.",
+          "--audience",
+          "Risk leaders",
+          "--signal",
+          "company::Is there recent evidence that this company launched a new lending workflow?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    assert.equal(ready.readyToLaunch, true);
+    assert.equal(ready.status, "ready-to-launch");
+    assert.match(ready.launchCommandHint, /exo motion start/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("motion add preserves commas inside a signal sentence instead of splitting it into multiple signals", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-signal-commas-"));
 
@@ -830,7 +916,7 @@ test("database migrations upgrade legacy motion payloads before motion list and 
     const migratedRow = migratedDb.prepare("SELECT payload_json FROM motions WHERE id = ?").get(legacyMotionId);
     migratedDb.close();
 
-    assert.equal(versionRow.user_version, 5);
+    assert.equal(versionRow.user_version, 6);
 
     const migratedPayload = JSON.parse(migratedRow.payload_json);
     assert.match(migratedPayload.name, generatedMotionNamePattern);
@@ -1353,6 +1439,249 @@ test("claimed browser identities can be pinned to a company and sticky resolutio
     assert.equal(blockedResolve.resolved, null);
     assert.match(blockedResolve.blocker, /pinned to audienti-main/i);
     assert.equal(secondProfile.verifiedCapabilities.includes("hubspot"), false);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("execution users can own mixed profile-backed and harness-backed accounts, and company assignment resolves per capability", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-user-assignment-"));
+  const userDataDir = path.join(tempDir, "Chrome");
+  const linkedinDirectory = "Profile 4";
+  const gmailDirectory = "Profile 9";
+  const linkedinPath = path.join(userDataDir, linkedinDirectory);
+  const gmailPath = path.join(userDataDir, gmailDirectory);
+  const browserCommand = path.join(tempDir, "fake-chrome");
+
+  fs.mkdirSync(linkedinPath, { recursive: true });
+  fs.mkdirSync(gmailPath, { recursive: true });
+  fs.writeFileSync(browserCommand, "#!/bin/sh\nexit 0\n");
+  fs.writeFileSync(
+    path.join(userDataDir, "Local State"),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          [linkedinDirectory]: { name: "LinkedIn Main" },
+          [gmailDirectory]: { name: "Email Main" }
+        }
+      }
+    })
+  );
+  fs.writeFileSync(path.join(linkedinPath, "Preferences"), JSON.stringify({ profile: { name: "LinkedIn Main" } }));
+  fs.writeFileSync(path.join(gmailPath, "Preferences"), JSON.stringify({ profile: { name: "Email Main" } }));
+  seedBrowserEvidence(linkedinPath, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/sales/home"]
+  });
+  seedBrowserEvidence(gmailPath, {
+    cookieHosts: ["mail.google.com"],
+    historyUrls: ["https://mail.google.com/mail/u/0/#inbox"]
+  });
+
+  try {
+    const linkedinProfile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "linkedin-profile",
+          "--user-data-dir",
+          userDataDir,
+          "--profile-directory",
+          linkedinDirectory,
+          "--browser-command",
+          browserCommand,
+          "--capability",
+          "linkedin",
+          "--capability",
+          "sales-navigator",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const gmailProfile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "gmail-profile",
+          "--user-data-dir",
+          userDataDir,
+          "--profile-directory",
+          gmailDirectory,
+          "--browser-command",
+          browserCommand,
+          "--capability",
+          "gmail",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "add", "--label", "william-main", "--owner", "william", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const afterLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "william@linkedin",
+          "--profile",
+          linkedinProfile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(afterLinkedin.accounts.length, 1);
+    assert.equal(afterLinkedin.accounts[0].sourceType, "browser-profile");
+
+    const afterGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "william@audienti.com",
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(afterGmail.harnessConnections.length, 1);
+    assert.equal(afterGmail.harnessConnections[0].runtime, "codex");
+    assert.equal(afterGmail.harnessConnections[0].connector, "gmail");
+    assert.equal(afterGmail.accounts.length, 2);
+
+    const resolvedLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "resolve", user.id, "--capability", "linkedin", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(resolvedLinkedin.resolved.sourceType, "browser-profile");
+    assert.equal(resolvedLinkedin.resolved.browserProfile.id, linkedinProfile.id);
+
+    const resolvedGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "resolve", user.id, "--capability", "gmail", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(resolvedGmail.resolved.sourceType, "harness-connection");
+    assert.equal(resolvedGmail.resolved.harnessConnection.runtime, "codex");
+    assert.equal(resolvedGmail.resolved.harnessConnection.connector, "gmail");
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "Chainguard", "--domain", "chainguard.dev", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const assigned = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "user",
+          "assign",
+          company.id,
+          "--user",
+          user.id,
+          "--reason",
+          "Use one human identity across LinkedIn and email.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    assert.equal(assigned.engagementUserAssignment.userId, user.id);
+    assert.equal(assigned.engagementUserAssignment.label, "william-main");
+    assert.equal(assigned.engagementProfileAssignment.profileId, linkedinProfile.id);
+
+    const shownAssignment = JSON.parse(
+      execFileSync("node", [cliPath, "companies", "user", "show", company.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(shownAssignment.assignment.userId, user.id);
+
+    const companyLinkedinResolution = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "resolve", "--company", company.id, "--capability", "linkedin", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(companyLinkedinResolution.resolved.browserProfile.id, linkedinProfile.id);
+
+    const stickyLinkedinProfile = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "profiles", "resolve", "--company", company.id, "--capability", "linkedin", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(stickyLinkedinProfile.resolutionMode, "company-user-assignment");
+    assert.equal(stickyLinkedinProfile.resolved.id, linkedinProfile.id);
+
+    const stickyGmailProfile = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "profiles", "resolve", "--company", company.id, "--capability", "gmail", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(stickyGmailProfile.resolved, null);
+    assert.equal(stickyGmailProfile.resolutionMode, "blocked-by-company-user-assignment");
+    assert.match(stickyGmailProfile.blocker, /harness connection/i);
+
+    assert.equal(gmailProfile.verifiedCapabilities.includes("gmail"), true);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2496,6 +2825,346 @@ test("companies persist prospects plus prospect-specific through-lines, opening 
   }
 });
 
+test("report motion renders one unified view across setup, readiness, company progress, and prospects", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-report-"));
+  const userDataDir = path.join(tempDir, "Chrome");
+  const profileDirectory = "Profile 4";
+  const profilePath = path.join(userDataDir, profileDirectory);
+  const browserCommand = path.join(tempDir, "fake-chrome");
+
+  fs.mkdirSync(profilePath, { recursive: true });
+  fs.writeFileSync(browserCommand, "#!/bin/sh\nexit 0\n");
+  fs.writeFileSync(
+    path.join(userDataDir, "Local State"),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          [profileDirectory]: { name: "Audienti Main" }
+        }
+      }
+    })
+  );
+  fs.writeFileSync(path.join(profilePath, "Preferences"), JSON.stringify({ profile: { name: "Audienti Main" } }));
+  seedBrowserEvidence(profilePath, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/sales/home"]
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "audienti-profile",
+          "--user-data-dir",
+          userDataDir,
+          "--profile-directory",
+          profileDirectory,
+          "--browser-command",
+          browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const claimedProfile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "claim",
+          profile.id,
+          "--label",
+          "audienti-main",
+          "--workspace",
+          "audienti",
+          "--account",
+          "linkedin:wflanagan@audienti.com",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when security leaders need more credible outbound.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there recent evidence that this company widened product or GTM scope?",
+          "--title",
+          "Chief Revenue Officer",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Chainguard",
+          "--domain",
+          "chainguard.dev",
+          "--website-url",
+          "https://www.chainguard.dev",
+          "--linkedin-company-url",
+          "https://www.linkedin.com/company/chainguard-dev/",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    execFileSync(
+      "node",
+      [cliPath, "companies", "profile", "assign", company.id, "--profile", claimedProfile.id, "--json"],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    const signalMatchesResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "signal-matches",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--signal",
+          motion.signals[0].id,
+          "--summary",
+          "Expanded GTM surface through a fresh product and partner push.",
+          "--source-url",
+          "https://www.chainguard.dev/news",
+          "--observed-at",
+          "2026-05-20T00:00:00.000Z",
+          "--confidence",
+          "high",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const signalMatchId = signalMatchesResult.signalMatches[0].id;
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Parm Uppal",
+          "--title",
+          "Chief Revenue Officer",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--signal-match",
+          signalMatchId,
+          "--why-relevant",
+          "Primary owner for credible GTM execution.",
+          "--active-channel",
+          "linkedin",
+          "--activity-type",
+          "own-post",
+          "--live-signal-summary",
+          "Recent post suggests active LinkedIn use.",
+          "--live-signal-url",
+          "https://www.linkedin.com/posts/parm-example",
+          "--live-signal-observed-at",
+          "2026-05-24T00:00:00.000Z",
+          "--freshness-band",
+          "15-30-days",
+          "--hook-strength",
+          "high",
+          "--engagement-rationale",
+          "Fresh posting supports a legitimate warmup.",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const prospectId = prospectResult.prospects[0].id;
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--signal-match",
+        signalMatchId,
+        "--specific-to-them",
+        "Parm now owns GTM credibility.",
+        "--shared-problem",
+        "Generic outbound burns trust.",
+        "--why-now",
+        "Broader GTM scope creates pressure now.",
+        "--legitimate-wedge",
+        "Show a credible path to relevance.",
+        "--compression-line",
+        "Parm needs credible outbound now that GTM scope is wider.",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--signal-match",
+        signalMatchId,
+        "--why-now",
+        "Fresh GTM expansion raises the cost of generic outreach.",
+        "--angle",
+        "Credible, signal-led outbound.",
+        "--reply-path",
+        "Ground the message in Parm's current GTM credibility problem.",
+        "--primary-channel",
+        "connection-request",
+        "--fallback-channel",
+        "email",
+        "--fallback-trigger",
+        "Use email only if LinkedIn stalls.",
+        "--first-move",
+        "Connection request",
+        "--first-message-goal",
+        "Start a reply, not a pitch.",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--current-step",
+        "connection-request",
+        "--next-action",
+        "Send the first touch",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    const reportJson = JSON.parse(
+      execFileSync("node", [cliPath, "report", "motion", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(reportJson.motion.id, motion.id);
+    assert.equal(reportJson.targeting.overallStage, "targeting-ready");
+    assert.equal(reportJson.prospects.counts.prospectCount, 1);
+    assert.equal(reportJson.prospects.prospects[0].name, "Parm Uppal");
+
+    const reportText = execFileSync("node", [cliPath, "report", "motion", motion.id], {
+      cwd: tempDir,
+      encoding: "utf8"
+    });
+    assert.match(reportText, /Motion Report:/);
+    assert.match(reportText, /Readiness/);
+    assert.match(reportText, /Company Progress/);
+    assert.match(reportText, /Prospect Progress/);
+    assert.match(reportText, /Parm Uppal/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("motion remove deletes the motion and unlinks linked companies", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-remove-"));
 
@@ -2569,6 +3238,432 @@ test("motion remove deletes the motion and unlinks linked companies", () => {
       })
     );
     assert.deepEqual(companyAfter.motionIds, []);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("canonical action catalog and motion action briefs expose executable Audienti actions", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-actions-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when security GTM teams need sharper executive outreach.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there recent evidence that this company expanded its product or go-to-market surface?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Chainguard",
+          "--domain",
+          "chainguard.dev",
+          "--motion",
+          motion.id,
+          "--website-url",
+          "https://www.chainguard.dev",
+          "--linkedin-company-url",
+          "https://www.linkedin.com/company/chainguard",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const signalMatchResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "signal-matches",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--signal",
+          motion.signals[0].id,
+          "--summary",
+          "Chainguard expanded its market story through a visible product-and-marketplace push.",
+          "--source-url",
+          "https://www.chainguard.dev/unchained/everything-we-announced-at-chainguard-assemble-2026",
+          "--observed-at",
+          "2026-03-17T00:00:00.000Z",
+          "--confidence",
+          "high",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const signalMatchId = signalMatchResult.signalMatches[0].id;
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Parm Uppal",
+          "--title",
+          "Chief Revenue Officer",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/parm-uppal",
+          "--email",
+          "parm@example.com",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--signal-match",
+          signalMatchId,
+          "--role-summary",
+          "Owns the revenue narrative and outbound quality bar as Chainguard widens its GTM surface.",
+          "--trigger-summary",
+          "Recent product and distribution expansion raises the cost of generic outbound.",
+          "--identity-summary",
+          "Reads like a GTM operator who cares about sharp market narrative, not volume theater.",
+          "--active-channel",
+          "linkedin",
+          "--activity-type",
+          "own-post",
+          "--live-signal-summary",
+          "Recent LinkedIn post shows active public GTM commentary.",
+          "--live-signal-url",
+          "https://www.linkedin.com/posts/example",
+          "--live-signal-observed-at",
+          "2026-05-10T00:00:00.000Z",
+          "--freshness-band",
+          "0-14-days",
+          "--hook-strength",
+          "high",
+          "--engagement-rationale",
+          "Recent public posting is a legitimate warmup surface before a private ask.",
+          "--why-relevant",
+          "Best-fit owner for the narrative quality and executive-attention angle.",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const prospectId = prospectResult.prospects[0].id;
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--signal-match",
+        signalMatchId,
+        "--specific-to-them",
+        "Parm owns how Chainguard sounds when the GTM story gets broader.",
+        "--shared-problem",
+        "Broader product and channel expansion makes generic outbound easier to spot and ignore.",
+        "--why-now",
+        "The recent expansion wave raises the cost of sloppy executive outreach now, not later.",
+        "--legitimate-wedge",
+        "Offer a concrete observation about outbound quality under expansion pressure instead of a generic sales pitch.",
+        "--compression-line",
+        "As CRO, Parm now has to protect message quality while Chainguard's story gets bigger.",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--signal-match",
+        signalMatchId,
+        "--why-now",
+        "The recent product-and-distribution push makes message discipline more visible.",
+        "--angle",
+        "Executive outbound gets weaker when the story broadens faster than the narrative discipline.",
+        "--reply-path",
+        "Lead with a specific narrative-quality tension that a CRO would plausibly want to react to.",
+        "--primary-channel",
+        "connection-request",
+        "--fallback-channel",
+        "email",
+        "--fallback-trigger",
+        "Use email if LinkedIn stays cold or unavailable.",
+        "--preflight-action",
+        "View the prospect profile",
+        "--preflight-action",
+        "Engage one recent relevant LinkedIn post only if the interaction is natural",
+        "--first-move",
+        "Warm up on the recent post, then send a connection request.",
+        "--first-message-goal",
+        "Start a conversation about executive outbound quality under expansion pressure.",
+        "--talking-point",
+        "Reference the recent expansion wave and the resulting pressure on narrative precision.",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--current-step",
+        "connection-request",
+        "--next-action",
+        "Warm up on the recent post, then send the first connection request.",
+        "--next-action-due-at",
+        "2026-05-27T14:00:00.000Z",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    const actionCatalog = JSON.parse(
+      execFileSync("node", [cliPath, "actions", "list", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.ok(actionCatalog.actions.some((action) => action.key === "connection_request"));
+    assert.ok(actionCatalog.actions.some((action) => action.key === "profile_view"));
+    assert.ok(actionCatalog.actions.some((action) => action.key === "send_direct_message"));
+    assert.ok(actionCatalog.actions.some((action) => action.key === "create_post_comment"));
+
+    const shownAction = JSON.parse(
+      execFileSync("node", [cliPath, "actions", "show", "send_direct_message", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(shownAction.action.key, "send_direct_message");
+    assert.equal(shownAction.action.platform, "linkedin");
+    assert.ok(shownAction.action.fields.includes("text"));
+    assert.ok(shownAction.action.knowledgeRefs.some((ref) => /action-catalog\.md$/i.test(ref.path)));
+
+    const motionActions = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "actions", motion.id, "--prospect", prospectId, "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const profileViewAction = motionActions.actions.find((action) => action.key === "profile_view");
+    const connectionRequestAction = motionActions.actions.find((action) => action.key === "connection_request");
+    const directMessageAction = motionActions.actions.find((action) => action.key === "send_direct_message");
+    const emailAction = motionActions.actions.find((action) => action.key === "send_email");
+    const postCommentAction = motionActions.actions.find((action) => action.key === "create_post_comment");
+
+    assert.equal(profileViewAction.available, true);
+    assert.equal(connectionRequestAction.available, true);
+    assert.equal(connectionRequestAction.draftSurface.key, "connection_request");
+    assert.equal(directMessageAction.available, false);
+    assert.match(directMessageAction.reason, /accepted connection|inbound/i);
+    assert.equal(emailAction.available, true);
+    assert.equal(postCommentAction.available, true);
+    assert.equal(postCommentAction.draftSurface.key, "public_comment");
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "touches",
+        "add",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--surface",
+        "profile_view",
+        "--direction",
+        "outbound",
+        "--outcome",
+        "sent",
+        "--occurred-at",
+        "2026-05-26T18:00:00.000Z",
+        "--summary",
+        "Viewed the LinkedIn profile before outreach.",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    const motionActionsAfterView = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "actions", motion.id, "--prospect", prospectId, "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const profileViewAfter = motionActionsAfterView.actions.find((action) => action.key === "profile_view");
+    assert.equal(profileViewAfter.available, false);
+    assert.match(profileViewAfter.reason, /already viewed|already recorded/i);
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "touches",
+        "add",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--surface",
+        "follow",
+        "--direction",
+        "outbound",
+        "--outcome",
+        "blocked",
+        "--occurred-at",
+        "2026-05-26T18:05:00.000Z",
+        "--summary",
+        "LinkedIn rejected the follow attempt.",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    const motionActionsAfterBlockedFollow = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "actions", motion.id, "--prospect", prospectId, "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const followAfterBlocked = motionActionsAfterBlockedFollow.actions.find((action) => action.key === "follow");
+    assert.equal(followAfterBlocked.available, false);
+    assert.equal(followAfterBlocked.status, "blocked");
+    assert.match(followAfterBlocked.reason, /rejected a follow attempt|rejected 1 follow attempt/i);
+
+    const actionBrief = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "action-brief", motion.id, "--prospect", prospectId, "--action", "connection_request", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(actionBrief.action.key, "connection_request");
+    assert.equal(actionBrief.action.available, true);
+    assert.equal(actionBrief.action.draftSurface.key, "connection_request");
+    assert.ok(actionBrief.action.executionHints.affordances.length > 0);
+    assert.ok(actionBrief.action.executionHints.fallbacks.some((hint) => /direct invite flow/i.test(hint)));
+    assert.ok(actionBrief.execution.steps.some((step) => /native chrome|browser harness/i.test(step)));
+    assert.ok(actionBrief.execution.contextualHints.some((hint) => /blocked Follow attempt|Follow attempts/i.test(hint)));
+    assert.ok(actionBrief.execution.writeback.command.includes("exo companies touches add"));
+    assert.ok(actionBrief.execution.knowledgeRefs.some((ref) => /action-catalog\.md$/i.test(ref.path)));
+    assert.ok(actionBrief.execution.knowledgeRefs.some((ref) => /docs\/linkedin\/connection_request\.md$/i.test(ref.path)));
+
+    const actionDetail = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "actions", "show", "connection_request", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    assert.ok(actionDetail.action.executionHints.successProofs.some((hint) => /Pending control|Pending/i.test(hint)));
+    assert.ok(actionDetail.action.knowledgeRefs.some((ref) => /docs\/linkedin\/connection_request\.md$/i.test(ref.path)));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2743,6 +3838,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   });
   assert.match(topLevelHelp, /Prefer --json when Claude\/Codex is calling Exo/);
   assert.match(topLevelHelp, /Register and test a browser profile before any browser-backed work/);
+  assert.match(topLevelHelp, /Use exo motion intake when an agent should ask one setup question at a time/);
   assert.match(topLevelHelp, /Current state location:/);
 
   const profilesHelp = execFileSync("node", [cliPath, "profiles", "add", "--help"], {
@@ -2797,7 +3893,25 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   assert.match(companiesHelp, /exo companies touches add <company-id>/);
   assert.match(companiesHelp, /exo companies profile show <company-id>/);
   assert.match(companiesHelp, /exo companies profile assign <company-id> --profile <profile-id>/);
+  assert.match(companiesHelp, /exo companies user show <company-id>/);
+  assert.match(companiesHelp, /exo companies user assign <company-id> --user <user-id>/);
   assert.match(companiesHelp, /Keep the noun consistent/);
+
+  const usersHelp = execFileSync("node", [cliPath, "users", "--help"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+  assert.match(usersHelp, /exo users add --label william-main --owner william/);
+  assert.match(usersHelp, /exo users harness add <user-id> --runtime codex --connector chrome --status available/);
+  assert.match(usersHelp, /exo users accounts add <user-id> --capability linkedin/);
+  assert.match(usersHelp, /exo users resolve <user-id> --capability gmail --json/);
+
+  const actionsHelp = execFileSync("node", [cliPath, "actions", "--help"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+  assert.match(actionsHelp, /exo actions list/);
+  assert.match(actionsHelp, /exo actions show <action-key>/);
 
   const motionHelp = execFileSync("node", [cliPath, "motion", "add", "--help"], {
     cwd: repoRoot,
@@ -2812,16 +3926,25 @@ test("CLI help explains agent-safe usage and profile gating", () => {
     cwd: repoRoot,
     encoding: "utf8"
   });
+  assert.match(motionRootHelp, /exo motion intake/);
   assert.match(motionRootHelp, /exo motion clone/);
   assert.match(motionRootHelp, /exo motion update/);
   assert.match(motionRootHelp, /exo motion prospects/);
   assert.match(motionRootHelp, /exo motion drafts/);
   assert.match(motionRootHelp, /exo motion draft-brief/);
+  assert.match(motionRootHelp, /exo motion actions/);
+  assert.match(motionRootHelp, /exo motion action-brief/);
   assert.match(motionRootHelp, /exo motion pause/);
   assert.match(motionRootHelp, /exo motion resume/);
   assert.match(motionRootHelp, /exo motion archive/);
   assert.match(motionRootHelp, /exo motion restart/);
   assert.match(motionRootHelp, /exo motion refresh/);
+
+  const reportHelp = execFileSync("node", [cliPath, "report", "--help"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+  assert.match(reportHelp, /exo report motion <motion-id>/);
 });
 
 test("what-is-this returns machine-readable orientation for agents", () => {
@@ -2844,16 +3967,28 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected config portability surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign"),
+    about.currentCapabilities.some((item) => item.command === "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign"),
     "expected companies surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo motion start/add/target/prospects/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
+    about.currentCapabilities.some((item) => item.command === "exo motion intake/start/add/target/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
     "expected motion write surface to be listed in current capabilities"
+  );
+  assert.ok(
+    about.currentCapabilities.some((item) => item.command === "exo report motion"),
+    "expected unified motion report surface to be listed in current capabilities"
+  );
+  assert.ok(
+    about.currentCapabilities.some((item) => item.command === "exo actions list/show"),
+    "expected canonical action catalog surface to be listed in current capabilities"
   );
   assert.ok(
     about.currentCapabilities.some((item) => item.command === "exo profiles discover/add/claim/list/show/capabilities/resolve/test/remove"),
     "expected profile capability command surface to be listed in current capabilities"
+  );
+  assert.ok(
+    about.currentCapabilities.some((item) => item.command === "exo users add/list/show/harness add/accounts add/resolve"),
+    "expected execution-user surface to be listed in current capabilities"
   );
   assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo companies list --json"),
@@ -2866,6 +4001,10 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo profiles capabilities --json"),
     "expected bootstrap sequence to include capability discovery"
+  );
+  assert.ok(
+    about.agentUsage.bootstrapSequence.includes("exo users list --json"),
+    "expected bootstrap sequence to include execution-user discovery"
   );
   assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo profiles resolve --capability linkedin --json"),

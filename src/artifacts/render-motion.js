@@ -390,6 +390,307 @@ export function renderMotionProspectList(result) {
 
 /**
  * @param {{
+ *   motion: { id: string, name: string, status: string },
+ *   company: { id: string, name: string },
+ *   prospect: { prospectId: string, name: string, title: string },
+ *   executionIdentity: { status: string, message: string },
+ *   actions: Array<{
+ *     key: string,
+ *     label: string,
+ *     platform: string,
+ *     category: string,
+ *     requiredCapability: string,
+ *     recommended: boolean,
+ *     available: boolean,
+ *     status: string,
+ *     reason: string | null,
+ *     draftSurface: null | { key: string, stage: string }
+ *   }>
+ * }} result
+ */
+export function renderMotionActionList(result) {
+  const lines = [
+    `Motion Actions: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Company: ${result.company.name}`,
+    `Prospect: ${result.prospect.name} (${result.prospect.title})`,
+    `Execution Identity: ${result.executionIdentity.status} — ${result.executionIdentity.message}`,
+    ""
+  ];
+
+  for (const action of result.actions) {
+    lines.push(`${action.label}  [${action.key}]  ${action.available ? "available" : action.status}`);
+    lines.push(`  Platform: ${action.platform}  Category: ${action.category}  Capability: ${action.requiredCapability}`);
+    lines.push(`  Recommended: ${action.recommended ? "yes" : "no"}  Draft Surface: ${action.draftSurface?.key ?? "none"}`);
+    if (action.reason) {
+      lines.push(`  Reason: ${action.reason}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+/**
+ * @param {{
+ *   motion: { id: string, name: string },
+ *   company: { id: string, name: string },
+ *   prospect: { prospectId: string, name: string, title: string, linkedinProfileUrl: string | null, email: string | null, profileViewedAt: string | null },
+ *   executionIdentity: { status: string, message: string },
+ *   action: {
+ *     key: string,
+ *     label: string,
+ *     summary: string,
+ *     platform: string,
+ *     category: string,
+ *     executionActionType: string,
+ *     available: boolean,
+ *     status: string,
+ *     reason: string | null,
+ *     requiredCapability: string,
+ *     entityRequirement: string,
+ *     fields: string[],
+ *     draftSurface: null | { key: string, stage: string, channel: string },
+ *     executionHints: {
+ *       affordances: string[],
+ *       fallbacks: string[],
+ *       successProofs: string[],
+ *       failureSignatures: string[],
+ *       cleanup: string[]
+ *     },
+ *     knowledgeRefs: Array<{ path: string, section: string }>
+ *   },
+ *   execution: {
+ *     task: string,
+ *     preferredHarness: string,
+ *     draftCommand: string | null,
+ *     steps: string[],
+ *     contextualHints: string[],
+ *     writeback: { command: string },
+ *     knowledgeRefs: Array<{ path: string, section: string }>
+ *   }
+ * }} result
+ */
+export function renderMotionActionBrief(result) {
+  const lines = [
+    `Motion Action Brief: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Company: ${result.company.name}`,
+    `Prospect: ${result.prospect.name} (${result.prospect.title})`,
+    `Prospect ID: ${result.prospect.prospectId}`,
+    `Action: ${result.action.label} [${result.action.key}]`,
+    `Available: ${result.action.available ? "yes" : "no"}`,
+    `Status: ${result.action.status}`,
+    `Execution Identity: ${result.executionIdentity.status} — ${result.executionIdentity.message}`,
+    `Task: ${result.execution.task}`,
+    `Preferred Harness: ${result.execution.preferredHarness}`,
+    `Required Capability: ${result.action.requiredCapability}`,
+    `Entity Requirement: ${result.action.entityRequirement}`,
+    `Draft Surface: ${result.action.draftSurface?.key ?? "none"}`,
+    `Draft Command: ${result.execution.draftCommand ?? "none"}`,
+    `Writeback Command: ${result.execution.writeback.command}`,
+    `LinkedIn URL: ${result.prospect.linkedinProfileUrl ?? "none"}`,
+    `Email: ${result.prospect.email ?? "none"}`,
+    `Profile Viewed At: ${result.prospect.profileViewedAt ?? "none"}`
+  ];
+
+  if (result.action.reason) {
+    lines.push(`Reason: ${result.action.reason}`);
+  }
+
+  lines.push("", "Summary", `  ${result.action.summary}`, "", "Execution Steps");
+  for (const step of result.execution.steps) {
+    lines.push(`  - ${step}`);
+  }
+
+  const hintSections = [
+    ["Affordances", result.action.executionHints.affordances],
+    ["Fallbacks", result.action.executionHints.fallbacks],
+    ["Success Proofs", result.action.executionHints.successProofs],
+    ["Failure Signatures", result.action.executionHints.failureSignatures],
+    ["Cleanup", result.action.executionHints.cleanup]
+  ].filter(([, entries]) => entries.length > 0);
+
+  if (hintSections.length > 0) {
+    lines.push("", "Execution Hints");
+    for (const [label, entries] of hintSections) {
+      lines.push(`  ${label}`);
+      for (const entry of entries) {
+        lines.push(`    - ${entry}`);
+      }
+    }
+  }
+
+  if (result.execution.contextualHints.length > 0) {
+    lines.push("", "Contextual Hints");
+    for (const hint of result.execution.contextualHints) {
+      lines.push(`  - ${hint}`);
+    }
+  }
+
+  lines.push("", "Knowledge");
+  for (const ref of result.execution.knowledgeRefs) {
+    lines.push(`  - ${ref.path} :: ${ref.section}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {{
+ *   motion: {
+ *     id: string,
+ *     name: string,
+ *     status: string,
+ *     sourceUrl: string,
+ *     createdAt: string,
+ *     updatedAt: string,
+ *     premise: {
+ *       status: string,
+ *       statement: string | null,
+ *       notes: string | null
+ *     },
+ *     setup: {
+ *       audienceHypotheses: Array<{ id: string, name: string, confidence: string }>,
+ *       signals: Array<{ id: string, name: string, scope: string, status: string }>,
+ *       targetingProfile: {
+ *         stakeholderTargetCount: number,
+ *         targetTitles: string[],
+ *         roleFamilies: string[],
+ *         industries: string[],
+ *         geolocations: string[],
+ *         segmentVariants: string[]
+ *       },
+ *       suppression: {
+ *         excludedAccountsCount: number,
+ *         excludedDomainsCount: number,
+ *         excludedContactsCount: number,
+ *         doNotContactEntryCount: number
+ *       }
+ *     }
+ *   },
+ *   targeting: ReturnType<typeof import("../core/evaluate-motion-targeting.js").evaluateMotionTargeting>,
+ *   prospects: ReturnType<typeof import("../core/build-motion-prospect-view.js").buildMotionProspectView>
+ * }} result
+ */
+export function renderMotionReport(result) {
+  const lines = [
+    `Motion Report: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Status: ${result.motion.status}`,
+    `URL: ${result.motion.sourceUrl}`,
+    `Created: ${result.motion.createdAt}`,
+    `Updated: ${result.motion.updatedAt}`,
+    "",
+    "Readiness",
+    `  Stage: ${result.targeting.overallStage}`,
+    `  Ready To Target: ${result.targeting.readyToTarget ? "yes" : "no"}`,
+    `  Ready To Engage: ${result.targeting.readyToEngage ? "yes" : "no"}`,
+    `  Browser Gate: ${result.targeting.browserGate.status} (${result.targeting.browserGate.capability})`,
+    `    ${result.targeting.browserGate.message}`
+  ];
+
+  if (result.targeting.browserGate.resolvedProfile) {
+    lines.push(
+      `    Profile: ${result.targeting.browserGate.resolvedProfile.label} (${result.targeting.browserGate.resolvedProfile.browser} / ${result.targeting.browserGate.resolvedProfile.profileDirectory})`
+    );
+  }
+
+  lines.push(
+    "",
+    "Setup",
+    `  Premise: ${result.motion.premise.status} — ${result.motion.premise.statement ?? "none"}`,
+    `  Audiences: ${result.motion.setup.audienceHypotheses.length}`,
+    `  Signals: ${result.motion.setup.signals.length}`,
+    `  Stakeholder Target Count: ${result.motion.setup.targetingProfile.stakeholderTargetCount}`,
+    `  Target Titles: ${joinOrNone(result.motion.setup.targetingProfile.targetTitles)}`,
+    `  Role Families: ${joinOrNone(result.motion.setup.targetingProfile.roleFamilies)}`,
+    `  Industries: ${joinOrNone(result.motion.setup.targetingProfile.industries)}`,
+    `  Geolocations: ${joinOrNone(result.motion.setup.targetingProfile.geolocations)}`,
+    `  Segments: ${joinOrNone(result.motion.setup.targetingProfile.segmentVariants)}`,
+    `  Suppression: accounts=${result.motion.setup.suppression.excludedAccountsCount} domains=${result.motion.setup.suppression.excludedDomainsCount} contacts=${result.motion.setup.suppression.excludedContactsCount} dnc=${result.motion.setup.suppression.doNotContactEntryCount}`
+  );
+
+  if (result.motion.setup.audienceHypotheses.length) {
+    lines.push("", "Audience Hypotheses");
+    for (const audience of result.motion.setup.audienceHypotheses) {
+      lines.push(`  ${audience.name} [${audience.confidence}]`);
+    }
+  }
+
+  if (result.motion.setup.signals.length) {
+    lines.push("", "Signals");
+    for (const signal of result.motion.setup.signals) {
+      lines.push(`  ${signal.scope}  ${signal.name}  [${signal.status}]`);
+    }
+  }
+
+  if (result.targeting.motionPreflight.blockers.length) {
+    lines.push("", "Motion Preflight Blockers");
+    for (const blocker of result.targeting.motionPreflight.blockers) {
+      lines.push(`  - ${blocker}`);
+    }
+  }
+
+  lines.push(
+    "",
+    "Company Progress",
+    `  Companies: ${result.targeting.companyLoop.companyCount}`,
+    `  Targeting-Ready Companies: ${result.targeting.companyLoop.readyCount}`
+  );
+
+  if (!result.targeting.companyLoop.items.length) {
+    lines.push("  none");
+  } else {
+    for (const company of result.targeting.companyLoop.items) {
+      lines.push(
+        `  ${company.companyName}  [${company.stage}]  signals:${company.signalMatchCount}  prospects:${company.prospectCount}  through-lines:${company.readyThroughLineCount}  opening-plans:${company.readyOpeningPlanCount}  cadence:${company.readyCadenceCount}`
+      );
+      lines.push(`    Execution Identity: ${company.executionIdentity.status} — ${company.executionIdentity.message}`);
+      if (company.missingEmailFallbackCount > 0) {
+        lines.push(`    Missing Email Fallbacks: ${company.missingEmailFallbackCount}`);
+      }
+    }
+  }
+
+  lines.push(
+    "",
+    "Prospect Progress",
+    `  Prospects: ${result.prospects.counts.prospectCount}`,
+    `  Message-Test Ready: ${result.prospects.counts.messageTestReadyCount}`,
+    `  Recent Post Warmups: ${result.prospects.counts.recentPostReadyCount}`,
+    `  Email Fallbacks: ${result.prospects.counts.emailFallbackCount}`
+  );
+
+  if (!result.prospects.prospects.length) {
+    lines.push("  none");
+  } else {
+    for (const prospect of result.prospects.prospects) {
+      lines.push(
+        `  ${prospect.companyName}  ${prospect.name} — ${prospect.title}  [${prospect.buyingCommitteeRole}, ${prospect.decisionAuthority}, ${prospect.fitConfidence}]`
+      );
+      lines.push(
+        `    Message-Test: ${prospect.messageTestReady ? "ready" : "not-ready"}  Recent Post Warmup: ${prospect.recentPost.engageable ? "ready" : "not-ready"}  Email: ${prospect.hasEmailFallback ? "yes" : "no"}  Channel: ${prospect.primaryChannel ?? "none"}`
+      );
+      if (prospect.compressionLine) {
+        lines.push(`    Compression: ${prospect.compressionLine}`);
+      }
+      if (prospect.nextAction) {
+        lines.push(`    Next Action: ${prospect.nextAction}`);
+      }
+    }
+  }
+
+  lines.push("", "Next Actions");
+  for (const action of result.targeting.nextActions) {
+    lines.push(`  - ${action}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {{
  *   motion: {
  *     id: string,
  *     name: string,
