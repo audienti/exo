@@ -11,7 +11,7 @@ import { addCompany } from "../../core/add-company.js";
 import { assignCompanyProfile } from "../../core/assign-company-profile.js";
 import { assignCompanyUser } from "../../core/assign-company-user.js";
 import { buildCompanyResearchBrief } from "../../core/build-company-research-brief.js";
-import { recordMotionProspect } from "../../core/record-prospect.js";
+import { recordMotionProspect, updateMotionProspect } from "../../core/record-prospect.js";
 import { recordMotionProspectTouch } from "../../core/record-prospect-touch.js";
 import { recordMotionSignalMatch } from "../../core/record-signal-match.js";
 import { setMotionProspectCadence } from "../../core/set-prospect-cadence.js";
@@ -58,6 +58,7 @@ Canonical companies interface:
   exo companies signal-matches add <company-id>
   exo companies prospects show <company-id>
   exo companies prospects add <company-id>
+  exo companies prospects update <company-id>
   exo companies through-line show <company-id>
   exo companies through-line set <company-id>
   exo companies opening-plan show <company-id>
@@ -701,6 +702,13 @@ Use this when the agent needs the chosen people of record before writing or brow
     .option("--freshness-band <band>", "Freshness band: 0-14-days, 15-30-days, 31-60-days, 61-90-days, stale, unknown")
     .option("--hook-strength <level>", "Live-signal hook strength: low, moderate, high, or unknown")
     .option("--engagement-rationale <text>", "Why the live signal matters for legitimate engagement")
+    .option("--contact-point <json>", "Structured contact point JSON; repeat for multiple", collect, [])
+    .option("--enrichment-status <status>", "Contact enrichment status: pending, in_progress, complete, exhausted")
+    .option("--source-tried <source>", "Enrichment source attempted; repeat for multiple", collect, [])
+    .option("--missing-channel <channel>", "Still-missing contact channel; repeat for multiple", collect, [])
+    .option("--best-direct-channel <channel>", "Best direct channel currently available; repeat for multiple", collect, [])
+    .option("--last-enriched-at <datetime>", "Last contact-enrichment timestamp in ISO-8601 format")
+    .option("--enrichment-notes <notes>", "Contact-enrichment notes")
     .option("--notes <notes>", "Optional notes")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
@@ -709,6 +717,7 @@ Use this when the agent needs the chosen people of record before writing or brow
 Examples:
   exo companies prospects add <company-id> --motion <motion-id> --name "Minh Le" --title "Head of Risk" --buying-committee-role primary_business_owner --decision-authority influences --why-relevant "Best-fit owner for the LenderLink and decisioning-complexity story"
   exo companies prospects add <company-id> --motion <motion-id> --name "Jared Barreda" --title "Head of Collections Analytics" --signal-match <signal-match-id> --email jared@example.com --profile-viewed-at 2026-05-26T16:00:00.000Z --active-channel linkedin --activity-type own-post --live-signal-summary "Recent post on merchant-growth analytics suggests active LinkedIn use." --live-signal-url https://www.linkedin.com/posts/example --engagement-rationale "Recent public posting is positive evidence this channel is live enough for legitimate engagement." --why-relevant "Expanded product surfaces create downstream monitoring pressure"
+  exo companies prospects add <company-id> --motion <motion-id> --name "Jared Barreda" --title "Head of Collections Analytics" --why-relevant "Expanded merchant and borrower coverage creates monitoring and segmentation pressure downstream." --contact-point '{"kind":"x_profile","value":"https://x.com/jaredrisk","matchStatus":"same_person_probable","verificationStatus":"observed","confidence":"moderate","source":"public-web","usableForResearch":true,"usableForWarmup":true}'
 
 Rules:
   - Prospects are motion-specific and live on the motion-owned target account.
@@ -718,6 +727,7 @@ Rules:
   - If you view the profile, write that back. Do not assume it happened.
   - Store only the strongest recent live signal that changes how you would reach out.
   - If you find a direct email, store it so the motion has a fallback when LinkedIn is blocked or cold.
+  - Use structured contact points to store additional socials, phones, weak hints, and rejected candidates instead of flattening everything into one email field.
 `
     )
     .action((companyId, options) => {
@@ -730,56 +740,7 @@ Rules:
       const { company, rawMotion } = context;
 
       try {
-        const updatedMotion = recordMotionProspect(rawMotion, company, {
-          name: options.name,
-          title: options.title,
-          linkedinProfileUrl: options.linkedinProfileUrl,
-          email: options.email,
-          buyingCommitteeRole: normalizeBuyingCommitteeRole(options.buyingCommitteeRole),
-          decisionAuthority: normalizeDecisionAuthority(options.decisionAuthority),
-          fitConfidence: normalizeConfidence(options.fitConfidence),
-          whyRelevant: options.whyRelevant,
-          sourceUrl: options.sourceUrl,
-          observedAt: options.observedAt,
-          profileViewedAt: options.profileViewedAt,
-          roleTruth: {
-            currentRoleDescription: options.roleDescription,
-            summary: options.roleSummary,
-            operatingMode: options.operatingMode,
-            scope: options.scope,
-            evidence: normalizeRepeatedStringList(options.roleEvidence)
-          },
-          triggerWindow: {
-            summary: options.triggerSummary,
-            tenureMonths: options.tenureMonths !== undefined ? Number(options.tenureMonths) : undefined,
-            tenureBand: normalizeTenureBand(options.tenureBand),
-            whyNowAnchor: options.whyNowAnchor,
-            personTriggers: normalizeRepeatedStringList(options.personTrigger),
-            companyTriggers: normalizeRepeatedStringList(options.companyTrigger)
-          },
-          identityTells: {
-            summary: options.identitySummary,
-            headline: options.headline,
-            aboutQuotes: normalizeRepeatedStringList(options.aboutQuote),
-            frameworks: normalizeRepeatedStringList(options.framework),
-            certifications: normalizeRepeatedStringList(options.certification),
-            quantifiedReceipts: normalizeRepeatedStringList(options.quantifiedReceipt),
-            selfImageVerbs: normalizeRepeatedStringList(options.selfImageVerb),
-            metaphors: normalizeRepeatedStringList(options.metaphor)
-          },
-          liveSignal: {
-            channel: options.activeChannel,
-            activityType: options.activityType,
-            summary: options.liveSignalSummary,
-            url: options.liveSignalUrl,
-            observedAt: options.liveSignalObservedAt,
-            freshnessBand: normalizeFreshnessBand(options.freshnessBand),
-            hookStrength: normalizeNullableConfidence(options.hookStrength),
-            engagementRationale: options.engagementRationale
-          },
-          notes: options.notes,
-          signalMatchIds: normalizeStringList(options.signalMatch)
-        });
+        const updatedMotion = recordMotionProspect(rawMotion, company, buildProspectInputFromOptions(options));
         const storedMotion = updateMotion(updatedMotion);
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const result = {
@@ -823,7 +784,139 @@ Rules:
             `Why Relevant: ${storedProspect.whyRelevant}`,
             `Email: ${storedProspect.email ?? "none"}`,
             `Profile Viewed: ${storedProspect.profileViewedAt ?? "not recorded"}`,
-            `Live Signal: ${storedProspect.liveSignal.summary ?? "none"}`
+            `Live Signal: ${storedProspect.liveSignal.summary ?? "none"}`,
+            `Contact Points: ${storedProspect.contactPoints.length}`,
+            `Contact Enrichment: ${storedProspect.contactEnrichmentState.status}`
+          ].join("\n")
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  prospects
+    .command("update")
+    .description("Update one existing motion-specific prospect by prospect id.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier to update")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--name <name>", "Prospect name")
+    .option("--title <title>", "Prospect title")
+    .option("--why-relevant <text>", "Short reason this person matters for the motion")
+    .option("--linkedin-profile-url <url>", "LinkedIn profile URL")
+    .option("--email <email>", "Direct email when known")
+    .option("--buying-committee-role <role>", "Buying committee role")
+    .option("--decision-authority <authority>", "Decision authority: buys, blocks, sponsors, influences, observes, unknown")
+    .option("--fit-confidence <level>", "Prospect fit confidence: low, moderate, high, or unknown")
+    .option("--signal-match <signal-match-id>", "Supporting signal-match id; repeat for multiple", collect, [])
+    .option("--source-url <url>", "Source URL for this prospect evidence")
+    .option("--observed-at <datetime>", "Observed timestamp in ISO-8601 format")
+    .option("--profile-viewed-at <datetime>", "When the profile was actually viewed in ISO-8601 format")
+    .option("--role-description <text>", "Current role description text")
+    .option("--role-summary <text>", "Role truth summary")
+    .option("--operating-mode <text>", "Operating mode, for example building or leading")
+    .option("--scope <text>", "Scope of responsibility, for example regional or global")
+    .option("--role-evidence <text>", "Additional role-truth evidence; repeat for multiple", collect, [])
+    .option("--trigger-summary <text>", "Trigger-window summary")
+    .option("--tenure-months <number>", "Tenure in current role, in months")
+    .option("--tenure-band <band>", "Tenure band: under-6-months, 6-to-24-months, 24-to-60-months, 60-plus-months, unknown")
+    .option("--why-now-anchor <text>", "Best current why-now anchor for this person")
+    .option("--person-trigger <text>", "Person-level trigger; repeat for multiple", collect, [])
+    .option("--company-trigger <text>", "Company-level trigger; repeat for multiple", collect, [])
+    .option("--identity-summary <text>", "Identity-tells summary")
+    .option("--headline <text>", "Profile headline or tagline")
+    .option("--about-quote <text>", "Quoted phrase from the profile or about section; repeat for multiple", collect, [])
+    .option("--framework <text>", "Named framework; repeat for multiple", collect, [])
+    .option("--certification <text>", "Certification or credential; repeat for multiple", collect, [])
+    .option("--quantified-receipt <text>", "Quantified receipt; repeat for multiple", collect, [])
+    .option("--self-image-verb <text>", "Self-image verb; repeat for multiple", collect, [])
+    .option("--metaphor <text>", "Metaphor system; repeat for multiple", collect, [])
+    .option("--active-channel <channel>", "Primary active channel seen in live signal evidence")
+    .option("--activity-type <type>", "Live-signal activity type, for example own-post or reshare")
+    .option("--live-signal-summary <text>", "Short synthesized summary of the most useful recent live signal")
+    .option("--live-signal-url <url>", "URL for the recent activity or live signal")
+    .option("--live-signal-observed-at <datetime>", "Observed timestamp for the live signal in ISO-8601 format")
+    .option("--freshness-band <band>", "Freshness band: 0-14-days, 15-30-days, 31-60-days, 61-90-days, stale, unknown")
+    .option("--hook-strength <level>", "Live-signal hook strength: low, moderate, high, or unknown")
+    .option("--engagement-rationale <text>", "Why the live signal matters for legitimate engagement")
+    .option("--contact-point <json>", "Structured contact point JSON; repeat for multiple", collect, [])
+    .option("--enrichment-status <status>", "Contact enrichment status: pending, in_progress, complete, exhausted")
+    .option("--source-tried <source>", "Enrichment source attempted; repeat for multiple", collect, [])
+    .option("--missing-channel <channel>", "Still-missing contact channel; repeat for multiple", collect, [])
+    .option("--best-direct-channel <channel>", "Best direct channel currently available; repeat for multiple", collect, [])
+    .option("--last-enriched-at <datetime>", "Last contact-enrichment timestamp in ISO-8601 format")
+    .option("--enrichment-notes <notes>", "Contact-enrichment notes")
+    .option("--notes <notes>", "Optional notes")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies prospects update <company-id> --motion <motion-id> --prospect <prospect-id> --email minh@example.com --source-url https://example.com/profile --observed-at 2026-05-28T10:00:00.000Z --json
+  exo companies prospects update <company-id> --motion <motion-id> --prospect <prospect-id> --live-signal-summary "Recent post confirms active LinkedIn use." --live-signal-url https://www.linkedin.com/posts/example --freshness-band 0-14-days --json
+  exo companies prospects update <company-id> --motion <motion-id> --prospect <prospect-id> --contact-point '{"kind":"reddit_profile","value":"https://www.reddit.com/u/example","matchStatus":"same_person_possible","verificationStatus":"observed","confidence":"low","source":"public-web","usableForResearch":true,"usableForWarmup":false}' --enrichment-status exhausted --source-tried gmail --source-tried public-web --missing-channel email --json
+
+Rules:
+  - Use this when the prospect already exists and you are enriching or correcting that exact person.
+  - Prefer updating by prospect id over re-adding a person when contact enrichment or live-surface checks produce new evidence.
+  - This path preserves the existing prospect record and its through-line, opening plan, cadence state, and touches.
+  - Structured contact points are the place for additional socials, phones, direct emails, weak hints, and rejected candidates.
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, rawMotion } = context;
+
+      try {
+        const updatedMotion = updateMotionProspect(rawMotion, company, {
+          prospectId: options.prospect,
+          ...buildProspectInputFromOptions(options)
+        });
+        const storedMotion = updateMotion(updatedMotion);
+        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+        const storedProspect = account?.prospects.find((prospect) => prospect.id === options.prospect) ?? null;
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            company,
+            motion: {
+              id: storedMotion.id,
+              name: storedMotion.name,
+              prospectTargetCount: storedMotion.targetingProfile.stakeholderTargetCount
+            },
+            account,
+            prospects: account?.prospects ?? [],
+            prospect: storedProspect
+          }, null, 2));
+          return;
+        }
+
+        if (!storedProspect) {
+          console.log(`No prospect state was stored for ${company.name}.`);
+          return;
+        }
+
+        console.log(
+          [
+            `Updated Prospect: ${company.name}`,
+            `Motion: ${storedMotion.name}`,
+            `Person: ${storedProspect.name}`,
+            `Prospect ID: ${storedProspect.id}`,
+            `Title: ${storedProspect.title}`,
+            `Buying Committee Role: ${storedProspect.buyingCommitteeRole}`,
+            `Decision Authority: ${storedProspect.decisionAuthority}`,
+            `Why Relevant: ${storedProspect.whyRelevant}`,
+            `Email: ${storedProspect.email ?? "none"}`,
+            `Profile Viewed: ${storedProspect.profileViewedAt ?? "not recorded"}`,
+            `Live Signal: ${storedProspect.liveSignal.summary ?? "none"}`,
+            `Contact Points: ${storedProspect.contactPoints.length}`,
+            `Contact Enrichment: ${storedProspect.contactEnrichmentState.status}`
           ].join("\n")
         );
       } catch (error) {
@@ -1492,6 +1585,138 @@ function collect(value, previous) {
 }
 
 /**
+ * @param {Record<string, any>} options
+ */
+function buildProspectInputFromOptions(options) {
+  const contactPoints = parseContactPointOptions(options.contactPoint);
+  const contactEnrichmentState = buildContactEnrichmentInput(options);
+
+  return {
+    name: options.name,
+    title: options.title,
+    linkedinProfileUrl: options.linkedinProfileUrl,
+    email: options.email,
+    buyingCommitteeRole: normalizeBuyingCommitteeRole(options.buyingCommitteeRole),
+    decisionAuthority: normalizeDecisionAuthority(options.decisionAuthority),
+    fitConfidence: normalizeConfidence(options.fitConfidence),
+    whyRelevant: options.whyRelevant,
+    sourceUrl: options.sourceUrl,
+    observedAt: options.observedAt,
+    profileViewedAt: options.profileViewedAt,
+    roleTruth: {
+      currentRoleDescription: options.roleDescription,
+      summary: options.roleSummary,
+      operatingMode: options.operatingMode,
+      scope: options.scope,
+      evidence: normalizeRepeatedStringList(options.roleEvidence)
+    },
+    triggerWindow: {
+      summary: options.triggerSummary,
+      tenureMonths: options.tenureMonths !== undefined ? Number(options.tenureMonths) : undefined,
+      tenureBand: normalizeTenureBand(options.tenureBand),
+      whyNowAnchor: options.whyNowAnchor,
+      personTriggers: normalizeRepeatedStringList(options.personTrigger),
+      companyTriggers: normalizeRepeatedStringList(options.companyTrigger)
+    },
+    identityTells: {
+      summary: options.identitySummary,
+      headline: options.headline,
+      aboutQuotes: normalizeRepeatedStringList(options.aboutQuote),
+      frameworks: normalizeRepeatedStringList(options.framework),
+      certifications: normalizeRepeatedStringList(options.certification),
+      quantifiedReceipts: normalizeRepeatedStringList(options.quantifiedReceipt),
+      selfImageVerbs: normalizeRepeatedStringList(options.selfImageVerb),
+      metaphors: normalizeRepeatedStringList(options.metaphor)
+    },
+    liveSignal: {
+      channel: options.activeChannel,
+      activityType: options.activityType,
+      summary: options.liveSignalSummary,
+      url: options.liveSignalUrl,
+      observedAt: options.liveSignalObservedAt,
+      freshnessBand: normalizeFreshnessBand(options.freshnessBand),
+      hookStrength: normalizeNullableConfidence(options.hookStrength),
+      engagementRationale: options.engagementRationale
+    },
+    contactPoints: contactPoints.length ? contactPoints : undefined,
+    contactEnrichmentState,
+    notes: options.notes,
+    signalMatchIds: normalizeStringList(options.signalMatch)
+  };
+}
+
+/**
+ * @param {string[] | undefined} values
+ */
+function parseContactPointOptions(values) {
+  return normalizeRepeatedStringList(values).map((value) => {
+    let parsed;
+
+    try {
+      parsed = JSON.parse(value);
+    } catch (error) {
+      throw new Error(`Invalid --contact-point JSON: ${value}`);
+    }
+
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error(`Invalid --contact-point payload: ${value}`);
+    }
+
+    return {
+      id: typeof parsed.id === "string" ? parsed.id : undefined,
+      kind: normalizeContactPointKind(parsed.kind),
+      value: requireContactPointValue(parsed.value),
+      label: typeof parsed.label === "string" ? parsed.label : undefined,
+      matchStatus: normalizeContactMatchStatus(parsed.matchStatus),
+      verificationStatus: normalizeContactVerificationStatus(parsed.verificationStatus),
+      confidence: normalizeConfidence(parsed.confidence),
+      source: typeof parsed.source === "string" ? parsed.source : undefined,
+      sourceUrl: typeof parsed.sourceUrl === "string" ? parsed.sourceUrl : undefined,
+      observedAt: typeof parsed.observedAt === "string" ? parsed.observedAt : undefined,
+      notes: typeof parsed.notes === "string" ? parsed.notes : undefined,
+      evidence: Array.isArray(parsed.evidence)
+        ? parsed.evidence.map((evidence) => ({
+            type: requireEvidenceField(evidence?.type, "type"),
+            summary: requireEvidenceField(evidence?.summary, "summary"),
+            sourceUrl: typeof evidence?.sourceUrl === "string" ? evidence.sourceUrl : undefined,
+            observedAt: typeof evidence?.observedAt === "string" ? evidence.observedAt : undefined
+          }))
+        : undefined,
+      usableForOutreach: typeof parsed.usableForOutreach === "boolean" ? parsed.usableForOutreach : undefined,
+      usableForResearch: typeof parsed.usableForResearch === "boolean" ? parsed.usableForResearch : undefined,
+      usableForWarmup: typeof parsed.usableForWarmup === "boolean" ? parsed.usableForWarmup : undefined
+    };
+  });
+}
+
+/**
+ * @param {Record<string, any>} options
+ */
+function buildContactEnrichmentInput(options) {
+  const state = {
+    status: normalizeContactEnrichmentStatus(options.enrichmentStatus),
+    sourcesTried: normalizeRepeatedStringList(options.sourceTried),
+    missingChannels: normalizeRepeatedStringList(options.missingChannel),
+    bestDirectChannels: normalizeRepeatedStringList(options.bestDirectChannel),
+    lastEnrichedAt: options.lastEnrichedAt,
+    notes: options.enrichmentNotes
+  };
+
+  if (
+    state.status === undefined
+    && !state.sourcesTried.length
+    && !state.missingChannels.length
+    && !state.bestDirectChannels.length
+    && !state.lastEnrichedAt
+    && !state.notes
+  ) {
+    return undefined;
+  }
+
+  return state;
+}
+
+/**
  * @param {string | undefined} value
  * @returns {"low" | "moderate" | "high" | "unknown" | undefined}
  */
@@ -1506,6 +1731,116 @@ function normalizeConfidence(value) {
   }
 
   throw new Error(`Invalid confidence: ${value}`);
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeContactPointKind(value) {
+  const normalized = value?.toString().trim().toLowerCase();
+  if (
+    normalized === "linkedin_profile"
+    || normalized === "email"
+    || normalized === "phone"
+    || normalized === "x_profile"
+    || normalized === "instagram_profile"
+    || normalized === "facebook_profile"
+    || normalized === "tiktok_profile"
+    || normalized === "reddit_profile"
+    || normalized === "website"
+    || normalized === "generic_contact"
+  ) {
+    return normalized;
+  }
+
+  throw new Error(`Invalid contact-point kind: ${value}`);
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeContactMatchStatus(value) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const normalized = value.toString().trim().toLowerCase();
+  if (
+    normalized === "same_person_verified"
+    || normalized === "same_person_probable"
+    || normalized === "same_person_possible"
+    || normalized === "rejected"
+  ) {
+    return normalized;
+  }
+
+  throw new Error(`Invalid contact-point match status: ${value}`);
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeContactVerificationStatus(value) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  const normalized = value.toString().trim().toLowerCase();
+  if (
+    normalized === "verified"
+    || normalized === "observed"
+    || normalized === "inferred"
+    || normalized === "rejected"
+    || normalized === "unknown"
+  ) {
+    return normalized;
+  }
+
+  throw new Error(`Invalid contact-point verification status: ${value}`);
+}
+
+/**
+ * @param {string | undefined} value
+ */
+function normalizeContactEnrichmentStatus(value) {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "pending"
+    || normalized === "in_progress"
+    || normalized === "complete"
+    || normalized === "exhausted"
+  ) {
+    return normalized;
+  }
+
+  throw new Error(`Invalid contact enrichment status: ${value}`);
+}
+
+/**
+ * @param {unknown} value
+ */
+function requireContactPointValue(value) {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  throw new Error(`Invalid contact-point value: ${value}`);
+}
+
+/**
+ * @param {unknown} value
+ * @param {string} field
+ */
+function requireEvidenceField(value, field) {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  throw new Error(`Invalid contact-point evidence ${field}: ${value}`);
 }
 
 /**
@@ -1823,6 +2158,8 @@ function renderProspectDetail(companyName, motionName, prospect) {
     `Trigger Window: ${prospect.triggerWindow.summary ?? "none"}`,
     `Identity Tells: ${prospect.identityTells.summary ?? "none"}`,
     `Live Signal: ${prospect.liveSignal.summary ?? "none"}`,
+    `Contact Points: ${prospect.contactPoints.length ? prospect.contactPoints.map((point) => `${point.kind}=${point.value}`).join(" | ") : "none"}`,
+    `Contact Enrichment: ${prospect.contactEnrichmentState.status}`,
     `Through-Line: ${prospect.throughLine.status}`,
     `Opening Plan: ${prospect.openingPlan.status}`,
     `Cadence: ${prospect.cadenceState.status}`

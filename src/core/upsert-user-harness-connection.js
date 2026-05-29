@@ -2,6 +2,7 @@
 
 import crypto from "node:crypto";
 import { userHarnessConnectionSchema, userSchema } from "../schema/user.js";
+import { listInboundSurfaceCatalog } from "../lib/inbound-surface-catalog.js";
 
 /**
  * @param {unknown} rawUser
@@ -91,7 +92,15 @@ export function upsertUserConnectedAccount(rawUser, input) {
     browserProfileId: input.browserProfileId ?? null,
     harnessConnectionId: input.harnessConnectionId ?? null,
     preferred: input.preferred ?? match?.preferred ?? false,
-    notes: normalizeNullableString(input.notes) ?? match?.notes ?? null
+    notes: normalizeNullableString(input.notes) ?? match?.notes ?? null,
+    inboundSync: match?.inboundSync ?? {
+      surfaces: listInboundSurfaceCatalog({ capability: input.capability })
+        .filter((surface) => surface.defaultEnabled)
+        .map((surface) => ({
+          surfaceKey: surface.key,
+          enabled: true
+        }))
+    }
   };
 
   return userSchema.parse({

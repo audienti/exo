@@ -132,6 +132,22 @@ export function describeExo() {
         purpose: "Inspect the canonical Audienti-style GTM action catalog that Exo uses for action readiness and execution briefs."
       },
       {
+        command: "exo inbound surfaces/surface/sync show/set/record/observations list/show/add",
+        purpose: "Inspect the canonical inbound truth surfaces, manage per-account sync policy, and read or write normalized inbound observations before live retrieval exists."
+      },
+      {
+        command: "exo inbox",
+        purpose: "Show the ranked triage surface of meaningful inbound changes and the next move each one may justify."
+      },
+      {
+        command: "exo daily",
+        purpose: "Show the planner agenda that reconciles prospect cadence with inbound observations into due-now, waiting, and inbound-overridden next moves."
+      },
+      {
+        command: "exo next",
+        purpose: "Show the strongest governed next move right now by preferring the daily agenda, then the motion path, then the general operator call."
+      },
+      {
         command: "exo report motion",
         purpose: "Render one unified motion report that combines setup, readiness, company progress, prospect progress, and next actions."
       },
@@ -140,7 +156,7 @@ export function describeExo() {
         purpose: "Export and import motions, companies, browser profiles, and execution users as portable Exo configuration."
       },
       {
-        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign",
+        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign",
         purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, and pin either a sticky engagement profile or a cross-capability execution user when outreach starts."
       },
       {
@@ -160,6 +176,7 @@ export function describeExo() {
       "Browser-backed work should fail closed if no profile is attached or trusted.",
       "A ready profile means the local browser context looks structurally usable.",
       "Profile checks do not yet prove live LinkedIn, Sales Navigator, Gmail, or HubSpot auth.",
+      "Inbound sync policy and normalized inbound observations can now be governed per connected account, but actual retrieval still needs a live sync implementation.",
       "Configured weekly quotas on the claimed profile identity should govern outreach pacing. InMail credits are still a separate live observation, not a static config knob.",
       "Exo resolves browser identity. The agent runtime should choose the browser-control harness.",
       "In Codex, prefer the Chrome skill or native Chrome connector before Playwriter for Chrome-profile work."
@@ -173,6 +190,11 @@ export function describeExo() {
         "exo profiles list --json",
         "exo profiles capabilities --json",
         "exo users list --json",
+        "exo inbound surfaces --json",
+        "exo inbound observations list <user-id> --json",
+        "exo inbox --user <user-id> --json",
+        "exo daily --user <user-id> --json",
+        "exo next --json",
         "exo profiles resolve --capability linkedin --json",
         "exo motion list --json"
       ],
@@ -254,6 +276,7 @@ export function describeExo() {
               "exo companies signal-matches add <company-id> --signal <signal-id> --summary \"Stored reason to talk\" --json",
               "exo companies signal-matches show <company-id> --json",
               "exo companies prospects add <company-id> --name \"Person Name\" --title \"Director Title\" --email person@example.com --profile-viewed-at <iso-datetime> --live-signal-summary \"Recent post shows channel activity\" --why-relevant \"Why this person matters now\" --json",
+              "exo companies prospects update <company-id> --prospect <prospect-id> --email person@example.com --source-url https://example.com/profile --observed-at <iso-datetime> --json",
               "exo companies through-line set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them \"Specific to them\" --shared-problem \"Shared problem\" --why-now \"Why now\" --legitimate-wedge \"Why they would reply\" --compression-line \"One sentence\" --json",
               "exo companies opening-plan set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --why-now \"Reason to talk now\" --angle \"Opening angle\" --reply-path \"Why this person would legitimately reply now\" --primary-channel connection-request --fallback-channel email --fallback-trigger \"Use email if LinkedIn is blocked or there is no reply.\" --preflight-action \"View the prospect profile\" --first-move \"First move\" --first-message-goal \"Desired response\" --json",
               "exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action \"Send the first touch\" --json",
@@ -279,6 +302,7 @@ export function describeExo() {
     currentLimitations: [
       "No MCP wrapper yet.",
       "No live browser auth probes yet.",
+      "No live inbound retrieval yet. Exo can now store inbound sync policy, last-run sync memory, and normalized inbound observations, but it does not yet pull inbox or LinkedIn state by itself.",
       "No profile-to-motion assignment yet.",
       "No automatic company population from motion retrieval yet.",
       "No real Sales Navigator retrieval yet.",
@@ -294,6 +318,11 @@ export function describeExo() {
       { label: "Companies", path: "docs/companies.md" },
       { label: "Browser Profiles", path: "docs/browser-profiles.md" },
       { label: "Action Catalog", path: "docs/action-catalog.md" },
+      { label: "Inbound Sync", path: "docs/inbound-sync.md" },
+      { label: "Inbox", path: "docs/inbox.md" },
+      { label: "Daily", path: "docs/daily.md" },
+      { label: "Next", path: "docs/next.md" },
+      { label: "Go-Live Checklist", path: "docs/go-live-checklist.md" },
       { label: "Config Portability", path: "docs/config-portability.md" },
       { label: "CLI and MCP Contract", path: "docs/cli-mcp-contract.md" }
     ]
@@ -319,12 +348,15 @@ function buildStateSummary(motions, companies, browserProfiles, users) {
       nextStepCount: Array.isArray(motion.nextSteps) ? motion.nextSteps.length : 0
     }))
     .sort(compareMotionPreview);
+  const activeMotionPreview = rankedMotions.filter((motion) => motion.status === "active");
+  const focusMotion = activeMotionPreview[0] ?? rankedMotions[0] ?? null;
 
   return {
     motions: {
       count: motions.length,
-      focusMotionId: rankedMotions[0]?.id ?? null,
-      focusMotionName: rankedMotions[0]?.name ?? null,
+      focusMotionId: focusMotion?.id ?? null,
+      focusMotionName: focusMotion?.name ?? null,
+      activeCount: activeMotionPreview.length,
       preview: rankedMotions.slice(0, 3)
     },
     companies: {
@@ -358,7 +390,7 @@ function buildStateSummary(motions, companies, browserProfiles, users) {
 
 /**
  * @param {{
- *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
+ *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, activeCount: number, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
  *   companies: { count: number, preview: Array<{ id: string, name: string, domain: string | null }> },
  *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> }
  * }} stateSummary
@@ -460,7 +492,7 @@ function buildGettingStarted(stateSummary) {
 
 /**
  * @param {{
- *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
+ *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, activeCount: number, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
  *   companies: { count: number, preview: Array<{ id: string, name: string, domain: string | null }> },
  *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> }
  * }} stateSummary
@@ -479,6 +511,22 @@ function buildRecommendedPath(stateSummary) {
       blockers: [],
       commands: [
         "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
+      ]
+    };
+  }
+
+  if (stateSummary.motions.activeCount === 0) {
+    return {
+      mode: "activate-motion",
+      reason: "Motions exist in state, but none of them are active. Cross-motion execution should only move active motions forward.",
+      focusMotionId: focusMotion.id,
+      focusMotionName: focusMotion.name,
+      blockers: ["No active motion exists yet."],
+      commands: [
+        "exo motion list --json",
+        `exo motion show ${focusMotion.id} --json`,
+        `exo motion restart ${focusMotion.id} --json`,
+        `exo motion clone ${focusMotion.id} --audience "Secondary ICP" --segment alt-segment --json`
       ]
     };
   }
@@ -544,12 +592,16 @@ function buildOperatorInterface(recommendedPath) {
       headline:
         recommendedPath.mode === "continue-motion"
           ? `Keep working ${recommendedPath.focusMotionName ?? "the current motion"} instead of creating a new one.`
+          : recommendedPath.mode === "activate-motion"
+            ? `Activate ${recommendedPath.focusMotionName ?? "a motion"} before trying to use cross-motion execution.`
           : recommendedPath.mode === "create-motion"
             ? "Create the first motion before trying to do anything downstream."
             : "Follow the current governed path before expanding scope.",
       nextMove:
         recommendedPath.mode === "continue-motion"
           ? `Continue ${recommendedPath.focusMotionName ?? "the focus motion"}, clear its blockers, and only then move into browser or company work.`
+          : recommendedPath.mode === "activate-motion"
+            ? `Restart or resume ${recommendedPath.focusMotionName ?? "a motion"} first. Draft, paused, and archived motions should not enter the shared execution agenda.`
           : recommendedPath.mode === "create-motion"
             ? "Define a new motion with premise, audience hypothesis, and first signal."
             : "Use the recommended path as the next governed move.",

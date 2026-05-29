@@ -2,6 +2,7 @@
 
 import { z } from "zod";
 import { browserProfileCapabilitySchema } from "./browser-profile.js";
+import { inboundSyncPolicySchema } from "./inbound.js";
 
 export const userHarnessConnectionStatusSchema = z.enum(["available", "unavailable", "unknown"]);
 
@@ -30,7 +31,10 @@ export const userConnectedAccountSchema = z
     browserProfileId: z.string().min(1).nullable().default(null),
     harnessConnectionId: z.string().min(1).nullable().default(null),
     preferred: z.boolean().default(false),
-    notes: z.string().nullable().default(null)
+    notes: z.string().nullable().default(null),
+    inboundSync: inboundSyncPolicySchema.default({
+      surfaces: []
+    })
   })
   .superRefine((value, context) => {
     if (value.sourceType === "browser-profile") {

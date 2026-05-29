@@ -3,6 +3,10 @@
 import crypto from "node:crypto";
 import { prospectSchema, targetAccountSchema } from "../schema/target-account.js";
 import {
+  mergeContactPointLists,
+  withDerivedProspectContacts
+} from "../lib/prospect-contacts.js";
+import {
   finalizeTargetAccountUpdate,
   normalizeNullableString,
   normalizeStringArray,
@@ -59,20 +63,43 @@ import {
  *     hookStrength?: "low" | "moderate" | "high" | "unknown" | null | undefined,
  *     engagementRationale?: string | null | undefined
  *   },
+ *   contactPoints?: Array<{
+ *     id?: string | null | undefined,
+ *     kind: import("../schema/target-account.js").contactPointSchema._type["kind"],
+ *     value: string,
+ *     label?: string | null | undefined,
+ *     matchStatus?: import("../schema/target-account.js").contactPointSchema._type["matchStatus"],
+ *     verificationStatus?: import("../schema/target-account.js").contactPointSchema._type["verificationStatus"],
+ *     confidence?: "low" | "moderate" | "high" | "unknown",
+ *     source?: string | null | undefined,
+ *     sourceUrl?: string | null | undefined,
+ *     observedAt?: string | null | undefined,
+ *     notes?: string | null | undefined,
+ *     evidence?: Array<{
+ *       type: string,
+ *       summary: string,
+ *       sourceUrl?: string | null | undefined,
+ *       observedAt?: string | null | undefined
+ *     }>,
+ *     usableForOutreach?: boolean | undefined,
+ *     usableForResearch?: boolean | undefined,
+ *     usableForWarmup?: boolean | undefined
+ *   }>,
+ *   contactEnrichmentState?: {
+ *     status?: import("../schema/target-account.js").contactEnrichmentStateSchema._type["status"],
+ *     sourcesTried?: string[],
+ *     missingChannels?: string[],
+ *     bestDirectChannels?: string[],
+ *     lastEnrichedAt?: string | null | undefined,
+ *     notes?: string | null | undefined
+ *   },
  *   notes?: string | null | undefined,
  *   signalMatchIds?: string[]
  * }} input
  */
 export function recordMotionProspect(rawMotion, rawCompany, input) {
   const { motion, company, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
-  const normalizedSignalMatchIds = normalizeStringArray(input.signalMatchIds);
-  const knownSignalIds = new Set(baseAccount.signalMatches.map((match) => match.id));
-
-  for (const signalMatchId of normalizedSignalMatchIds) {
-    if (!knownSignalIds.has(signalMatchId)) {
-      throw new Error(`Signal match not found on ${company.name}: ${signalMatchId}`);
-    }
-  }
+  const normalizedSignalMatchIds = normalizeSignalMatchIds(baseAccount, company.name, input.signalMatchIds);
 
   const nextProspect = {
     id: crypto.randomUUID(),
@@ -146,6 +173,8 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
       hookStrength: input.liveSignal?.hookStrength,
       engagementRationale: normalizeOptionalNullableString(input.liveSignal?.engagementRationale)
     },
+    contactPoints: buildContactPointInputs(input.contactPoints),
+    contactEnrichmentState: buildContactEnrichmentStateInput(input.contactEnrichmentState),
     notes: normalizeOptionalNullableString(input.notes),
     signalMatchIds: normalizedSignalMatchIds
   };
@@ -159,6 +188,224 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
     linkedinCompanyUrl: company.linkedinCompanyUrl,
     lastResearchAt: now,
     prospects
+  });
+
+  return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+}
+
+/**
+ * @param {unknown} rawMotion
+ * @param {unknown} rawCompany
+ * @param {{
+ *   prospectId: string,
+ *   name?: string | undefined,
+ *   title?: string | undefined,
+ *   linkedinProfileUrl?: string | null | undefined,
+ *   email?: string | null | undefined,
+ *   buyingCommitteeRole?: import("../schema/target-account.js").prospectSchema._type["buyingCommitteeRole"],
+ *   decisionAuthority?: import("../schema/target-account.js").prospectSchema._type["decisionAuthority"],
+ *   fitConfidence?: "low" | "moderate" | "high" | "unknown",
+ *   whyRelevant?: string | undefined,
+ *   sourceUrl?: string | null | undefined,
+ *   observedAt?: string | null | undefined,
+ *   profileViewedAt?: string | null | undefined,
+ *   roleTruth?: {
+ *     currentRoleDescription?: string | null | undefined,
+ *     summary?: string | null | undefined,
+ *     operatingMode?: string | null | undefined,
+ *     scope?: string | null | undefined,
+ *     evidence?: string[]
+ *   },
+ *   triggerWindow?: {
+ *     summary?: string | null | undefined,
+ *     tenureMonths?: number | null | undefined,
+ *     tenureBand?: import("../schema/target-account.js").triggerWindowSchema._type["tenureBand"],
+ *     whyNowAnchor?: string | null | undefined,
+ *     personTriggers?: string[],
+ *     companyTriggers?: string[]
+ *   },
+ *   identityTells?: {
+ *     summary?: string | null | undefined,
+ *     headline?: string | null | undefined,
+ *     aboutQuotes?: string[],
+ *     frameworks?: string[],
+ *     certifications?: string[],
+ *     quantifiedReceipts?: string[],
+ *     selfImageVerbs?: string[],
+ *     metaphors?: string[]
+ *   },
+ *   liveSignal?: {
+ *     channel?: string | null | undefined,
+ *     activityType?: string | null | undefined,
+ *     summary?: string | null | undefined,
+ *     url?: string | null | undefined,
+ *     observedAt?: string | null | undefined,
+ *     freshnessBand?: import("../schema/target-account.js").liveSignalSchema._type["freshnessBand"],
+ *     hookStrength?: "low" | "moderate" | "high" | "unknown" | null | undefined,
+ *     engagementRationale?: string | null | undefined
+ *   },
+ *   contactPoints?: Array<{
+ *     id?: string | null | undefined,
+ *     kind: import("../schema/target-account.js").contactPointSchema._type["kind"],
+ *     value: string,
+ *     label?: string | null | undefined,
+ *     matchStatus?: import("../schema/target-account.js").contactPointSchema._type["matchStatus"],
+ *     verificationStatus?: import("../schema/target-account.js").contactPointSchema._type["verificationStatus"],
+ *     confidence?: "low" | "moderate" | "high" | "unknown",
+ *     source?: string | null | undefined,
+ *     sourceUrl?: string | null | undefined,
+ *     observedAt?: string | null | undefined,
+ *     notes?: string | null | undefined,
+ *     evidence?: Array<{
+ *       type: string,
+ *       summary: string,
+ *       sourceUrl?: string | null | undefined,
+ *       observedAt?: string | null | undefined
+ *     }>,
+ *     usableForOutreach?: boolean | undefined,
+ *     usableForResearch?: boolean | undefined,
+ *     usableForWarmup?: boolean | undefined
+ *   }>,
+ *   contactEnrichmentState?: {
+ *     status?: import("../schema/target-account.js").contactEnrichmentStateSchema._type["status"],
+ *     sourcesTried?: string[],
+ *     missingChannels?: string[],
+ *     bestDirectChannels?: string[],
+ *     lastEnrichedAt?: string | null | undefined,
+ *     notes?: string | null | undefined
+ *   },
+ *   notes?: string | null | undefined,
+ *   signalMatchIds?: string[]
+ * }} input
+ */
+export function updateMotionProspect(rawMotion, rawCompany, input) {
+  const { motion, company, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
+  const existing = baseAccount.prospects.find((prospect) => prospect.id === input.prospectId);
+
+  if (!existing) {
+    throw new Error(`Prospect not found on ${company.name}: ${input.prospectId}`);
+  }
+
+  const normalizedSignalMatchIds = input.signalMatchIds === undefined
+    ? undefined
+    : normalizeSignalMatchIds(baseAccount, company.name, input.signalMatchIds);
+
+  const updatedProspects = baseAccount.prospects.map((prospect) => {
+    if (prospect.id !== input.prospectId) {
+      return prospect;
+    }
+
+    return prospectSchema.parse(withDerivedProspectContacts({
+      ...existing,
+      name: input.name ?? existing.name,
+      title: input.title ?? existing.title,
+      linkedinProfileUrl:
+        normalizeOptionalNullableString(input.linkedinProfileUrl) === undefined
+          ? existing.linkedinProfileUrl
+          : normalizeOptionalNullableString(input.linkedinProfileUrl),
+      email:
+        normalizeOptionalNullableString(input.email) === undefined
+          ? existing.email
+          : normalizeOptionalNullableString(input.email),
+      buyingCommitteeRole: input.buyingCommitteeRole ?? existing.buyingCommitteeRole,
+      decisionAuthority: input.decisionAuthority ?? existing.decisionAuthority,
+      fitConfidence: input.fitConfidence ?? existing.fitConfidence,
+      whyRelevant: input.whyRelevant ?? existing.whyRelevant,
+      sourceUrl:
+        normalizeOptionalNullableString(input.sourceUrl) === undefined
+          ? existing.sourceUrl
+          : normalizeOptionalNullableString(input.sourceUrl),
+      observedAt:
+        normalizeOptionalNullableString(input.observedAt) === undefined
+          ? existing.observedAt
+          : normalizeOptionalNullableString(input.observedAt),
+      profileViewedAt:
+        normalizeOptionalNullableString(input.profileViewedAt) === undefined
+          ? existing.profileViewedAt
+          : normalizeOptionalNullableString(input.profileViewedAt),
+      roleTruth: buildRoleTruthUpdate(existing.roleTruth, {
+        currentRoleDescription: normalizeOptionalNullableString(input.roleTruth?.currentRoleDescription),
+        summary: normalizeOptionalNullableString(input.roleTruth?.summary),
+        operatingMode: normalizeOptionalNullableString(input.roleTruth?.operatingMode),
+        scope: normalizeOptionalNullableString(input.roleTruth?.scope),
+        evidence: input.roleTruth?.evidence !== undefined ? normalizeStringArray(input.roleTruth.evidence) : undefined
+      }),
+      triggerWindow: buildTriggerWindowUpdate(existing.triggerWindow, {
+        summary: normalizeOptionalNullableString(input.triggerWindow?.summary),
+        tenureMonths: input.triggerWindow?.tenureMonths === undefined ? undefined : input.triggerWindow.tenureMonths,
+        tenureBand: input.triggerWindow?.tenureBand,
+        whyNowAnchor: normalizeOptionalNullableString(input.triggerWindow?.whyNowAnchor),
+        personTriggers:
+          input.triggerWindow?.personTriggers !== undefined
+            ? normalizeStringArray(input.triggerWindow.personTriggers)
+            : undefined,
+        companyTriggers:
+          input.triggerWindow?.companyTriggers !== undefined
+            ? normalizeStringArray(input.triggerWindow.companyTriggers)
+            : undefined
+      }),
+      identityTells: buildIdentityTellsUpdate(existing.identityTells, {
+        summary: normalizeOptionalNullableString(input.identityTells?.summary),
+        headline: normalizeOptionalNullableString(input.identityTells?.headline),
+        aboutQuotes:
+          input.identityTells?.aboutQuotes !== undefined
+            ? normalizeStringArray(input.identityTells.aboutQuotes)
+            : undefined,
+        frameworks:
+          input.identityTells?.frameworks !== undefined
+            ? normalizeStringArray(input.identityTells.frameworks)
+            : undefined,
+        certifications:
+          input.identityTells?.certifications !== undefined
+            ? normalizeStringArray(input.identityTells.certifications)
+            : undefined,
+        quantifiedReceipts:
+          input.identityTells?.quantifiedReceipts !== undefined
+            ? normalizeStringArray(input.identityTells.quantifiedReceipts)
+            : undefined,
+        selfImageVerbs:
+          input.identityTells?.selfImageVerbs !== undefined
+            ? normalizeStringArray(input.identityTells.selfImageVerbs)
+            : undefined,
+        metaphors:
+          input.identityTells?.metaphors !== undefined
+            ? normalizeStringArray(input.identityTells.metaphors)
+            : undefined
+      }),
+      liveSignal: buildLiveSignalUpdate(existing.liveSignal, {
+        channel: normalizeOptionalNullableString(input.liveSignal?.channel),
+        activityType: normalizeOptionalNullableString(input.liveSignal?.activityType),
+        summary: normalizeOptionalNullableString(input.liveSignal?.summary),
+        url: normalizeOptionalNullableString(input.liveSignal?.url),
+        observedAt: normalizeOptionalNullableString(input.liveSignal?.observedAt),
+        freshnessBand: input.liveSignal?.freshnessBand,
+        hookStrength: input.liveSignal?.hookStrength,
+        engagementRationale: normalizeOptionalNullableString(input.liveSignal?.engagementRationale)
+      }),
+      contactPoints:
+        input.contactPoints === undefined
+          ? existing.contactPoints
+          : mergeContactPointLists(existing.contactPoints, buildContactPointInputs(input.contactPoints)),
+      contactEnrichmentState: buildContactEnrichmentStateUpdate(existing.contactEnrichmentState, buildContactEnrichmentStateInput(input.contactEnrichmentState)),
+      notes:
+        normalizeOptionalNullableString(input.notes) === undefined
+          ? existing.notes
+          : normalizeOptionalNullableString(input.notes),
+      signalMatchIds:
+        normalizedSignalMatchIds === undefined
+          ? existing.signalMatchIds
+          : mergeStringLists(existing.signalMatchIds, normalizedSignalMatchIds)
+    }));
+  });
+
+  const updatedAccount = targetAccountSchema.parse({
+    ...baseAccount,
+    companyName: company.name,
+    domain: company.domain,
+    websiteUrl: company.websiteUrl,
+    linkedinCompanyUrl: company.linkedinCompanyUrl,
+    lastResearchAt: now,
+    prospects: updatedProspects
   });
 
   return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
@@ -179,7 +426,7 @@ function upsertProspect(prospects, nextProspect, limit) {
 
     return [
       ...prospects,
-      prospectSchema.parse({
+      prospectSchema.parse(withDerivedProspectContacts({
         id: nextProspect.id,
         name: nextProspect.name,
         title: nextProspect.title,
@@ -196,12 +443,14 @@ function upsertProspect(prospects, nextProspect, limit) {
         triggerWindow: buildTriggerWindowUpdate({}, nextProspect.triggerWindow),
         identityTells: buildIdentityTellsUpdate({}, nextProspect.identityTells),
         liveSignal: buildLiveSignalUpdate({}, nextProspect.liveSignal),
+        contactPoints: nextProspect.contactPoints,
+        contactEnrichmentState: buildContactEnrichmentStateUpdate({}, nextProspect.contactEnrichmentState),
         notes: nextProspect.notes ?? null,
         signalMatchIds: nextProspect.signalMatchIds,
         throughLine: {},
         openingPlan: {},
         cadenceState: {}
-      })
+      }))
     ];
   }
 
@@ -211,7 +460,7 @@ function upsertProspect(prospects, nextProspect, limit) {
       return prospect;
     }
 
-    return prospectSchema.parse({
+    return prospectSchema.parse(withDerivedProspectContacts({
       ...existing,
       name: nextProspect.name,
       title: nextProspect.title,
@@ -228,9 +477,11 @@ function upsertProspect(prospects, nextProspect, limit) {
       triggerWindow: buildTriggerWindowUpdate(existing.triggerWindow, nextProspect.triggerWindow),
       identityTells: buildIdentityTellsUpdate(existing.identityTells, nextProspect.identityTells),
       liveSignal: buildLiveSignalUpdate(existing.liveSignal, nextProspect.liveSignal),
+      contactPoints: mergeContactPointLists(existing.contactPoints, nextProspect.contactPoints),
+      contactEnrichmentState: buildContactEnrichmentStateUpdate(existing.contactEnrichmentState, nextProspect.contactEnrichmentState),
       notes: nextProspect.notes ?? existing.notes,
       signalMatchIds: mergeStringLists(existing.signalMatchIds, nextProspect.signalMatchIds)
-    });
+    }));
   });
 }
 
@@ -340,6 +591,107 @@ function buildLiveSignalUpdate(existing, patch = {}) {
 }
 
 /**
+ * @param {Array<{
+ *   id?: string | null | undefined,
+ *   kind: import("../schema/target-account.js").contactPointSchema._type["kind"],
+ *   value: string,
+ *   label?: string | null | undefined,
+ *   matchStatus?: import("../schema/target-account.js").contactPointSchema._type["matchStatus"],
+ *   verificationStatus?: import("../schema/target-account.js").contactPointSchema._type["verificationStatus"],
+ *   confidence?: "low" | "moderate" | "high" | "unknown",
+ *   source?: string | null | undefined,
+ *   sourceUrl?: string | null | undefined,
+ *   observedAt?: string | null | undefined,
+ *   notes?: string | null | undefined,
+ *   evidence?: Array<{
+ *     type: string,
+ *     summary: string,
+ *     sourceUrl?: string | null | undefined,
+ *     observedAt?: string | null | undefined
+ *   }>,
+ *   usableForOutreach?: boolean | undefined,
+ *   usableForResearch?: boolean | undefined,
+ *   usableForWarmup?: boolean | undefined
+ * }>} [points]
+ */
+function buildContactPointInputs(points = []) {
+  return points.map((point) => ({
+    id: point.id ?? crypto.randomUUID(),
+    kind: point.kind,
+    value: point.value,
+    label: normalizeOptionalNullableString(point.label) ?? null,
+    matchStatus: point.matchStatus,
+    verificationStatus: point.verificationStatus,
+    confidence: point.confidence,
+    source: normalizeOptionalNullableString(point.source) ?? null,
+    sourceUrl: normalizeOptionalNullableString(point.sourceUrl) ?? null,
+    observedAt: normalizeOptionalNullableString(point.observedAt) ?? null,
+    notes: normalizeOptionalNullableString(point.notes) ?? null,
+    evidence: (point.evidence ?? []).map((evidence) => ({
+      type: evidence.type,
+      summary: evidence.summary,
+      sourceUrl: normalizeOptionalNullableString(evidence.sourceUrl) ?? null,
+      observedAt: normalizeOptionalNullableString(evidence.observedAt) ?? null
+    })),
+    usableForOutreach: point.usableForOutreach,
+    usableForResearch: point.usableForResearch,
+    usableForWarmup: point.usableForWarmup
+  }));
+}
+
+/**
+ * @param {{
+ *   status?: import("../schema/target-account.js").contactEnrichmentStateSchema._type["status"],
+ *   sourcesTried?: string[],
+ *   missingChannels?: string[],
+ *   bestDirectChannels?: string[],
+ *   lastEnrichedAt?: string | null | undefined,
+ *   notes?: string | null | undefined
+ * } | undefined} state
+ */
+function buildContactEnrichmentStateInput(state) {
+  if (!state) {
+    return {};
+  }
+
+  return {
+    status: state.status,
+    sourcesTried:
+      state.sourcesTried !== undefined ? normalizeStringArray(state.sourcesTried) : undefined,
+    missingChannels:
+      state.missingChannels !== undefined ? normalizeStringArray(state.missingChannels) : undefined,
+    bestDirectChannels:
+      state.bestDirectChannels !== undefined ? normalizeStringArray(state.bestDirectChannels) : undefined,
+    lastEnrichedAt: normalizeOptionalNullableString(state.lastEnrichedAt),
+    notes: normalizeOptionalNullableString(state.notes)
+  };
+}
+
+/**
+ * @param {import("../schema/target-account.js").contactEnrichmentStateSchema._type | Record<string, never>} existing
+ * @param {ReturnType<typeof buildContactEnrichmentStateInput>} [patch]
+ */
+function buildContactEnrichmentStateUpdate(existing, patch = {}) {
+  return {
+    status: patch.status ?? existing.status ?? "pending",
+    sourcesTried:
+      patch.sourcesTried !== undefined
+        ? mergeStringLists(existing.sourcesTried ?? [], patch.sourcesTried)
+        : existing.sourcesTried ?? [],
+    missingChannels:
+      patch.missingChannels !== undefined
+        ? mergeStringLists(existing.missingChannels ?? [], patch.missingChannels)
+        : existing.missingChannels ?? [],
+    bestDirectChannels:
+      patch.bestDirectChannels !== undefined
+        ? mergeStringLists(existing.bestDirectChannels ?? [], patch.bestDirectChannels)
+        : existing.bestDirectChannels ?? [],
+    lastEnrichedAt: patch.lastEnrichedAt ?? existing.lastEnrichedAt ?? null,
+    notes: patch.notes ?? existing.notes ?? null
+  };
+}
+
+/**
  * @param {string[] | undefined} left
  * @param {string[] | undefined} right
  */
@@ -352,6 +704,24 @@ function mergeStringLists(left, right) {
  */
 function normalizeOptionalNullableString(value) {
   return value === undefined ? undefined : normalizeNullableString(value);
+}
+
+/**
+ * @param {import("../schema/target-account.js").targetAccountSchema._type} account
+ * @param {string} companyName
+ * @param {string[] | undefined} signalMatchIds
+ */
+function normalizeSignalMatchIds(account, companyName, signalMatchIds) {
+  const normalizedSignalMatchIds = normalizeStringArray(signalMatchIds);
+  const knownSignalIds = new Set(account.signalMatches.map((match) => match.id));
+
+  for (const signalMatchId of normalizedSignalMatchIds) {
+    if (!knownSignalIds.has(signalMatchId)) {
+      throw new Error(`Signal match not found on ${companyName}: ${signalMatchId}`);
+    }
+  }
+
+  return normalizedSignalMatchIds;
 }
 
 function buildMergeSeed() {

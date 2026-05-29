@@ -1,6 +1,7 @@
 // @ts-check
 
 import { z } from "zod";
+import { withDerivedProspectContacts } from "../lib/prospect-contacts.js";
 
 const WRITER_SIGNAL_SUMMARY_MAX_LENGTH = 160;
 const nullableString = z.string().trim().min(1).nullable();
@@ -62,6 +63,31 @@ const buyingCommitteeRoleSchema = z.enum([
 const decisionAuthoritySchema = z.enum(["buys", "blocks", "sponsors", "influences", "observes", "unknown"]);
 const tenureBandSchema = z.enum(["under-6-months", "6-to-24-months", "24-to-60-months", "60-plus-months", "unknown"]);
 const freshnessBandSchema = z.enum(["0-14-days", "15-30-days", "31-60-days", "61-90-days", "stale", "unknown"]);
+const contactPointKindSchema = z.enum([
+  "linkedin_profile",
+  "email",
+  "phone",
+  "x_profile",
+  "instagram_profile",
+  "facebook_profile",
+  "tiktok_profile",
+  "reddit_profile",
+  "website",
+  "generic_contact"
+]);
+const contactPointMatchStatusSchema = z.enum([
+  "same_person_verified",
+  "same_person_probable",
+  "same_person_possible",
+  "rejected"
+]);
+const contactPointVerificationStatusSchema = z.enum([
+  "verified",
+  "observed",
+  "inferred",
+  "rejected",
+  "unknown"
+]);
 
 export const signalMatchSubjectSchema = z.object({
   type: z.enum(["company", "person"]),
@@ -178,6 +204,40 @@ export const liveSignalSchema = z.object({
   engagementRationale: nullableString.default(null)
 });
 
+export const contactPointEvidenceSchema = z.object({
+  type: z.string().trim().min(1),
+  summary: z.string().trim().min(1),
+  sourceUrl: z.string().url().nullable().default(null),
+  observedAt: z.string().datetime().nullable().default(null)
+});
+
+export const contactPointSchema = z.object({
+  id: z.string().min(1),
+  kind: contactPointKindSchema,
+  value: z.string().trim().min(1),
+  label: nullableString.default(null),
+  matchStatus: contactPointMatchStatusSchema.default("same_person_possible"),
+  verificationStatus: contactPointVerificationStatusSchema.default("unknown"),
+  confidence: confidenceSchema.default("unknown"),
+  source: nullableString.default(null),
+  sourceUrl: z.string().url().nullable().default(null),
+  observedAt: z.string().datetime().nullable().default(null),
+  notes: nullableString.default(null),
+  evidence: z.array(contactPointEvidenceSchema).default([]),
+  usableForOutreach: z.boolean().default(false),
+  usableForResearch: z.boolean().default(true),
+  usableForWarmup: z.boolean().default(false)
+});
+
+export const contactEnrichmentStateSchema = z.object({
+  status: z.enum(["pending", "in_progress", "complete", "exhausted"]).default("pending"),
+  sourcesTried: stringArray,
+  missingChannels: stringArray,
+  bestDirectChannels: stringArray,
+  lastEnrichedAt: z.string().datetime().nullable().default(null),
+  notes: nullableString.default(null)
+});
+
 export const throughLineSchema = z.object({
   status: z.enum(["pending", "ready"]).default("pending"),
   specificToThem: nullableString.default(null),
@@ -251,6 +311,8 @@ export const prospectSchema = z.object({
   triggerWindow: triggerWindowSchema.default({}),
   identityTells: identityTellsSchema.default({}),
   liveSignal: liveSignalSchema.default({}),
+  contactPoints: z.array(contactPointSchema).default([]),
+  contactEnrichmentState: contactEnrichmentStateSchema.default({}),
   notes: nullableString.default(null),
   signalMatchIds: stringArray,
   touches: z.array(touchSchema).default([]),
@@ -283,7 +345,7 @@ export function rehydrateTargetAccount(rawAccount) {
   const source = /** @type {Record<string, any>} */ (rawAccount);
   const signalMatches = z.array(signalMatchSchema).parse(source.signalMatches ?? []);
   const prospects = Array.isArray(source.prospects)
-    ? z.array(prospectSchema).parse(source.prospects)
+    ? z.array(prospectSchema).parse(source.prospects.map((prospect) => withDerivedProspectContacts(prospect)))
     : buildProspectsFromLegacy(source, signalMatches);
 
   return targetAccountSchema.parse({
@@ -307,7 +369,7 @@ export function rehydrateTargetAccount(rawAccount) {
 function buildProspectsFromLegacy(source, signalMatches) {
   const stakeholders = z.array(legacyStakeholderSchema).parse(source.stakeholders ?? []);
   const legacyPlan = legacyOutreachPlanSchema.parse(source.outreachPlan ?? {});
-  const prospects = stakeholders.map((stakeholder) => prospectSchema.parse({
+  const prospects = stakeholders.map((stakeholder) => prospectSchema.parse(withDerivedProspectContacts({
     id: stakeholder.id,
     name: stakeholder.name,
     title: stakeholder.title,
@@ -339,7 +401,7 @@ function buildProspectsFromLegacy(source, signalMatches) {
     throughLine: {},
     openingPlan: {},
     cadenceState: {}
-  }));
+  })));
 
   if (legacyPlan.status !== "ready" || !legacyPlan.primaryStakeholderId) {
     return prospects;

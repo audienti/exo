@@ -1,0 +1,124 @@
+# Inbound Sync
+
+Exo treats inbound observation as a governed truth layer, not as a browser trick.
+
+The first slice does three things:
+
+- defines the canonical inbound surfaces Exo cares about
+- stores which of those surfaces are enabled on each connected user account
+- stores the last known sync result for each enabled surface
+- stores normalized inbound observations that an agent can write back after inspecting a live surface
+
+It does **not** yet do live retrieval by itself.
+
+## Canonical surfaces
+
+Current surfaces:
+
+- `linkedin-sent-invitations`
+- `linkedin-received-invitations`
+- `linkedin-messaging-inbox`
+- `linkedin-profile-views`
+- `linkedin-followers-list`
+- `linkedin-following-list`
+- `linkedin-comment-replies`
+- `linkedin-catch-up-updates`
+- `gmail-inbox-threads`
+
+These are the truth surfaces Exo should reason about first.
+The LinkedIn notifications bell is intentionally not the primary source of truth.
+
+## Why this exists
+
+Cadence is not real if Exo cannot answer:
+
+- which requests were accepted
+- which requests came in
+- which people viewed us
+- which inbox threads changed
+- which public replies landed
+
+Before retrieval exists, Exo still needs a governed place to store:
+
+- what each connected account intends to scan
+- whether the last sync succeeded
+- when it last synced
+- how many items it saw
+- whether the last run failed
+- what the agent actually observed and wants Exo to remember as inbound truth
+
+## CLI
+
+Inspect the catalog:
+
+```bash
+exo inbound surfaces
+exo inbound surface linkedin-messaging-inbox
+```
+
+Inspect one user's sync coverage:
+
+```bash
+exo inbound sync show <user-id>
+exo inbound sync show <user-id> --capability linkedin --json
+```
+
+Enable or disable surfaces on one account:
+
+```bash
+exo inbound sync set <user-id> \
+  --account <account-id> \
+  --enable-surface linkedin-profile-views \
+  --disable-surface linkedin-comment-replies \
+  --json
+```
+
+Record the last run outcome for one surface:
+
+```bash
+exo inbound sync record <user-id> \
+  --account <account-id> \
+  --surface linkedin-profile-views \
+  --status success \
+  --observed-at 2026-05-28T13:00:00.000Z \
+  --item-count 4 \
+  --json
+```
+
+Write back one observed inbound event:
+
+```bash
+exo inbound observations add <user-id> \
+  --account <account-id> \
+  --surface linkedin-messaging-inbox \
+  --kind inbound_reply_received \
+  --observed-at 2026-05-28T14:00:00.000Z \
+  --summary "Prospect replied in LinkedIn inbox." \
+  --actor-name "Parm Uppal" \
+  --actor-profile-url https://www.linkedin.com/in/example \
+  --json
+```
+
+Inspect stored observations:
+
+```bash
+exo inbound observations list <user-id> --json
+exo inbound observations show <observation-id> --json
+```
+
+## Design rule
+
+This layer is for:
+
+- truth-surface inventory
+- per-account enablement
+- sync-state memory
+- normalized inbound observation writeback
+
+Later work will add:
+
+- live LinkedIn retrieval
+- live Gmail retrieval
+- cross-motion rationalization
+- inbound inbox
+- daily agenda

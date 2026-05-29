@@ -5,7 +5,11 @@ import { Command } from "commander";
 import { registerActions } from "./commands/actions.js";
 import { registerCompanies } from "./commands/companies.js";
 import { registerConfig } from "./commands/config.js";
+import { registerDaily } from "./commands/daily.js";
+import { registerInbound } from "./commands/inbound.js";
+import { registerInbox } from "./commands/inbox.js";
 import { registerMotion } from "./commands/motion.js";
+import { registerNext } from "./commands/next.js";
 import { registerProfiles } from "./commands/profiles.js";
 import { registerReport } from "./commands/report.js";
 import { registerUsers } from "./commands/users.js";
@@ -44,6 +48,13 @@ Common patterns:
   exo motion actions <motion-id> --prospect <prospect-id> --json
   exo motion action-brief <motion-id> --prospect <prospect-id> --action connection_request --json
   exo motion remove <motion-id>
+  exo inbound surfaces --json
+  exo inbound sync show <user-id> --json
+  exo inbound observations list <user-id> --json
+  exo inbound observations add <user-id> --account <account-id> --surface linkedin-messaging-inbox --kind inbound_reply_received --observed-at 2026-05-28T14:00:00.000Z --summary "Prospect replied in LinkedIn" --json
+  exo inbox --user <user-id> --json
+  exo daily --user <user-id> --json
+  exo next --json
   exo actions list
   exo actions show connection_request
   exo companies list
@@ -54,6 +65,7 @@ Common patterns:
   exo companies signal-matches add <company-id> --signal <signal-id> --summary "Stored reason to talk"
   exo companies signal-matches show <company-id> --json
   exo companies prospects add <company-id> --name "Person Name" --title "Director Title" --email person@example.com --profile-viewed-at <iso-datetime> --live-signal-summary "Recent post shows channel activity" --why-relevant "Why this person matters now"
+  exo companies prospects update <company-id> --prospect <prospect-id> --email person@example.com --source-url https://example.com/profile --observed-at <iso-datetime>
   exo companies through-line set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them "Specific to them" --shared-problem "Shared problem" --why-now "Why now" --legitimate-wedge "Why they would reply" --compression-line "One sentence"
   exo companies opening-plan set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --why-now "Reason to talk now" --angle "Opening angle" --reply-path "Why this person would legitimately reply now" --primary-channel connection-request --fallback-channel email --fallback-trigger "Use email if LinkedIn is blocked or there is no reply." --preflight-action "View the prospect profile" --first-move "First move" --first-message-goal "Desired response"
   exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action "Send the first touch"
@@ -80,7 +92,11 @@ Current state location:
 registerActions(program);
 registerCompanies(program);
 registerConfig(program);
+registerDaily(program);
+registerInbound(program);
+registerInbox(program);
 registerMotion(program);
+registerNext(program);
 registerProfiles(program);
 registerReport(program);
 registerUsers(program);

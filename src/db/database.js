@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { buildMotionName } from "../core/motion-support.js";
 import { rehydrateMotion } from "../core/rehydrate-motion.js";
+import { inboundObservationSchema } from "../schema/inbound.js";
 import { applyMigrations } from "./migrations.js";
 import { getDatabasePath, getStateDir } from "./paths.js";
 
@@ -327,6 +328,169 @@ export function deleteUser(id) {
   getDatabase()
     .prepare(`DELETE FROM users WHERE id = ?`)
     .run(id);
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ */
+export function upsertInboundObservation(observation) {
+  const normalized = inboundObservationSchema.parse(observation);
+  const statement = getDatabase().prepare(`
+    INSERT INTO inbound_observations (
+      id,
+      dedupe_key,
+      user_id,
+      account_id,
+      capability,
+      surface_key,
+      observation_kind,
+      observed_at,
+      recorded_at,
+      motion_id,
+      company_id,
+      prospect_id,
+      payload_json
+    )
+    VALUES (
+      @id,
+      @dedupeKey,
+      @userId,
+      @accountId,
+      @capability,
+      @surfaceKey,
+      @kind,
+      @observedAt,
+      @recordedAt,
+      @motionId,
+      @companyId,
+      @prospectId,
+      @payloadJson
+    )
+    ON CONFLICT(dedupe_key) DO UPDATE SET
+      id = excluded.id,
+      user_id = excluded.user_id,
+      account_id = excluded.account_id,
+      capability = excluded.capability,
+      surface_key = excluded.surface_key,
+      observation_kind = excluded.observation_kind,
+      observed_at = excluded.observed_at,
+      recorded_at = excluded.recorded_at,
+      motion_id = excluded.motion_id,
+      company_id = excluded.company_id,
+      prospect_id = excluded.prospect_id,
+      payload_json = excluded.payload_json
+  `);
+
+  statement.run({
+    id: normalized.id,
+    dedupeKey: normalized.dedupeKey,
+    userId: normalized.userId,
+    accountId: normalized.accountId,
+    capability: normalized.capability,
+    surfaceKey: normalized.surfaceKey,
+    kind: normalized.kind,
+    observedAt: normalized.observedAt,
+    recordedAt: normalized.recordedAt,
+    motionId: normalized.motionId,
+    companyId: normalized.companyId,
+    prospectId: normalized.prospectId,
+    payloadJson: JSON.stringify(normalized, null, 2)
+  });
+
+  return normalized;
+}
+
+/**
+ * @param {string} id
+ * @returns {unknown | null}
+ */
+export function findInboundObservationById(id) {
+  const row = getDatabase()
+    .prepare(`SELECT payload_json FROM inbound_observations WHERE id = ?`)
+    .get(id);
+
+  if (!row) return null;
+  return JSON.parse(row.payload_json);
+}
+
+/**
+ * @param {string} dedupeKey
+ * @returns {unknown | null}
+ */
+export function findInboundObservationByDedupeKey(dedupeKey) {
+  const row = getDatabase()
+    .prepare(`SELECT payload_json FROM inbound_observations WHERE dedupe_key = ?`)
+    .get(dedupeKey);
+
+  if (!row) return null;
+  return JSON.parse(row.payload_json);
+}
+
+/**
+ * @param {{
+ *   userId?: string | null,
+ *   accountId?: string | null,
+ *   capability?: string | null,
+ *   surfaceKey?: string | null,
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null,
+ *   limit?: number | null
+ * }} [filters]
+ * @returns {unknown[]}
+ */
+export function listInboundObservations(filters = {}) {
+  const where = [];
+  const params = /** @type {Record<string, string | number>} */ ({});
+
+  if (filters.userId) {
+    where.push("user_id = @userId");
+    params.userId = filters.userId;
+  }
+
+  if (filters.accountId) {
+    where.push("account_id = @accountId");
+    params.accountId = filters.accountId;
+  }
+
+  if (filters.capability) {
+    where.push("capability = @capability");
+    params.capability = filters.capability;
+  }
+
+  if (filters.surfaceKey) {
+    where.push("surface_key = @surfaceKey");
+    params.surfaceKey = filters.surfaceKey;
+  }
+
+  if (filters.motionId) {
+    where.push("motion_id = @motionId");
+    params.motionId = filters.motionId;
+  }
+
+  if (filters.companyId) {
+    where.push("company_id = @companyId");
+    params.companyId = filters.companyId;
+  }
+
+  if (filters.prospectId) {
+    where.push("prospect_id = @prospectId");
+    params.prospectId = filters.prospectId;
+  }
+
+  const clauses = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const limit = Number.isInteger(filters.limit) && filters.limit ? `LIMIT ${filters.limit}` : "";
+  const rows = getDatabase()
+    .prepare(`
+      SELECT payload_json
+      FROM inbound_observations
+      ${clauses}
+      ORDER BY observed_at DESC, recorded_at DESC
+      ${limit}
+    `)
+    .all(params);
+
+  return rows.map((row) => JSON.parse(row.payload_json));
 }
 
 /**

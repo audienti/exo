@@ -1,6 +1,7 @@
 // @ts-check
 
 import { motionSchema } from "../schema/motion.js";
+import { hasUsableEmailFallback, selectBestEmailContactPoint } from "../lib/prospect-contacts.js";
 
 const RECENT_POST_READY_BANDS = new Set(["0-14-days", "15-30-days", "31-60-days"]);
 const ENGAGEABLE_ACTIVITY_TYPES = new Set([
@@ -107,12 +108,16 @@ function buildProspectView(account, prospect) {
     whyRelevant: prospect.whyRelevant,
     linkedinProfileUrl: prospect.linkedinProfileUrl,
     email: prospect.email,
-    hasEmailFallback: Boolean(prospect.email),
+    hasEmailFallback: hasUsableEmailFallback(prospect),
+    bestEmailContactPoint: selectBestEmailContactPoint(prospect),
     profileViewedAt: prospect.profileViewedAt,
     roleTruth: prospect.roleTruth,
     triggerWindow: prospect.triggerWindow,
     identityTells: prospect.identityTells,
     liveSignal: prospect.liveSignal,
+    contactPoints: prospect.contactPoints,
+    contactEnrichmentState: prospect.contactEnrichmentState,
+    notes: prospect.notes,
     recentPost,
     signalMatches,
     signalMatchCount: signalMatches.length,

@@ -95,6 +95,39 @@ const migrations = [
         );
       `);
     }
+  },
+  {
+    version: 7,
+    name: "add-inbound-observations-table",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS inbound_observations (
+          id TEXT PRIMARY KEY,
+          dedupe_key TEXT NOT NULL UNIQUE,
+          user_id TEXT NOT NULL,
+          account_id TEXT NOT NULL,
+          capability TEXT NOT NULL,
+          surface_key TEXT NOT NULL,
+          observation_kind TEXT NOT NULL,
+          observed_at TEXT NOT NULL,
+          recorded_at TEXT NOT NULL,
+          motion_id TEXT,
+          company_id TEXT,
+          prospect_id TEXT,
+          payload_json TEXT NOT NULL
+        );
+      `);
+
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS inbound_observations_by_user_observed
+        ON inbound_observations (user_id, observed_at DESC);
+      `);
+
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS inbound_observations_by_account_observed
+        ON inbound_observations (account_id, observed_at DESC);
+      `);
+    }
   }
 ];
 
