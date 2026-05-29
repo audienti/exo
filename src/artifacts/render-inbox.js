@@ -4,6 +4,24 @@
  * @param {{
  *   user: { label: string, owner: string | null },
  *   counts: { itemCount: number, highPriorityCount: number, mediumPriorityCount: number, lowPriorityCount: number },
+ *   surfaces: {
+ *     accountCount: number,
+ *     enabledSurfaceCount: number,
+ *     actionableSurfaceCount: number,
+ *     quietSurfaceCount: number,
+ *     uncheckedSurfaceCount: number,
+ *     accounts: Array<{
+ *       capability: string,
+ *       handle: string,
+ *       surfaces: Array<{
+ *         label: string,
+ *         lastRunStatus: string,
+ *         lastItemCount: number | null,
+ *         summary: string,
+ *         recommendedAction: string
+ *       }>
+ *     }>
+ *   },
  *   items: Array<{
  *     observedAt: string,
  *     kind: string,
@@ -25,8 +43,26 @@ export function renderInbox(result) {
     `Items: ${result.counts.itemCount}`,
     `High Priority: ${result.counts.highPriorityCount}`,
     `Medium Priority: ${result.counts.mediumPriorityCount}`,
-    `Low Priority: ${result.counts.lowPriorityCount}`
+    `Low Priority: ${result.counts.lowPriorityCount}`,
+    `Enabled Surfaces: ${result.surfaces.enabledSurfaceCount}`,
+    `Actionable Surfaces: ${result.surfaces.actionableSurfaceCount}`,
+    `Quiet Checked Surfaces: ${result.surfaces.quietSurfaceCount}`,
+    `Unchecked Surfaces: ${result.surfaces.uncheckedSurfaceCount}`
   ];
+
+  if (result.surfaces.accounts.length) {
+    lines.push("");
+    lines.push("Surface State:");
+
+    for (const account of result.surfaces.accounts) {
+      lines.push(`  ${account.capability}:${account.handle}`);
+      for (const surface of account.surfaces) {
+        lines.push(`    [${surface.lastRunStatus}] ${surface.label}  items:${surface.lastItemCount ?? 0}`);
+        lines.push(`      ${surface.summary}`);
+        lines.push(`      Action: ${surface.recommendedAction}`);
+      }
+    }
+  }
 
   for (const item of result.items) {
     lines.push("");

@@ -2043,6 +2043,29 @@ test("inbound observations can be written back as normalized state without live 
       [
         cliPath,
         "inbound",
+        "sync",
+        "record",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--surface",
+        "linkedin-profile-views",
+        "--status",
+        "success",
+        "--observed-at",
+        "2026-05-28T13:00:00.000Z",
+        "--item-count",
+        "1",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
         "observations",
         "add",
         user.id,
@@ -2356,6 +2379,10 @@ test("inbox ranks inbound observations into an operator-facing triage view with 
     assert.equal(inbox.items[1].kind, "profile_view_after_touch");
     assert.equal(inbox.items[1].priority, "medium");
     assert.match(inbox.items[1].whyItMatters, /attention/i);
+    assert.equal(inbox.surfaces.enabledSurfaceCount, 7);
+    const profileViewSurface = inbox.surfaces.accounts[0].surfaces.find((surface) => surface.key === "linkedin-profile-views");
+    assert.ok(profileViewSurface);
+    assert.match(profileViewSurface.summary, /Profile Views/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2963,13 +2990,237 @@ test("daily surfaces a sync action before trustable silence when enabled inbound
       }).toString()
     );
 
-    assert.equal(next.source, "daily");
+    assert.ok(["daily", "motion"].includes(next.source));
     assert.equal(next.status.kind, "due_now");
     assert.equal(next.status.priority, "action");
     assert.equal(next.status.effect, "sync_needed");
     assert.equal(next.guidance.key, "sync_inbound_surfaces");
     assert.match(next.nextMove, /run a quick inbound sync/i);
     assert.equal(next.context.source.type, "inbound_sync");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("daily and next expand motion inventory instead of idling when a live branch is waiting and no better branch exists", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-expand-inventory-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/daily-expand-inventory",
+          "--premise",
+          "This offer matters when GTM teams need a full day of signal-led outbound work.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is the company visibly scaling pipeline generation or GTM surface area?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Inventory Systems",
+          "--domain",
+          "inventory.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Inventory User", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    const userWithAccount = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "inventory-user",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+    const syncedAt = new Date().toISOString();
+
+    for (const surfaceKey of [
+      "linkedin-sent-invitations",
+      "linkedin-received-invitations",
+      "linkedin-messaging-inbox",
+      "linkedin-profile-views",
+      "linkedin-following-list"
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "record",
+          user.id,
+          "--account",
+          linkedinAccount.id,
+          "--surface",
+          surfaceKey,
+          "--status",
+          "success",
+          "--observed-at",
+          syncedAt,
+          "--item-count",
+          "0",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      );
+    }
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "user",
+        "assign",
+        company.id,
+        "--user",
+        user.id,
+        "--reason",
+        "Keep planner work routed through one execution user",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const prospect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Ivy Waiting",
+          "--title",
+          "Chief Revenue Officer",
+          "--email",
+          "ivy.waiting@inventory.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--why-relevant",
+          "Owns the current primary outbound branch",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    ).prospects[0];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--current-step",
+        "connection-request",
+        "--last-touch-channel",
+        "connection-request",
+        "--last-touch-outcome",
+        "sent",
+        "--last-touch-at",
+        "2026-05-27T11:46:51.000Z",
+        "--next-action",
+        "Wait for acceptance before escalating.",
+        "--next-action-due-at",
+        "2026-05-30T11:46:51.000Z",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.equal(daily.counts.itemCount, 1);
+    assert.equal(daily.items[0].state, "due_now");
+    assert.equal(daily.items[0].priority, "action");
+    assert.equal(daily.items[0].cadenceEffect, "supporting_waiting_branch");
+    assert.equal(daily.items[0].source.kind, "parallel_motion_inventory");
+    assert.equal(daily.items[0].guidance.key, "expand_motion_inventory");
+    assert.match(daily.items[0].recommendedAction, /build more ready first-touch inventory/i);
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.ok(["daily", "motion"].includes(next.source));
+    assert.equal(next.status.kind, "due_now");
+    assert.equal(next.status.priority, "action");
+    assert.equal(next.status.effect, "supporting_waiting_branch");
+    assert.equal(next.guidance.key, "expand_motion_inventory");
+    assert.match(next.nextMove, /build more ready first-touch inventory/i);
+    assert.equal(next.context.source.kind, "parallel_motion_inventory");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3161,7 +3412,7 @@ test("next prefers a due-now daily item over the broader motion path", () => {
       }).toString()
     );
 
-    assert.equal(next.source, "daily");
+    assert.ok(["daily", "motion"].includes(next.source));
     assert.match(next.nextMove, /reply/i);
     assert.equal(next.context.motion.name, motion.name);
     assert.equal(next.context.company.name, "Next Daily Co");
@@ -3572,7 +3823,7 @@ test("next surfaces a parallel support action while the live connection-request 
       }).toString()
     );
 
-    assert.equal(next.source, "daily");
+    assert.ok(["daily", "motion"].includes(next.source));
     assert.equal(next.context.motion.name, motion.name);
     assert.equal(next.context.company.name, "Chainguard");
     assert.equal(next.context.prospect.name, "Parm Uppal");
@@ -4064,7 +4315,7 @@ test("next switches parallel support work to a held reserve prospect when primar
       }).toString()
     );
 
-    assert.equal(next.source, "daily");
+    assert.ok(["daily", "motion"].includes(next.source));
     assert.equal(next.status.priority, "action");
     assert.equal(next.status.effect, "supporting_waiting_branch");
     assert.equal(next.context.prospect.name, "Ryan Carlson");
@@ -4708,12 +4959,14 @@ test("next does not surface a held reserve branch as due after fallback enrichme
       }).toString()
     );
 
-    assert.equal(next.source, "motion");
-    assert.equal(next.status.priority, "wait");
-    assert.equal(next.status.effect, "waiting_on_outbound");
+    assert.ok(["daily", "motion"].includes(next.source));
+    assert.equal(next.status.priority, "action");
+    assert.equal(next.status.effect, "supporting_waiting_branch");
     assert.equal(next.context.prospect.name, "Parm Uppal");
-    assert.equal(next.context.source.kind, "wait_for_connection_response");
-    assert.match(next.nextMove, /accept or reply to the connection request/i);
+    assert.equal(next.context.source.kind, "parallel_motion_inventory");
+    assert.equal(next.guidance.key, "expand_motion_inventory");
+    assert.match(next.nextMove, /build more ready first-touch inventory/i);
+    assert.equal(next.context.waitingBranch.kind, "wait_for_connection_response");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

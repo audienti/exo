@@ -114,7 +114,17 @@ export function selectParallelSupportAction(prospects, waitingProspect) {
     };
   }
 
-  return null;
+  return {
+    kind: "parallel_motion_inventory",
+    guidanceKey: "expand_motion_inventory",
+    priority: "action",
+    effect: "supporting_waiting_branch",
+    dueAt: null,
+    nextMove: `While ${waitingProspect.name}'s branch is waiting, build more ready first-touch inventory so the motion does not stall on one pending conversation.`,
+    why: `A quiet inbox is not permission to do nothing. ${waitingProspect.name}'s live branch is waiting, and the next useful move is to create more ready first-touch inventory in the motion.`,
+    company: waitingProspect,
+    prospect: waitingProspect
+  };
 }
 
 /**

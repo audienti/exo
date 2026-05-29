@@ -3,14 +3,16 @@
 import { inboundObservationSchema } from "../schema/inbound.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
+import { buildUserInboundSyncView } from "./user-inbound-sync.js";
 
 /**
  * @param {unknown} rawUser
  * @param {unknown[]} rawObservations
  * @param {unknown[]} rawMotions
  * @param {unknown[]} rawCompanies
+ * @param {{ accountId?: string | null }} [options]
  */
-export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanies) {
+export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanies, options = {}) {
   const user = userSchema.parse(rawUser);
   const observations = rawObservations.map((item) => inboundObservationSchema.parse(item));
   const motions = rawMotions.map((item) => motionSchema.parse(item));
@@ -36,6 +38,32 @@ export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanie
   const items = observations
     .map((observation) => buildInboxItem(observation, motions, companiesById, prospectContextById))
     .sort(compareInboxItems);
+  const syncView = buildUserInboundSyncView(user);
+  const accounts = syncView.accounts
+    .filter((account) => !options.accountId || account.accountId === options.accountId)
+    .map((account) => ({
+      accountId: account.accountId,
+      capability: account.capability,
+      handle: account.handle,
+      label: account.label,
+      preferred: account.preferred,
+      actionableSurfaceCount: account.surfaces.filter((surface) => isActionableSurface(surface)).length,
+      quietSurfaceCount: account.surfaces.filter((surface) => isQuietSurface(surface)).length,
+      uncheckedSurfaceCount: account.surfaces.filter((surface) => surface.enabled && surface.lastRunStatus === "never").length,
+      surfaces: account.surfaces
+        .filter((surface) => surface.enabled)
+        .map((surface) => ({
+          key: surface.key,
+          label: surface.label,
+          truthLevel: surface.truthLevel,
+          lastRunStatus: surface.lastRunStatus,
+          lastSyncedAt: surface.lastSyncedAt,
+          lastObservedAt: surface.lastObservedAt,
+          lastItemCount: surface.lastItemCount,
+          summary: summarizeSurfaceState(surface),
+          recommendedAction: recommendSurfaceAction(surface)
+        }))
+    }));
 
   return {
     user: {
@@ -48,6 +76,14 @@ export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanie
       highPriorityCount: items.filter((item) => item.priority === "high").length,
       mediumPriorityCount: items.filter((item) => item.priority === "medium").length,
       lowPriorityCount: items.filter((item) => item.priority === "low").length
+    },
+    surfaces: {
+      accountCount: accounts.length,
+      enabledSurfaceCount: accounts.reduce((sum, account) => sum + account.surfaces.length, 0),
+      actionableSurfaceCount: accounts.reduce((sum, account) => sum + account.actionableSurfaceCount, 0),
+      quietSurfaceCount: accounts.reduce((sum, account) => sum + account.quietSurfaceCount, 0),
+      uncheckedSurfaceCount: accounts.reduce((sum, account) => sum + account.uncheckedSurfaceCount, 0),
+      accounts
     },
     items
   };
@@ -150,6 +186,8 @@ function classifyObservation(kind) {
  */
 function recommendAction(kind, prospect) {
   switch (kind) {
+    case "connection_request_pending":
+      return `Keep the branch patient for now, but review whether the pending invite has become stale enough to withdraw under current policy.`;
     case "inbound_reply_received":
     case "email_reply_received":
     case "message_received":
@@ -191,4 +229,112 @@ function compareInboxItems(left, right) {
     || right.observedAt.localeCompare(left.observedAt)
     || right.recordedAt.localeCompare(left.recordedAt)
   );
+}
+
+/**
+ * @param {{
+ *   key: string,
+ *   label: string,
+ *   truthLevel: string,
+ *   lastRunStatus: string,
+ *   lastSyncedAt: string | null,
+ *   lastObservedAt: string | null,
+ *   lastItemCount: number | null
+ * }} surface
+ */
+function summarizeSurfaceState(surface) {
+  if (surface.lastRunStatus === "never") {
+    return `${surface.label} has not been checked yet.`;
+  }
+
+  if (surface.lastRunStatus === "failed") {
+    return `${surface.label} failed on the last sync.`;
+  }
+
+  if (surface.lastRunStatus === "warning") {
+    return `${surface.label} completed with warnings on the last sync.`;
+  }
+
+  const count = surface.lastItemCount ?? 0;
+  if (count === 0) {
+    return `${surface.label} was checked and is currently quiet.`;
+  }
+
+  switch (surface.key) {
+    case "linkedin-sent-invitations":
+      return `${surface.label} was checked and currently has ${count} pending or changed outbound invitation ${count === 1 ? "record" : "records"}.`;
+    case "linkedin-received-invitations":
+      return `${surface.label} was checked and currently has ${count} inbound invitation ${count === 1 ? "request" : "requests"} to review.`;
+    case "linkedin-messaging-inbox":
+    case "gmail-inbox-threads":
+      return `${surface.label} was checked and currently has ${count} thread ${count === 1 ? "change" : "changes"} worth review.`;
+    case "linkedin-profile-views":
+      return `${surface.label} was checked and currently has ${count} profile-view ${count === 1 ? "signal" : "signals"}.`;
+    case "linkedin-followers-list":
+      return `${surface.label} was checked and currently has ${count} follower ${count === 1 ? "change" : "changes"}.`;
+    case "linkedin-following-list":
+      return `${surface.label} was checked and currently has ${count} follow-state ${count === 1 ? "change" : "changes"}.`;
+    case "linkedin-comment-replies":
+      return `${surface.label} was checked and currently has ${count} public reply ${count === 1 ? "change" : "changes"}.`;
+    case "linkedin-catch-up-updates":
+      return `${surface.label} was checked and currently has ${count} public update ${count === 1 ? "opportunity" : "opportunities"}.`;
+    default:
+      return `${surface.label} was checked and currently has ${count} relevant ${count === 1 ? "item" : "items"}.`;
+  }
+}
+
+/**
+ * @param {{
+ *   key: string,
+ *   lastRunStatus: string,
+ *   lastItemCount: number | null
+ * }} surface
+ */
+function recommendSurfaceAction(surface) {
+  if (surface.lastRunStatus === "never") {
+    return "Run this surface check before trusting silence.";
+  }
+
+  if (surface.lastRunStatus === "failed" || surface.lastRunStatus === "warning") {
+    return "Rerun this surface check and fix the capture path before trusting silence.";
+  }
+
+  const count = surface.lastItemCount ?? 0;
+  if (count === 0) {
+    return "No action from this surface right now.";
+  }
+
+  switch (surface.key) {
+    case "linkedin-sent-invitations":
+      return "Review pending and changed invites for accepts, withdrawals, or stale requests.";
+    case "linkedin-received-invitations":
+      return "Review inbound invites and decide whether to accept or decline them.";
+    case "linkedin-messaging-inbox":
+    case "gmail-inbox-threads":
+      return "Open the changed threads and respond or triage them.";
+    case "linkedin-profile-views":
+      return "Review whether these attention signals justify patience or a later escalation.";
+    case "linkedin-followers-list":
+    case "linkedin-following-list":
+      return "Review whether the follow-state change matters for visibility or cleanup.";
+    case "linkedin-comment-replies":
+    case "linkedin-catch-up-updates":
+      return "Review whether there is a legitimate public engagement move to make.";
+    default:
+      return "Review this surface and decide whether it changes the next move.";
+  }
+}
+
+/**
+ * @param {{ enabled?: boolean, lastRunStatus: string, lastItemCount: number | null }} surface
+ */
+function isActionableSurface(surface) {
+  return surface.enabled !== false && surface.lastRunStatus === "success" && (surface.lastItemCount ?? 0) > 0;
+}
+
+/**
+ * @param {{ enabled?: boolean, lastRunStatus: string, lastItemCount: number | null }} surface
+ */
+function isQuietSurface(surface) {
+  return surface.enabled !== false && surface.lastRunStatus === "success" && (surface.lastItemCount ?? 0) === 0;
 }

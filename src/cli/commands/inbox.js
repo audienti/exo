@@ -46,7 +46,9 @@ Rules:
         prospectId: options.prospect ?? null,
         limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
       });
-      const result = buildInboxView(user, observations, listMotions(), listCompanies());
+      const result = buildInboxView(user, observations, listMotions(), listCompanies(), {
+        accountId: options.account ?? null
+      });
 
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
