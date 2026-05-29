@@ -120,6 +120,7 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
  */
 function buildDailyItem({ motion, account, prospect, motionSupportProspects, latestInboxItem, now }) {
   const cadence = prospect.cadenceState;
+  const cadenceNotes = cadence.notes?.toLowerCase() ?? "";
   const currentSupportProspect = toSupportProspect(account, prospect);
   const guidanceContext = {
     motionId: motion.id,
@@ -238,6 +239,35 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
         }
       };
     }
+  }
+
+  if (
+    !cadence.lastTouchOutcome
+    && (cadenceNotes.includes("on hold") || cadenceNotes.includes("held behind") || cadenceNotes.includes("wait for operator"))
+  ) {
+    const holdDueAt = cadence.nextActionDueAt ?? "9999-12-31T23:59:59.999Z";
+    const whyItMatters = `${prospect.name}'s branch is explicitly being held in reserve behind a stronger primary path, so it should not surface as due work until the escalation trigger is met.`;
+    const recommendedAction = cadence.nextAction ?? `Keep ${prospect.name}'s reserve branch on hold until the primary path stalls or explicitly escalates.`;
+    return {
+      ...base,
+      state: "waiting_until",
+      priority: "wait",
+      priorityRank: 3,
+      cadenceEffect: "waiting_on_outbound",
+      dueAt: holdDueAt,
+      whyItMatters,
+      recommendedAction,
+      guidance: buildPlannerGuidance("wait_for_response", {
+        ...guidanceContext,
+        dueAt: cadence.nextActionDueAt ?? "",
+        whyItMatters,
+        recommendedAction
+      }),
+      source: {
+        type: "cadence",
+        kind: "held_in_reserve"
+      }
+    };
   }
 
   if (

@@ -3486,6 +3486,8 @@ test("next switches parallel support work to a held reserve prospect when primar
           "chainguard.dev",
           "--website-url",
           "https://www.chainguard.dev",
+          "--linkedin-company-url",
+          "https://www.linkedin.com/company/chainguard-dev/",
           "--motion",
           motion.id,
           "--json"
@@ -3925,6 +3927,554 @@ test("companies add/list/find/show/motions persists canonical company records", 
     assert.equal(motionsOutput.company.id, company.id);
     assert.equal(motionsOutput.motions.length, 1);
     assert.equal(motionsOutput.motions[0].id, motion.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("next does not surface a held reserve branch as due after fallback enrichment is complete", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-held-reserve-"));
+  const userDataDir = path.join(tempDir, "Chrome");
+  const profileDirectory = "Profile 4";
+  const profilePath = path.join(userDataDir, profileDirectory);
+
+  fs.mkdirSync(profilePath, { recursive: true });
+  fs.writeFileSync(
+    path.join(userDataDir, "Local State"),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          [profileDirectory]: {
+            name: "Reserve User"
+          }
+        }
+      }
+    })
+  );
+  fs.writeFileSync(
+    path.join(profilePath, "Preferences"),
+    JSON.stringify({
+      profile: {
+        name: "Reserve User"
+      }
+    })
+  );
+  seedBrowserEvidence(profilePath, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/feed/"]
+  });
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when GTM leaders need signal-led outreach under expansion pressure.",
+          "--audience",
+          "Cybersecurity revenue leaders",
+          "--stakeholder-count",
+          "2",
+          "--signal-json",
+          JSON.stringify({
+            question: "Is there recent evidence this company is broadening its GTM story or product surface?",
+            scope: "company",
+            whyItMatters: "Broader scope raises message-discipline pressure.",
+            status: "ready"
+          }),
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+      cwd: tempDir,
+      encoding: "utf8"
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Chainguard",
+          "--domain",
+          "chainguard.dev",
+          "--website-url",
+          "https://www.chainguard.dev",
+          "--linkedin-company-url",
+          "https://www.linkedin.com/company/chainguard-dev/",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Reserve User", "--owner", "William", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      }).toString()
+    );
+
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "reserve-user",
+          "--user-data-dir",
+          userDataDir,
+          "--profile-directory",
+          profileDirectory,
+          "--browser-command",
+          "/bin/echo",
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "linkedin",
+        "--handle",
+        "reserve-user",
+        "--profile",
+        profile.id,
+        "--preferred",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "user",
+        "assign",
+        company.id,
+        "--user",
+        user.id,
+        "--reason",
+        "Drive the reserve-path daily agenda through one execution user",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "profile",
+        "assign",
+        company.id,
+        "--profile",
+        profile.id,
+        "--reason",
+        "Keep the reserve-path fixture on one trusted browser identity",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const signalMatch = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "signal-matches",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--signal",
+          motion.signals[0].id,
+          "--summary",
+          "Broadened its commercial and product story during the current expansion wave.",
+          "--source-url",
+          "https://www.chainguard.dev/unchained/example",
+          "--observed-at",
+          "2026-05-20T00:00:00.000Z",
+          "--confidence",
+          "high",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const signalMatchId = signalMatch.signalMatches[0].id;
+
+    const parm = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Parm Uppal",
+          "--title",
+          "Chief Revenue Officer",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/parmuppal",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--signal-match",
+          signalMatchId,
+          "--why-relevant",
+          "Owns the executive outbound quality bar.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      ).toString()
+    ).prospects[0];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        parm.id,
+        "--signal-match",
+        signalMatchId,
+        "--specific-to-them",
+        "Parm owns the GTM narrative quality bar while the company story broadens.",
+        "--shared-problem",
+        "Broader product and channel expansion makes generic outbound easier to spot and ignore.",
+        "--why-now",
+        "The current expansion wave makes message discipline urgent now.",
+        "--legitimate-wedge",
+        "Lead with the narrative-quality tension instead of a generic sales pitch.",
+        "--compression-line",
+        "As CRO, Parm has to protect message quality while the story gets bigger.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        parm.id,
+        "--signal-match",
+        signalMatchId,
+        "--why-now",
+        "The current expansion wave makes executive-message quality more visible.",
+        "--angle",
+        "Executive outbound gets weaker when the story broadens faster than the narrative discipline.",
+        "--reply-path",
+        "Lead with a specific narrative-quality tension a CRO would plausibly react to.",
+        "--primary-channel",
+        "connection-request",
+        "--fallback-channel",
+        "email",
+        "--fallback-trigger",
+        "Use direct email only if the connection branch stalls.",
+        "--first-move",
+        "Send the first connection request.",
+        "--first-message-goal",
+        "Start a conversation about message quality under expansion pressure.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        parm.id,
+        "--current-step",
+        "connection-request",
+        "--last-touch-channel",
+        "connection-request",
+        "--last-touch-outcome",
+        "sent",
+        "--last-touch-at",
+        "2026-05-27T11:46:51.000Z",
+        "--next-action",
+        "Wait for acceptance before escalating.",
+        "--next-action-due-at",
+        "2026-05-30T11:46:51.000Z",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const ryan = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Ryan Carlson",
+          "--title",
+          "President",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/ryancarlson",
+          "--buying-committee-role",
+          "executive_sponsor",
+          "--decision-authority",
+          "sponsors",
+          "--fit-confidence",
+          "high",
+          "--signal-match",
+          signalMatchId,
+          "--why-relevant",
+          "Strong executive sponsor if the CRO branch stalls.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      ).toString()
+    ).prospects[1];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        ryan.id,
+        "--signal-match",
+        signalMatchId,
+        "--specific-to-them",
+        "Ryan carries the broader market story.",
+        "--shared-problem",
+        "The market story has to stay credible as the company broadens its footprint.",
+        "--why-now",
+        "Expansion raises the cost of generic executive outreach.",
+        "--legitimate-wedge",
+        "Use the narrative-quality tension rather than a tactical pitch.",
+        "--compression-line",
+        "Ryan is the reserve executive path if the CRO branch stalls.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        ryan.id,
+        "--signal-match",
+        signalMatchId,
+        "--why-now",
+        "The broader story has to land cleanly with senior buyers.",
+        "--angle",
+        "Keep the sponsor path ready without cutting across the CRO branch.",
+        "--reply-path",
+        "Approach Ryan as the executive narrator, not the first owner.",
+        "--primary-channel",
+        "inmail",
+        "--fallback-channel",
+        "none",
+        "--fallback-trigger",
+        "Only use this path if the CRO branch stalls.",
+        "--first-move",
+        "Hold a sponsor-ready message in reserve.",
+        "--first-message-goal",
+        "Keep the executive path ready if the primary branch needs escalation.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        ryan.id,
+        "--current-step",
+        "inmail",
+        "--next-action",
+        "Keep the sponsor-ready InMail on hold unless the CRO branch needs executive escalation.",
+        "--notes",
+        "Sponsor path is ready but intentionally held behind the primary CRO path.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "prospects",
+        "update",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        parm.id,
+        "--email",
+        "parm.uppal@chainguard.dev",
+        "--contact-point",
+        JSON.stringify({
+          id: "email:parm.uppal@chainguard.dev",
+          kind: "email",
+          value: "parm.uppal@chainguard.dev",
+          label: "Verified direct email",
+          matchStatus: "same_person_verified",
+          verificationStatus: "verified",
+          confidence: "high",
+          source: "icypeas",
+          usableForOutreach: true,
+          usableForResearch: true,
+          usableForWarmup: false
+        }),
+        "--enrichment-status",
+        "complete",
+        "--best-direct-channel",
+        "linkedin",
+        "--best-direct-channel",
+        "email",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "prospects",
+        "update",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        ryan.id,
+        "--email",
+        "ryan.carlson@chainguard.dev",
+        "--contact-point",
+        JSON.stringify({
+          id: "email:ryan.carlson@chainguard.dev",
+          kind: "email",
+          value: "ryan.carlson@chainguard.dev",
+          label: "Verified direct email",
+          matchStatus: "same_person_verified",
+          verificationStatus: "verified",
+          confidence: "high",
+          source: "provider-convergence",
+          usableForOutreach: true,
+          usableForResearch: true,
+          usableForWarmup: false
+        }),
+        "--enrichment-status",
+        "complete",
+        "--best-direct-channel",
+        "linkedin",
+        "--best-direct-channel",
+        "email",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      }).toString()
+    );
+
+    assert.equal(next.source, "motion");
+    assert.equal(next.status.priority, "wait");
+    assert.equal(next.status.effect, "waiting_on_outbound");
+    assert.equal(next.context.prospect.name, "Parm Uppal");
+    assert.equal(next.context.source.kind, "wait_for_connection_response");
+    assert.match(next.nextMove, /accept or reply to the connection request/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
