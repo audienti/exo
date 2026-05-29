@@ -4,6 +4,7 @@ principles:
   - One selected prospect should travel as one coherent packet through research, enrichment, through-line, opening-plan, and cadence work.
   - A prospect packet is not done just because a name was chosen; it is done when the branch is genuinely ready or intentionally suppressed.
 do:
+  - Open the first packet contract with `exo motion packet-brief {{firstClaimableProspectResearchPacketMotionId}} --packet {{firstClaimableProspectResearchPacketId}}` before you start, so the worker sees the exact scope and writeback path.
   - Claim the selected prospect packet before splitting work across agents.
   - Keep role truth, trigger window, identity tells, live signal, contact enrichment, through-line, opening plan, and cadence work together on the same prospect.
   - If the branch becomes genuinely ready, make sure the stored through-line, opening plan, and cadence state reflect that before completing the packet.

@@ -50,6 +50,7 @@ export function buildNextView(input) {
         },
         guidance: topDailyItem.guidance,
         context: {
+          ...(topDailyItem.context ?? {}),
           user: daily.user,
           motion: topDailyItem.motion,
           company: topDailyItem.company,

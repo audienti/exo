@@ -5,6 +5,7 @@ principles:
   - Claimed prospect-selection packets must survive writeback until they are explicitly completed.
 do:
   - Inspect `exo motion packets <motion-id> --json` to see which researched accounts have claimable prospect-selection packets.
+  - Open the first packet contract with `exo motion packet-brief {{firstClaimableProspectSelectionPacketMotionId}} --packet {{firstClaimableProspectSelectionPacketId}}` before you start, so the worker sees the exact scope and writeback path.
   - Claim the packet explicitly with `exo companies queue claim <company-id> --motion <motion-id> --worker <label>`.
   - Add the best-fit prospects to the motion-owned target account with `exo companies prospects add ...`.
   - Complete the packet with `exo companies queue complete <company-id> --motion <motion-id> --worker <label>` after the chosen prospect set is in Exo.

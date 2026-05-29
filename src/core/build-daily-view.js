@@ -202,6 +202,7 @@ function buildOutboundCapacityPlannerItem(capacity, { motionId, motions }) {
     dueAt,
     whyItMatters: capacity.plannerItem.whyItMatters,
     recommendedAction: capacity.plannerItem.recommendedAction,
+    context: capacity.plannerItem.context,
     source: {
       type: "outbound_capacity",
       kind: capacity.plannerItem.kind,

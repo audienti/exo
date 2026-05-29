@@ -107,6 +107,17 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     for (const packet of item.items) {
       const targetBucket = packet.claimState === "claimed" ? summary.claimedByKind : summary.claimableByKind;
       targetBucket[packet.packetKind] = (targetBucket[packet.packetKind] ?? 0) + 1;
+      const previewBucket = packet.claimState === "claimed" ? summary.claimedItemsByKind : summary.claimableItemsByKind;
+      previewBucket[packet.packetKind] = previewBucket[packet.packetKind] ?? [];
+      previewBucket[packet.packetKind].push({
+        motionId: item.motion.id,
+        motionName: item.motion.name,
+        packetId: packet.packetId,
+        companyId: packet.companyId,
+        companyName: packet.companyName,
+        prospectId: packet.prospectId ?? null,
+        prospectName: packet.prospectName ?? null
+      });
     }
     return summary;
   }, {
@@ -114,7 +125,9 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     claimableCount: 0,
     claimedCount: 0,
     claimableByKind: {},
-    claimedByKind: {}
+    claimedByKind: {},
+    claimableItemsByKind: {},
+    claimedItemsByKind: {}
   });
   const execution = {
     sentToday,
@@ -284,7 +297,17 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
         claimableProspectResearchPacketCount: String(packets.claimableByKind.prospect_research ?? 0),
         claimedCompanyResearchPacketCount: String(packets.claimedByKind.company_research ?? 0),
         claimedProspectSelectionPacketCount: String(packets.claimedByKind.prospect_selection ?? 0),
-        claimedProspectResearchPacketCount: String(packets.claimedByKind.prospect_research ?? 0)
+        claimedProspectResearchPacketCount: String(packets.claimedByKind.prospect_research ?? 0),
+        firstClaimableCompanyResearchPacketId: packets.claimableItemsByKind.company_research?.[0]?.packetId ?? "",
+        firstClaimableCompanyResearchPacketMotionId: packets.claimableItemsByKind.company_research?.[0]?.motionId ?? "",
+        firstClaimableCompanyResearchCompanyName: packets.claimableItemsByKind.company_research?.[0]?.companyName ?? "",
+        firstClaimableProspectSelectionPacketId: packets.claimableItemsByKind.prospect_selection?.[0]?.packetId ?? "",
+        firstClaimableProspectSelectionPacketMotionId: packets.claimableItemsByKind.prospect_selection?.[0]?.motionId ?? "",
+        firstClaimableProspectSelectionCompanyName: packets.claimableItemsByKind.prospect_selection?.[0]?.companyName ?? "",
+        firstClaimableProspectResearchPacketId: packets.claimableItemsByKind.prospect_research?.[0]?.packetId ?? "",
+        firstClaimableProspectResearchPacketMotionId: packets.claimableItemsByKind.prospect_research?.[0]?.motionId ?? "",
+        firstClaimableProspectResearchCompanyName: packets.claimableItemsByKind.prospect_research?.[0]?.companyName ?? "",
+        firstClaimableProspectResearchProspectName: packets.claimableItemsByKind.prospect_research?.[0]?.prospectName ?? ""
       }
     }
   };
@@ -310,7 +333,25 @@ function isSameLocalDate(iso, now) {
  *   claimableCount: number,
  *   claimedCount: number,
  *   claimableByKind: Record<string, number>,
- *   claimedByKind: Record<string, number>
+ *   claimedByKind: Record<string, number>,
+ *   claimableItemsByKind: Record<string, Array<{
+ *     motionId: string,
+ *     motionName: string,
+ *     packetId: string,
+ *     companyId: string,
+ *     companyName: string,
+ *     prospectId: string | null,
+ *     prospectName: string | null
+ *   }>>,
+ *   claimedItemsByKind: Record<string, Array<{
+ *     motionId: string,
+ *     motionName: string,
+ *     packetId: string,
+ *     companyId: string,
+ *     companyName: string,
+ *     prospectId: string | null,
+ *     prospectName: string | null
+ *   }>>
  * }} packets
  * @param {number} remainingInvitationsToday
  * @param {number} inventoryShortfall
@@ -322,12 +363,15 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
   const claimableCompanyResearchPacketCount = packets.claimableByKind.company_research ?? 0;
   const claimableProspectSelectionPacketCount = packets.claimableByKind.prospect_selection ?? 0;
   const claimableProspectResearchPacketCount = packets.claimableByKind.prospect_research ?? 0;
+  const firstProspectResearchPacket = packets.claimableItemsByKind.prospect_research?.[0] ?? null;
+  const firstProspectSelectionPacket = packets.claimableItemsByKind.prospect_selection?.[0] ?? null;
+  const firstCompanyResearchPacket = packets.claimableItemsByKind.company_research?.[0] ?? null;
 
   if (claimableProspectResearchPacketCount > 0) {
     return {
       kind: "claim_prospect_research_packets",
       guidanceKey: "claim_prospect_research_packets",
-      recommendedAction: `Claim ${claimableProspectResearchPacketCount} prospect-research packet${claimableProspectResearchPacketCount === 1 ? "" : "s"} from selected stakeholders so the motion can turn them into ready branches and refill ${inventoryShortfall} connection-request slot${inventoryShortfall === 1 ? "" : "s"} today.`
+      recommendedAction: `Claim ${claimableProspectResearchPacketCount} prospect-research packet${claimableProspectResearchPacketCount === 1 ? "" : "s"} from selected stakeholders so the motion can turn them into ready branches and refill ${inventoryShortfall} connection-request slot${inventoryShortfall === 1 ? "" : "s"} today.${formatPacketLead(firstProspectResearchPacket)}`
     };
   }
 
@@ -335,7 +379,7 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
     return {
       kind: "claim_prospect_selection_packets",
       guidanceKey: "claim_prospect_selection_packets",
-      recommendedAction: `Claim ${claimableProspectSelectionPacketCount} prospect-selection packet${claimableProspectSelectionPacketCount === 1 ? "" : "s"} from researched account${claimableProspectSelectionPacketCount === 1 ? "" : "s"} so the motion can turn them into selected stakeholders and refill ${inventoryShortfall} ready branch${inventoryShortfall === 1 ? "" : "es"} for today's invitation target.`
+      recommendedAction: `Claim ${claimableProspectSelectionPacketCount} prospect-selection packet${claimableProspectSelectionPacketCount === 1 ? "" : "s"} from researched account${claimableProspectSelectionPacketCount === 1 ? "" : "s"} so the motion can turn them into selected stakeholders and refill ${inventoryShortfall} ready branch${inventoryShortfall === 1 ? "" : "es"} for today's invitation target.${formatPacketLead(firstProspectSelectionPacket)}`
     };
   }
 
@@ -343,7 +387,7 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
     return {
       kind: "claim_company_research_packets",
       guidanceKey: "claim_company_research_packets",
-      recommendedAction: `Claim ${claimableCompanyResearchPacketCount} company-research packet${claimableCompanyResearchPacketCount === 1 ? "" : "s"} from discovered or queued accounts so the motion can manufacture ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.`
+      recommendedAction: `Claim ${claimableCompanyResearchPacketCount} company-research packet${claimableCompanyResearchPacketCount === 1 ? "" : "s"} from discovered or queued accounts so the motion can manufacture ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.${formatPacketLead(firstCompanyResearchPacket)}`
     };
   }
 
@@ -384,4 +428,24 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
     guidanceKey: "fill_connection_request_deficit",
     recommendedAction: `Build ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today so outbound does not miss the invitation target.`
   };
+}
+
+/**
+ * @param {{
+ *   motionId: string,
+ *   packetId: string,
+ *   companyName: string,
+ *   prospectName: string | null
+ * } | null} packet
+ */
+function formatPacketLead(packet) {
+  if (!packet) {
+    return "";
+  }
+
+  const subject = packet.prospectName
+    ? `${packet.prospectName} at ${packet.companyName}`
+    : packet.companyName;
+
+  return ` Start with ${packet.packetId} for ${subject} via exo motion packet-brief ${packet.motionId} --packet ${packet.packetId}.`;
 }

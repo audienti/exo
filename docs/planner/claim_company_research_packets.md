@@ -5,6 +5,7 @@ principles:
   - Company research should produce durable signal and account identity state inside Exo.
 do:
   - Inspect `exo motion packets <motion-id> --json` to see which companies are claimable right now.
+  - Open the first packet contract with `exo motion packet-brief {{firstClaimableCompanyResearchPacketMotionId}} --packet {{firstClaimableCompanyResearchPacketId}}` before you start, so the worker sees the exact scope and writeback path.
   - Claim the packet explicitly with `exo companies queue claim <company-id> --motion <motion-id> --worker <label>`.
   - Research the company against the motion signals, then write signal matches and durable company identity back into Exo.
   - Complete the packet with `exo companies queue complete <company-id> --motion <motion-id> --worker <label> --next-status researched`.

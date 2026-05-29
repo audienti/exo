@@ -4640,6 +4640,8 @@ test("motion queue exposes discovered and queued research inventory and daily us
     assert.equal(daily.items[0].source.kind, "claim_company_research_packets");
     assert.equal(daily.items[0].guidance.key, "claim_company_research_packets");
     assert.match(daily.items[0].recommendedAction, /claim 1 company-research packet/i);
+    assert.match(daily.items[0].recommendedAction, /exo motion packet-brief/i);
+    assert.equal(daily.items[0].guidance.do.some((line) => line.includes("exo motion packet-brief")), true);
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
@@ -4650,6 +4652,8 @@ test("motion queue exposes discovered and queued research inventory and daily us
     assert.equal(next.guidance.key, "claim_company_research_packets");
     assert.equal(next.context.source.kind, "claim_company_research_packets");
     assert.match(next.nextMove, /claim 1 company-research packet/i);
+    assert.match(next.nextMove, /exo motion packet-brief/i);
+    assert.equal(next.context.firstClaimableCompanyResearchCompanyName, backlogCompany.name);
 
     execFileSync(
       "node",
@@ -4695,6 +4699,7 @@ test("motion queue exposes discovered and queued research inventory and daily us
     assert.equal(dailyAfterResearch.items[0].source.kind, "claim_prospect_selection_packets");
     assert.equal(dailyAfterResearch.items[0].guidance.key, "claim_prospect_selection_packets");
     assert.match(dailyAfterResearch.items[0].recommendedAction, /claim 1 prospect-selection packet/i);
+    assert.match(dailyAfterResearch.items[0].recommendedAction, /exo motion packet-brief/i);
 
     const nextAfterResearch = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
@@ -4705,6 +4710,7 @@ test("motion queue exposes discovered and queued research inventory and daily us
     assert.equal(nextAfterResearch.guidance.key, "claim_prospect_selection_packets");
     assert.equal(nextAfterResearch.context.source.kind, "claim_prospect_selection_packets");
     assert.match(nextAfterResearch.nextMove, /claim 1 prospect-selection packet/i);
+    assert.match(nextAfterResearch.nextMove, /exo motion packet-brief/i);
 
     execFileSync(
       "node",
@@ -4773,6 +4779,7 @@ test("motion queue exposes discovered and queued research inventory and daily us
     assert.equal(dailyAfterSelection.items[0].source.kind, "claim_prospect_research_packets");
     assert.equal(dailyAfterSelection.items[0].guidance.key, "claim_prospect_research_packets");
     assert.match(dailyAfterSelection.items[0].recommendedAction, /claim 1 prospect-research packet/i);
+    assert.match(dailyAfterSelection.items[0].recommendedAction, /exo motion packet-brief/i);
 
     const nextAfterSelection = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
@@ -4783,6 +4790,7 @@ test("motion queue exposes discovered and queued research inventory and daily us
     assert.equal(nextAfterSelection.guidance.key, "claim_prospect_research_packets");
     assert.equal(nextAfterSelection.context.source.kind, "claim_prospect_research_packets");
     assert.match(nextAfterSelection.nextMove, /claim 1 prospect-research packet/i);
+    assert.match(nextAfterSelection.nextMove, /exo motion packet-brief/i);
     assert.equal(selectedProspectId.length > 0, true);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
