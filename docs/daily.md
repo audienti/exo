@@ -21,6 +21,7 @@ Today Exo daily works from stored state:
 - normalized inbound observations
 - inbound review decisions and itemization gaps
 - company-to-user assignment
+- profile-level connection-request quotas for deficit math when they are configured
 
 That means the agent still has to:
 - inspect live surfaces
@@ -45,11 +46,15 @@ Exo daily currently distinguishes:
 - waiting until
 - overridden by inbound
 - advanced by inbound
+- outbound-capacity configuration gaps
+- daily connection-request deficits
 
 Examples:
 - a live reply overrides the old follow-up branch and turns the next move into a reply
 - a connection acceptance advances the branch into the first post-accept direct message
 - a future due date stays waiting until the planned time
+- a missing LinkedIn invitation quota becomes a configuration task
+- a daily invitation shortfall becomes a concrete send/build target instead of vague inventory advice
 
 Each daily item now also carries doc-backed planner guidance from `docs/planner/`:
 - a task prompt for the agent
@@ -62,7 +67,7 @@ Each daily item now also carries doc-backed planner guidance from `docs/planner/
 Exo daily still does not:
 - retrieve LinkedIn or email state by itself
 - do automatic multi-surface reconciliation beyond stored observations
-- enforce per-account send capacity
+- enforce full multi-surface send capacity beyond stored LinkedIn invitation deficit math
 - drive unattended execution
 
 Those belong to the next inbound and execution slices.

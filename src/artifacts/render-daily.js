@@ -14,6 +14,21 @@
  *     overriddenByInboundCount: number,
  *     advancedByInboundCount: number
  *   },
+ *   capacity?: {
+ *     linkedin?: null | {
+ *       status: string,
+ *       reason: string,
+ *       account: { handle: string, profileLabel: string | null },
+ *       quota: { weeklyInvitations: number | null, dailyInvitationsTarget: number | null },
+ *       execution: {
+ *         sentToday: number,
+ *         pendingInvitations: number,
+ *         readyConnectionRequests: number,
+ *         remainingInvitationsToday?: number | null,
+ *         inventoryShortfall?: number | null
+ *       }
+ *     }
+ *   },
  *   items: Array<{
  *     motion: { name: string },
  *     company: { name: string },
@@ -43,6 +58,26 @@ export function renderDaily(result) {
     `Overridden By Inbound: ${result.counts.overriddenByInboundCount}`,
     `Advanced By Inbound: ${result.counts.advancedByInboundCount}`
   ];
+
+  const linkedinCapacity = result.capacity?.linkedin ?? null;
+  if (linkedinCapacity) {
+    lines.push(`LinkedIn Capacity: ${linkedinCapacity.status}`);
+    lines.push(`LinkedIn Handle: ${linkedinCapacity.account.handle}`);
+    if (linkedinCapacity.account.profileLabel) {
+      lines.push(`LinkedIn Profile: ${linkedinCapacity.account.profileLabel}`);
+    }
+    lines.push(`LinkedIn Capacity Reason: ${linkedinCapacity.reason}`);
+
+    if (linkedinCapacity.status === "configured") {
+      lines.push(`LinkedIn Daily Target: ${linkedinCapacity.quota.dailyInvitationsTarget ?? 0}`);
+      lines.push(`LinkedIn Weekly Quota: ${linkedinCapacity.quota.weeklyInvitations ?? 0}`);
+      lines.push(`LinkedIn Sent Today: ${linkedinCapacity.execution.sentToday}`);
+      lines.push(`LinkedIn Pending: ${linkedinCapacity.execution.pendingInvitations}`);
+      lines.push(`LinkedIn Ready Now: ${linkedinCapacity.execution.readyConnectionRequests}`);
+      lines.push(`LinkedIn Remaining Today: ${linkedinCapacity.execution.remainingInvitationsToday ?? 0}`);
+      lines.push(`LinkedIn Inventory Shortfall: ${linkedinCapacity.execution.inventoryShortfall ?? 0}`);
+    }
+  }
 
   if (!result.items.length) {
     lines.push("No daily agenda items.");

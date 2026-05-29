@@ -3,7 +3,7 @@
 
 import { renderDaily } from "../../artifacts/render-daily.js";
 import { buildDailyView } from "../../core/build-daily-view.js";
-import { findUserById, listCompanies, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
+import { findUserById, listBrowserProfiles, listCompanies, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
 
 /**
  * @param {import("commander").Command} program
@@ -43,7 +43,7 @@ Rules:
         companyId: options.company ?? null,
         prospectId: options.prospect ?? null
       });
-      const result = buildDailyView(user, listMotions(), listCompanies(), observations, {
+      const result = buildDailyView(user, listMotions(), listCompanies(), listBrowserProfiles(), observations, {
         motionId: options.motion ?? null,
         companyId: options.company ?? null,
         prospectId: options.prospect ?? null,

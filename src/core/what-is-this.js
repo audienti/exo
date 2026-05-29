@@ -145,7 +145,7 @@ export function describeExo() {
       },
       {
         command: "exo daily",
-        purpose: "Show the planner agenda that reconciles prospect cadence with inbound observations into due-now, waiting, and inbound-overridden next moves."
+        purpose: "Show the planner agenda that reconciles prospect cadence, inbound observations, and configured connection-request pacing into due-now, waiting, deficit, and inbound-overridden next moves."
       },
       {
         command: "exo next",
@@ -315,6 +315,7 @@ export function describeExo() {
       "No automatic target-map or stakeholder-map generation yet, even though Exo can now persist manual target-account signal matches, prospects, through-lines, opening plans, and cadence state.",
       "No automatic prospect selection, through-line synthesis, or opening-plan generation yet. Agents still need to choose and write back the people, the reply-path hypothesis, and the first move explicitly.",
       "No runtime auto-discovery for harness connectors yet. Exo can now store user-level harness connections, but it still does not inspect Codex-vs-Claude runtime availability by itself.",
+      "No full multi-channel pacing model yet. Exo can now compute LinkedIn invitation deficit when the claimed browser profile has a stored quota, but broader channel saturation and capacity balancing are still future work.",
       "No public bug-reporting or feature-request intake yet. That is a future alpha feature, not current scope."
     ],
     docs: [

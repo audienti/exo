@@ -1,0 +1,250 @@
+// @ts-check
+
+import { browserProfileSchema } from "../schema/browser-profile.js";
+import { companySchema } from "../schema/company.js";
+import { motionSchema } from "../schema/motion.js";
+import { userSchema } from "../schema/user.js";
+import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
+
+const BUSINESS_DAYS_PER_WEEK = 5;
+
+/**
+ * @param {unknown} rawUser
+ * @param {unknown[]} rawMotions
+ * @param {unknown[]} rawCompanies
+ * @param {unknown[]} rawProfiles
+ * @param {{
+ *   now?: string | null | undefined,
+ *   motionId?: string | null | undefined,
+ *   companyId?: string | null | undefined,
+ *   prospectId?: string | null | undefined
+ * }} [options]
+ */
+export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, rawProfiles, options = {}) {
+  const user = userSchema.parse(rawUser);
+  const motions = rawMotions
+    .map((item) => motionSchema.parse(item))
+    .filter((motion) => isExecutionEligibleMotionStatus(motion.status));
+  const companies = rawCompanies.map((item) => companySchema.parse(item));
+  const profiles = rawProfiles.map((item) => browserProfileSchema.parse(item));
+  const now = new Date(options.now ?? new Date().toISOString());
+  const linkedinAccount = user.accounts.find((account) => account.capability === "linkedin" && account.preferred)
+    ?? user.accounts.find((account) => account.capability === "linkedin")
+    ?? null;
+
+  if (!linkedinAccount) {
+    return null;
+  }
+
+  const assignedCompanyIds = new Set(
+    companies
+      .filter((company) => company.engagementUserAssignment?.userId === user.id)
+      .map((company) => company.id)
+  );
+  const scopedAccounts = motions.flatMap((motion) =>
+    motion.targetMap.accounts
+      .filter((account) => assignedCompanyIds.has(account.companyId))
+      .filter((account) => !options.motionId || motion.id === options.motionId)
+      .filter((account) => !options.companyId || account.companyId === options.companyId)
+      .map((account) => ({ motion, account }))
+  );
+  const scopedProspects = scopedAccounts.flatMap(({ motion, account }) =>
+    account.prospects
+      .filter((prospect) => !options.prospectId || prospect.id === options.prospectId)
+      .map((prospect) => ({ motion, account, prospect }))
+  );
+  const sentToday = scopedProspects.reduce((count, item) => (
+    count
+    + item.prospect.touches.filter((touch) =>
+      touch.surface === "connection_request"
+      && touch.direction === "outbound"
+      && touch.outcome === "sent"
+      && isSameLocalDate(touch.occurredAt, now)
+    ).length
+  ), 0);
+  const pendingInvitations = scopedProspects.filter(({ prospect }) =>
+    prospect.cadenceState.currentStep === "connection-request"
+    && prospect.cadenceState.lastTouchOutcome === "sent"
+  ).length;
+  const readyConnectionRequests = scopedProspects.filter(({ prospect }) => isReadyConnectionRequestProspect(prospect)).length;
+  const consideredMotionCount = new Set(scopedAccounts.map(({ motion }) => motion.id)).size;
+  const consideredCompanyCount = new Set(scopedAccounts.map(({ account }) => account.companyId)).size;
+  const consideredProspectCount = scopedProspects.length;
+  const execution = {
+    sentToday,
+    pendingInvitations,
+    readyConnectionRequests,
+    consideredMotionCount,
+    consideredCompanyCount,
+    consideredProspectCount
+  };
+
+  if (linkedinAccount.sourceType !== "browser-profile") {
+    return {
+      channel: "linkedin",
+      status: "unavailable",
+      reason: "The LinkedIn account is not resolved through a claimed browser profile, so Exo has no durable quota source for connection-request pacing yet.",
+      account: {
+        id: linkedinAccount.id,
+        handle: linkedinAccount.handle,
+        sourceType: linkedinAccount.sourceType,
+        profileId: null,
+        profileLabel: null
+      },
+      quota: {
+        weeklyInvitations: null,
+        dailyInvitationsTarget: null
+      },
+      execution,
+      plannerItem: null
+    };
+  }
+
+  const profile = profiles.find((candidate) => candidate.id === linkedinAccount.browserProfileId) ?? null;
+  if (!profile) {
+    return {
+      channel: "linkedin",
+      status: "unavailable",
+      reason: "The LinkedIn account points at a browser profile that is missing from Exo state, so quota-driven pacing cannot be computed.",
+      account: {
+        id: linkedinAccount.id,
+        handle: linkedinAccount.handle,
+        sourceType: linkedinAccount.sourceType,
+        profileId: linkedinAccount.browserProfileId,
+        profileLabel: null
+      },
+      quota: {
+        weeklyInvitations: null,
+        dailyInvitationsTarget: null
+      },
+      execution,
+      plannerItem: null
+    };
+  }
+
+  const weeklyInvitations = profile.automationControls.weeklyQuotas.invitations;
+  if (weeklyInvitations === null) {
+    return {
+      channel: "linkedin",
+      status: "needs_configuration",
+      reason: "The claimed LinkedIn browser profile has no connection-request quota stored, so Exo cannot compute today's invitation deficit yet.",
+      account: {
+        id: linkedinAccount.id,
+        handle: linkedinAccount.handle,
+        sourceType: linkedinAccount.sourceType,
+        profileId: profile.id,
+        profileLabel: profile.label
+      },
+      quota: {
+        weeklyInvitations: null,
+        dailyInvitationsTarget: null
+      },
+      execution,
+      plannerItem: {
+        kind: "configure_connection_request_quota",
+        priority: "action",
+        priorityRank: 0.9,
+        dueAt: now.toISOString(),
+        whyItMatters: `Exo cannot tell whether ${user.label} is filling today's LinkedIn invitation capacity because ${profile.label} has no stored connection-request quota.`,
+        recommendedAction: `Set a durable LinkedIn connection-request quota on ${profile.label}, then rerun daily and next so Exo can compute today's deficit.`,
+        guidanceKey: "configure_connection_request_quota",
+        context: {
+          userLabel: user.label,
+          profileId: profile.id,
+          profileLabel: profile.label,
+          accountHandle: linkedinAccount.handle
+        }
+      }
+    };
+  }
+
+  const dailyInvitationsTarget = Math.ceil(weeklyInvitations / BUSINESS_DAYS_PER_WEEK);
+  const remainingInvitationsToday = Math.max(dailyInvitationsTarget - sentToday, 0);
+  const inventoryShortfall = Math.max(remainingInvitationsToday - readyConnectionRequests, 0);
+  const configuredResult = {
+    channel: "linkedin",
+    status: "configured",
+    reason: remainingInvitationsToday > 0
+      ? `${remainingInvitationsToday} invitation${remainingInvitationsToday === 1 ? "" : "s"} remain against today's target.`
+      : "Today's invitation target is already satisfied from stored touch state.",
+    account: {
+      id: linkedinAccount.id,
+      handle: linkedinAccount.handle,
+      sourceType: linkedinAccount.sourceType,
+      profileId: profile.id,
+      profileLabel: profile.label
+    },
+    quota: {
+      weeklyInvitations,
+      dailyInvitationsTarget
+    },
+    execution: {
+      ...execution,
+      remainingInvitationsToday,
+      inventoryShortfall
+    },
+    plannerItem: null
+  };
+
+  if (remainingInvitationsToday === 0) {
+    return configuredResult;
+  }
+
+  const recommendedAction = readyConnectionRequests >= remainingInvitationsToday
+    ? `Use the ready connection-request branches to send ${remainingInvitationsToday} more LinkedIn invitation${remainingInvitationsToday === 1 ? "" : "s"} today and close the remaining deficit.`
+    : readyConnectionRequests > 0
+      ? `Send ${readyConnectionRequests} ready LinkedIn connection request${readyConnectionRequests === 1 ? "" : "s"} now, then build ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} to close today's remaining invitation deficit.`
+      : `Build ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today so outbound does not miss the invitation target.`;
+  const whyItMatters = `LinkedIn target is ${dailyInvitationsTarget} invitation${dailyInvitationsTarget === 1 ? "" : "s"} today. ${sentToday} ${sentToday === 1 ? "has" : "have"} been sent today, ${pendingInvitations} ${pendingInvitations === 1 ? "is" : "are"} still pending from prior work, ${readyConnectionRequests} more branch${readyConnectionRequests === 1 ? "" : "es"} ${readyConnectionRequests === 1 ? "is" : "are"} ready right now, and ${remainingInvitationsToday} invitation${remainingInvitationsToday === 1 ? "" : "s"} still need to be filled today.`;
+
+  return {
+    ...configuredResult,
+    plannerItem: {
+      kind: "fill_connection_request_deficit",
+      priority: "action",
+      priorityRank: 0.95,
+      dueAt: now.toISOString(),
+      whyItMatters,
+      recommendedAction,
+      guidanceKey: "fill_connection_request_deficit",
+      context: {
+        userLabel: user.label,
+        profileId: profile.id,
+        profileLabel: profile.label,
+        accountHandle: linkedinAccount.handle,
+        dailyInvitationTarget: String(dailyInvitationsTarget),
+        sentTodayCount: String(sentToday),
+        pendingInvitationCount: String(pendingInvitations),
+        readyConnectionRequestCount: String(readyConnectionRequests),
+        remainingInvitationCount: String(remainingInvitationsToday),
+        inventoryShortfallCount: String(inventoryShortfall)
+      }
+    }
+  };
+}
+
+/**
+ * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ */
+function isReadyConnectionRequestProspect(prospect) {
+  return (
+    prospect.cadenceState.status === "ready"
+    && prospect.cadenceState.currentStep === "connection-request"
+    && !prospect.cadenceState.lastTouchOutcome
+    && prospect.throughLine.status === "ready"
+    && prospect.openingPlan.status === "ready"
+  );
+}
+
+/**
+ * @param {string} iso
+ * @param {Date} now
+ */
+function isSameLocalDate(iso, now) {
+  const date = new Date(iso);
+  return (
+    date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate()
+  );
+}

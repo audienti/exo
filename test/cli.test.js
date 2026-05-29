@@ -1527,7 +1527,7 @@ test("execution users can own mixed profile-backed and harness-backed accounts, 
           "gmail",
           "--json"
         ],
-        { cwd: tempDir, encoding: "utf8" }
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir }, encoding: "utf8" }
       )
     );
 
@@ -3823,6 +3823,402 @@ test("daily and next expand motion inventory instead of idling when a live branc
   }
 });
 
+test("daily and next surface connection-request quota gaps and invitation deficits before generic inventory work", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-capacity-deficit-"));
+  const userDataDir = path.join(tempDir, "Chrome");
+  const profileDirectory = "Profile 4";
+  const profilePath = path.join(userDataDir, profileDirectory);
+  const browserCommand = path.join(tempDir, "fake-chrome");
+
+  fs.mkdirSync(profilePath, { recursive: true });
+  fs.writeFileSync(browserCommand, "#!/bin/sh\nexit 0\n");
+  fs.writeFileSync(
+    path.join(userDataDir, "Local State"),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          [profileDirectory]: { name: "Quota Main" }
+        }
+      }
+    })
+  );
+  fs.writeFileSync(path.join(profilePath, "Preferences"), JSON.stringify({ profile: { name: "Quota Main" } }));
+  seedBrowserEvidence(profilePath, {
+    cookieHosts: [".linkedin.com", "mail.google.com"],
+    historyUrls: ["https://www.linkedin.com/feed/", "https://mail.google.com/mail/u/0/#inbox"]
+  });
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/daily-capacity-deficit",
+          "--premise",
+          "This offer matters when outbound teams need enough inventory to fill daily connection-request capacity.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is the company visibly scaling pipeline generation or GTM surface area?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Quota Systems",
+          "--domain",
+          "quota.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "quota-main",
+          "--user-data-dir",
+          userDataDir,
+          "--profile-directory",
+          profileDirectory,
+          "--browser-command",
+          browserCommand,
+          "--capability",
+          "linkedin",
+          "--capability",
+          "gmail",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir }, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "quota-user", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    const userWithLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "quota-user",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const linkedinAccount = userWithLinkedin.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+
+    const userWithGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "quota-user",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const gmailAccount = userWithGmail.accounts.find((account) => account.capability === "gmail");
+    assert.ok(gmailAccount);
+
+    const syncedAt = new Date().toISOString();
+    for (const [accountId, surfaceKeys] of [
+      [
+        linkedinAccount.id,
+        [
+          "linkedin-sent-invitations",
+          "linkedin-received-invitations",
+          "linkedin-messaging-inbox",
+          "linkedin-profile-views",
+          "linkedin-following-list"
+        ]
+      ],
+      [
+        gmailAccount.id,
+        ["gmail-inbox-threads"]
+      ]
+    ]) {
+      for (const surfaceKey of surfaceKeys) {
+        execFileSync(
+          "node",
+          [
+            cliPath,
+            "inbound",
+            "sync",
+            "record",
+            user.id,
+            "--account",
+            accountId,
+            "--surface",
+            surfaceKey,
+            "--status",
+            "success",
+            "--observed-at",
+            syncedAt,
+            "--item-count",
+            "0",
+            "--json"
+          ],
+          { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        );
+      }
+    }
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "user",
+        "assign",
+        company.id,
+        "--user",
+        user.id,
+        "--reason",
+        "Keep planner work routed through one execution user",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const prospect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Quinn Waiting",
+          "--title",
+          "Chief Revenue Officer",
+          "--email",
+          "quinn.waiting@quota.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--why-relevant",
+          "Owns the current primary outbound branch",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    ).prospects[0];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--specific-to-them",
+        "Quinn owns the branch.",
+        "--shared-problem",
+        "Pipeline creation needs consistent executive access.",
+        "--why-now",
+        "The team needs enough quality first touches every day.",
+        "--legitimate-wedge",
+        "A pacing-aware outbound system is missing.",
+        "--compression-line",
+        "Daily capacity is only real if the motion can fill it.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--why-now",
+        "The current motion is inventory-thin.",
+        "--angle",
+        "Connect outbound pacing to motion throughput.",
+        "--reply-path",
+        "Quinn should see why weak inventory ruins daily capacity.",
+        "--primary-channel",
+        "connection-request",
+        "--fallback-channel",
+        "email",
+        "--fallback-trigger",
+        "Use email only if LinkedIn is blocked or the branch later needs escalation.",
+        "--first-move",
+        "Send a short connection request.",
+        "--first-message-goal",
+        "Validate whether Quinn owns outbound pacing.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--current-step",
+        "connection-request",
+        "--last-touch-channel",
+        "connection-request",
+        "--last-touch-outcome",
+        "sent",
+        "--last-touch-at",
+        "2026-05-28T11:46:51.000Z",
+        "--next-action",
+        "Wait for acceptance before escalating.",
+        "--next-action-due-at",
+        "2026-05-30T11:46:51.000Z",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const beforeQuotaDaily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.equal(beforeQuotaDaily.capacity.linkedin.status, "needs_configuration");
+    assert.equal(beforeQuotaDaily.items[0].cadenceEffect, "capacity_configuration_needed");
+    assert.equal(beforeQuotaDaily.items[0].source.kind, "configure_connection_request_quota");
+    assert.equal(beforeQuotaDaily.items[0].guidance.key, "configure_connection_request_quota");
+    assert.match(beforeQuotaDaily.items[0].recommendedAction, /set a durable linkedin connection-request quota/i);
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "profiles",
+        "claim",
+        profile.id,
+        "--max-connection-requests",
+        "125",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const afterQuotaDaily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.equal(afterQuotaDaily.capacity.linkedin.status, "configured");
+    assert.equal(afterQuotaDaily.capacity.linkedin.quota.weeklyInvitations, 125);
+    assert.equal(afterQuotaDaily.capacity.linkedin.quota.dailyInvitationsTarget, 25);
+    assert.equal(afterQuotaDaily.capacity.linkedin.execution.sentToday, 0);
+    assert.equal(afterQuotaDaily.capacity.linkedin.execution.pendingInvitations, 1);
+    assert.equal(afterQuotaDaily.capacity.linkedin.execution.readyConnectionRequests, 0);
+    assert.equal(afterQuotaDaily.capacity.linkedin.execution.remainingInvitationsToday, 25);
+    assert.equal(afterQuotaDaily.capacity.linkedin.execution.inventoryShortfall, 25);
+    assert.equal(afterQuotaDaily.items[0].cadenceEffect, "capacity_deficit");
+    assert.equal(afterQuotaDaily.items[0].source.kind, "fill_connection_request_deficit");
+    assert.equal(afterQuotaDaily.items[0].guidance.key, "fill_connection_request_deficit");
+    assert.match(afterQuotaDaily.items[0].recommendedAction, /build 25 more ready linkedin connection-request branches/i);
+
+    const afterQuotaNext = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.ok(["daily", "motion"].includes(afterQuotaNext.source));
+    assert.equal(afterQuotaNext.status.effect, "capacity_deficit");
+    assert.equal(afterQuotaNext.guidance.key, "fill_connection_request_deficit");
+    assert.equal(afterQuotaNext.context.source.kind, "fill_connection_request_deficit");
+    assert.match(afterQuotaNext.nextMove, /build 25 more ready linkedin connection-request branches/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("next prefers a due-now daily item over the broader motion path", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-next-daily-"));
 
@@ -4121,6 +4517,20 @@ test("next surfaces a parallel support action while the live connection-request 
         ],
         { cwd: tempDir, encoding: "utf8" }
       ).toString()
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "profiles",
+        "claim",
+        profile.id,
+        "--max-connection-requests",
+        "0",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
     );
 
     const user = JSON.parse(
@@ -5141,6 +5551,20 @@ test("next does not surface a held reserve branch as due after fallback enrichme
           encoding: "utf8"
         }
       )
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "profiles",
+        "claim",
+        profile.id,
+        "--max-connection-requests",
+        "0",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
     );
 
     execFileSync(

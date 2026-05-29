@@ -6,6 +6,7 @@ import { describeExo } from "../../core/what-is-this.js";
 import {
   findMotionById,
   findUserById,
+  listBrowserProfiles,
   listCompanies,
   listInboundObservations,
   listMotions,
@@ -71,6 +72,7 @@ Rules:
         rawMotion,
         rawMotions,
         rawCompanies,
+        rawProfiles: listBrowserProfiles(),
         rawUsers,
         rawObservations,
         filters: {

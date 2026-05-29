@@ -10,6 +10,7 @@ import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
 import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
 import { hasUsableEmailFallback } from "../lib/prospect-contacts.js";
+import { buildOutboundCapacityView } from "./build-outbound-capacity-view.js";
 
 const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
 
@@ -17,6 +18,7 @@ const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
  * @param {unknown} rawUser
  * @param {unknown[]} rawMotions
  * @param {unknown[]} rawCompanies
+ * @param {unknown[]} rawProfiles
  * @param {unknown[]} rawObservations
  * @param {{
  *   now?: string | null | undefined,
@@ -26,7 +28,7 @@ const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
  *   limit?: number | null | undefined
  * }} [options]
  */
-export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservations, options = {}) {
+export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, rawObservations, options = {}) {
   const user = userSchema.parse(rawUser);
   const motions = rawMotions
     .map((item) => motionSchema.parse(item))
@@ -53,6 +55,12 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
       .filter((company) => company.engagementUserAssignment?.userId === user.id)
       .map((company) => company.id)
   );
+  const outboundCapacity = buildOutboundCapacityView(user, motions, companies, rawProfiles, {
+    now,
+    motionId: options.motionId ?? null,
+    companyId: options.companyId ?? null,
+    prospectId: options.prospectId ?? null
+  });
 
   const syncPlannerItem = buildSyncPlannerItem({
     user,
@@ -65,6 +73,10 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
 
   const items = [
     syncPlannerItem,
+    buildOutboundCapacityPlannerItem(outboundCapacity, {
+      motionId: options.motionId ?? null,
+      motions
+    }),
     ...buildInboundReviewPlannerItems(inboundReview),
     ...motions
     .flatMap((motion) =>
@@ -126,7 +138,75 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
       overriddenByInboundCount: limitedItems.filter((item) => item.cadenceEffect === "overridden_by_inbound").length,
       advancedByInboundCount: limitedItems.filter((item) => item.cadenceEffect === "advanced_by_inbound").length
     },
+    capacity: {
+      linkedin: outboundCapacity
+    },
     items: limitedItems
+  };
+}
+
+/**
+ * @param {ReturnType<typeof buildOutboundCapacityView> | null} capacity
+ * @param {{ motionId: string | null | undefined, motions: import("../schema/motion.js").motionSchema._type[] }} input
+ */
+function buildOutboundCapacityPlannerItem(capacity, { motionId, motions }) {
+  if (!capacity?.plannerItem) {
+    return null;
+  }
+
+  const filteredMotion = motionId
+    ? motions.find((motion) => motion.id === motionId) ?? null
+    : null;
+  const dueAt = capacity.plannerItem.dueAt;
+
+  return {
+    motion: filteredMotion
+      ? {
+          id: filteredMotion.id,
+          name: filteredMotion.name
+        }
+      : {
+          id: "outbound-capacity:linkedin",
+          name: "LinkedIn outbound capacity"
+        },
+    company: {
+      id: "outbound-capacity:linkedin",
+      name: capacity.account.profileLabel ?? capacity.account.handle
+    },
+    prospect: {
+      id: "outbound-capacity:linkedin",
+      name: "LinkedIn invitation target",
+      title: capacity.status === "needs_configuration" ? "Quota configuration needed" : "Daily deficit"
+    },
+    cadence: {
+      currentStep: null,
+      nextAction: capacity.plannerItem.recommendedAction,
+      nextActionDueAt: dueAt,
+      lastTouchOutcome: null
+    },
+    guidance: buildPlannerGuidance(capacity.plannerItem.guidanceKey, {
+      motionId: filteredMotion?.id ?? "",
+      motionName: filteredMotion?.name ?? "active motions",
+      companyName: capacity.account.profileLabel ?? capacity.account.handle,
+      prospectName: "LinkedIn invitation target",
+      prospectTitle: capacity.status === "needs_configuration" ? "Quota configuration needed" : "Daily deficit",
+      recommendedAction: capacity.plannerItem.recommendedAction,
+      dueAt,
+      whyItMatters: capacity.plannerItem.whyItMatters,
+      ...capacity.plannerItem.context
+    }),
+    state: "due_now",
+    priority: capacity.plannerItem.priority,
+    priorityRank: capacity.plannerItem.priorityRank,
+    cadenceEffect: capacity.status === "needs_configuration" ? "capacity_configuration_needed" : "capacity_deficit",
+    dueAt,
+    whyItMatters: capacity.plannerItem.whyItMatters,
+    recommendedAction: capacity.plannerItem.recommendedAction,
+    source: {
+      type: "outbound_capacity",
+      kind: capacity.plannerItem.kind,
+      channel: capacity.channel
+    }
   };
 }
 

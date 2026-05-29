@@ -13,6 +13,7 @@ import { selectParallelSupportAction } from "./planner-support-actions.js";
  *   rawMotion?: unknown | null | undefined,
  *   rawMotions: unknown[],
  *   rawCompanies: unknown[],
+ *   rawProfiles: unknown[],
  *   rawUsers: unknown[],
  *   rawObservations: unknown[],
  *   filters?: {
@@ -27,7 +28,7 @@ export function buildNextView(input) {
   const filters = input.filters ?? {};
 
   if (input.rawUser) {
-    const daily = buildDailyView(input.rawUser, input.rawMotions, input.rawCompanies, input.rawObservations, {
+    const daily = buildDailyView(input.rawUser, input.rawMotions, input.rawCompanies, input.rawProfiles, input.rawObservations, {
       motionId: filters.motionId ?? null,
       companyId: filters.companyId ?? null,
       prospectId: filters.prospectId ?? null,
