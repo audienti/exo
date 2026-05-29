@@ -15,7 +15,10 @@ const STALE_CONNECTION_REQUEST_DAYS = 21;
  * @param {unknown[]} rawCompanies
  * @param {{
  *   accountId?: string | null,
- *   capability?: string | null
+ *   capability?: string | null,
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null
  * }} [options]
  */
 export function buildInboundReviewView(rawUser, rawObservations, rawMotions, rawCompanies, options = {}) {
@@ -59,6 +62,9 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
   const filteredObservations = observations.filter((observation) =>
     (!options.accountId || observation.accountId === options.accountId)
     && (!options.capability || observation.capability === options.capability)
+    && (!options.motionId || observation.motionId === options.motionId)
+    && (!options.companyId || observation.companyId === options.companyId)
+    && (!options.prospectId || observation.prospectId === options.prospectId)
   );
 
   const surfaceObservationCounts = new Map();

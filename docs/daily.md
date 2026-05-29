@@ -19,6 +19,7 @@ It is the operator agenda for:
 Today Exo daily works from stored state:
 - ready prospect cadence
 - normalized inbound observations
+- inbound review decisions and itemization gaps
 - company-to-user assignment
 
 That means the agent still has to:

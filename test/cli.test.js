@@ -2678,6 +2678,313 @@ test("inbound review shows decision-ready items, stale sent invites, and itemiza
   }
 });
 
+test("daily and next surface inbound review decisions before idle outbound work", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-inbound-review-"));
+  const userDataDir = path.join(tempDir, "Chrome");
+  const linkedinDirectory = "Profile 4";
+  const linkedinPath = path.join(userDataDir, linkedinDirectory);
+  const browserCommand = path.join(tempDir, "fake-chrome");
+
+  fs.mkdirSync(linkedinPath, { recursive: true });
+  fs.writeFileSync(browserCommand, "#!/bin/sh\nexit 0\n");
+  fs.writeFileSync(
+    path.join(userDataDir, "Local State"),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          [linkedinDirectory]: { name: "LinkedIn Main" }
+        }
+      }
+    })
+  );
+  fs.writeFileSync(path.join(linkedinPath, "Preferences"), JSON.stringify({ profile: { name: "LinkedIn Main" } }));
+  seedBrowserEvidence(linkedinPath, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/feed/"]
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "linkedin-profile",
+          "--user-data-dir",
+          userDataDir,
+          "--profile-directory",
+          linkedinDirectory,
+          "--browser-command",
+          browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "william-main", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "william@linkedin",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    for (const surfaceKey of [
+      "linkedin-sent-invitations",
+      "linkedin-received-invitations",
+      "linkedin-messaging-inbox",
+      "linkedin-profile-views",
+      "linkedin-following-list"
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "record",
+          user.id,
+          "--account",
+          linkedinAccountId,
+          "--surface",
+          surfaceKey,
+          "--status",
+          "success",
+          "--observed-at",
+          "2026-05-28T13:00:00.000Z",
+          "--item-count",
+          surfaceKey === "linkedin-received-invitations" ? "1" : "0",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      );
+    }
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "observations",
+        "add",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--surface",
+        "linkedin-received-invitations",
+        "--kind",
+        "connection_request_received",
+        "--observed-at",
+        "2026-05-28T13:00:00.000Z",
+        "--actor-name",
+        "Alicia Buyer",
+        "--summary",
+        "Alicia Buyer sent us a new inbound connection request.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(daily.items[0].source.type, "inbound_review");
+    assert.equal(daily.items[0].source.kind, "needs_decision");
+    assert.equal(daily.items[0].cadenceEffect, "inbound_review_needed");
+    assert.equal(daily.items[0].guidance.key, "review_inbound_item");
+    assert.match(daily.items[0].recommendedAction, /accept or decline/i);
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(next.source, "daily");
+    assert.equal(next.status.effect, "inbound_review_needed");
+    assert.equal(next.guidance.key, "review_inbound_item");
+    assert.match(next.nextMove, /accept or decline/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("daily and next surface inbound itemization gaps when sync counts items without observations", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-inbound-gap-"));
+  const userDataDir = path.join(tempDir, "Chrome");
+  const linkedinDirectory = "Profile 4";
+  const linkedinPath = path.join(userDataDir, linkedinDirectory);
+  const browserCommand = path.join(tempDir, "fake-chrome");
+
+  fs.mkdirSync(linkedinPath, { recursive: true });
+  fs.writeFileSync(browserCommand, "#!/bin/sh\nexit 0\n");
+  fs.writeFileSync(
+    path.join(userDataDir, "Local State"),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          [linkedinDirectory]: { name: "LinkedIn Main" }
+        }
+      }
+    })
+  );
+  fs.writeFileSync(path.join(linkedinPath, "Preferences"), JSON.stringify({ profile: { name: "LinkedIn Main" } }));
+  seedBrowserEvidence(linkedinPath, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/feed/"]
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "linkedin-profile",
+          "--user-data-dir",
+          userDataDir,
+          "--profile-directory",
+          linkedinDirectory,
+          "--browser-command",
+          browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "william-main", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "william@linkedin",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    for (const surfaceKey of [
+      "linkedin-sent-invitations",
+      "linkedin-received-invitations",
+      "linkedin-messaging-inbox",
+      "linkedin-profile-views",
+      "linkedin-following-list"
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "record",
+          user.id,
+          "--account",
+          linkedinAccountId,
+          "--surface",
+          surfaceKey,
+          "--status",
+          "success",
+          "--observed-at",
+          "2026-05-28T13:00:00.000Z",
+          "--item-count",
+          surfaceKey === "linkedin-received-invitations" ? "2" : "0",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      );
+    }
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(daily.items[0].source.type, "inbound_itemization_gap");
+    assert.equal(daily.items[0].source.kind, "linkedin-received-invitations");
+    assert.equal(daily.items[0].cadenceEffect, "inbound_itemization_needed");
+    assert.equal(daily.items[0].guidance.key, "itemize_inbound_surface");
+    assert.match(daily.items[0].recommendedAction, /write each concrete item back/i);
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(next.source, "daily");
+    assert.equal(next.status.effect, "inbound_itemization_needed");
+    assert.equal(next.guidance.key, "itemize_inbound_surface");
+    assert.match(next.nextMove, /write each concrete item back/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("daily reconciles cadence with inbound observations into due, waiting, and overridden agenda items", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-"));
 

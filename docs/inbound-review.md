@@ -27,6 +27,13 @@ It answers:
 - do I have attention signals to review
 - did the agent fail to itemize a surface even though sync saw items there
 
+High-priority review work from this surface can now feed `exo daily` and `exo next`.
+That means inbound review is not just descriptive anymore. It can become the top governed operator task when:
+
+- an inbound invite needs an accept or decline decision
+- a sent invite is old enough for stale withdraw review
+- sync saw items on a surface but the agent failed to write those items back individually
+
 ## What inbound review does not do
 
 Inbound review does not:

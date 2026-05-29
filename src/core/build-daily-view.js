@@ -1,6 +1,7 @@
 // @ts-check
 
 import { buildInboxView } from "./build-inbox-view.js";
+import { buildInboundReviewView } from "./build-inbound-review-view.js";
 import { buildUserInboundSyncView } from "./user-inbound-sync.js";
 import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
@@ -33,6 +34,11 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
   const companies = rawCompanies.map((item) => companySchema.parse(item));
   const now = options.now ?? new Date().toISOString();
   const inbox = buildInboxView(user, rawObservations, motions, companies);
+  const inboundReview = buildInboundReviewView(user, rawObservations, motions, companies, {
+    motionId: options.motionId ?? null,
+    companyId: options.companyId ?? null,
+    prospectId: options.prospectId ?? null
+  });
   const inboxByProspectId = new Map();
 
   for (const item of inbox.items) {
@@ -59,6 +65,7 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
 
   const items = [
     syncPlannerItem,
+    ...buildInboundReviewPlannerItems(inboundReview),
     ...motions
     .flatMap((motion) =>
       motion.targetMap.accounts.flatMap((account) =>
@@ -121,6 +128,115 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
     },
     items: limitedItems
   };
+}
+
+/**
+ * @param {ReturnType<typeof buildInboundReviewView>} review
+ */
+function buildInboundReviewPlannerItems(review) {
+  const decisionItems = review.reviewItems
+    .filter((item) => shouldSurfaceInboundReviewItem(item))
+    .map((item) => {
+      const dueAt = item.observedAt;
+      return {
+        motion: item.motion ?? {
+          id: `inbound-review:${item.account.id}`,
+          name: "Inbound review"
+        },
+        company: item.company ?? {
+          id: `inbound-review:${item.account.id}`,
+          name: item.account.capability
+        },
+        prospect: item.prospect ?? {
+          id: item.id,
+          name: item.actorName ?? "Inbound item",
+          title: humanizeReviewState(item.state)
+        },
+        cadence: {
+          currentStep: null,
+          nextAction: item.recommendedAction,
+          nextActionDueAt: dueAt,
+          lastTouchOutcome: null
+        },
+        guidance: buildPlannerGuidance("review_inbound_item", {
+          motionId: item.motion?.id ?? "",
+          motionName: item.motion?.name ?? "inbound review",
+          companyId: item.company?.id ?? "",
+          companyName: item.company?.name ?? item.account.capability,
+          prospectId: item.prospect?.id ?? "",
+          prospectName: item.prospect?.name ?? item.actorName ?? "this inbound item",
+          prospectTitle: item.prospect?.title ?? humanizeReviewState(item.state),
+          recommendedAction: item.recommendedAction,
+          dueAt,
+          whyItMatters: item.whyItMatters,
+          inboundKind: item.kind,
+          inboundChoices: item.decisionOptions.join(", "),
+          inboundState: item.state
+        }),
+        state: "due_now",
+        priority: "action",
+        priorityRank: 0.75,
+        cadenceEffect: "inbound_review_needed",
+        dueAt,
+        whyItMatters: item.whyItMatters,
+        recommendedAction: item.recommendedAction,
+        source: {
+          type: "inbound_review",
+          kind: item.state,
+          observationId: item.id
+        }
+      };
+    });
+
+  const itemizationGapItems = review.itemizationGaps.map((gap) => {
+    const dueAt = new Date().toISOString();
+    return {
+      motion: {
+        id: `inbound-gap:${gap.accountId}`,
+        name: "Inbound itemization"
+      },
+      company: {
+        id: `inbound-gap:${gap.accountId}`,
+        name: `${gap.capability}:${gap.handle}`
+      },
+      prospect: {
+        id: `inbound-gap:${gap.accountId}:${gap.surfaceKey}`,
+        name: gap.label,
+        title: "Itemization gap"
+      },
+      cadence: {
+        currentStep: null,
+        nextAction: gap.recommendedAction,
+        nextActionDueAt: dueAt,
+        lastTouchOutcome: null
+      },
+      guidance: buildPlannerGuidance("itemize_inbound_surface", {
+        motionName: "inbound review",
+        companyName: `${gap.capability}:${gap.handle}`,
+        prospectName: gap.label,
+        prospectTitle: "Itemization gap",
+        recommendedAction: gap.recommendedAction,
+        dueAt,
+        whyItMatters: gap.summary,
+        surfaceLabel: gap.label,
+        itemCount: String(gap.itemCount)
+      }),
+      state: "due_now",
+      priority: "action",
+      priorityRank: 0.8,
+      cadenceEffect: "inbound_itemization_needed",
+      dueAt,
+      whyItMatters: gap.summary,
+      recommendedAction: gap.recommendedAction,
+      source: {
+        type: "inbound_itemization_gap",
+        kind: gap.surfaceKey,
+        accountId: gap.accountId
+      }
+    };
+  });
+
+  return [...decisionItems, ...itemizationGapItems];
 }
 
 /**
@@ -645,6 +761,41 @@ function humanizeCapability(capability) {
     default:
       return capability
         .split("-")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+  }
+}
+
+/**
+ * @param {ReturnType<typeof buildInboundReviewView>["reviewItems"][number]} item
+ */
+function shouldSurfaceInboundReviewItem(item) {
+  if (item.state === "needs_reply" || item.state === "ready_for_post_accept") {
+    return false;
+  }
+
+  return (
+    item.state === "needs_decision"
+    || item.state === "stale_withdraw_review"
+  );
+}
+
+/**
+ * @param {string} state
+ */
+function humanizeReviewState(state) {
+  switch (state) {
+    case "needs_decision":
+      return "Needs decision";
+    case "stale_withdraw_review":
+      return "Stale withdraw review";
+    case "needs_reply":
+      return "Needs reply";
+    case "ready_for_post_accept":
+      return "Post-accept ready";
+    default:
+      return state
+        .split("_")
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join(" ");
   }
