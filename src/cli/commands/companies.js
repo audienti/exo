@@ -14,6 +14,7 @@ import { buildCompanyResearchBrief } from "../../core/build-company-research-bri
 import { recordMotionProspect, updateMotionProspect } from "../../core/record-prospect.js";
 import { recordMotionProspectTouch } from "../../core/record-prospect-touch.js";
 import { recordMotionSignalMatch } from "../../core/record-signal-match.js";
+import { setMotionTargetAccountQueue } from "../../core/set-target-account-queue.js";
 import { setMotionProspectCadence } from "../../core/set-prospect-cadence.js";
 import { setMotionProspectOpeningPlan } from "../../core/set-prospect-opening-plan.js";
 import { setMotionProspectThroughLine } from "../../core/set-prospect-through-line.js";
@@ -33,6 +34,7 @@ import {
 } from "../../db/database.js";
 import { browserProfileSchema } from "../../schema/browser-profile.js";
 import { normalizeRepeatedStringList, normalizeStringList } from "../../lib/collections.js";
+import { buildMotionQueueSummary, isMotionQueueStatus, withDerivedTargetAccountQueueState } from "../../lib/motion-queue.js";
 import { companySchema } from "../../schema/company.js";
 import { motionSchema } from "../../schema/motion.js";
 
@@ -54,6 +56,8 @@ Canonical companies interface:
   exo companies update <company-id>
   exo companies motions <company-id>
   exo companies research-brief <company-id>
+  exo companies queue show <company-id>
+  exo companies queue set <company-id>
   exo companies signal-matches show <company-id>
   exo companies signal-matches add <company-id>
   exo companies prospects show <company-id>
@@ -709,6 +713,8 @@ Use this when the agent needs the chosen people of record before writing or brow
     .option("--best-direct-channel <channel>", "Best direct channel currently available; repeat for multiple", collect, [])
     .option("--last-enriched-at <datetime>", "Last contact-enrichment timestamp in ISO-8601 format")
     .option("--enrichment-notes <notes>", "Contact-enrichment notes")
+    .option("--queue-status <status>", "Prospect queue status: discovered, queued_for_research, researched, selected, ready, suppressed, exhausted")
+    .option("--queue-notes <notes>", "Prospect queue notes")
     .option("--notes <notes>", "Optional notes")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
@@ -786,7 +792,8 @@ Rules:
             `Profile Viewed: ${storedProspect.profileViewedAt ?? "not recorded"}`,
             `Live Signal: ${storedProspect.liveSignal.summary ?? "none"}`,
             `Contact Points: ${storedProspect.contactPoints.length}`,
-            `Contact Enrichment: ${storedProspect.contactEnrichmentState.status}`
+            `Contact Enrichment: ${storedProspect.contactEnrichmentState.status}`,
+            `Queue: ${storedProspect.queueState.status}`
           ].join("\n")
         );
       } catch (error) {
@@ -847,6 +854,8 @@ Rules:
     .option("--best-direct-channel <channel>", "Best direct channel currently available; repeat for multiple", collect, [])
     .option("--last-enriched-at <datetime>", "Last contact-enrichment timestamp in ISO-8601 format")
     .option("--enrichment-notes <notes>", "Contact-enrichment notes")
+    .option("--queue-status <status>", "Prospect queue status: discovered, queued_for_research, researched, selected, ready, suppressed, exhausted")
+    .option("--queue-notes <notes>", "Prospect queue notes")
     .option("--notes <notes>", "Optional notes")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
@@ -916,7 +925,8 @@ Rules:
             `Profile Viewed: ${storedProspect.profileViewedAt ?? "not recorded"}`,
             `Live Signal: ${storedProspect.liveSignal.summary ?? "none"}`,
             `Contact Points: ${storedProspect.contactPoints.length}`,
-            `Contact Enrichment: ${storedProspect.contactEnrichmentState.status}`
+            `Contact Enrichment: ${storedProspect.contactEnrichmentState.status}`,
+            `Queue: ${storedProspect.queueState.status}`
           ].join("\n")
         );
       } catch (error) {
@@ -1476,6 +1486,136 @@ Examples:
       );
     });
 
+  const queue = companies
+    .command("queue")
+    .description("Inspect or set the motion-specific inventory queue state for one company.");
+
+  queue
+    .command("show")
+    .description("Show the current queue state for one motion-linked company.")
+    .argument("<company-id>", "Company identifier")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies queue show <company-id>
+  exo companies queue show <company-id> --motion <motion-id> --json
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, motion, account } = context;
+      const queueSummary = buildMotionQueueSummary(motion, [company], { companyId: company.id });
+      const queueItem = queueSummary.items[0] ?? {
+        queueStatus: "discovered",
+        queueSource: "derived",
+        signalMatchCount: 0,
+        prospectCount: 0,
+        readyToSendCount: 0,
+        prospectStatusCounts: {}
+      };
+      const result = {
+        company,
+        motion: {
+          id: motion.id,
+          name: motion.name
+        },
+        account: account ? withDerivedTargetAccountQueueState(account) : null,
+        queue: {
+          status: queueItem.queueStatus,
+          source: queueItem.queueSource,
+          signalMatchCount: queueItem.signalMatchCount,
+          prospectCount: queueItem.prospectCount,
+          readyToSendCount: queueItem.readyToSendCount,
+          prospectStatusCounts: queueItem.prospectStatusCounts
+        }
+      };
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(
+        [
+          `Company Queue: ${company.name}`,
+          `Motion: ${motion.name}`,
+          `Queue Status: ${result.queue.status} (${result.queue.source})`,
+          `Signal Matches: ${result.queue.signalMatchCount}`,
+          `Prospects: ${result.queue.prospectCount}`,
+          `Ready To Send: ${result.queue.readyToSendCount}`,
+          `Prospect Queue Counts: ${Object.entries(result.queue.prospectStatusCounts).map(([status, count]) => `${status}:${count}`).join(", ") || "none"}`
+        ].join("\n")
+      );
+    });
+
+  queue
+    .command("set")
+    .description("Set the motion-specific queue state for one company.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--status <status>", "Queue status: discovered, queued_for_research, researched, selected, ready, suppressed, exhausted")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--notes <notes>", "Optional queue notes")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies queue set <company-id> --motion <motion-id> --status queued_for_research --json
+  exo companies queue set <company-id> --motion <motion-id> --status suppressed --notes "Strategic hold until Q4" --json
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, rawMotion } = context;
+
+      try {
+        const updatedMotion = setMotionTargetAccountQueue(rawMotion, company, {
+          status: normalizeMotionQueueStatus(options.status),
+          notes: options.notes ?? null
+        });
+        const storedMotion = updateMotion(updatedMotion);
+        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            company,
+            motion: {
+              id: storedMotion.id,
+              name: storedMotion.name
+            },
+            account
+          }, null, 2));
+          return;
+        }
+
+        console.log(
+          [
+            `Updated Company Queue: ${company.name}`,
+            `Motion: ${storedMotion.name}`,
+            `Queue Status: ${account?.queueState.status ?? "unknown"}`,
+            `Queue Source: ${account?.queueState.source ?? "unknown"}`,
+            `Queue Notes: ${account?.queueState.notes ?? "none"}`
+          ].join("\n")
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
   companies
     .command("research-brief")
     .description("Build the governed company research brief for one motion-linked account.")
@@ -1590,6 +1730,7 @@ function collect(value, previous) {
 function buildProspectInputFromOptions(options) {
   const contactPoints = parseContactPointOptions(options.contactPoint);
   const contactEnrichmentState = buildContactEnrichmentInput(options);
+  const queueState = buildProspectQueueInput(options);
 
   return {
     name: options.name,
@@ -1640,6 +1781,7 @@ function buildProspectInputFromOptions(options) {
     },
     contactPoints: contactPoints.length ? contactPoints : undefined,
     contactEnrichmentState,
+    queueState,
     notes: options.notes,
     signalMatchIds: normalizeStringList(options.signalMatch)
   };
@@ -1714,6 +1856,46 @@ function buildContactEnrichmentInput(options) {
   }
 
   return state;
+}
+
+/**
+ * @param {Record<string, any>} options
+ */
+function buildProspectQueueInput(options) {
+  const status = normalizeOptionalMotionQueueStatus(options.queueStatus);
+  const notes = typeof options.queueNotes === "string" ? options.queueNotes : undefined;
+
+  if (!status && !notes) {
+    return undefined;
+  }
+
+  return {
+    status,
+    notes
+  };
+}
+
+/**
+ * @param {string | undefined} value
+ */
+function normalizeOptionalMotionQueueStatus(value) {
+  if (!value) {
+    return undefined;
+  }
+
+  return normalizeMotionQueueStatus(value);
+}
+
+/**
+ * @param {string} value
+ */
+function normalizeMotionQueueStatus(value) {
+  const normalized = value.trim().toLowerCase();
+  if (isMotionQueueStatus(normalized)) {
+    return normalized;
+  }
+
+  throw new Error(`Invalid motion queue status: ${value}`);
 }
 
 /**

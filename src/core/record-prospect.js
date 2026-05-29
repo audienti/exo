@@ -6,6 +6,7 @@ import {
   mergeContactPointLists,
   withDerivedProspectContacts
 } from "../lib/prospect-contacts.js";
+import { applyManualProspectQueueState, isMotionQueueStatus } from "../lib/motion-queue.js";
 import {
   finalizeTargetAccountUpdate,
   normalizeNullableString,
@@ -94,7 +95,11 @@ import {
  *     notes?: string | null | undefined
  *   },
  *   notes?: string | null | undefined,
- *   signalMatchIds?: string[]
+ *   signalMatchIds?: string[],
+ *   queueState?: {
+ *     status?: string | null | undefined,
+ *     notes?: string | null | undefined
+ *   }
  * }} input
  */
 export function recordMotionProspect(rawMotion, rawCompany, input) {
@@ -176,10 +181,11 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
     contactPoints: buildContactPointInputs(input.contactPoints),
     contactEnrichmentState: buildContactEnrichmentStateInput(input.contactEnrichmentState),
     notes: normalizeOptionalNullableString(input.notes),
-    signalMatchIds: normalizedSignalMatchIds
+    signalMatchIds: normalizedSignalMatchIds,
+    queueState: buildProspectQueueStateInput(input.queueState)
   };
 
-  const prospects = upsertProspect(baseAccount.prospects, nextProspect, motion.targetingProfile.stakeholderTargetCount);
+  const prospects = upsertProspect(baseAccount.prospects, nextProspect, motion.targetingProfile.stakeholderTargetCount, now);
   const updatedAccount = targetAccountSchema.parse({
     ...baseAccount,
     companyName: company.name,
@@ -275,7 +281,11 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
  *     notes?: string | null | undefined
  *   },
  *   notes?: string | null | undefined,
- *   signalMatchIds?: string[]
+ *   signalMatchIds?: string[],
+ *   queueState?: {
+ *     status?: string | null | undefined,
+ *     notes?: string | null | undefined
+ *   }
  * }} input
  */
 export function updateMotionProspect(rawMotion, rawCompany, input) {
@@ -295,7 +305,7 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
       return prospect;
     }
 
-    return prospectSchema.parse(withDerivedProspectContacts({
+    const updatedProspect = prospectSchema.parse(withDerivedProspectContacts({
       ...existing,
       name: input.name ?? existing.name,
       title: input.title ?? existing.title,
@@ -396,6 +406,10 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
           ? existing.signalMatchIds
           : mergeStringLists(existing.signalMatchIds, normalizedSignalMatchIds)
     }));
+
+    return input.queueState?.status
+      ? prospectSchema.parse(applyManualProspectQueueState(updatedProspect, input.queueState, now))
+      : updatedProspect;
   });
 
   const updatedAccount = targetAccountSchema.parse({
@@ -415,8 +429,9 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
  * @param {import("../schema/target-account.js").prospectSchema._type[]} prospects
  * @param {ReturnType<typeof buildMergeSeed>} nextProspect
  * @param {number} limit
+ * @param {string} now
  */
-function upsertProspect(prospects, nextProspect, limit) {
+function upsertProspect(prospects, nextProspect, limit, now) {
   const index = prospects.findIndex((prospect) => prospectsReferToSamePerson(prospect, nextProspect));
 
   if (index === -1) {
@@ -424,9 +439,7 @@ function upsertProspect(prospects, nextProspect, limit) {
       throw new Error(`Prospect limit reached (${limit}). Raise stakeholderTargetCount on the motion before adding another person.`);
     }
 
-    return [
-      ...prospects,
-      prospectSchema.parse(withDerivedProspectContacts({
+    const createdProspect = prospectSchema.parse(withDerivedProspectContacts({
         id: nextProspect.id,
         name: nextProspect.name,
         title: nextProspect.title,
@@ -445,12 +458,19 @@ function upsertProspect(prospects, nextProspect, limit) {
         liveSignal: buildLiveSignalUpdate({}, nextProspect.liveSignal),
         contactPoints: nextProspect.contactPoints,
         contactEnrichmentState: buildContactEnrichmentStateUpdate({}, nextProspect.contactEnrichmentState),
+        queueState: nextProspect.queueState ?? {},
         notes: nextProspect.notes ?? null,
         signalMatchIds: nextProspect.signalMatchIds,
         throughLine: {},
         openingPlan: {},
         cadenceState: {}
-      }))
+      }));
+
+    return [
+      ...prospects,
+      nextProspect.queueState?.status
+        ? prospectSchema.parse(applyManualProspectQueueState(createdProspect, nextProspect.queueState, now))
+        : createdProspect
     ];
   }
 
@@ -460,7 +480,7 @@ function upsertProspect(prospects, nextProspect, limit) {
       return prospect;
     }
 
-    return prospectSchema.parse(withDerivedProspectContacts({
+    const updatedProspect = prospectSchema.parse(withDerivedProspectContacts({
       ...existing,
       name: nextProspect.name,
       title: nextProspect.title,
@@ -479,10 +499,29 @@ function upsertProspect(prospects, nextProspect, limit) {
       liveSignal: buildLiveSignalUpdate(existing.liveSignal, nextProspect.liveSignal),
       contactPoints: mergeContactPointLists(existing.contactPoints, nextProspect.contactPoints),
       contactEnrichmentState: buildContactEnrichmentStateUpdate(existing.contactEnrichmentState, nextProspect.contactEnrichmentState),
+      queueState: nextProspect.queueState ?? existing.queueState,
       notes: nextProspect.notes ?? existing.notes,
       signalMatchIds: mergeStringLists(existing.signalMatchIds, nextProspect.signalMatchIds)
     }));
+
+    return nextProspect.queueState?.status
+      ? prospectSchema.parse(applyManualProspectQueueState(updatedProspect, nextProspect.queueState, now))
+      : updatedProspect;
   });
+}
+
+/**
+ * @param {{ status?: string | null | undefined, notes?: string | null | undefined } | undefined} input
+ */
+function buildProspectQueueStateInput(input) {
+  if (!input) {
+    return undefined;
+  }
+
+  return {
+    status: isMotionQueueStatus(input.status) ? input.status : undefined,
+    notes: normalizeOptionalNullableString(input.notes)
+  };
 }
 
 /**

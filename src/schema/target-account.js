@@ -1,6 +1,7 @@
 // @ts-check
 
 import { z } from "zod";
+import { withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
 import { withDerivedProspectContacts } from "../lib/prospect-contacts.js";
 
 const WRITER_SIGNAL_SUMMARY_MAX_LENGTH = 160;
@@ -87,6 +88,15 @@ const contactPointVerificationStatusSchema = z.enum([
   "inferred",
   "rejected",
   "unknown"
+]);
+export const queueStatusSchema = z.enum([
+  "discovered",
+  "queued_for_research",
+  "researched",
+  "selected",
+  "ready",
+  "suppressed",
+  "exhausted"
 ]);
 
 export const signalMatchSubjectSchema = z.object({
@@ -238,6 +248,13 @@ export const contactEnrichmentStateSchema = z.object({
   notes: nullableString.default(null)
 });
 
+export const queueStateSchema = z.object({
+  status: queueStatusSchema.default("discovered"),
+  source: z.enum(["derived", "manual"]).default("derived"),
+  updatedAt: z.string().datetime().nullable().default(null),
+  notes: nullableString.default(null)
+});
+
 export const throughLineSchema = z.object({
   status: z.enum(["pending", "ready"]).default("pending"),
   specificToThem: nullableString.default(null),
@@ -313,6 +330,7 @@ export const prospectSchema = z.object({
   liveSignal: liveSignalSchema.default({}),
   contactPoints: z.array(contactPointSchema).default([]),
   contactEnrichmentState: contactEnrichmentStateSchema.default({}),
+  queueState: queueStateSchema.default({ status: "selected" }),
   notes: nullableString.default(null),
   signalMatchIds: stringArray,
   touches: z.array(touchSchema).default([]),
@@ -329,6 +347,7 @@ export const targetAccountSchema = z.object({
   linkedinCompanyUrl: z.string().url().nullable(),
   signalMatches: z.array(signalMatchSchema).default([]),
   prospects: z.array(prospectSchema).default([]),
+  queueState: queueStateSchema.default({}),
   lastResearchAt: z.string().datetime().nullable(),
   notes: z.string().nullable().default(null)
 });
@@ -348,7 +367,7 @@ export function rehydrateTargetAccount(rawAccount) {
     ? z.array(prospectSchema).parse(source.prospects.map((prospect) => withDerivedProspectContacts(prospect)))
     : buildProspectsFromLegacy(source, signalMatches);
 
-  return targetAccountSchema.parse({
+  return targetAccountSchema.parse(withDerivedTargetAccountQueueState({
     companyId: source.companyId,
     companyName: source.companyName,
     domain: source.domain ?? null,
@@ -356,9 +375,10 @@ export function rehydrateTargetAccount(rawAccount) {
     linkedinCompanyUrl: source.linkedinCompanyUrl ?? null,
     signalMatches,
     prospects,
+    queueState: source.queueState ?? {},
     lastResearchAt: source.lastResearchAt ?? null,
     notes: source.notes ?? null
-  });
+  }));
 }
 
 /**

@@ -4,6 +4,7 @@ import { browserProfileCapabilitySchema, browserProfileSchema } from "../schema/
 import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
+import { buildMotionQueueSummary, withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
 import { resolveUserConnection } from "./resolve-user-connection.js";
 
 /**
@@ -29,6 +30,7 @@ export function evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, ra
   const motionPreflight = buildMotionPreflight(motion);
   const browserGate = buildBrowserGate(profiles, capability);
   const companyLoop = companies.map((company) => buildCompanyTargetingState(company, motion, profiles, users, capability, browserGate));
+  const queue = buildMotionQueueSummary(motion, companies);
   const overallStage = deriveOverallStage(motionPreflight, companyLoop);
   const readyToTarget = overallStage === "targeting-ready";
   const readyToEngage = readyToTarget
@@ -53,6 +55,7 @@ export function evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, ra
       readyCount: companyLoop.filter((company) => company.stage === "targeting-ready").length,
       items: companyLoop
     },
+    queue,
     overallStage,
     readyToTarget,
     readyToEngage,
@@ -140,7 +143,8 @@ function buildBrowserGate(profiles, capability) {
  * @param {ReturnType<typeof buildBrowserGate>} browserGate
  */
 function buildCompanyTargetingState(company, motion, profiles, users, capability, browserGate) {
-  const account = motion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+  const rawAccount = motion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+  const account = rawAccount ? withDerivedTargetAccountQueueState(rawAccount) : null;
   const prospects = account?.prospects ?? [];
   const readyThroughLineCount = prospects.filter((prospect) => prospect.throughLine.status === "ready").length;
   const readyOpeningPlanCount = prospects.filter((prospect) => prospect.openingPlan.status === "ready").length;
@@ -169,6 +173,7 @@ function buildCompanyTargetingState(company, motion, profiles, users, capability
     companyId: company.id,
     companyName: company.name,
     stage,
+    queueStatus: account?.queueState?.status ?? "discovered",
     websiteUrl: company.websiteUrl,
     linkedinCompanyUrl: company.linkedinCompanyUrl,
     signalMatchCount: account?.signalMatches.length ?? 0,

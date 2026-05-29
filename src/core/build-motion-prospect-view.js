@@ -1,6 +1,7 @@
 // @ts-check
 
 import { motionSchema } from "../schema/motion.js";
+import { withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
 import { hasUsableEmailFallback, selectBestEmailContactPoint } from "../lib/prospect-contacts.js";
 
 const RECENT_POST_READY_BANDS = new Set(["0-14-days", "15-30-days", "31-60-days"]);
@@ -22,6 +23,7 @@ const ENGAGEABLE_ACTIVITY_TYPES = new Set([
 export function buildMotionProspectView(rawMotion, options = {}) {
   const motion = motionSchema.parse(rawMotion);
   const companyAccounts = motion.targetMap.accounts
+    .map((account) => withDerivedTargetAccountQueueState(account))
     .filter((account) => !options.companyId || account.companyId === options.companyId);
 
   if (options.companyId && companyAccounts.length === 0) {
@@ -54,7 +56,8 @@ export function buildMotionProspectView(rawMotion, options = {}) {
       prospectCount: prospectViews.length,
       messageTestReadyCount: prospectViews.filter((prospect) => prospect.messageTestReady).length,
       recentPostReadyCount: prospectViews.filter((prospect) => prospect.recentPost.engageable).length,
-      emailFallbackCount: prospectViews.filter((prospect) => prospect.hasEmailFallback).length
+      emailFallbackCount: prospectViews.filter((prospect) => prospect.hasEmailFallback).length,
+      queueStatusCounts: buildStatusCounts(prospectViews.map((prospect) => prospect.queueStatus))
     },
     prospects: prospectViews,
     prospect: selectedProspect,
@@ -117,6 +120,7 @@ function buildProspectView(account, prospect) {
     liveSignal: prospect.liveSignal,
     contactPoints: prospect.contactPoints,
     contactEnrichmentState: prospect.contactEnrichmentState,
+    queueStatus: prospect.queueState.status,
     notes: prospect.notes,
     recentPost,
     signalMatches,
@@ -135,6 +139,16 @@ function buildProspectView(account, prospect) {
     compressionLine: prospect.throughLine.compressionLine,
     nextAction: prospect.cadenceState.nextAction
   };
+}
+
+/**
+ * @param {Array<string>} statuses
+ */
+function buildStatusCounts(statuses) {
+  return statuses.reduce((counts, status) => {
+    counts[status] = (counts[status] ?? 0) + 1;
+    return counts;
+  }, /** @type {Record<string, number>} */ ({}));
 }
 
 /**

@@ -100,7 +100,7 @@ export function renderMotionSummary(motion) {
     lines.push("  none");
   } else {
     for (const account of motion.targetMap.accounts) {
-      lines.push(`  ${account.companyName}  [matches: ${account.signalMatches.length}]  [prospects: ${account.prospects.length}]`);
+      lines.push(`  ${account.companyName}  [queue: ${account.queueState.status}]  [matches: ${account.signalMatches.length}]  [prospects: ${account.prospects.length}]`);
       if (account.websiteUrl) {
         lines.push(`    Website: ${account.websiteUrl}`);
       }
@@ -121,7 +121,7 @@ export function renderMotionSummary(motion) {
       }
       if (account.prospects.length) {
         for (const prospect of account.prospects) {
-          lines.push(`    Prospect: ${prospect.name} (${prospect.title}) [${prospect.buyingCommitteeRole}, ${prospect.decisionAuthority}, ${prospect.fitConfidence}]`);
+          lines.push(`    Prospect: ${prospect.name} (${prospect.title}) [queue: ${prospect.queueState.status}] [${prospect.buyingCommitteeRole}, ${prospect.decisionAuthority}, ${prospect.fitConfidence}]`);
           lines.push(`      Why Relevant: ${prospect.whyRelevant}`);
           if (prospect.email) {
             lines.push(`      Email: ${prospect.email}`);
@@ -255,6 +255,7 @@ export function renderMotionStartResult(result) {
  *       companyId: string,
  *       companyName: string,
  *       stage: string,
+ *       queueStatus: string,
  *       signalMatchCount: number,
  *       prospectCount: number,
  *       readyThroughLineCount: number,
@@ -267,6 +268,13 @@ export function renderMotionStartResult(result) {
  *       },
  *       nextCommand: string
  *     }>
+ *   },
+ *   queue: {
+ *     companyCount: number,
+ *     prospectCount: number,
+ *     companyStatusCounts: Record<string, number>,
+ *     prospectStatusCounts: Record<string, number>,
+ *     readyToSendCount: number
  *   },
  *   overallStage: string,
  *   readyToTarget: boolean,
@@ -296,13 +304,20 @@ export function renderMotionTargetingSummary(result) {
     }
   }
 
+  lines.push(
+    "",
+    "Queue Summary",
+    `  Companies: ${result.queue.companyCount}  Prospects: ${result.queue.prospectCount}  Ready To Send: ${result.queue.readyToSendCount}`,
+    `  Company Statuses: ${formatCountMap(result.queue.companyStatusCounts)}`,
+    `  Prospect Statuses: ${formatCountMap(result.queue.prospectStatusCounts)}`
+  );
   lines.push("", "Company Loop");
 
   if (!result.companyLoop.items.length) {
     lines.push("  none");
   } else {
     for (const company of result.companyLoop.items) {
-      lines.push(`  ${company.companyName}  [${company.stage}]  signals:${company.signalMatchCount}  prospects:${company.prospectCount}  through-lines:${company.readyThroughLineCount}  opening-plans:${company.readyOpeningPlanCount}  cadence:${company.readyCadenceCount}`);
+      lines.push(`  ${company.companyName}  [${company.stage}]  [queue:${company.queueStatus}]  signals:${company.signalMatchCount}  prospects:${company.prospectCount}  through-lines:${company.readyThroughLineCount}  opening-plans:${company.readyOpeningPlanCount}  cadence:${company.readyCadenceCount}`);
       lines.push(`    Execution Identity: ${company.executionIdentity.status} — ${company.executionIdentity.message}`);
       if (company.missingEmailFallbackCount > 0) {
         lines.push(`    Missing Email Fallbacks: ${company.missingEmailFallbackCount}`);
@@ -334,7 +349,8 @@ export function renderMotionTargetingSummary(result) {
  *     prospectCount: number,
  *     messageTestReadyCount: number,
  *     recentPostReadyCount: number,
- *     emailFallbackCount: number
+ *     emailFallbackCount: number,
+ *     queueStatusCounts: Record<string, number>
  *   },
  *   prospects: Array<{
  *     companyId: string,
@@ -345,6 +361,7 @@ export function renderMotionTargetingSummary(result) {
  *     buyingCommitteeRole: string,
  *     decisionAuthority: string,
  *     fitConfidence: string,
+ *     queueStatus: string,
  *     messageTestReady: boolean,
  *     recentPost: { engageable: boolean },
  *     hasEmailFallback: boolean,
@@ -364,7 +381,8 @@ export function renderMotionProspectList(result) {
     `Prospects: ${result.counts.prospectCount}`,
     `Message-Test Ready: ${result.counts.messageTestReadyCount}`,
     `Recent Post Warmups: ${result.counts.recentPostReadyCount}`,
-    `Email Fallbacks: ${result.counts.emailFallbackCount}`
+    `Email Fallbacks: ${result.counts.emailFallbackCount}`,
+    `Queue Statuses: ${formatCountMap(result.counts.queueStatusCounts)}`
   ];
 
   if (!result.prospects.length) {
@@ -378,7 +396,7 @@ export function renderMotionProspectList(result) {
       `  ${prospect.prospectId}  ${prospect.companyName}  ${prospect.name} — ${prospect.title}  [${prospect.buyingCommitteeRole}, ${prospect.decisionAuthority}, ${prospect.fitConfidence}]`
     );
     lines.push(
-      `    Message-Test: ${prospect.messageTestReady ? "ready" : "not-ready"}  Recent Post Warmup: ${prospect.recentPost.engageable ? "ready" : "not-ready"}  Email: ${prospect.hasEmailFallback ? "yes" : "no"}  Channel: ${prospect.primaryChannel ?? "none"}`
+      `    Queue: ${prospect.queueStatus}  Message-Test: ${prospect.messageTestReady ? "ready" : "not-ready"}  Recent Post Warmup: ${prospect.recentPost.engageable ? "ready" : "not-ready"}  Email: ${prospect.hasEmailFallback ? "yes" : "no"}  Channel: ${prospect.primaryChannel ?? "none"}`
     );
     if (prospect.compressionLine) {
       lines.push(`    Compression: ${prospect.compressionLine}`);
@@ -386,6 +404,16 @@ export function renderMotionProspectList(result) {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * @param {Record<string, number>} counts
+ */
+function formatCountMap(counts) {
+  return Object.entries(counts)
+    .filter(([, count]) => count > 0)
+    .map(([status, count]) => `${status}:${count}`)
+    .join(", ") || "none";
 }
 
 /**

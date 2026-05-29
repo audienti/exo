@@ -4,6 +4,7 @@ import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { rehydrateTargetAccount, targetAccountSchema } from "../schema/target-account.js";
 import { rehydrateMotion } from "./rehydrate-motion.js";
+import { withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
 
 /**
  * @param {unknown} rawMotion
@@ -33,7 +34,8 @@ export function prepareTargetAccountContext(rawMotion, rawCompany) {
  * @param {string} now
  */
 export function finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now) {
-  const updatedAccounts = upsertTargetAccount(accounts, updatedAccount);
+  const normalizedAccount = rehydrateTargetAccount(withDerivedTargetAccountQueueState(updatedAccount, now));
+  const updatedAccounts = upsertTargetAccount(accounts, normalizedAccount);
 
   return motionSchema.parse({
     ...motion,
@@ -50,7 +52,7 @@ export function finalizeTargetAccountUpdate(motion, accounts, updatedAccount, no
  * @param {import("../schema/company.js").companySchema._type} company
  */
 export function buildTargetAccount(company) {
-  return targetAccountSchema.parse({
+  return targetAccountSchema.parse(withDerivedTargetAccountQueueState({
     companyId: company.id,
     companyName: company.name,
     domain: company.domain,
@@ -58,9 +60,10 @@ export function buildTargetAccount(company) {
     linkedinCompanyUrl: company.linkedinCompanyUrl,
     signalMatches: [],
     prospects: [],
+    queueState: {},
     lastResearchAt: null,
     notes: null
-  });
+  }));
 }
 
 /**

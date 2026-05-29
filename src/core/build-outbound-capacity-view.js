@@ -5,6 +5,7 @@ import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
 import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
+import { buildMotionQueueSummary, isReadyConnectionRequestProspect } from "../lib/motion-queue.js";
 
 const BUSINESS_DAYS_PER_WEEK = 5;
 
@@ -48,6 +49,11 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       .filter((account) => !options.companyId || account.companyId === options.companyId)
       .map((account) => ({ motion, account }))
   );
+  const queueSummaries = motions
+    .filter((motion) => !options.motionId || motion.id === options.motionId)
+    .map((motion) => buildMotionQueueSummary(motion, companies.filter((company) => assignedCompanyIds.has(company.id)), {
+      companyId: options.companyId ?? null
+    }));
   const scopedProspects = scopedAccounts.flatMap(({ motion, account }) =>
     account.prospects
       .filter((prospect) => !options.prospectId || prospect.id === options.prospectId)
@@ -70,13 +76,32 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
   const consideredMotionCount = new Set(scopedAccounts.map(({ motion }) => motion.id)).size;
   const consideredCompanyCount = new Set(scopedAccounts.map(({ account }) => account.companyId)).size;
   const consideredProspectCount = scopedProspects.length;
+  const queue = queueSummaries.reduce((summary, item) => {
+    summary.companyCount += item.companyCount;
+    summary.prospectCount += item.prospectCount;
+    summary.readyToSendCount += item.readyToSendCount;
+    for (const [status, count] of Object.entries(item.companyStatusCounts)) {
+      summary.companyStatusCounts[status] = (summary.companyStatusCounts[status] ?? 0) + count;
+    }
+    for (const [status, count] of Object.entries(item.prospectStatusCounts)) {
+      summary.prospectStatusCounts[status] = (summary.prospectStatusCounts[status] ?? 0) + count;
+    }
+    return summary;
+  }, {
+    companyCount: 0,
+    prospectCount: 0,
+    readyToSendCount: 0,
+    companyStatusCounts: {},
+    prospectStatusCounts: {}
+  });
   const execution = {
     sentToday,
     pendingInvitations,
     readyConnectionRequests,
     consideredMotionCount,
     consideredCompanyCount,
-    consideredProspectCount
+    consideredProspectCount,
+    queue
   };
 
   if (linkedinAccount.sourceType !== "browser-profile") {
@@ -194,7 +219,7 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     ? `Use the ready connection-request branches to send ${remainingInvitationsToday} more LinkedIn invitation${remainingInvitationsToday === 1 ? "" : "s"} today and close the remaining deficit.`
     : readyConnectionRequests > 0
       ? `Send ${readyConnectionRequests} ready LinkedIn connection request${readyConnectionRequests === 1 ? "" : "s"} now, then build ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} to close today's remaining invitation deficit.`
-      : `Build ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today so outbound does not miss the invitation target.`;
+      : buildDeficitActionFromQueue(queue, remainingInvitationsToday, inventoryShortfall);
   const whyItMatters = `LinkedIn target is ${dailyInvitationsTarget} invitation${dailyInvitationsTarget === 1 ? "" : "s"} today. ${sentToday} ${sentToday === 1 ? "has" : "have"} been sent today, ${pendingInvitations} ${pendingInvitations === 1 ? "is" : "are"} still pending from prior work, ${readyConnectionRequests} more branch${readyConnectionRequests === 1 ? "" : "es"} ${readyConnectionRequests === 1 ? "is" : "are"} ready right now, and ${remainingInvitationsToday} invitation${remainingInvitationsToday === 1 ? "" : "s"} still need to be filled today.`;
 
   return {
@@ -217,23 +242,15 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
         pendingInvitationCount: String(pendingInvitations),
         readyConnectionRequestCount: String(readyConnectionRequests),
         remainingInvitationCount: String(remainingInvitationsToday),
-        inventoryShortfallCount: String(inventoryShortfall)
+        inventoryShortfallCount: String(inventoryShortfall),
+        discoveredCompanyCount: String(queue.companyStatusCounts.discovered ?? 0),
+        queuedResearchCompanyCount: String(queue.companyStatusCounts.queued_for_research ?? 0),
+        researchedCompanyCount: String(queue.companyStatusCounts.researched ?? 0),
+        selectedProspectCount: String(queue.prospectStatusCounts.selected ?? 0),
+        readyProspectCount: String(queue.prospectStatusCounts.ready ?? 0)
       }
     }
   };
-}
-
-/**
- * @param {import("../schema/target-account.js").prospectSchema._type} prospect
- */
-function isReadyConnectionRequestProspect(prospect) {
-  return (
-    prospect.cadenceState.status === "ready"
-    && prospect.cadenceState.currentStep === "connection-request"
-    && !prospect.cadenceState.lastTouchOutcome
-    && prospect.throughLine.status === "ready"
-    && prospect.openingPlan.status === "ready"
-  );
 }
 
 /**
@@ -247,4 +264,32 @@ function isSameLocalDate(iso, now) {
     && date.getMonth() === now.getMonth()
     && date.getDate() === now.getDate()
   );
+}
+
+/**
+ * @param {{
+ *   companyStatusCounts: Record<string, number>,
+ *   prospectStatusCounts: Record<string, number>
+ * }} queue
+ * @param {number} remainingInvitationsToday
+ * @param {number} inventoryShortfall
+ */
+function buildDeficitActionFromQueue(queue, remainingInvitationsToday, inventoryShortfall) {
+  const queuedResearchCount = (queue.companyStatusCounts.discovered ?? 0) + (queue.companyStatusCounts.queued_for_research ?? 0);
+  const researchedCount = queue.companyStatusCounts.researched ?? 0;
+  const selectedCount = queue.prospectStatusCounts.selected ?? 0;
+
+  if (selectedCount > 0) {
+    return `Finish through-lines, opening plans, and cadence on ${selectedCount} selected prospect${selectedCount === 1 ? "" : "s"} so the motion can close ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} today.`;
+  }
+
+  if (researchedCount > 0) {
+    return `Select prospects from ${researchedCount} researched account${researchedCount === 1 ? "" : "s"} so the motion can refill ${inventoryShortfall} ready branch${inventoryShortfall === 1 ? "" : "es"} for today's invitation target.`;
+  }
+
+  if (queuedResearchCount > 0) {
+    return `Research ${queuedResearchCount} discovered or queued company${queuedResearchCount === 1 ? "" : "ies"} so the motion can manufacture ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.`;
+  }
+
+  return `Build ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today so outbound does not miss the invitation target.`;
 }
