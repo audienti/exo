@@ -71,7 +71,7 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
     options
   });
 
-  const items = [
+  const items = dedupeDailyItems([
     syncPlannerItem,
     buildOutboundCapacityPlannerItem(outboundCapacity, {
       motionId: options.motionId ?? null,
@@ -115,7 +115,7 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
         })
       )
     )
-  ]
+  ])
     .filter(Boolean)
     .sort(compareDailyItems);
 
@@ -143,6 +143,38 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
     },
     items: limitedItems
   };
+}
+
+/**
+ * @param {Array<ReturnType<typeof buildDailyItem> | ReturnType<typeof buildInboundReviewPlannerItems>[number] | ReturnType<typeof buildSyncPlannerItem> | ReturnType<typeof buildOutboundCapacityPlannerItem> | null>} items
+ */
+function dedupeDailyItems(items) {
+  const deduped = [];
+  const seenProspectActions = new Set();
+
+  for (const item of items) {
+    if (!item) {
+      continue;
+    }
+
+    const sourceType = item.source?.type ?? "";
+    const shouldDedupeProspectAction = item.state === "due_now"
+      && item.prospect?.id
+      && item.recommendedAction
+      && (sourceType === "parallel_support_action" || sourceType === "cadence");
+
+    if (shouldDedupeProspectAction) {
+      const key = `${item.prospect.id}::${item.recommendedAction}`;
+      if (seenProspectActions.has(key)) {
+        continue;
+      }
+      seenProspectActions.add(key);
+    }
+
+    deduped.push(item);
+  }
+
+  return deduped;
 }
 
 /**

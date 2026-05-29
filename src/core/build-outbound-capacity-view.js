@@ -43,6 +43,9 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       .filter((company) => company.engagementUserAssignment?.userId === user.id)
       .map((company) => company.id)
   );
+  const operatorVisibleCompanies = companies.filter((company) =>
+    assignedCompanyIds.has(company.id) || !company.engagementUserAssignment
+  );
   const scopedAccounts = motions.flatMap((motion) =>
     motion.targetMap.accounts
       .filter((account) => assignedCompanyIds.has(account.companyId))
@@ -52,12 +55,12 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
   );
   const queueSummaries = motions
     .filter((motion) => !options.motionId || motion.id === options.motionId)
-    .map((motion) => buildMotionQueueSummary(motion, companies.filter((company) => assignedCompanyIds.has(company.id)), {
+    .map((motion) => buildMotionQueueSummary(motion, operatorVisibleCompanies, {
       companyId: options.companyId ?? null
     }));
   const packetSummaries = motions
     .filter((motion) => !options.motionId || motion.id === options.motionId)
-    .map((motion) => buildMotionPacketSummary(motion, companies.filter((company) => assignedCompanyIds.has(company.id)), {
+    .map((motion) => buildMotionPacketSummary(motion, operatorVisibleCompanies, {
       companyId: options.companyId ?? null
     }));
   const scopedProspects = scopedAccounts.flatMap(({ motion, account }) =>
@@ -251,6 +254,9 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     return configuredResult;
   }
 
+  const backlogAction = inventoryShortfall > 0
+    ? buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, inventoryShortfall)
+    : null;
   const deficitAction = readyConnectionRequests >= remainingInvitationsToday
     ? {
         kind: "fill_connection_request_deficit",
@@ -258,12 +264,12 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
         recommendedAction: `Use the ready connection-request branches to send ${remainingInvitationsToday} more LinkedIn invitation${remainingInvitationsToday === 1 ? "" : "s"} today and close the remaining deficit.`
       }
     : readyConnectionRequests > 0
-      ? {
-          kind: "fill_connection_request_deficit",
-          guidanceKey: "fill_connection_request_deficit",
-          recommendedAction: `Send ${readyConnectionRequests} ready LinkedIn connection request${readyConnectionRequests === 1 ? "" : "s"} now, then build ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} to close today's remaining invitation deficit.`
-        }
-      : buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, inventoryShortfall);
+      ? combineReadySendWithFollowOnAction({
+          readyConnectionRequests,
+          inventoryShortfall,
+          followOnAction: backlogAction
+        })
+      : backlogAction;
   const whyItMatters = `LinkedIn target is ${dailyInvitationsTarget} invitation${dailyInvitationsTarget === 1 ? "" : "s"} today. ${sentToday} ${sentToday === 1 ? "has" : "have"} been sent today, ${pendingInvitations} ${pendingInvitations === 1 ? "is" : "are"} still pending from prior work, ${readyConnectionRequests} more branch${readyConnectionRequests === 1 ? "" : "es"} ${readyConnectionRequests === 1 ? "is" : "are"} ready right now, and ${remainingInvitationsToday} invitation${remainingInvitationsToday === 1 ? "" : "s"} still need to be filled today.`;
 
   return {
@@ -310,6 +316,35 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
         firstClaimableProspectResearchProspectName: packets.claimableItemsByKind.prospect_research?.[0]?.prospectName ?? ""
       }
     }
+  };
+}
+
+/**
+ * @param {{
+ *   readyConnectionRequests: number,
+ *   inventoryShortfall: number,
+ *   followOnAction: {
+ *     kind: string,
+ *     guidanceKey: string,
+ *     recommendedAction: string
+ *   } | null
+ * }} input
+ */
+function combineReadySendWithFollowOnAction({ readyConnectionRequests, inventoryShortfall, followOnAction }) {
+  const sendPrefix = `Send ${readyConnectionRequests} ready LinkedIn connection request${readyConnectionRequests === 1 ? "" : "s"} now`;
+
+  if (!followOnAction) {
+    return {
+      kind: "fill_connection_request_deficit",
+      guidanceKey: "fill_connection_request_deficit",
+      recommendedAction: `${sendPrefix}, then build ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} to close today's remaining invitation deficit.`
+    };
+  }
+
+  return {
+    kind: followOnAction.kind,
+    guidanceKey: followOnAction.guidanceKey,
+    recommendedAction: `${sendPrefix}, then ${lowercaseSentenceStart(followOnAction.recommendedAction)}`
   };
 }
 
@@ -448,4 +483,15 @@ function formatPacketLead(packet) {
     : packet.companyName;
 
   return ` Start with ${packet.packetId} for ${subject} via exo motion packet-brief ${packet.motionId} --packet ${packet.packetId}.`;
+}
+
+/**
+ * @param {string} value
+ */
+function lowercaseSentenceStart(value) {
+  if (!value) {
+    return value;
+  }
+
+  return value.charAt(0).toLowerCase() + value.slice(1);
 }

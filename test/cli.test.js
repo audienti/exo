@@ -3468,6 +3468,342 @@ test("daily surfaces a parallel support action while a live outbound branch wait
   }
 });
 
+test("daily does not duplicate the same ready branch as both a support action and a cadence item", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-support-dedupe-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/daily-support-dedupe",
+          "--premise",
+          "This offer matters when one waiting branch should surface one other real branch, not duplicates.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is the company broadening its GTM story or product surface?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const waitingCompany = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Waiting Systems",
+          "--domain",
+          "waiting.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const readyCompany = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Ready Systems",
+          "--domain",
+          "ready.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Dedupe User", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    const userWithAccount = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "dedupe-user",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+
+    const syncedAt = new Date().toISOString();
+    for (const surfaceKey of [
+      "linkedin-sent-invitations",
+      "linkedin-received-invitations",
+      "linkedin-messaging-inbox",
+      "linkedin-profile-views",
+      "linkedin-following-list"
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "record",
+          user.id,
+          "--account",
+          linkedinAccount.id,
+          "--surface",
+          surfaceKey,
+          "--status",
+          "success",
+          "--observed-at",
+          syncedAt,
+          "--item-count",
+          "0",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      );
+    }
+
+    for (const company of [waitingCompany, readyCompany]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "user",
+          "assign",
+          company.id,
+          "--user",
+          user.id,
+          "--reason",
+          "Drive the daily through one execution user",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      );
+    }
+
+    const waitingProspect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          waitingCompany.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Paula Waiting",
+          "--title",
+          "Chief Revenue Officer",
+          "--email",
+          "paula.waiting@waiting.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--why-relevant",
+          "Primary waiting branch.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    ).prospects[0];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        waitingCompany.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        waitingProspect.id,
+        "--current-step",
+        "connection-request",
+        "--last-touch-channel",
+        "connection-request",
+        "--last-touch-outcome",
+        "sent",
+        "--last-touch-at",
+        "2026-05-27T11:46:51.000Z",
+        "--next-action",
+        "Wait for acceptance before escalating.",
+        "--next-action-due-at",
+        "2026-05-30T11:46:51.000Z",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const readyProspect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          readyCompany.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Brian Ready",
+          "--title",
+          "VP Revenue Operations",
+          "--email",
+          "brian.ready@ready.example",
+          "--buying-committee-role",
+          "operator_champion",
+          "--decision-authority",
+          "influences",
+          "--fit-confidence",
+          "high",
+          "--why-relevant",
+          "Best-fit ready branch.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    ).prospects[0];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        readyCompany.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        readyProspect.id,
+        "--specific-to-them",
+        "Brian owns the operator path.",
+        "--shared-problem",
+        "Outbound throughput is underfilled.",
+        "--why-now",
+        "The queue needs real branch production.",
+        "--legitimate-wedge",
+        "Branch readiness is visible and actionable.",
+        "--compression-line",
+        "Queue state should become live throughput.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        readyCompany.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        readyProspect.id,
+        "--why-now",
+        "The branch is ready now.",
+        "--angle",
+        "Connect queue truth to outbound pacing.",
+        "--reply-path",
+        "Brian should recognize the operator problem quickly.",
+        "--primary-channel",
+        "connection-request",
+        "--fallback-channel",
+        "email",
+        "--fallback-trigger",
+        "Use email only if LinkedIn is blocked.",
+        "--first-move",
+        "Send the first connection request.",
+        "--first-message-goal",
+        "Validate ownership of outbound pacing.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        readyCompany.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        readyProspect.id,
+        "--current-step",
+        "connection-request",
+        "--next-action",
+        "Send the first connection request now.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    const brianItems = daily.items.filter((item) => item.prospect.name === "Brian Ready");
+    assert.equal(brianItems.length, 1);
+    assert.equal(brianItems[0].source.type, "parallel_support_action");
+    assert.match(brianItems[0].recommendedAction, /send the first connection request/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("daily surfaces a sync action before trustable silence when enabled inbound surfaces were never checked", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-sync-needed-"));
 
@@ -4432,24 +4768,22 @@ test("motion queue exposes discovered and queued research inventory and daily us
       }
     }
 
-    for (const company of [activeCompany, backlogCompany]) {
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "user",
-          "assign",
-          company.id,
-          "--user",
-          user.id,
-          "--reason",
-          "Keep queue work routed through one execution user",
-          "--json"
-        ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
-      );
-    }
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "user",
+        "assign",
+        activeCompany.id,
+        "--user",
+        user.id,
+        "--reason",
+        "Keep queue work routed through one execution user",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
 
     const prospect = JSON.parse(
       execFileSync(
