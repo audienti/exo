@@ -4784,6 +4784,113 @@ test("motion packets let a worker claim and complete a company research packet",
   }
 });
 
+test("motion discover links existing companies and creates new queued companies as packet-ready backlog", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-discover-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/motion-discover",
+          "--premise",
+          "This offer matters when pipeline teams need upstream discovery feeding the queue.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there current evidence this company needs more disciplined outbound execution?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const existingCompany = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Existing Discover Co",
+          "--domain",
+          "existing-discover.example",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const linked = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "discover",
+          motion.id,
+          "--company",
+          existingCompany.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(linked.createdCompany, false);
+    assert.equal(linked.linkedCompany, true);
+    assert.equal(linked.company.id, existingCompany.id);
+    assert.equal(linked.queue.status, "discovered");
+    assert.equal(linked.packet.claimState, "claimable");
+
+    const createdAndQueued = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "discover",
+          motion.id,
+          "--name",
+          "New Queued Discover Co",
+          "--domain",
+          "new-queued-discover.example",
+          "--queue-status",
+          "queued_for_research",
+          "--queue-notes",
+          "Ready for a worker to pick up immediately.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(createdAndQueued.createdCompany, true);
+    assert.equal(createdAndQueued.linkedCompany, true);
+    assert.equal(createdAndQueued.queue.status, "queued_for_research");
+    assert.equal(createdAndQueued.packet.claimState, "claimable");
+
+    const packets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(packets.counts.packetCount, 2);
+    assert.equal(packets.counts.claimableCount, 2);
+    assert.equal(packets.items.some((item) => item.companyId === existingCompany.id), true);
+    assert.equal(
+      packets.items.some((item) => item.companyId === createdAndQueued.company.id && item.queueStatus === "queued_for_research"),
+      true
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("next prefers a due-now daily item over the broader motion path", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-next-daily-"));
 

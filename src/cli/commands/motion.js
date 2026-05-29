@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { addCompany } from "../../core/add-company.js";
 import { cloneMotionDefinition } from "../../core/clone-motion.js";
 import { buildMotionActionBrief, buildMotionActionView } from "../../core/build-motion-action-view.js";
 import { buildMotionIntake } from "../../core/build-motion-intake.js";
@@ -10,14 +11,18 @@ import { defineMotion } from "../../core/define-motion.js";
 import { buildMotionDraftBrief, buildMotionDraftView } from "../../core/build-motion-draft-view.js";
 import { buildMotionProspectView } from "../../core/build-motion-prospect-view.js";
 import { evaluateMotionTargeting } from "../../core/evaluate-motion-targeting.js";
+import { linkCompanyToMotion } from "../../core/link-company-to-motion.js";
 import { refreshMotion } from "../../core/refresh-motion.js";
+import { setMotionTargetAccountQueue } from "../../core/set-target-account-queue.js";
 import { startMotion } from "../../core/start-motion.js";
 import { transitionMotionStatus } from "../../core/transition-motion-status.js";
 import { updateMotionDefinition } from "../../core/update-motion.js";
 import {
   deleteMotion,
   findCompanyById,
+  findCompanyByIdentity,
   findMotionById,
+  insertCompany,
   insertMotion,
   listBrowserProfiles,
   listCompanies,
@@ -28,6 +33,7 @@ import {
 } from "../../db/database.js";
 import { normalizeStringList } from "../../lib/collections.js";
 import { loadDoNotContactEntries } from "../../lib/dnc.js";
+import { buildMotionQueueSummary } from "../../lib/motion-queue.js";
 import {
   renderMotionActionBrief,
   renderMotionActionList,
@@ -58,6 +64,7 @@ Canonical motion interface:
   exo motion intake
   exo motion start
   exo motion add
+  exo motion discover
   exo motion target
   exo motion packets
   exo motion prospects
@@ -267,6 +274,155 @@ Examples:
       }
 
       console.log(renderMotionSummary(storedMotion));
+    });
+
+  motion
+    .command("discover")
+    .description("Create or link a discovered company into a motion backlog so workers can research it.")
+    .argument("<motion-id>", "Motion identifier")
+    .option("--company <company-id>", "Existing canonical company identifier to link into this motion")
+    .option("--name <name>", "Create or reuse a canonical company by name")
+    .option("--domain <domain>", "Company domain when creating or reusing by identity")
+    .option("--website-url <url>", "Company website URL when creating a new canonical company")
+    .option("--linkedin-company-url <url>", "LinkedIn company URL when creating a new canonical company")
+    .option("--tag <tag>", "Company tag when creating a new canonical company", collect, [])
+    .option("--notes <notes>", "Canonical company notes when creating a new canonical company")
+    .option("--queue-status <status>", "Initial queue state: discovered or queued_for_research")
+    .option("--queue-notes <notes>", "Queue notes when immediately queuing the company for research")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Links an existing canonical company into a motion, or creates a new canonical company and links it immediately.
+  - Seeds the upstream motion backlog so company-research packets can exist.
+  - Optionally puts the company straight into queued_for_research so a worker can claim it next.
+
+Examples:
+  exo motion discover <motion-id> --company <company-id> --json
+  exo motion discover <motion-id> --company <company-id> --queue-status queued_for_research --queue-notes "Ready for parallel research" --json
+  exo motion discover <motion-id> --name Chainguard --domain chainguard.dev --queue-status discovered --json
+`
+    )
+    .action((motionId, options) => {
+      const rawMotion = findMotionById(motionId);
+      if (!rawMotion) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const queueStatus = normalizeMotionDiscoveryQueueStatus(options.queueStatus);
+      if (options.queueStatus && !queueStatus) {
+        console.error(`Invalid discovery queue status: ${options.queueStatus}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const hasCompanyId = typeof options.company === "string" && options.company.trim().length > 0;
+      const hasCompanyName = typeof options.name === "string" && options.name.trim().length > 0;
+      if ((hasCompanyId && hasCompanyName) || (!hasCompanyId && !hasCompanyName)) {
+        console.error("Pass exactly one of --company or --name.");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (options.queueNotes && queueStatus !== "queued_for_research") {
+        console.error("--queue-notes is only supported when --queue-status queued_for_research is used.");
+        process.exitCode = 1;
+        return;
+      }
+
+      let company;
+      let createdCompany = false;
+      let linkedCompany = false;
+
+      if (hasCompanyId) {
+        const rawCompany = findCompanyById(options.company);
+        if (!rawCompany) {
+          console.error(`Company not found: ${options.company}`);
+          process.exitCode = 1;
+          return;
+        }
+
+        const updatedCompany = linkCompanyToMotion(rawCompany, motionId);
+        company = companySchema.parse(updatedCompany);
+        if (!companySchema.parse(rawCompany).motionIds.includes(motionId)) {
+          updateCompany(company);
+          linkedCompany = true;
+        }
+      } else {
+        const existing = findCompanyByIdentity(options.name, options.domain ?? null);
+        if (existing) {
+          const updatedCompany = linkCompanyToMotion(existing, motionId);
+          company = companySchema.parse(updatedCompany);
+          if (!companySchema.parse(existing).motionIds.includes(motionId)) {
+            updateCompany(company);
+            linkedCompany = true;
+          }
+        } else {
+          company = addCompany({
+            name: options.name,
+            domain: options.domain ?? null,
+            websiteUrl: options.websiteUrl ?? null,
+            linkedinCompanyUrl: options.linkedinCompanyUrl ?? null,
+            notes: options.notes ?? null,
+            tags: normalizeStringList(options.tag),
+            motionIds: [motionId]
+          });
+          insertCompany(company);
+          createdCompany = true;
+          linkedCompany = true;
+        }
+      }
+
+      let storedMotion = motionSchema.parse(rawMotion);
+      if (queueStatus === "queued_for_research") {
+        storedMotion = updateMotion(setMotionTargetAccountQueue(storedMotion, company, {
+          status: queueStatus,
+          notes: options.queueNotes ?? null
+        }));
+      }
+
+      const queueSummary = buildMotionQueueSummary(storedMotion, [company], { companyId: company.id });
+      const packetSummary = buildMotionPacketSummary(storedMotion, [company], { companyId: company.id });
+      const queueItem = queueSummary.items[0] ?? null;
+      const packet = packetSummary.items[0] ?? null;
+      const result = {
+        motion: {
+          id: storedMotion.id,
+          name: storedMotion.name,
+          status: storedMotion.status
+        },
+        company,
+        createdCompany,
+        linkedCompany,
+        queue: queueItem ? {
+          status: queueItem.queueStatus,
+          source: queueItem.queueSource,
+          signalMatchCount: queueItem.signalMatchCount,
+          prospectCount: queueItem.prospectCount,
+          readyToSendCount: queueItem.readyToSendCount
+        } : null,
+        packet
+      };
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(
+        [
+          `Motion Discovery Intake: ${storedMotion.name}`,
+          `Company: ${company.name}`,
+          `Created Company: ${createdCompany ? "yes" : "no"}`,
+          `Linked To Motion: ${linkedCompany ? "yes" : "already linked"}`,
+          `Queue Status: ${result.queue?.status ?? "discovered"}`,
+          `Queue Source: ${result.queue?.source ?? "derived"}`,
+          `Packet: ${packet ? `${packet.packetKind} [${packet.claimState}]` : "none"}`
+        ].join("\n")
+      );
     });
 
   motion
@@ -1287,6 +1443,23 @@ function normalizePacketClaimState(value) {
 
   const normalized = value.trim().toLowerCase();
   if (normalized === "claimable" || normalized === "claimed") {
+    return normalized;
+  }
+
+  return null;
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"discovered" | "queued_for_research" | null}
+ */
+function normalizeMotionDiscoveryQueueStatus(value) {
+  if (!value) {
+    return "discovered";
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "discovered" || normalized === "queued_for_research") {
     return normalized;
   }
 
