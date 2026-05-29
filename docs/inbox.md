@@ -22,6 +22,7 @@ Inbox answers:
 - what kind of next move that change may justify
 
 It is a read surface over stored observations and linked motion context.
+It now also echoes the last checked state of enabled surfaces so "quiet" has evidence behind it.
 
 ## What inbox does not do
 
@@ -31,6 +32,7 @@ Inbox does not:
 - replace cadence logic
 - replace the future daily agenda
 - pretend every observation is a command to act
+- replace `exo inbound review` when you need the full management question of what is sitting on invites, views, follows, and other inbound surfaces
 
 ## CLI
 

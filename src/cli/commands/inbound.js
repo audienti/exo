@@ -12,17 +12,21 @@ import {
   findInboundObservationByDedupeKey,
   findInboundObservationById,
   findUserById,
+  listCompanies,
   listInboundObservations,
+  listMotions,
   updateUser,
   upsertInboundObservation
 } from "../../db/database.js";
 import {
+  renderInboundReview,
   renderInboundObservationDetail,
   renderInboundObservationList,
   renderInboundSurfaceCatalog,
   renderInboundSurfaceDetail,
   renderUserInboundSync
 } from "../../artifacts/render-inbound.js";
+import { buildInboundReviewView } from "../../core/build-inbound-review-view.js";
 import { browserProfileCapabilitySchema } from "../../schema/browser-profile.js";
 import { inboundObservationKindSchema, inboundSyncRunStatusSchema } from "../../schema/inbound.js";
 import { findInboundSurfaceDefinition, listInboundSurfaceCatalog } from "../../lib/inbound-surface-catalog.js";
@@ -35,6 +39,7 @@ export function registerInbound(program) {
       "after",
       `
 Canonical inbound interface:
+  exo inbound review <user-id>
   exo inbound surfaces
   exo inbound surface <surface-key>
   exo inbound sync show <user-id>
@@ -47,8 +52,52 @@ Rules:
   - Start with the canonical truth surfaces, not the LinkedIn notifications bell.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
   - Sync policy and observation storage exist now. Live retrieval still does not.
+  - Use inbound review when you need the management surface: what was checked, what needs a decision, what is stale, and what still needs itemization.
 `
     );
+
+  inbound
+    .command("review")
+    .description("Show the concrete inbound review queue plus surface-by-surface state for one execution user.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--account <account-id>", "Filter to one connected account")
+    .option("--capability <capability>", "Filter to one capability like linkedin or gmail")
+    .option("--motion <motion-id>", "Filter to one motion")
+    .option("--company <company-id>", "Filter to one company")
+    .option("--prospect <prospect-id>", "Filter to one prospect")
+    .option("--limit <count>", "Maximum observations to consider for the review queue")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const rawUser = findUserById(userId);
+      if (!rawUser) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const capability = options.capability ? browserProfileCapabilitySchema.parse(options.capability) : null;
+      const observations = listInboundObservations({
+        userId,
+        accountId: options.account ?? null,
+        capability,
+        motionId: options.motion ?? null,
+        companyId: options.company ?? null,
+        prospectId: options.prospect ?? null,
+        limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
+      });
+
+      const result = buildInboundReviewView(rawUser, observations, listMotions(), listCompanies(), {
+        accountId: options.account ?? null,
+        capability
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderInboundReview(result));
+    });
 
   inbound
     .command("surfaces")

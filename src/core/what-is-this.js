@@ -136,6 +136,10 @@ export function describeExo() {
         purpose: "Inspect the canonical inbound truth surfaces, manage per-account sync policy, and read or write normalized inbound observations before live retrieval exists."
       },
       {
+        command: "exo inbound review",
+        purpose: "Show the management surface for inbound state: which surfaces were checked, which concrete items need review, which sent invites are stale, and where sync counted items without itemizing them."
+      },
+      {
         command: "exo inbox",
         purpose: "Show the ranked triage surface of meaningful inbound changes and the next move each one may justify."
       },
@@ -191,6 +195,8 @@ export function describeExo() {
         "exo profiles capabilities --json",
         "exo users list --json",
         "exo inbound surfaces --json",
+        "exo inbound sync show <user-id> --json",
+        "exo inbound review <user-id> --json",
         "exo inbound observations list <user-id> --json",
         "exo inbox --user <user-id> --json",
         "exo daily --user <user-id> --json",
@@ -319,6 +325,7 @@ export function describeExo() {
       { label: "Browser Profiles", path: "docs/browser-profiles.md" },
       { label: "Action Catalog", path: "docs/action-catalog.md" },
       { label: "Inbound Sync", path: "docs/inbound-sync.md" },
+      { label: "Inbound Review", path: "docs/inbound-review.md" },
       { label: "Inbox", path: "docs/inbox.md" },
       { label: "Daily", path: "docs/daily.md" },
       { label: "Next", path: "docs/next.md" },

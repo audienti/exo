@@ -211,3 +211,120 @@ export function renderInboundObservationDetail(result) {
     `Notes: ${observation.notes ?? "none"}`
   ].join("\n");
 }
+
+/**
+ * @param {{
+ *   user: { label: string, owner: string | null },
+ *   counts: {
+ *     reviewItemCount: number,
+ *     highPriorityCount: number,
+ *     mediumPriorityCount: number,
+ *     lowPriorityCount: number,
+ *     decisionItemCount: number,
+ *     signalItemCount: number,
+ *     itemizationGapCount: number
+ *   },
+ *   surfaces: {
+ *     enabledSurfaceCount: number,
+ *     uncheckedSurfaceCount: number,
+ *     itemizationGapCount: number,
+ *     accounts: Array<{
+ *       capability: string,
+ *       handle: string,
+ *       surfaces: Array<{
+ *         label: string,
+ *         lastRunStatus: string,
+ *         lastItemCount: number | null,
+ *         summary: string,
+ *         recommendedAction: string,
+ *         needsItemization: boolean
+ *       }>
+ *     }>
+ *   },
+ *   reviewItems: Array<{
+ *     observedAt: string,
+ *     ageDays: number,
+ *     priority: string,
+ *     state: string,
+ *     kind: string,
+ *     summary: string,
+ *     recommendedAction: string,
+ *     decisionOptions: string[],
+ *     motion: { name: string } | null,
+ *     company: { name: string | null } | null,
+ *     prospect: { name: string, title: string } | null
+ *   }>,
+ *   itemizationGaps: Array<{
+ *     capability: string,
+ *     handle: string,
+ *     label: string,
+ *     itemCount: number,
+ *     summary: string,
+ *     recommendedAction: string
+ *   }>
+ * }} result
+ */
+export function renderInboundReview(result) {
+  const lines = [
+    `Inbound Review: ${result.user.label}`,
+    `Owner: ${result.user.owner ?? "unknown"}`,
+    `Review Items: ${result.counts.reviewItemCount}`,
+    `High Priority: ${result.counts.highPriorityCount}`,
+    `Medium Priority: ${result.counts.mediumPriorityCount}`,
+    `Low Priority: ${result.counts.lowPriorityCount}`,
+    `Decision Items: ${result.counts.decisionItemCount}`,
+    `Signal Items: ${result.counts.signalItemCount}`,
+    `Enabled Surfaces: ${result.surfaces.enabledSurfaceCount}`,
+    `Unchecked Surfaces: ${result.surfaces.uncheckedSurfaceCount}`,
+    `Itemization Gaps: ${result.counts.itemizationGapCount}`
+  ];
+
+  if (result.surfaces.accounts.length) {
+    lines.push("");
+    lines.push("Surface State:");
+
+    for (const account of result.surfaces.accounts) {
+      lines.push(`  ${account.capability}:${account.handle}`);
+      for (const surface of account.surfaces) {
+        lines.push(`    [${surface.lastRunStatus}] ${surface.label}  items:${surface.lastItemCount ?? 0}`);
+        lines.push(`      ${surface.summary}`);
+        lines.push(`      Action: ${surface.recommendedAction}`);
+        if (surface.needsItemization) {
+          lines.push("      Gap: sync counted items here, but no individual observations were written back.");
+        }
+      }
+    }
+  }
+
+  if (result.reviewItems.length) {
+    lines.push("");
+    lines.push("Review Queue:");
+
+    for (const item of result.reviewItems) {
+      lines.push(`  ${item.observedAt}  [${item.priority}]  ${item.kind}  state:${item.state}  age:${item.ageDays}d`);
+      lines.push(`    ${item.summary}`);
+      lines.push(`    Next: ${item.recommendedAction}`);
+      if (item.decisionOptions.length) {
+        lines.push(`    Choices: ${item.decisionOptions.join(", ")}`);
+      }
+      if (item.motion || item.company || item.prospect) {
+        lines.push(
+          `    Context: motion=${item.motion?.name ?? "-"}  company=${item.company?.name ?? "-"}  prospect=${item.prospect ? `${item.prospect.name} (${item.prospect.title})` : "-"}`
+        );
+      }
+    }
+  }
+
+  if (result.itemizationGaps.length) {
+    lines.push("");
+    lines.push("Itemization Gaps:");
+
+    for (const gap of result.itemizationGaps) {
+      lines.push(`  ${gap.capability}:${gap.handle}  ${gap.label}  items:${gap.itemCount}`);
+      lines.push(`    ${gap.summary}`);
+      lines.push(`    Next: ${gap.recommendedAction}`);
+    }
+  }
+
+  return lines.join("\n");
+}

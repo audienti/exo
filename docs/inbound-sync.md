@@ -9,6 +9,8 @@ The first slice does three things:
 - stores the last known sync result for each enabled surface
 - stores normalized inbound observations that an agent can write back after inspecting a live surface
 
+The next management layer is `exo inbound review`, which combines that sync state with the concrete observations so the operator can see what actually needs a decision.
+
 It does **not** yet do live retrieval by itself.
 
 ## Canonical surfaces
@@ -61,6 +63,7 @@ Inspect one user's sync coverage:
 ```bash
 exo inbound sync show <user-id>
 exo inbound sync show <user-id> --capability linkedin --json
+exo inbound review <user-id> --json
 ```
 
 Enable or disable surfaces on one account:

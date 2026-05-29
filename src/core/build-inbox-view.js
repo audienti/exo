@@ -242,7 +242,7 @@ function compareInboxItems(left, right) {
  *   lastItemCount: number | null
  * }} surface
  */
-function summarizeSurfaceState(surface) {
+export function summarizeSurfaceState(surface) {
   if (surface.lastRunStatus === "never") {
     return `${surface.label} has not been checked yet.`;
   }
@@ -290,7 +290,7 @@ function summarizeSurfaceState(surface) {
  *   lastItemCount: number | null
  * }} surface
  */
-function recommendSurfaceAction(surface) {
+export function recommendSurfaceAction(surface) {
   if (surface.lastRunStatus === "never") {
     return "Run this surface check before trusting silence.";
   }
@@ -328,13 +328,13 @@ function recommendSurfaceAction(surface) {
 /**
  * @param {{ enabled?: boolean, lastRunStatus: string, lastItemCount: number | null }} surface
  */
-function isActionableSurface(surface) {
+export function isActionableSurface(surface) {
   return surface.enabled !== false && surface.lastRunStatus === "success" && (surface.lastItemCount ?? 0) > 0;
 }
 
 /**
  * @param {{ enabled?: boolean, lastRunStatus: string, lastItemCount: number | null }} surface
  */
-function isQuietSurface(surface) {
+export function isQuietSurface(surface) {
   return surface.enabled !== false && surface.lastRunStatus === "success" && (surface.lastItemCount ?? 0) === 0;
 }

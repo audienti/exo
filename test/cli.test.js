@@ -2388,6 +2388,296 @@ test("inbox ranks inbound observations into an operator-facing triage view with 
   }
 });
 
+test("inbound review shows decision-ready items, stale sent invites, and itemization gaps", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-review-"));
+  const userDataDir = path.join(tempDir, "Chrome");
+  const linkedinDirectory = "Profile 4";
+  const linkedinPath = path.join(userDataDir, linkedinDirectory);
+  const browserCommand = path.join(tempDir, "fake-chrome");
+
+  fs.mkdirSync(linkedinPath, { recursive: true });
+  fs.writeFileSync(browserCommand, "#!/bin/sh\nexit 0\n");
+  fs.writeFileSync(
+    path.join(userDataDir, "Local State"),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          [linkedinDirectory]: { name: "LinkedIn Main" }
+        }
+      }
+    })
+  );
+  fs.writeFileSync(path.join(linkedinPath, "Preferences"), JSON.stringify({ profile: { name: "LinkedIn Main" } }));
+  seedBrowserEvidence(linkedinPath, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/feed/"]
+  });
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when a rep needs a real inbound review surface.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there enough pipeline motion to justify outbound work?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "Chainguard", "--domain", "chainguard.dev", "--motion", motion.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Parm Uppal",
+          "--title",
+          "Chief Revenue Officer",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--why-relevant",
+          "Primary buying owner for the motion.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospect = prospectResult.prospects[0];
+
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "linkedin-profile",
+          "--user-data-dir",
+          userDataDir,
+          "--profile-directory",
+          linkedinDirectory,
+          "--browser-command",
+          browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "william-main", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "william@linkedin",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "sync",
+        "record",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--surface",
+        "linkedin-sent-invitations",
+        "--status",
+        "success",
+        "--observed-at",
+        "2026-04-20T13:00:00.000Z",
+        "--item-count",
+        "1",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "sync",
+        "record",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--surface",
+        "linkedin-received-invitations",
+        "--status",
+        "success",
+        "--observed-at",
+        "2026-05-28T13:00:00.000Z",
+        "--item-count",
+        "1",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "sync",
+        "record",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--surface",
+        "linkedin-comment-replies",
+        "--status",
+        "success",
+        "--observed-at",
+        "2026-05-28T14:00:00.000Z",
+        "--item-count",
+        "2",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "observations",
+        "add",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--surface",
+        "linkedin-sent-invitations",
+        "--kind",
+        "connection_request_pending",
+        "--observed-at",
+        "2026-04-20T13:00:00.000Z",
+        "--actor-name",
+        "Parm Uppal",
+        "--summary",
+        "Parm Uppal's connection request is still pending.",
+        "--motion",
+        motion.id,
+        "--company",
+        company.id,
+        "--prospect",
+        prospect.id,
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "observations",
+        "add",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--surface",
+        "linkedin-received-invitations",
+        "--kind",
+        "connection_request_received",
+        "--observed-at",
+        "2026-05-28T13:00:00.000Z",
+        "--actor-name",
+        "Alicia Buyer",
+        "--summary",
+        "Alicia Buyer sent us a new inbound connection request.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const review = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "review", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(review.counts.reviewItemCount, 2);
+    assert.equal(review.counts.decisionItemCount, 2);
+    assert.equal(review.counts.itemizationGapCount, 1);
+
+    const incomingInvite = review.reviewItems.find((item) => item.kind === "connection_request_received");
+    assert.equal(incomingInvite.state, "needs_decision");
+    assert.deepEqual(incomingInvite.decisionOptions, ["accept", "decline"]);
+
+    const staleSentInvite = review.reviewItems.find((item) => item.kind === "connection_request_pending");
+    assert.equal(staleSentInvite.state, "stale_withdraw_review");
+    assert.match(staleSentInvite.recommendedAction, /withdraw/i);
+
+    const commentReplyGap = review.itemizationGaps.find((gap) => gap.surfaceKey === "linkedin-comment-replies");
+    assert.ok(commentReplyGap);
+    assert.equal(commentReplyGap.itemCount, 2);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("daily reconciles cadence with inbound observations into due, waiting, and overridden agenda items", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-"));
 
