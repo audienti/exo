@@ -11,7 +11,9 @@ import { addCompany } from "../../core/add-company.js";
 import { assignCompanyProfile } from "../../core/assign-company-profile.js";
 import { assignCompanyUser } from "../../core/assign-company-user.js";
 import { buildCompanyResearchBrief } from "../../core/build-company-research-brief.js";
+import { claimMotionProspectPacket } from "../../core/claim-motion-prospect-packet.js";
 import { claimMotionTargetAccountPacket } from "../../core/claim-target-account-packet.js";
+import { completeMotionProspectPacket } from "../../core/complete-motion-prospect-packet.js";
 import { completeMotionTargetAccountPacket } from "../../core/complete-target-account-packet.js";
 import { recordMotionProspect, updateMotionProspect } from "../../core/record-prospect.js";
 import { recordMotionProspectTouch } from "../../core/record-prospect-touch.js";
@@ -67,6 +69,8 @@ Canonical companies interface:
   exo companies prospects show <company-id>
   exo companies prospects add <company-id>
   exo companies prospects update <company-id>
+  exo companies prospects claim <company-id>
+  exo companies prospects complete <company-id>
   exo companies through-line show <company-id>
   exo companies through-line set <company-id>
   exo companies opening-plan show <company-id>
@@ -931,6 +935,165 @@ Rules:
             `Contact Points: ${storedProspect.contactPoints.length}`,
             `Contact Enrichment: ${storedProspect.contactEnrichmentState.status}`,
             `Queue: ${storedProspect.queueState.status}`
+          ].join("\n")
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  prospects
+    .command("claim")
+    .description("Claim one selected prospect packet for deeper research, enrichment, and branch synthesis work.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier to claim")
+    .requiredOption("--worker <label>", "Worker label claiming this packet")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--notes <notes>", "Claim notes")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies prospects claim <company-id> --motion <motion-id> --prospect <prospect-id> --worker codex-prospect-1 --json
+
+Rules:
+  - Claim this only after the account-level prospect-selection packet is done.
+  - This packet is for one selected prospect and should keep that person's research, enrichment, through-line, opening plan, and cadence work together.
+  - Use a stable worker label so retries and completion checks stay safe.
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, rawMotion } = context;
+
+      try {
+        const updatedMotion = claimMotionProspectPacket(rawMotion, company, {
+          prospectId: options.prospect,
+          workerLabel: options.worker,
+          notes: options.notes ?? null
+        });
+        const storedMotion = updateMotion(updatedMotion);
+        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+        const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            company,
+            motion: {
+              id: storedMotion.id,
+              name: storedMotion.name
+            },
+            account,
+            prospect
+          }, null, 2));
+          return;
+        }
+
+        if (!prospect) {
+          console.log(`No prospect packet was claimed for ${company.name}.`);
+          return;
+        }
+
+        console.log(
+          [
+            `Claimed Prospect Packet: ${company.name}`,
+            `Motion: ${storedMotion.name}`,
+            `Prospect: ${prospect.name}`,
+            `Prospect ID: ${prospect.id}`,
+            `Packet: ${prospect.packetState?.kind ?? "none"} [${prospect.packetState?.status ?? "none"}]`,
+            `Worker: ${prospect.packetState?.workerLabel ?? "none"}`,
+            `Queue: ${prospect.queueState.status}`
+          ].join("\n")
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  prospects
+    .command("complete")
+    .description("Complete one claimed prospect packet and release it back into the queue or terminal state.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier to complete")
+    .option("--worker <label>", "Worker label expected to own this packet")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--next-status <status>", "Optional terminal override: suppressed or exhausted")
+    .option("--notes <notes>", "Completion notes")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies prospects complete <company-id> --motion <motion-id> --prospect <prospect-id> --worker codex-prospect-1 --json
+  exo companies prospects complete <company-id> --motion <motion-id> --prospect <prospect-id> --worker codex-prospect-1 --next-status exhausted --json
+
+Rules:
+  - Completing a prospect packet does not magically make the branch ready. The stored through-line, opening-plan, cadence, and queue state still have to support readiness.
+  - If the packet is completed but the prospect is still selected, it should naturally return to the claimable backlog.
+  - Use terminal overrides only when the prospect should be suppressed or exhausted.
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const nextStatus = normalizeProspectPacketNextStatus(options.nextStatus);
+      if (options.nextStatus && !nextStatus) {
+        console.error(`Invalid prospect packet next status: ${options.nextStatus}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, rawMotion } = context;
+
+      try {
+        const updatedMotion = completeMotionProspectPacket(rawMotion, company, {
+          prospectId: options.prospect,
+          workerLabel: options.worker ?? null,
+          nextStatus,
+          notes: options.notes ?? null
+        });
+        const storedMotion = updateMotion(updatedMotion);
+        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+        const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            company,
+            motion: {
+              id: storedMotion.id,
+              name: storedMotion.name
+            },
+            account,
+            prospect
+          }, null, 2));
+          return;
+        }
+
+        if (!prospect) {
+          console.log(`No prospect packet was completed for ${company.name}.`);
+          return;
+        }
+
+        console.log(
+          [
+            `Completed Prospect Packet: ${company.name}`,
+            `Motion: ${storedMotion.name}`,
+            `Prospect: ${prospect.name}`,
+            `Prospect ID: ${prospect.id}`,
+            `Packet: ${prospect.packetState?.kind ?? "none"} [${prospect.packetState?.status ?? "none"}]`,
+            `Queue: ${prospect.queueState.status}`
           ].join("\n")
         );
       } catch (error) {
@@ -2025,6 +2188,23 @@ function normalizeOptionalPacketCompletionStatus(value) {
   }
 
   throw new Error(`Invalid packet completion status: ${value}`);
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"suppressed" | "exhausted" | undefined | null}
+ */
+function normalizeProspectPacketNextStatus(value) {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = normalizeMotionQueueStatus(value);
+  if (normalized === "suppressed" || normalized === "exhausted") {
+    return normalized;
+  }
+
+  return null;
 }
 
 /**

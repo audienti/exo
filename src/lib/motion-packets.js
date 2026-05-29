@@ -1,6 +1,6 @@
 // @ts-check
 
-import { targetAccountSchema } from "../schema/target-account.js";
+import { prospectSchema, targetAccountSchema } from "../schema/target-account.js";
 import { applyManualTargetAccountQueueState, withDerivedTargetAccountQueueState } from "./motion-queue.js";
 
 /**
@@ -26,7 +26,14 @@ export function buildMotionPacketSummary(rawMotion, rawCompanies, options = {}) 
   const items = companies
     .filter((company) => Array.isArray(company.motionIds) && company.motionIds.includes(motionId))
     .filter((company) => !options.companyId || company.id === options.companyId)
-    .map((company) => buildMotionPacket(company, accountByCompanyId.get(company.id) ?? null, stakeholderTargetCount))
+    .flatMap((company) => {
+      const packet = buildMotionPacket(company, accountByCompanyId.get(company.id) ?? null, stakeholderTargetCount);
+      if (!packet) {
+        return [];
+      }
+
+      return Array.isArray(packet) ? packet : [packet];
+    })
     .filter(Boolean)
     .filter((item) => !options.status || item.claimState === options.status);
 
@@ -157,6 +164,77 @@ export function applyCompleteTargetAccountPacket(rawAccount, input, now) {
 }
 
 /**
+ * @param {unknown} rawProspect
+ * @param {{ workerLabel: string, notes?: string | null | undefined }} input
+ * @param {string} now
+ */
+export function applyClaimMotionProspectPacket(rawProspect, input, now) {
+  const prospect = prospectSchema.parse(rawProspect);
+  const existingClaim = prospect.packetState?.status === "claimed" ? prospect.packetState : null;
+  if (existingClaim) {
+    throw new Error(`${formatPacketKind(existingClaim.kind)} packet is already claimed by ${existingClaim.workerLabel ?? "another worker"}.`);
+  }
+
+  const queueStatus = prospect.queueState?.status ?? "selected";
+  if (queueStatus !== "selected") {
+    throw new Error(`No claimable prospect packet exists for queue state ${queueStatus}.`);
+  }
+
+  return prospectSchema.parse({
+    ...prospect,
+    packetState: {
+      kind: "prospect_research",
+      status: "claimed",
+      workerLabel: input.workerLabel,
+      claimedAt: now,
+      completedAt: null,
+      notes: normalizeNullableString(input.notes)
+    }
+  });
+}
+
+/**
+ * @param {unknown} rawProspect
+ * @param {{ workerLabel?: string | null | undefined, nextStatus?: "suppressed" | "exhausted" | undefined, notes?: string | null | undefined }} input
+ * @param {string} now
+ */
+export function applyCompleteMotionProspectPacket(rawProspect, input, now) {
+  const prospect = prospectSchema.parse(rawProspect);
+
+  if (!prospect.packetState || prospect.packetState.status !== "claimed") {
+    throw new Error("No prospect packet is currently claimed.");
+  }
+
+  if (prospect.packetState.kind !== "prospect_research") {
+    throw new Error(`Unsupported packet kind: ${prospect.packetState.kind}`);
+  }
+
+  if (input.workerLabel && prospect.packetState.workerLabel && input.workerLabel !== prospect.packetState.workerLabel) {
+    throw new Error(`${formatPacketKind(prospect.packetState.kind)} packet is claimed by ${prospect.packetState.workerLabel}, not ${input.workerLabel}.`);
+  }
+
+  const nextQueueState = input.nextStatus
+    ? {
+        status: input.nextStatus,
+        source: "manual",
+        updatedAt: now,
+        notes: prospect.queueState?.notes ?? null
+      }
+    : prospect.queueState;
+
+  return prospectSchema.parse({
+    ...prospect,
+    queueState: nextQueueState,
+    packetState: {
+      ...prospect.packetState,
+      status: "completed",
+      completedAt: now,
+      notes: normalizeNullableString(input.notes) ?? prospect.packetState.notes ?? null
+    }
+  });
+}
+
+/**
  * @param {Record<string, any>} company
  * @param {import("../schema/target-account.js").targetAccountSchema._type | null} account
  * @param {number} stakeholderTargetCount
@@ -216,6 +294,37 @@ function buildMotionPacket(company, account, stakeholderTargetCount) {
       };
     }
 
+    const prospectResearchPackets = (account?.prospects ?? [])
+      .filter((prospect) => prospect.queueState?.status === "selected")
+      .map((prospect) => ({
+        packetKind: "prospect_research",
+        claimState:
+          prospect.packetState?.status === "claimed" && prospect.packetState?.kind === "prospect_research"
+            ? "claimed"
+            : "claimable",
+        companyId: company.id,
+        companyName: company.name,
+        prospectId: prospect.id,
+        prospectName: prospect.name,
+        prospectTitle: prospect.title,
+        queueStatus: prospect.queueState?.status ?? "selected",
+        signalMatchCount: account?.signalMatches.length ?? 0,
+        prospectCount: account?.prospects.length ?? 0,
+        targetProspectCount: stakeholderTargetCount,
+        workerLabel:
+          prospect.packetState?.status === "claimed" && prospect.packetState?.kind === "prospect_research"
+            ? prospect.packetState?.workerLabel ?? null
+            : null,
+        claimedAt:
+          prospect.packetState?.status === "claimed" && prospect.packetState?.kind === "prospect_research"
+            ? prospect.packetState?.claimedAt ?? null
+            : null,
+        notes: prospect.packetState?.notes ?? null
+      }));
+    if (prospectResearchPackets.length) {
+      return prospectResearchPackets;
+    }
+
     return null;
   }
 
@@ -235,10 +344,18 @@ function buildMotionPacket(company, account, stakeholderTargetCount) {
 }
 
 /**
- * @param {"company_research" | "prospect_selection"} kind
+ * @param {"company_research" | "prospect_selection" | "prospect_research"} kind
  */
 function formatPacketKind(kind) {
-  return kind === "prospect_selection" ? "Prospect selection" : "Company research";
+  if (kind === "prospect_selection") {
+    return "Prospect selection";
+  }
+
+  if (kind === "prospect_research") {
+    return "Prospect research";
+  }
+
+  return "Company research";
 }
 
 /**

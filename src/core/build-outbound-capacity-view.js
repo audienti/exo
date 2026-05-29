@@ -281,8 +281,10 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
         readyProspectCount: String(queue.prospectStatusCounts.ready ?? 0),
         claimableCompanyResearchPacketCount: String(packets.claimableByKind.company_research ?? 0),
         claimableProspectSelectionPacketCount: String(packets.claimableByKind.prospect_selection ?? 0),
+        claimableProspectResearchPacketCount: String(packets.claimableByKind.prospect_research ?? 0),
         claimedCompanyResearchPacketCount: String(packets.claimedByKind.company_research ?? 0),
-        claimedProspectSelectionPacketCount: String(packets.claimedByKind.prospect_selection ?? 0)
+        claimedProspectSelectionPacketCount: String(packets.claimedByKind.prospect_selection ?? 0),
+        claimedProspectResearchPacketCount: String(packets.claimedByKind.prospect_research ?? 0)
       }
     }
   };
@@ -319,6 +321,15 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
   const selectedCount = queue.prospectStatusCounts.selected ?? 0;
   const claimableCompanyResearchPacketCount = packets.claimableByKind.company_research ?? 0;
   const claimableProspectSelectionPacketCount = packets.claimableByKind.prospect_selection ?? 0;
+  const claimableProspectResearchPacketCount = packets.claimableByKind.prospect_research ?? 0;
+
+  if (claimableProspectResearchPacketCount > 0) {
+    return {
+      kind: "claim_prospect_research_packets",
+      guidanceKey: "claim_prospect_research_packets",
+      recommendedAction: `Claim ${claimableProspectResearchPacketCount} prospect-research packet${claimableProspectResearchPacketCount === 1 ? "" : "s"} from selected stakeholders so the motion can turn them into ready branches and refill ${inventoryShortfall} connection-request slot${inventoryShortfall === 1 ? "" : "s"} today.`
+    };
+  }
 
   if (claimableProspectSelectionPacketCount > 0) {
     return {

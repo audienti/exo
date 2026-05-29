@@ -459,6 +459,7 @@ function upsertProspect(prospects, nextProspect, limit, now) {
         contactPoints: nextProspect.contactPoints,
         contactEnrichmentState: buildContactEnrichmentStateUpdate({}, nextProspect.contactEnrichmentState),
         queueState: nextProspect.queueState ?? {},
+        packetState: null,
         notes: nextProspect.notes ?? null,
         signalMatchIds: nextProspect.signalMatchIds,
         throughLine: {},
@@ -500,6 +501,7 @@ function upsertProspect(prospects, nextProspect, limit, now) {
       contactPoints: mergeContactPointLists(existing.contactPoints, nextProspect.contactPoints),
       contactEnrichmentState: buildContactEnrichmentStateUpdate(existing.contactEnrichmentState, nextProspect.contactEnrichmentState),
       queueState: nextProspect.queueState ?? existing.queueState,
+      packetState: existing.packetState,
       notes: nextProspect.notes ?? existing.notes,
       signalMatchIds: mergeStringLists(existing.signalMatchIds, nextProspect.signalMatchIds)
     }));

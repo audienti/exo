@@ -889,6 +889,9 @@ export function renderMotionWritingBrief(result) {
  *     claimState: "claimable" | "claimed",
  *     companyId: string,
  *     companyName: string,
+ *     prospectId?: string,
+ *     prospectName?: string,
+ *     prospectTitle?: string,
  *     queueStatus: string,
  *     signalMatchCount: number,
  *     prospectCount: number,
@@ -918,6 +921,12 @@ export function renderMotionPacketSummary(result) {
   for (const item of result.items) {
     lines.push(`${item.companyName}  [${item.packetKind}]  [${item.claimState}]`);
     lines.push(`  Company ID: ${item.companyId}`);
+    if (item.prospectId) {
+      lines.push(`  Prospect ID: ${item.prospectId}`);
+    }
+    if (item.prospectName) {
+      lines.push(`  Prospect: ${item.prospectName}${item.prospectTitle ? ` (${item.prospectTitle})` : ""}`);
+    }
     lines.push(`  Queue Status: ${item.queueStatus}`);
     lines.push(`  Signal Matches: ${item.signalMatchCount}`);
     lines.push(`  Prospects: ${item.prospectCount}`);

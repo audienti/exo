@@ -256,7 +256,7 @@ export const queueStateSchema = z.object({
 });
 
 export const packetStateSchema = z.object({
-  kind: z.enum(["company_research", "prospect_selection"]),
+  kind: z.enum(["company_research", "prospect_selection", "prospect_research"]),
   status: z.enum(["claimed", "completed"]),
   workerLabel: nullableString.default(null),
   claimedAt: z.string().datetime().nullable().default(null),
@@ -340,6 +340,7 @@ export const prospectSchema = z.object({
   contactPoints: z.array(contactPointSchema).default([]),
   contactEnrichmentState: contactEnrichmentStateSchema.default({}),
   queueState: queueStateSchema.default({ status: "selected" }),
+  packetState: packetStateSchema.nullable().default(null),
   notes: nullableString.default(null),
   signalMatchIds: stringArray,
   touches: z.array(touchSchema).default([]),

@@ -4705,6 +4705,85 @@ test("motion queue exposes discovered and queued research inventory and daily us
     assert.equal(nextAfterResearch.guidance.key, "claim_prospect_selection_packets");
     assert.equal(nextAfterResearch.context.source.kind, "claim_prospect_selection_packets");
     assert.match(nextAfterResearch.nextMove, /claim 1 prospect-selection packet/i);
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "claim",
+        backlogCompany.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-select-1",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const selectedProspect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          backlogCompany.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Packeted Prospect",
+          "--title",
+          "VP Revenue Operations",
+          "--why-relevant",
+          "Best-fit first operator branch for the motion.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const selectedProspectId = selectedProspect.prospects[0].id;
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "complete",
+        backlogCompany.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-select-1",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const dailyAfterSelection = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(dailyAfterSelection.items[0].source.kind, "claim_prospect_research_packets");
+    assert.equal(dailyAfterSelection.items[0].guidance.key, "claim_prospect_research_packets");
+    assert.match(dailyAfterSelection.items[0].recommendedAction, /claim 1 prospect-research packet/i);
+
+    const nextAfterSelection = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(nextAfterSelection.guidance.key, "claim_prospect_research_packets");
+    assert.equal(nextAfterSelection.context.source.kind, "claim_prospect_research_packets");
+    assert.match(nextAfterSelection.nextMove, /claim 1 prospect-research packet/i);
+    assert.equal(selectedProspectId.length > 0, true);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -5061,9 +5140,9 @@ test("motion seed supports direct company seeding and person-first seeding into 
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    assert.equal(packets.counts.packetCount, 1);
-    assert.equal(packets.items[0].companyId, existingCompany.id);
-    assert.equal(packets.items[0].packetKind, "company_research");
+    assert.equal(packets.counts.packetCount, 2);
+    assert.equal(packets.items.some((item) => item.companyId === existingCompany.id && item.packetKind === "company_research"), true);
+    assert.equal(packets.items.some((item) => item.prospectName === "Alex Rivera" && item.packetKind === "prospect_research"), true);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -5259,7 +5338,68 @@ test("prospect-selection packets stay claimable through researched accounts and 
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    assert.equal(finalPackets.counts.packetCount, 0);
+    assert.equal(finalPackets.counts.packetCount, 1);
+    assert.equal(finalPackets.items[0].packetKind, "prospect_research");
+    assert.equal(finalPackets.items[0].claimState, "claimable");
+    assert.equal(finalPackets.items[0].prospectName, "Selena Stakeholder");
+
+    const claimedProspectResearch = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "claim",
+          company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          firstProspect.prospects[0].id,
+          "--worker",
+          "codex-prospect-1",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(claimedProspectResearch.prospect.packetState.kind, "prospect_research");
+    assert.equal(claimedProspectResearch.prospect.packetState.status, "claimed");
+    assert.equal(claimedProspectResearch.prospect.packetState.workerLabel, "codex-prospect-1");
+
+    const completedProspectResearch = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "complete",
+          company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          firstProspect.prospects[0].id,
+          "--worker",
+          "codex-prospect-1",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(completedProspectResearch.prospect.packetState.kind, "prospect_research");
+    assert.equal(completedProspectResearch.prospect.packetState.status, "completed");
+    assert.equal(completedProspectResearch.prospect.queueState.status, "selected");
+
+    const recycledPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(recycledPackets.counts.packetCount, 1);
+    assert.equal(recycledPackets.items[0].packetKind, "prospect_research");
+    assert.equal(recycledPackets.items[0].claimState, "claimable");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -9385,11 +9525,11 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected config portability surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign"),
+    about.currentCapabilities.some((item) => item.command === "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/claim/complete/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign"),
     "expected companies surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo motion intake/start/add/target/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
+    about.currentCapabilities.some((item) => item.command === "exo motion intake/start/add/seed/discover/target/packets/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
     "expected motion write surface to be listed in current capabilities"
   );
   assert.ok(
