@@ -164,7 +164,7 @@ export function describeExo() {
         purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, and pin either a sticky engagement profile or a cross-capability execution user when outreach starts."
       },
       {
-        command: "exo motion intake/start/add/seed/discover/target/packets/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove",
+        command: "exo motion intake/start/add/seed/discover/target/packets/packet-brief/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove",
         purpose: "Ask one intake question at a time before launch, start a motion from an offer URL, force reuse-or-branch decisions when that URL already exists, evaluate targeting readiness, inspect targeted prospects and writing inputs, inspect prospect-scoped action readiness and execution briefs, inspect Audienti-style draft cases, inspect one compact single-surface draft brief for chat writing, and then create, branch, refine, pause, resume, archive, restart, refresh, enumerate, inspect, and remove offer-driven motion state built around premise, audience hypotheses, and motion-specific signals."
       },
       {

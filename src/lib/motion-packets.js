@@ -34,6 +34,10 @@ export function buildMotionPacketSummary(rawMotion, rawCompanies, options = {}) 
 
       return Array.isArray(packet) ? packet : [packet];
     })
+    .map((item) => ({
+      ...item,
+      packetId: buildMotionPacketId(item)
+    }))
     .filter(Boolean)
     .filter((item) => !options.status || item.claimState === options.status);
 
@@ -50,6 +54,21 @@ export function buildMotionPacketSummary(rawMotion, rawCompanies, options = {}) 
     },
     items
   };
+}
+
+/**
+ * @param {{
+ *   packetKind: string,
+ *   companyId: string,
+ *   prospectId?: string | null
+ * }} packet
+ */
+export function buildMotionPacketId(packet) {
+  if (packet.packetKind === "prospect_research" && packet.prospectId) {
+    return `${packet.packetKind}:${packet.companyId}:${packet.prospectId}`;
+  }
+
+  return `${packet.packetKind}:${packet.companyId}`;
 }
 
 /**

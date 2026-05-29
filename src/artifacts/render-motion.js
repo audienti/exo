@@ -885,6 +885,7 @@ export function renderMotionWritingBrief(result) {
  *     claimedCount: number
  *   },
  *   items: Array<{
+ *     packetId: string,
  *     packetKind: string,
  *     claimState: "claimable" | "claimed",
  *     companyId: string,
@@ -920,6 +921,7 @@ export function renderMotionPacketSummary(result) {
 
   for (const item of result.items) {
     lines.push(`${item.companyName}  [${item.packetKind}]  [${item.claimState}]`);
+    lines.push(`  Packet ID: ${item.packetId}`);
     lines.push(`  Company ID: ${item.companyId}`);
     if (item.prospectId) {
       lines.push(`  Prospect ID: ${item.prospectId}`);
@@ -946,6 +948,205 @@ export function renderMotionPacketSummary(result) {
   }
 
   return lines.join("\n").trimEnd();
+}
+
+/**
+ * @param {{
+ *   motion: {
+ *     id: string,
+ *     name: string,
+ *     status: string,
+ *     premise: string | null,
+ *     stakeholderTargetCount: number
+ *   },
+ *   packet: {
+ *     id: string,
+ *     kind: string,
+ *     claimState: string,
+ *     companyId: string,
+ *     companyName: string,
+ *     prospectId: string | null,
+ *     prospectName: string | null,
+ *     prospectTitle: string | null,
+ *     queueStatus: string,
+ *     workerLabel: string | null,
+ *     claimedAt: string | null,
+ *     notes: string | null
+ *   },
+ *   summary: string,
+ *   scope: {
+ *     kind: string,
+ *     focus: string,
+ *     constraints: string[]
+ *   },
+ *   inputs: Record<string, any>,
+ *   doneWhen: string[],
+ *   writeback: {
+ *     claimCommand: string,
+ *     supportingCommands: string[],
+ *     completeCommands: string[]
+ *   },
+ *   reviewSignals: string[]
+ * }} result
+ */
+export function renderMotionPacketBrief(result) {
+  const lines = [
+    `Motion Packet Brief: ${result.packet.kind}`,
+    `Packet ID: ${result.packet.id}`,
+    `Motion: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Motion Status: ${result.motion.status}`,
+    `Claim State: ${result.packet.claimState}`,
+    `Queue Status: ${result.packet.queueStatus}`,
+    `Company: ${result.packet.companyName} (${result.packet.companyId})`
+  ];
+
+  if (result.packet.prospectId) {
+    lines.push(
+      `Prospect: ${result.packet.prospectName ?? "unknown"}${result.packet.prospectTitle ? ` (${result.packet.prospectTitle})` : ""} (${result.packet.prospectId})`
+    );
+  }
+
+  if (result.packet.workerLabel) {
+    lines.push(`Worker: ${result.packet.workerLabel}`);
+  }
+
+  if (result.packet.claimedAt) {
+    lines.push(`Claimed At: ${result.packet.claimedAt}`);
+  }
+
+  if (result.packet.notes) {
+    lines.push(`Packet Notes: ${result.packet.notes}`);
+  }
+
+  lines.push("", "Summary", `  ${result.summary}`, "", "Scope", `  Focus: ${result.scope.focus}`);
+
+  if (result.scope.constraints.length) {
+    lines.push("  Constraints");
+    for (const constraint of result.scope.constraints) {
+      lines.push(`    - ${constraint}`);
+    }
+  }
+
+  lines.push("", "Inputs");
+  for (const line of renderPacketInputs(result.inputs)) {
+    lines.push(`  ${line}`);
+  }
+
+  lines.push("", "Done When");
+  for (const step of result.doneWhen) {
+    lines.push(`  - ${step}`);
+  }
+
+  lines.push("", "Writeback");
+  lines.push(`  Claim: ${result.writeback.claimCommand}`);
+  if (result.writeback.supportingCommands.length) {
+    lines.push("  Supporting Commands");
+    for (const command of result.writeback.supportingCommands) {
+      lines.push(`    - ${command}`);
+    }
+  }
+  if (result.writeback.completeCommands.length) {
+    lines.push("  Complete");
+    for (const command of result.writeback.completeCommands) {
+      lines.push(`    - ${command}`);
+    }
+  }
+
+  if (result.reviewSignals.length) {
+    lines.push("", "Review Signals");
+    for (const signal of result.reviewSignals) {
+      lines.push(`  - ${signal}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {Record<string, any>} inputs
+ */
+function renderPacketInputs(inputs) {
+  const lines = [];
+
+  if (inputs.company) {
+    lines.push(`Company: ${inputs.company.name} (${inputs.company.id})`);
+    if (inputs.company.domain) {
+      lines.push(`Domain: ${inputs.company.domain}`);
+    }
+    if (inputs.company.websiteUrl) {
+      lines.push(`Website: ${inputs.company.websiteUrl}`);
+    }
+    if (inputs.company.linkedinCompanyUrl) {
+      lines.push(`LinkedIn Company: ${inputs.company.linkedinCompanyUrl}`);
+    }
+  }
+
+  if (inputs.prospect) {
+    lines.push(`Prospect: ${inputs.prospect.name} (${inputs.prospect.id})`);
+    lines.push(`Title: ${inputs.prospect.title}`);
+    if (inputs.prospect.whyRelevant) {
+      lines.push(`Why Relevant: ${inputs.prospect.whyRelevant}`);
+    }
+    if (inputs.prospect.linkedinProfileUrl) {
+      lines.push(`LinkedIn Profile: ${inputs.prospect.linkedinProfileUrl}`);
+    }
+    if (inputs.prospect.email) {
+      lines.push(`Email: ${inputs.prospect.email}`);
+    }
+  }
+
+  if (inputs.premise) {
+    lines.push(`Premise: ${inputs.premise}`);
+  }
+
+  if (Array.isArray(inputs.audienceHypotheses) && inputs.audienceHypotheses.length) {
+    lines.push(`Audiences: ${inputs.audienceHypotheses.join(", ")}`);
+  }
+
+  if (Array.isArray(inputs.targetTitles) && inputs.targetTitles.length) {
+    lines.push(`Target Titles: ${inputs.targetTitles.join(", ")}`);
+  }
+
+  if (Array.isArray(inputs.roleFamilies) && inputs.roleFamilies.length) {
+    lines.push(`Role Families: ${inputs.roleFamilies.join(", ")}`);
+  }
+
+  if (Number.isInteger(inputs.stakeholderTargetCount)) {
+    lines.push(`Stakeholder Target Count: ${inputs.stakeholderTargetCount}`);
+  }
+
+  if (Array.isArray(inputs.signalChecklist) && inputs.signalChecklist.length) {
+    lines.push(`Signal Checklist: ${inputs.signalChecklist.length}`);
+  }
+
+  if (Array.isArray(inputs.storedSignalMatches) && inputs.storedSignalMatches.length) {
+    lines.push(`Stored Signal Matches: ${inputs.storedSignalMatches.length}`);
+  }
+
+  if (Array.isArray(inputs.signalMatches) && inputs.signalMatches.length) {
+    lines.push(`Prospect Signal Matches: ${inputs.signalMatches.length}`);
+  }
+
+  if (Array.isArray(inputs.existingProspects) && inputs.existingProspects.length) {
+    lines.push(`Existing Prospects: ${inputs.existingProspects.length}`);
+  }
+
+  if (Number.isInteger(inputs.storedSignalMatchCount)) {
+    lines.push(`Stored Signal Match Count: ${inputs.storedSignalMatchCount}`);
+  }
+
+  if (Number.isInteger(inputs.selectedCount)) {
+    lines.push(`Selected Prospects: ${inputs.selectedCount}`);
+  }
+
+  if (inputs.currentState) {
+    lines.push(
+      `Current State: role-truth=${inputs.currentState.roleTruthStatus}, trigger=${inputs.currentState.triggerWindowStatus}, identity=${inputs.currentState.identityTellsStatus}, live-signal=${inputs.currentState.liveSignalStatus}, through-line=${inputs.currentState.throughLineStatus}, opening-plan=${inputs.currentState.openingPlanStatus}, cadence=${inputs.currentState.cadenceStatus}, enrichment=${inputs.currentState.contactEnrichmentStatus}`
+    );
+  }
+
+  return lines;
 }
 
 /**

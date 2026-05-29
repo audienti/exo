@@ -4924,6 +4924,231 @@ test("motion packets let a worker claim and complete a company research packet",
   }
 });
 
+test("motion packet-brief turns packet state into a worker contract with stable packet ids", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-packet-brief-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/motion-packet-brief",
+          "--premise",
+          "This offer matters when packetized targeting work needs explicit worker contracts.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there clear evidence this team needs more governed outbound execution?",
+          "--stakeholder-count",
+          "2",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Packet Brief Co",
+          "--domain",
+          "packet-brief.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const companyPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(companyPackets.items[0].packetId, `company_research:${company.id}`);
+
+    const companyBrief = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "packet-brief", motion.id, "--packet", companyPackets.items[0].packetId, "--json"],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(companyBrief.packet.id, `company_research:${company.id}`);
+    assert.equal(companyBrief.packet.kind, "company_research");
+    assert.match(companyBrief.summary, /Research Packet Brief Co against the motion premise/i);
+    assert.equal(companyBrief.writeback.claimCommand.includes(`exo companies queue claim ${company.id}`), true);
+    assert.equal(
+      companyBrief.writeback.supportingCommands.some((command) => command.includes("exo companies signal-matches add")),
+      true
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "claim",
+        company.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-research-1",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "complete",
+        company.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-research-1",
+        "--next-status",
+        "researched",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const selectionPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(selectionPackets.items[0].packetId, `prospect_selection:${company.id}`);
+
+    const selectionBrief = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "packet-brief", motion.id, "--packet", selectionPackets.items[0].packetId, "--json"],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(selectionBrief.packet.kind, "prospect_selection");
+    assert.equal(selectionBrief.inputs.stakeholderTargetCount, 2);
+    assert.equal(
+      selectionBrief.writeback.supportingCommands.some((command) => command.includes("exo companies prospects add")),
+      true
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "claim",
+        company.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-select-1",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const prospectAdded = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Jamie Operator",
+          "--title",
+          "VP Revenue Operations",
+          "--why-relevant",
+          "Primary owner for the packetized GTM problem.",
+          "--buying-committee-role",
+          "operator_champion",
+          "--decision-authority",
+          "influences",
+          "--fit-confidence",
+          "high",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "complete",
+        company.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-select-1",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const researchPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(
+      researchPackets.items[0].packetId,
+      `prospect_research:${company.id}:${prospectAdded.prospects[0].id}`
+    );
+
+    const researchBrief = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "packet-brief", motion.id, "--packet", researchPackets.items[0].packetId, "--json"],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(researchBrief.packet.kind, "prospect_research");
+    assert.equal(researchBrief.packet.prospectId, prospectAdded.prospects[0].id);
+    assert.equal(researchBrief.inputs.prospect.name, "Jamie Operator");
+    assert.equal(
+      researchBrief.writeback.supportingCommands.some((command) => command.includes("exo companies through-line set")),
+      true
+    );
+    assert.equal(
+      researchBrief.writeback.completeCommands.some((command) => command.includes("exo companies prospects complete")),
+      true
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("motion discover links existing companies and creates new queued companies as packet-ready backlog", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-discover-"));
 
@@ -9529,7 +9754,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected companies surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo motion intake/start/add/seed/discover/target/packets/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
+    about.currentCapabilities.some((item) => item.command === "exo motion intake/start/add/seed/discover/target/packets/packet-brief/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
     "expected motion write surface to be listed in current capabilities"
   );
   assert.ok(

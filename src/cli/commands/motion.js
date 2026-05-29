@@ -7,6 +7,7 @@ import { addCompany } from "../../core/add-company.js";
 import { cloneMotionDefinition } from "../../core/clone-motion.js";
 import { buildMotionActionBrief, buildMotionActionView } from "../../core/build-motion-action-view.js";
 import { buildMotionIntake } from "../../core/build-motion-intake.js";
+import { buildMotionPacketBrief } from "../../core/build-motion-packet-brief.js";
 import { defineMotion } from "../../core/define-motion.js";
 import { buildMotionDraftBrief, buildMotionDraftView } from "../../core/build-motion-draft-view.js";
 import { buildMotionProspectView } from "../../core/build-motion-prospect-view.js";
@@ -40,6 +41,7 @@ import {
   renderMotionActionList,
   renderMotionDraftCases,
   renderMotionDraftBrief,
+  renderMotionPacketBrief,
   renderMotionPacketSummary,
   renderMotionProspectList,
   renderMotionStartResult,
@@ -69,6 +71,7 @@ Canonical motion interface:
   exo motion discover
   exo motion target
   exo motion packets
+  exo motion packet-brief
   exo motion prospects
   exo motion actions
   exo motion action-brief
@@ -683,7 +686,7 @@ Examples:
       "after",
       `
 What this command does:
-  - Shows the motion work packets the motion currently exposes, starting with company research and prospect selection.
+  - Shows the motion work packets the motion currently exposes, including company research, prospect selection, and prospect research.
   - Tells you which packets are still claimable and which are already claimed.
   - Makes parallel backlog work visible before you open a browser or start research.
 
@@ -729,6 +732,49 @@ Examples:
       }
 
       console.log(renderMotionPacketSummary(result));
+    });
+
+  motion
+    .command("packet-brief")
+    .description("Show one packet as a concrete worker brief with scope, done-when, and writeback contract.")
+    .argument("<motion-id>", "Motion identifier")
+    .requiredOption("--packet <packet-id>", "Packet identifier from exo motion packets")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Turns one active motion packet into a concrete worker brief.
+  - Gives the scope, the real inputs, the done-when checks, and the exact writeback commands.
+  - Makes packetized delegation usable instead of forcing the operator to infer the contract from raw queue state.
+
+Examples:
+  exo motion packet-brief <motion-id> --packet company_research:<company-id>
+  exo motion packet-brief <motion-id> --packet prospect_research:<company-id>:<prospect-id> --json
+`
+    )
+    .action((motionId, options) => {
+      const raw = findMotionById(motionId);
+
+      if (!raw) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const result = buildMotionPacketBrief(raw, listCompanies(), options.packet);
+
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        console.log(renderMotionPacketBrief(result));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
     });
 
   motion
