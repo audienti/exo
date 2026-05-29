@@ -6,6 +6,7 @@ import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
 import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
 import { buildMotionQueueSummary, isReadyConnectionRequestProspect } from "../lib/motion-queue.js";
+import { buildMotionPacketSummary } from "../lib/motion-packets.js";
 
 const BUSINESS_DAYS_PER_WEEK = 5;
 
@@ -54,6 +55,11 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     .map((motion) => buildMotionQueueSummary(motion, companies.filter((company) => assignedCompanyIds.has(company.id)), {
       companyId: options.companyId ?? null
     }));
+  const packetSummaries = motions
+    .filter((motion) => !options.motionId || motion.id === options.motionId)
+    .map((motion) => buildMotionPacketSummary(motion, companies.filter((company) => assignedCompanyIds.has(company.id)), {
+      companyId: options.companyId ?? null
+    }));
   const scopedProspects = scopedAccounts.flatMap(({ motion, account }) =>
     account.prospects
       .filter((prospect) => !options.prospectId || prospect.id === options.prospectId)
@@ -94,6 +100,22 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     companyStatusCounts: {},
     prospectStatusCounts: {}
   });
+  const packets = packetSummaries.reduce((summary, item) => {
+    summary.packetCount += item.counts.packetCount;
+    summary.claimableCount += item.counts.claimableCount;
+    summary.claimedCount += item.counts.claimedCount;
+    for (const packet of item.items) {
+      const targetBucket = packet.claimState === "claimed" ? summary.claimedByKind : summary.claimableByKind;
+      targetBucket[packet.packetKind] = (targetBucket[packet.packetKind] ?? 0) + 1;
+    }
+    return summary;
+  }, {
+    packetCount: 0,
+    claimableCount: 0,
+    claimedCount: 0,
+    claimableByKind: {},
+    claimedByKind: {}
+  });
   const execution = {
     sentToday,
     pendingInvitations,
@@ -101,7 +123,8 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     consideredMotionCount,
     consideredCompanyCount,
     consideredProspectCount,
-    queue
+    queue,
+    packets
   };
 
   if (linkedinAccount.sourceType !== "browser-profile") {
@@ -215,23 +238,31 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     return configuredResult;
   }
 
-  const recommendedAction = readyConnectionRequests >= remainingInvitationsToday
-    ? `Use the ready connection-request branches to send ${remainingInvitationsToday} more LinkedIn invitation${remainingInvitationsToday === 1 ? "" : "s"} today and close the remaining deficit.`
+  const deficitAction = readyConnectionRequests >= remainingInvitationsToday
+    ? {
+        kind: "fill_connection_request_deficit",
+        guidanceKey: "fill_connection_request_deficit",
+        recommendedAction: `Use the ready connection-request branches to send ${remainingInvitationsToday} more LinkedIn invitation${remainingInvitationsToday === 1 ? "" : "s"} today and close the remaining deficit.`
+      }
     : readyConnectionRequests > 0
-      ? `Send ${readyConnectionRequests} ready LinkedIn connection request${readyConnectionRequests === 1 ? "" : "s"} now, then build ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} to close today's remaining invitation deficit.`
-      : buildDeficitActionFromQueue(queue, remainingInvitationsToday, inventoryShortfall);
+      ? {
+          kind: "fill_connection_request_deficit",
+          guidanceKey: "fill_connection_request_deficit",
+          recommendedAction: `Send ${readyConnectionRequests} ready LinkedIn connection request${readyConnectionRequests === 1 ? "" : "s"} now, then build ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} to close today's remaining invitation deficit.`
+        }
+      : buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, inventoryShortfall);
   const whyItMatters = `LinkedIn target is ${dailyInvitationsTarget} invitation${dailyInvitationsTarget === 1 ? "" : "s"} today. ${sentToday} ${sentToday === 1 ? "has" : "have"} been sent today, ${pendingInvitations} ${pendingInvitations === 1 ? "is" : "are"} still pending from prior work, ${readyConnectionRequests} more branch${readyConnectionRequests === 1 ? "" : "es"} ${readyConnectionRequests === 1 ? "is" : "are"} ready right now, and ${remainingInvitationsToday} invitation${remainingInvitationsToday === 1 ? "" : "s"} still need to be filled today.`;
 
   return {
     ...configuredResult,
     plannerItem: {
-      kind: "fill_connection_request_deficit",
+      kind: deficitAction.kind,
       priority: "action",
       priorityRank: 0.95,
       dueAt: now.toISOString(),
       whyItMatters,
-      recommendedAction,
-      guidanceKey: "fill_connection_request_deficit",
+      recommendedAction: deficitAction.recommendedAction,
+      guidanceKey: deficitAction.guidanceKey,
       context: {
         userLabel: user.label,
         profileId: profile.id,
@@ -247,7 +278,11 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
         queuedResearchCompanyCount: String(queue.companyStatusCounts.queued_for_research ?? 0),
         researchedCompanyCount: String(queue.companyStatusCounts.researched ?? 0),
         selectedProspectCount: String(queue.prospectStatusCounts.selected ?? 0),
-        readyProspectCount: String(queue.prospectStatusCounts.ready ?? 0)
+        readyProspectCount: String(queue.prospectStatusCounts.ready ?? 0),
+        claimableCompanyResearchPacketCount: String(packets.claimableByKind.company_research ?? 0),
+        claimableProspectSelectionPacketCount: String(packets.claimableByKind.prospect_selection ?? 0),
+        claimedCompanyResearchPacketCount: String(packets.claimedByKind.company_research ?? 0),
+        claimedProspectSelectionPacketCount: String(packets.claimedByKind.prospect_selection ?? 0)
       }
     }
   };
@@ -267,29 +302,67 @@ function isSameLocalDate(iso, now) {
 }
 
 /**
+ * @param {{ companyStatusCounts: Record<string, number>, prospectStatusCounts: Record<string, number> }} queue
  * @param {{
- *   companyStatusCounts: Record<string, number>,
- *   prospectStatusCounts: Record<string, number>
- * }} queue
+ *   packetCount: number,
+ *   claimableCount: number,
+ *   claimedCount: number,
+ *   claimableByKind: Record<string, number>,
+ *   claimedByKind: Record<string, number>
+ * }} packets
  * @param {number} remainingInvitationsToday
  * @param {number} inventoryShortfall
  */
-function buildDeficitActionFromQueue(queue, remainingInvitationsToday, inventoryShortfall) {
+function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, inventoryShortfall) {
   const queuedResearchCount = (queue.companyStatusCounts.discovered ?? 0) + (queue.companyStatusCounts.queued_for_research ?? 0);
   const researchedCount = queue.companyStatusCounts.researched ?? 0;
   const selectedCount = queue.prospectStatusCounts.selected ?? 0;
+  const claimableCompanyResearchPacketCount = packets.claimableByKind.company_research ?? 0;
+  const claimableProspectSelectionPacketCount = packets.claimableByKind.prospect_selection ?? 0;
+
+  if (claimableProspectSelectionPacketCount > 0) {
+    return {
+      kind: "claim_prospect_selection_packets",
+      guidanceKey: "claim_prospect_selection_packets",
+      recommendedAction: `Claim ${claimableProspectSelectionPacketCount} prospect-selection packet${claimableProspectSelectionPacketCount === 1 ? "" : "s"} from researched account${claimableProspectSelectionPacketCount === 1 ? "" : "s"} so the motion can turn them into selected stakeholders and refill ${inventoryShortfall} ready branch${inventoryShortfall === 1 ? "" : "es"} for today's invitation target.`
+    };
+  }
+
+  if (claimableCompanyResearchPacketCount > 0) {
+    return {
+      kind: "claim_company_research_packets",
+      guidanceKey: "claim_company_research_packets",
+      recommendedAction: `Claim ${claimableCompanyResearchPacketCount} company-research packet${claimableCompanyResearchPacketCount === 1 ? "" : "s"} from discovered or queued accounts so the motion can manufacture ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.`
+    };
+  }
 
   if (selectedCount > 0) {
-    return `Finish through-lines, opening plans, and cadence on ${selectedCount} selected prospect${selectedCount === 1 ? "" : "s"} so the motion can close ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} today.`;
+    return {
+      kind: "fill_connection_request_deficit",
+      guidanceKey: "fill_connection_request_deficit",
+      recommendedAction: `Finish through-lines, opening plans, and cadence on ${selectedCount} selected prospect${selectedCount === 1 ? "" : "s"} so the motion can close ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} today.`
+    };
   }
 
   if (researchedCount > 0) {
-    return `Select prospects from ${researchedCount} researched account${researchedCount === 1 ? "" : "s"} so the motion can refill ${inventoryShortfall} ready branch${inventoryShortfall === 1 ? "" : "es"} for today's invitation target.`;
+    return {
+      kind: "fill_connection_request_deficit",
+      guidanceKey: "fill_connection_request_deficit",
+      recommendedAction: `Select prospects from ${researchedCount} researched account${researchedCount === 1 ? "" : "s"} so the motion can refill ${inventoryShortfall} ready branch${inventoryShortfall === 1 ? "" : "es"} for today's invitation target.`
+    };
   }
 
   if (queuedResearchCount > 0) {
-    return `Research ${queuedResearchCount} discovered or queued company${queuedResearchCount === 1 ? "" : "ies"} so the motion can manufacture ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.`;
+    return {
+      kind: "fill_connection_request_deficit",
+      guidanceKey: "fill_connection_request_deficit",
+      recommendedAction: `Research ${queuedResearchCount} discovered or queued company${queuedResearchCount === 1 ? "" : "ies"} so the motion can manufacture ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.`
+    };
   }
 
-  return `Build ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today so outbound does not miss the invitation target.`;
+  return {
+    kind: "fill_connection_request_deficit",
+    guidanceKey: "fill_connection_request_deficit",
+    recommendedAction: `Build ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today so outbound does not miss the invitation target.`
+  };
 }

@@ -4637,8 +4637,9 @@ test("motion queue exposes discovered and queued research inventory and daily us
       }).toString()
     );
     assert.equal(daily.capacity.linkedin.execution.queue.companyStatusCounts.queued_for_research, 1);
-    assert.equal(daily.items[0].source.kind, "fill_connection_request_deficit");
-    assert.match(daily.items[0].recommendedAction, /research 1 discovered or queued compan/i);
+    assert.equal(daily.items[0].source.kind, "claim_company_research_packets");
+    assert.equal(daily.items[0].guidance.key, "claim_company_research_packets");
+    assert.match(daily.items[0].recommendedAction, /claim 1 company-research packet/i);
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
@@ -4646,7 +4647,64 @@ test("motion queue exposes discovered and queued research inventory and daily us
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    assert.match(next.nextMove, /research 1 discovered or queued compan/i);
+    assert.equal(next.guidance.key, "claim_company_research_packets");
+    assert.equal(next.context.source.kind, "claim_company_research_packets");
+    assert.match(next.nextMove, /claim 1 company-research packet/i);
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "claim",
+        backlogCompany.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-research-1",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "complete",
+        backlogCompany.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-research-1",
+        "--next-status",
+        "researched",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const dailyAfterResearch = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(dailyAfterResearch.items[0].source.kind, "claim_prospect_selection_packets");
+    assert.equal(dailyAfterResearch.items[0].guidance.key, "claim_prospect_selection_packets");
+    assert.match(dailyAfterResearch.items[0].recommendedAction, /claim 1 prospect-selection packet/i);
+
+    const nextAfterResearch = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(nextAfterResearch.guidance.key, "claim_prospect_selection_packets");
+    assert.equal(nextAfterResearch.context.source.kind, "claim_prospect_selection_packets");
+    assert.match(nextAfterResearch.nextMove, /claim 1 prospect-selection packet/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
