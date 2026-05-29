@@ -1,6 +1,7 @@
 // @ts-check
 
 import { buildInboxView } from "./build-inbox-view.js";
+import { buildUserInboundSyncView } from "./user-inbound-sync.js";
 import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
@@ -8,6 +9,8 @@ import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
 import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
 import { hasUsableEmailFallback } from "../lib/prospect-contacts.js";
+
+const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * @param {unknown} rawUser
@@ -45,7 +48,18 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
       .map((company) => company.id)
   );
 
-  const items = motions
+  const syncPlannerItem = buildSyncPlannerItem({
+    user,
+    motions,
+    assignedCompanyIds,
+    observationCount: rawObservations.length,
+    now,
+    options
+  });
+
+  const items = [
+    syncPlannerItem,
+    ...motions
     .flatMap((motion) =>
       motion.targetMap.accounts.flatMap((account) =>
         account.prospects.map((prospect) => {
@@ -82,6 +96,7 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
         })
       )
     )
+  ]
     .filter(Boolean)
     .sort(compareDailyItems);
 
@@ -105,6 +120,120 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawObservation
       advancedByInboundCount: limitedItems.filter((item) => item.cadenceEffect === "advanced_by_inbound").length
     },
     items: limitedItems
+  };
+}
+
+/**
+ * @param {{
+ *   user: import("../schema/user.js").userSchema._type,
+ *   motions: import("../schema/motion.js").motionSchema._type[],
+ *   assignedCompanyIds: Set<string>,
+ *   observationCount: number,
+ *   now: string,
+ *   options: {
+ *     motionId?: string | null | undefined,
+ *     companyId?: string | null | undefined,
+ *     prospectId?: string | null | undefined,
+ *     limit?: number | null | undefined
+ *   }
+ * }} input
+ */
+function buildSyncPlannerItem({ user, motions, assignedCompanyIds, observationCount, now, options }) {
+  if (!assignedCompanyIds.size || observationCount > 0 || options.prospectId) {
+    return null;
+  }
+
+  const syncView = buildUserInboundSyncView(user);
+  const relevantAccounts = syncView.accounts
+    .map((account) => {
+      const staleSurfaces = account.surfaces
+        .filter((surface) => surface.enabled && surface.truthLevel === "authoritative")
+        .map((surface) => ({
+          ...surface,
+          freshness: classifySurfaceFreshness(surface, now)
+        }))
+        .filter((surface) => surface.freshness);
+
+      if (!staleSurfaces.length) {
+        return null;
+      }
+
+      return {
+        account,
+        staleSurfaces
+      };
+    })
+    .filter(Boolean);
+
+  if (!relevantAccounts.length) {
+    return null;
+  }
+
+  const filteredMotion = options.motionId
+    ? motions.find((motion) => motion.id === options.motionId) ?? null
+    : null;
+  const capabilityLabels = [...new Set(relevantAccounts.map((entry) => humanizeCapability(entry.account.capability)))];
+  const staleSurfaceLabels = relevantAccounts.flatMap((entry) => entry.staleSurfaces.map((surface) => surface.label));
+  const neverOrFailed = relevantAccounts.some((entry) =>
+    entry.staleSurfaces.some((surface) => surface.freshness.reason === "never" || surface.freshness.reason === "failed")
+  );
+  const reasonSummary = neverOrFailed
+    ? "enabled inbound surfaces have never been checked yet or have a failed sync state"
+    : "enabled inbound surfaces are stale enough that the planner should refresh them before trusting silence";
+  const whyItMatters = `Exo has no fresh inbound truth for ${capabilityLabels.join(" and ")}, so the planner should refresh those surfaces before trusting the absence of replies, accepts, or attention signals.`;
+  const recommendedAction = `Run a quick inbound sync for ${capabilityLabels.join(" and ")}, record any observations you find, mark the surfaces checked, and then rerun inbox, daily, and next.`;
+  const earliestDueAt = relevantAccounts
+    .flatMap((entry) => entry.staleSurfaces.map((surface) => surface.freshness.dueAt))
+    .sort()[0] ?? now;
+
+  return {
+    motion: filteredMotion
+      ? {
+          id: filteredMotion.id,
+          name: filteredMotion.name
+        }
+      : {
+          id: `inbound-sync:${user.id}`,
+          name: "Cross-motion inbound truth"
+        },
+    company: {
+      id: `inbound-sync:${user.id}`,
+      name: capabilityLabels.join(" + ")
+    },
+    prospect: {
+      id: `inbound-sync:${user.id}`,
+      name: "Inbound sync",
+      title: `${staleSurfaceLabels.length} authoritative surface${staleSurfaceLabels.length === 1 ? "" : "s"} need refresh`
+    },
+    cadence: {
+      currentStep: null,
+      nextAction: recommendedAction,
+      nextActionDueAt: earliestDueAt,
+      lastTouchOutcome: null
+    },
+    guidance: buildPlannerGuidance("sync_inbound_surfaces", {
+      motionId: filteredMotion?.id ?? "",
+      motionName: filteredMotion?.name ?? "active motions",
+      recommendedAction,
+      dueAt: earliestDueAt,
+      whyItMatters,
+      accountCapabilityList: capabilityLabels.join(", "),
+      surfaceList: staleSurfaceLabels.join(", "),
+      syncReason: reasonSummary
+    }),
+    state: "due_now",
+    priority: "action",
+    priorityRank: 0.5,
+    cadenceEffect: "sync_needed",
+    dueAt: earliestDueAt,
+    whyItMatters,
+    recommendedAction,
+    source: {
+      type: "inbound_sync",
+      kind: neverOrFailed ? "sync_needed" : "sync_stale",
+      accountCount: relevantAccounts.length,
+      surfaceCount: staleSurfaceLabels.length
+    }
   };
 }
 
@@ -444,6 +573,53 @@ function inferCadenceGuidanceKey(cadence, waiting) {
 }
 
 /**
+ * @param {{
+ *   lastRunStatus: "never" | "success" | "warning" | "failed",
+ *   lastSyncedAt: string | null,
+ *   lastObservedAt: string | null
+ * }} surface
+ * @param {string} now
+ */
+function classifySurfaceFreshness(surface, now) {
+  if (surface.lastRunStatus === "never") {
+    return {
+      reason: "never",
+      dueAt: "1970-01-01T00:00:00.000Z"
+    };
+  }
+
+  if (surface.lastRunStatus === "failed") {
+    return {
+      reason: "failed",
+      dueAt: surface.lastSyncedAt ?? "1970-01-01T00:00:00.000Z"
+    };
+  }
+
+  const freshnessTime = surface.lastObservedAt ?? surface.lastSyncedAt;
+  if (!freshnessTime) {
+    return {
+      reason: "never",
+      dueAt: "1970-01-01T00:00:00.000Z"
+    };
+  }
+
+  const freshnessMs = Date.parse(freshnessTime);
+  const nowMs = Date.parse(now);
+  if (Number.isNaN(freshnessMs) || Number.isNaN(nowMs)) {
+    return null;
+  }
+
+  if (surface.lastRunStatus === "warning" || nowMs - freshnessMs > INBOUND_SYNC_STALE_MS) {
+    return {
+      reason: surface.lastRunStatus === "warning" ? "warning" : "stale",
+      dueAt: freshnessTime
+    };
+  }
+
+  return null;
+}
+
+/**
  * @param {ReturnType<typeof buildDailyItem>} left
  * @param {ReturnType<typeof buildDailyItem>} right
  */
@@ -453,6 +629,25 @@ function compareDailyItems(left, right) {
     || left.dueAt.localeCompare(right.dueAt)
     || left.prospect.name.localeCompare(right.prospect.name)
   );
+}
+
+/**
+ * @param {string} capability
+ */
+function humanizeCapability(capability) {
+  switch (capability) {
+    case "linkedin":
+      return "LinkedIn";
+    case "gmail":
+      return "Gmail";
+    case "sales-navigator":
+      return "Sales Navigator";
+    default:
+      return capability
+        .split("-")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+  }
 }
 
 /**

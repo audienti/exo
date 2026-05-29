@@ -2681,27 +2681,63 @@ test("daily surfaces a parallel support action while a live outbound branch wait
       }).toString()
     );
 
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "accounts",
-        "add",
-        user.id,
-        "--capability",
-        "linkedin",
-        "--handle",
-        "support-user",
-        "--runtime",
-        "codex",
-        "--connector",
-        "chrome",
-        "--preferred",
-        "--json"
-      ],
-      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    const userWithAccount = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "support-user",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
     );
+    const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+    const syncedAt = new Date().toISOString();
+
+    for (const surfaceKey of [
+      "linkedin-sent-invitations",
+      "linkedin-received-invitations",
+      "linkedin-messaging-inbox",
+      "linkedin-profile-views",
+      "linkedin-following-list"
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "record",
+          user.id,
+          "--account",
+          linkedinAccount.id,
+          "--surface",
+          surfaceKey,
+          "--status",
+          "success",
+          "--observed-at",
+          syncedAt,
+          "--item-count",
+          "0",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      );
+    }
 
     execFileSync(
       "node",
@@ -2803,6 +2839,137 @@ test("daily surfaces a parallel support action while a live outbound branch wait
     assert.match(daily.items[0].guidance.taskPrompt, /email permutations/i);
     assert.match(daily.items[0].guidance.taskPrompt, /prospects update .* --prospect /i);
     assert.equal(daily.items[0].waitingBranch.kind, "wait_for_connection_response");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("daily surfaces a sync action before trustable silence when enabled inbound surfaces were never checked", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-sync-needed-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/daily-sync-needed",
+          "--premise",
+          "This offer matters when operators need a governed GTM planner.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is the company actively working live outbound branches?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Sync Needed Co",
+          "--domain",
+          "sync-needed.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Sync Needed User", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "linkedin",
+        "--handle",
+        "sync-needed-user",
+        "--runtime",
+        "codex",
+        "--connector",
+        "chrome",
+        "--preferred",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "user",
+        "assign",
+        company.id,
+        "--user",
+        user.id,
+        "--reason",
+        "Make inbound sync freshness part of the planner.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.equal(daily.counts.itemCount, 1);
+    assert.equal(daily.counts.actionPriorityCount, 1);
+    assert.equal(daily.items[0].prospect.name, "Inbound sync");
+    assert.equal(daily.items[0].state, "due_now");
+    assert.equal(daily.items[0].priority, "action");
+    assert.equal(daily.items[0].cadenceEffect, "sync_needed");
+    assert.equal(daily.items[0].source.type, "inbound_sync");
+    assert.match(daily.items[0].recommendedAction, /run a quick inbound sync/i);
+    assert.equal(daily.items[0].guidance.key, "sync_inbound_surfaces");
+    assert.match(daily.items[0].guidance.taskPrompt, /write back every meaningful change/i);
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.equal(next.source, "daily");
+    assert.equal(next.status.kind, "due_now");
+    assert.equal(next.status.priority, "action");
+    assert.equal(next.status.effect, "sync_needed");
+    assert.equal(next.guidance.key, "sync_inbound_surfaces");
+    assert.match(next.nextMove, /run a quick inbound sync/i);
+    assert.equal(next.context.source.type, "inbound_sync");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3116,25 +3283,61 @@ test("next surfaces a parallel support action while the live connection-request 
       ).toString()
     );
 
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "accounts",
-        "add",
-        user.id,
-        "--capability",
-        "linkedin",
-        "--handle",
-        "live-branch-user",
-        "--profile",
-        profile.id,
-        "--preferred",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
+    const userWithAccount = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "live-branch-user",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      ).toString()
     );
+    const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+    const syncedAt = new Date().toISOString();
+
+    for (const surfaceKey of [
+      "linkedin-sent-invitations",
+      "linkedin-received-invitations",
+      "linkedin-messaging-inbox",
+      "linkedin-profile-views",
+      "linkedin-following-list"
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "record",
+          user.id,
+          "--account",
+          linkedinAccount.id,
+          "--surface",
+          surfaceKey,
+          "--status",
+          "success",
+          "--observed-at",
+          syncedAt,
+          "--item-count",
+          "0",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      );
+    }
 
     const motion = JSON.parse(
       execFileSync(
@@ -3503,27 +3706,63 @@ test("next switches parallel support work to a held reserve prospect when primar
       }).toString()
     );
 
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "accounts",
-        "add",
-        user.id,
-        "--capability",
-        "linkedin",
-        "--handle",
-        "reserve-user",
-        "--runtime",
-        "codex",
-        "--connector",
-        "chrome",
-        "--preferred",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
+    const userWithAccount = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "reserve-user",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      ).toString()
     );
+    const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+    const syncedAt = new Date().toISOString();
+
+    for (const surfaceKey of [
+      "linkedin-sent-invitations",
+      "linkedin-received-invitations",
+      "linkedin-messaging-inbox",
+      "linkedin-profile-views",
+      "linkedin-following-list"
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "record",
+          user.id,
+          "--account",
+          linkedinAccount.id,
+          "--surface",
+          surfaceKey,
+          "--status",
+          "success",
+          "--observed-at",
+          syncedAt,
+          "--item-count",
+          "0",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      );
+    }
 
     execFileSync(
       "node",
