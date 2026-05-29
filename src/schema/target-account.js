@@ -256,7 +256,7 @@ export const queueStateSchema = z.object({
 });
 
 export const packetStateSchema = z.object({
-  kind: z.enum(["company_research"]),
+  kind: z.enum(["company_research", "prospect_selection"]),
   status: z.enum(["claimed", "completed"]),
   workerLabel: nullableString.default(null),
   claimedAt: z.string().datetime().nullable().default(null),

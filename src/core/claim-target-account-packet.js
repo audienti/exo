@@ -1,6 +1,6 @@
 // @ts-check
 
-import { applyClaimCompanyResearchPacket } from "../lib/motion-packets.js";
+import { applyClaimTargetAccountPacket } from "../lib/motion-packets.js";
 import {
   finalizeTargetAccountUpdate,
   prepareTargetAccountContext
@@ -16,6 +16,6 @@ import {
  */
 export function claimMotionTargetAccountPacket(rawMotion, rawCompany, input) {
   const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
-  const updatedAccount = applyClaimCompanyResearchPacket(baseAccount, input, now);
+  const updatedAccount = applyClaimTargetAccountPacket(baseAccount, input, now);
   return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
 }

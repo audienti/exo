@@ -483,7 +483,7 @@ Examples:
       "after",
       `
 What this command does:
-  - Shows the company-research packets the motion currently exposes.
+  - Shows the motion work packets the motion currently exposes, starting with company research and prospect selection.
   - Tells you which packets are still claimable and which are already claimed.
   - Makes parallel backlog work visible before you open a browser or start research.
 

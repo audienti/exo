@@ -4777,8 +4777,11 @@ test("motion packets let a worker claim and complete a company research packet",
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    assert.equal(finalPackets.counts.packetCount, 0);
-    assert.equal(finalPackets.items.length, 0);
+    assert.equal(finalPackets.counts.packetCount, 1);
+    assert.equal(finalPackets.items.length, 1);
+    assert.equal(finalPackets.items[0].packetKind, "prospect_selection");
+    assert.equal(finalPackets.items[0].claimState, "claimable");
+    assert.equal(finalPackets.items[0].queueStatus, "researched");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -4886,6 +4889,202 @@ test("motion discover links existing companies and creates new queued companies 
       packets.items.some((item) => item.companyId === createdAndQueued.company.id && item.queueStatus === "queued_for_research"),
       true
     );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("prospect-selection packets stay claimable through researched accounts and survive prospect writeback until completion", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-prospect-selection-packets-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/prospect-selection-packets",
+          "--premise",
+          "This offer matters when researched accounts need safe stakeholder selection packets.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there current evidence this company needs more disciplined outbound execution?",
+          "--stakeholder-count",
+          "2",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "discover",
+          motion.id,
+          "--name",
+          "Prospect Packet Co",
+          "--domain",
+          "prospect-packet.example",
+          "--queue-status",
+          "queued_for_research",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    ).company;
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "claim",
+        company.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-research-1",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "complete",
+        company.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-research-1",
+        "--next-status",
+        "researched",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const claimableProspectPacket = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(claimableProspectPacket.counts.packetCount, 1);
+    assert.equal(claimableProspectPacket.items[0].packetKind, "prospect_selection");
+    assert.equal(claimableProspectPacket.items[0].claimState, "claimable");
+    assert.equal(claimableProspectPacket.items[0].queueStatus, "researched");
+    assert.equal(claimableProspectPacket.items[0].targetProspectCount, 2);
+
+    const claimedProspectPacket = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "queue",
+          "claim",
+          company.id,
+          "--motion",
+          motion.id,
+          "--worker",
+          "codex-select-1",
+          "--notes",
+          "Selecting the first stakeholders now.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(claimedProspectPacket.account.packetState.kind, "prospect_selection");
+    assert.equal(claimedProspectPacket.account.packetState.status, "claimed");
+    assert.equal(claimedProspectPacket.account.packetState.workerLabel, "codex-select-1");
+    assert.equal(claimedProspectPacket.account.queueState.status, "researched");
+
+    const firstProspect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Selena Stakeholder",
+          "--title",
+          "VP Revenue Operations",
+          "--why-relevant",
+          "Best-fit operator for the first outbound branch.",
+          "--buying-committee-role",
+          "operator_champion",
+          "--decision-authority",
+          "influences",
+          "--fit-confidence",
+          "high",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(firstProspect.account.prospects.length, 1);
+
+    const stillClaimedPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--status", "claimed", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(stillClaimedPackets.counts.packetCount, 1);
+    assert.equal(stillClaimedPackets.items[0].packetKind, "prospect_selection");
+    assert.equal(stillClaimedPackets.items[0].claimState, "claimed");
+    assert.equal(stillClaimedPackets.items[0].queueStatus, "selected");
+    assert.equal(stillClaimedPackets.items[0].prospectCount, 1);
+
+    const completedProspectPacket = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "queue",
+          "complete",
+          company.id,
+          "--motion",
+          motion.id,
+          "--worker",
+          "codex-select-1",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(completedProspectPacket.account.packetState.kind, "prospect_selection");
+    assert.equal(completedProspectPacket.account.packetState.status, "completed");
+    assert.equal(completedProspectPacket.account.queueState.status, "selected");
+
+    const finalPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(finalPackets.counts.packetCount, 0);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

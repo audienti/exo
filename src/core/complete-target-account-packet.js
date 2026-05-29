@@ -1,6 +1,6 @@
 // @ts-check
 
-import { applyCompleteCompanyResearchPacket } from "../lib/motion-packets.js";
+import { applyCompleteTargetAccountPacket } from "../lib/motion-packets.js";
 import {
   finalizeTargetAccountUpdate,
   prepareTargetAccountContext
@@ -17,6 +17,6 @@ import {
  */
 export function completeMotionTargetAccountPacket(rawMotion, rawCompany, input) {
   const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
-  const updatedAccount = applyCompleteCompanyResearchPacket(baseAccount, input, now);
+  const updatedAccount = applyCompleteTargetAccountPacket(baseAccount, input, now);
   return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
 }

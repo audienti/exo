@@ -892,6 +892,7 @@ export function renderMotionWritingBrief(result) {
  *     queueStatus: string,
  *     signalMatchCount: number,
  *     prospectCount: number,
+ *     targetProspectCount: number,
  *     workerLabel: string | null,
  *     claimedAt: string | null,
  *     notes: string | null
@@ -920,6 +921,9 @@ export function renderMotionPacketSummary(result) {
     lines.push(`  Queue Status: ${item.queueStatus}`);
     lines.push(`  Signal Matches: ${item.signalMatchCount}`);
     lines.push(`  Prospects: ${item.prospectCount}`);
+    if (item.packetKind === "prospect_selection") {
+      lines.push(`  Stakeholder Target: ${item.prospectCount}/${item.targetProspectCount}`);
+    }
     if (item.workerLabel) {
       lines.push(`  Worker: ${item.workerLabel}`);
     }
