@@ -33,12 +33,14 @@ import {
   renderMotionActionList,
   renderMotionDraftCases,
   renderMotionDraftBrief,
+  renderMotionPacketSummary,
   renderMotionProspectList,
   renderMotionStartResult,
   renderMotionSummary,
   renderMotionTargetingSummary,
   renderMotionWritingBrief
 } from "../../artifacts/render-motion.js";
+import { buildMotionPacketSummary } from "../../lib/motion-packets.js";
 import { companySchema } from "../../schema/company.js";
 import { motionSchema } from "../../schema/motion.js";
 
@@ -57,6 +59,7 @@ Canonical motion interface:
   exo motion start
   exo motion add
   exo motion target
+  exo motion packets
   exo motion prospects
   exo motion actions
   exo motion action-brief
@@ -311,6 +314,65 @@ Examples:
       }
 
       console.log(renderMotionTargetingSummary(result));
+    });
+
+  motion
+    .command("packets")
+    .description("Show motion work packets that can be claimed or are currently claimed by a worker.")
+    .argument("<motion-id>", "Motion identifier")
+    .option("--company <company-id>", "Filter to one targeted company")
+    .option("--status <status>", "Packet claim state: claimable or claimed")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Shows the company-research packets the motion currently exposes.
+  - Tells you which packets are still claimable and which are already claimed.
+  - Makes parallel backlog work visible before you open a browser or start research.
+
+Examples:
+  exo motion packets <motion-id>
+  exo motion packets <motion-id> --status claimable --json
+  exo motion packets <motion-id> --company <company-id> --json
+`
+    )
+    .action((motionId, options) => {
+      const raw = findMotionById(motionId);
+
+      if (!raw) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const status = normalizePacketClaimState(options.status);
+      if (options.status && !status) {
+        console.error(`Invalid packet status: ${options.status}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      if (options.company) {
+        const rawCompany = findCompanyById(options.company);
+        if (!rawCompany) {
+          console.error(`Company not found: ${options.company}`);
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      const result = buildMotionPacketSummary(raw, listCompanies(), {
+        companyId: options.company ?? null,
+        status
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderMotionPacketSummary(result));
     });
 
   motion
@@ -1212,6 +1274,23 @@ function normalizeExistingStrategy(value) {
   }
 
   throw new Error(`Invalid --existing strategy: ${value}`);
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"claimable" | "claimed" | null}
+ */
+function normalizePacketClaimState(value) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "claimable" || normalized === "claimed") {
+    return normalized;
+  }
+
+  return null;
 }
 
 /**

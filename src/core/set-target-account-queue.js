@@ -21,12 +21,14 @@ export function setMotionTargetAccountQueue(rawMotion, rawCompany, input) {
   }
 
   const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
-  const updatedAccount = targetAccountSchema.parse(
-    applyManualTargetAccountQueueState(baseAccount, {
+  const queuedAccount = applyManualTargetAccountQueueState(baseAccount, {
       status: input.status,
       notes: input.notes
-    }, now)
-  );
+    }, now);
+  const updatedAccount = targetAccountSchema.parse({
+    ...queuedAccount,
+    packetState: input.status === "queued_for_research" ? queuedAccount.packetState ?? null : null
+  });
 
   return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
 }

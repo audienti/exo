@@ -255,6 +255,15 @@ export const queueStateSchema = z.object({
   notes: nullableString.default(null)
 });
 
+export const packetStateSchema = z.object({
+  kind: z.enum(["company_research"]),
+  status: z.enum(["claimed", "completed"]),
+  workerLabel: nullableString.default(null),
+  claimedAt: z.string().datetime().nullable().default(null),
+  completedAt: z.string().datetime().nullable().default(null),
+  notes: nullableString.default(null)
+});
+
 export const throughLineSchema = z.object({
   status: z.enum(["pending", "ready"]).default("pending"),
   specificToThem: nullableString.default(null),
@@ -348,6 +357,7 @@ export const targetAccountSchema = z.object({
   signalMatches: z.array(signalMatchSchema).default([]),
   prospects: z.array(prospectSchema).default([]),
   queueState: queueStateSchema.default({}),
+  packetState: packetStateSchema.nullable().default(null),
   lastResearchAt: z.string().datetime().nullable(),
   notes: z.string().nullable().default(null)
 });
@@ -376,6 +386,7 @@ export function rehydrateTargetAccount(rawAccount) {
     signalMatches,
     prospects,
     queueState: source.queueState ?? {},
+    packetState: source.packetState ?? null,
     lastResearchAt: source.lastResearchAt ?? null,
     notes: source.notes ?? null
   }));

@@ -4652,6 +4652,138 @@ test("motion queue exposes discovered and queued research inventory and daily us
   }
 });
 
+test("motion packets let a worker claim and complete a company research packet", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-packets-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/motion-packets",
+          "--premise",
+          "This offer matters when GTM teams need safe packetized queue work.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there clear evidence this team needs more governed outbound execution?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Packet Queue Co",
+          "--domain",
+          "packet-queue.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const initialPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(initialPackets.counts.packetCount, 1);
+    assert.equal(initialPackets.counts.claimableCount, 1);
+    assert.equal(initialPackets.counts.claimedCount, 0);
+    assert.equal(initialPackets.items[0].companyId, company.id);
+    assert.equal(initialPackets.items[0].claimState, "claimable");
+    assert.equal(initialPackets.items[0].queueStatus, "discovered");
+
+    const claimed = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "queue",
+          "claim",
+          company.id,
+          "--motion",
+          motion.id,
+          "--worker",
+          "codex-queue-1",
+          "--notes",
+          "Claimed for parallel company research.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(claimed.account.queueState.status, "queued_for_research");
+    assert.equal(claimed.account.packetState.kind, "company_research");
+    assert.equal(claimed.account.packetState.status, "claimed");
+    assert.equal(claimed.account.packetState.workerLabel, "codex-queue-1");
+
+    const claimedPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--status", "claimed", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(claimedPackets.counts.packetCount, 1);
+    assert.equal(claimedPackets.counts.claimedCount, 1);
+    assert.equal(claimedPackets.items[0].claimState, "claimed");
+    assert.equal(claimedPackets.items[0].workerLabel, "codex-queue-1");
+
+    const completed = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "queue",
+          "complete",
+          company.id,
+          "--motion",
+          motion.id,
+          "--worker",
+          "codex-queue-1",
+          "--next-status",
+          "researched",
+          "--notes",
+          "Research pass completed and handed off.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(completed.account.queueState.status, "researched");
+    assert.equal(completed.account.packetState.status, "completed");
+    assert.ok(completed.account.packetState.completedAt);
+
+    const finalPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(finalPackets.counts.packetCount, 0);
+    assert.equal(finalPackets.items.length, 0);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("next prefers a due-now daily item over the broader motion path", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-next-daily-"));
 

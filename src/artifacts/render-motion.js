@@ -878,6 +878,65 @@ export function renderMotionWritingBrief(result) {
 
 /**
  * @param {{
+ *   motion: { id: string, name: string, status: string },
+ *   counts: {
+ *     packetCount: number,
+ *     claimableCount: number,
+ *     claimedCount: number
+ *   },
+ *   items: Array<{
+ *     packetKind: string,
+ *     claimState: "claimable" | "claimed",
+ *     companyId: string,
+ *     companyName: string,
+ *     queueStatus: string,
+ *     signalMatchCount: number,
+ *     prospectCount: number,
+ *     workerLabel: string | null,
+ *     claimedAt: string | null,
+ *     notes: string | null
+ *   }>
+ * }} result
+ */
+export function renderMotionPacketSummary(result) {
+  const lines = [
+    `Motion Packets: ${result.motion.name}`,
+    `Motion ID: ${result.motion.id}`,
+    `Motion Status: ${result.motion.status}`,
+    `Packets: ${result.counts.packetCount}`,
+    `Claimable: ${result.counts.claimableCount}`,
+    `Claimed: ${result.counts.claimedCount}`,
+    ""
+  ];
+
+  if (!result.items.length) {
+    lines.push("No active packets.");
+    return lines.join("\n");
+  }
+
+  for (const item of result.items) {
+    lines.push(`${item.companyName}  [${item.packetKind}]  [${item.claimState}]`);
+    lines.push(`  Company ID: ${item.companyId}`);
+    lines.push(`  Queue Status: ${item.queueStatus}`);
+    lines.push(`  Signal Matches: ${item.signalMatchCount}`);
+    lines.push(`  Prospects: ${item.prospectCount}`);
+    if (item.workerLabel) {
+      lines.push(`  Worker: ${item.workerLabel}`);
+    }
+    if (item.claimedAt) {
+      lines.push(`  Claimed At: ${item.claimedAt}`);
+    }
+    if (item.notes) {
+      lines.push(`  Notes: ${item.notes}`);
+    }
+    lines.push("");
+  }
+
+  return lines.join("\n").trimEnd();
+}
+
+/**
+ * @param {{
  *   motion: { id: string, name: string },
  *   prospect: { name: string, title: string },
  *   company: { name: string },

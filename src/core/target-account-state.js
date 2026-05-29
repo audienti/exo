@@ -61,6 +61,7 @@ export function buildTargetAccount(company) {
     signalMatches: [],
     prospects: [],
     queueState: {},
+    packetState: null,
     lastResearchAt: null,
     notes: null
   }));

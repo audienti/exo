@@ -11,6 +11,8 @@ import { addCompany } from "../../core/add-company.js";
 import { assignCompanyProfile } from "../../core/assign-company-profile.js";
 import { assignCompanyUser } from "../../core/assign-company-user.js";
 import { buildCompanyResearchBrief } from "../../core/build-company-research-brief.js";
+import { claimMotionTargetAccountPacket } from "../../core/claim-target-account-packet.js";
+import { completeMotionTargetAccountPacket } from "../../core/complete-target-account-packet.js";
 import { recordMotionProspect, updateMotionProspect } from "../../core/record-prospect.js";
 import { recordMotionProspectTouch } from "../../core/record-prospect-touch.js";
 import { recordMotionSignalMatch } from "../../core/record-signal-match.js";
@@ -58,6 +60,8 @@ Canonical companies interface:
   exo companies research-brief <company-id>
   exo companies queue show <company-id>
   exo companies queue set <company-id>
+  exo companies queue claim <company-id>
+  exo companies queue complete <company-id>
   exo companies signal-matches show <company-id>
   exo companies signal-matches add <company-id>
   exo companies prospects show <company-id>
@@ -1616,6 +1620,126 @@ Examples:
       }
     });
 
+  queue
+    .command("claim")
+    .description("Claim the company-research packet for one motion-linked company.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--worker <label>", "Worker or agent label claiming the packet")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--notes <notes>", "Optional claim notes")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies queue claim <company-id> --motion <motion-id> --worker codex-1 --json
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, rawMotion } = context;
+
+      try {
+        const updatedMotion = claimMotionTargetAccountPacket(rawMotion, company, {
+          workerLabel: options.worker,
+          notes: options.notes ?? null
+        });
+        const storedMotion = updateMotion(updatedMotion);
+        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            company,
+            motion: {
+              id: storedMotion.id,
+              name: storedMotion.name
+            },
+            account
+          }, null, 2));
+          return;
+        }
+
+        console.log(
+          [
+            `Claimed Company Packet: ${company.name}`,
+            `Motion: ${storedMotion.name}`,
+            `Worker: ${account?.packetState?.workerLabel ?? options.worker}`,
+            `Queue Status: ${account?.queueState.status ?? "unknown"}`,
+            `Packet Status: ${account?.packetState?.status ?? "unknown"}`
+          ].join("\n")
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  queue
+    .command("complete")
+    .description("Complete the claimed company-research packet and advance the queue state.")
+    .argument("<company-id>", "Company identifier")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--worker <label>", "Worker or agent label completing the packet")
+    .option("--next-status <status>", "Next queue status: researched, suppressed, exhausted")
+    .option("--notes <notes>", "Optional completion notes")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies queue complete <company-id> --motion <motion-id> --worker codex-1 --next-status researched --json
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, rawMotion } = context;
+
+      try {
+        const updatedMotion = completeMotionTargetAccountPacket(rawMotion, company, {
+          workerLabel: options.worker ?? null,
+          nextStatus: normalizeOptionalPacketCompletionStatus(options.nextStatus),
+          notes: options.notes ?? null
+        });
+        const storedMotion = updateMotion(updatedMotion);
+        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            company,
+            motion: {
+              id: storedMotion.id,
+              name: storedMotion.name
+            },
+            account
+          }, null, 2));
+          return;
+        }
+
+        console.log(
+          [
+            `Completed Company Packet: ${company.name}`,
+            `Motion: ${storedMotion.name}`,
+            `Queue Status: ${account?.queueState.status ?? "unknown"}`,
+            `Packet Status: ${account?.packetState?.status ?? "unknown"}`,
+            `Completed At: ${account?.packetState?.completedAt ?? "unknown"}`
+          ].join("\n")
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
   companies
     .command("research-brief")
     .description("Build the governed company research brief for one motion-linked account.")
@@ -1884,6 +2008,23 @@ function normalizeOptionalMotionQueueStatus(value) {
   }
 
   return normalizeMotionQueueStatus(value);
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"researched" | "suppressed" | "exhausted" | undefined}
+ */
+function normalizeOptionalPacketCompletionStatus(value) {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = normalizeMotionQueueStatus(value);
+  if (normalized === "researched" || normalized === "suppressed" || normalized === "exhausted") {
+    return normalized;
+  }
+
+  throw new Error(`Invalid packet completion status: ${value}`);
 }
 
 /**
