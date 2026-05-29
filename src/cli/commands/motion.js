@@ -12,6 +12,7 @@ import { buildMotionDraftBrief, buildMotionDraftView } from "../../core/build-mo
 import { buildMotionProspectView } from "../../core/build-motion-prospect-view.js";
 import { evaluateMotionTargeting } from "../../core/evaluate-motion-targeting.js";
 import { linkCompanyToMotion } from "../../core/link-company-to-motion.js";
+import { recordMotionProspect } from "../../core/record-prospect.js";
 import { refreshMotion } from "../../core/refresh-motion.js";
 import { setMotionTargetAccountQueue } from "../../core/set-target-account-queue.js";
 import { startMotion } from "../../core/start-motion.js";
@@ -64,6 +65,7 @@ Canonical motion interface:
   exo motion intake
   exo motion start
   exo motion add
+  exo motion seed
   exo motion discover
   exo motion target
   exo motion packets
@@ -277,6 +279,228 @@ Examples:
     });
 
   motion
+    .command("seed")
+    .description("Seed a motion directly with a target company or target person when the operator already knows the target.")
+    .argument("<motion-id>", "Motion identifier")
+    .option("--company <company-id>", "Existing canonical company identifier")
+    .option("--company-name <name>", "Company name when creating or reusing a canonical company by identity")
+    .option("--domain <domain>", "Company domain when creating or reusing by identity")
+    .option("--website-url <url>", "Company website URL when creating a new canonical company")
+    .option("--linkedin-company-url <url>", "LinkedIn company URL when creating a new canonical company")
+    .option("--tag <tag>", "Company tag when creating a new canonical company", collect, [])
+    .option("--company-notes <notes>", "Canonical company notes when creating a new canonical company")
+    .option("--queue-status <status>", "Initial company queue state for company-only seeding: discovered or queued_for_research")
+    .option("--queue-notes <notes>", "Queue notes when company-only seeding immediately queues the company for research")
+    .option("--person-name <name>", "Target person name for person-first seeding")
+    .option("--person-title <title>", "Target person title for person-first seeding")
+    .option("--why-relevant <text>", "Short reason this person matters for the motion")
+    .option("--linkedin-profile-url <url>", "LinkedIn profile URL for the target person")
+    .option("--email <email>", "Direct email for the target person when known")
+    .option("--buying-committee-role <role>", "Buying committee role for the target person")
+    .option("--decision-authority <authority>", "Decision authority: buys, blocks, sponsors, influences, observes, unknown")
+    .option("--fit-confidence <level>", "Prospect fit confidence: low, moderate, high, or unknown")
+    .option("--source-url <url>", "Source URL for this seeded target evidence")
+    .option("--observed-at <datetime>", "Observed timestamp in ISO-8601 format")
+    .option("--profile-viewed-at <datetime>", "When the profile was actually viewed in ISO-8601 format")
+    .option("--notes <notes>", "Prospect notes for person-first seeding")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Seeds a motion directly when the operator already knows the account or person worth targeting.
+  - Supports company-first seeding into the motion backlog.
+  - Supports person-first seeding by resolving or creating the related canonical company, then storing the person directly on the motion-owned target account.
+  - Keeps seeded targets inside the normal motion queue and prospect path instead of creating sidecar state.
+
+Examples:
+  exo motion seed <motion-id> --company <company-id> --json
+  exo motion seed <motion-id> --company-name Chainguard --domain chainguard.dev --queue-status queued_for_research --json
+  exo motion seed <motion-id> --person-name "Parm Uppal" --person-title "Chief Revenue Officer" --company-name Chainguard --domain chainguard.dev --why-relevant "Known best-fit CRO target for the motion premise." --linkedin-profile-url https://www.linkedin.com/in/example --json
+
+Rules:
+  - Pass either --company or --company-name for the company context.
+  - Person-first seeding requires --person-name, --person-title, and --why-relevant.
+  - Company-only seeding can optionally queue the company for research immediately.
+  - Person-first seeding creates or reuses the company context first, then writes the person into motion-owned prospect state.
+`
+    )
+    .action((motionId, options) => {
+      const rawMotion = findMotionById(motionId);
+      if (!rawMotion) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const queueStatus = normalizeMotionDiscoveryQueueStatus(options.queueStatus);
+      if (options.queueStatus && !queueStatus) {
+        console.error(`Invalid seed queue status: ${options.queueStatus}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const personName = normalizeNullableCliString(options.personName);
+      const personTitle = normalizeNullableCliString(options.personTitle);
+      const whyRelevant = normalizeNullableCliString(options.whyRelevant);
+      const companySelector = buildMotionSeedCompanySelector(options);
+
+      if (companySelector.error) {
+        console.error(companySelector.error);
+        process.exitCode = 1;
+        return;
+      }
+
+      if (options.queueNotes && queueStatus !== "queued_for_research") {
+        console.error("--queue-notes is only supported when --queue-status queued_for_research is used.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const isPersonSeed = Boolean(personName || personTitle || whyRelevant);
+      if (isPersonSeed && (!personName || !personTitle || !whyRelevant)) {
+        console.error("Person-first seeding requires --person-name, --person-title, and --why-relevant.");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (isPersonSeed && options.queueStatus) {
+        console.error("--queue-status only applies to company-only seeding. Person-first seeding derives its company and prospect queue state from the stored target.");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (isPersonSeed && options.queueNotes) {
+        console.error("--queue-notes only applies to company-only seeding.");
+        process.exitCode = 1;
+        return;
+      }
+
+      let company;
+      let createdCompany;
+      let linkedCompany;
+      try {
+        ({ company, createdCompany, linkedCompany } = resolveMotionSeedCompany(motionId, companySelector));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      if (isPersonSeed) {
+        try {
+          const updatedMotion = recordMotionProspect(rawMotion, company, {
+            name: personName,
+            title: personTitle,
+            whyRelevant,
+            linkedinProfileUrl: normalizeNullableCliString(options.linkedinProfileUrl),
+            email: normalizeNullableCliString(options.email),
+            buyingCommitteeRole: options.buyingCommitteeRole,
+            decisionAuthority: options.decisionAuthority,
+            fitConfidence: options.fitConfidence,
+            sourceUrl: normalizeNullableCliString(options.sourceUrl),
+            observedAt: normalizeNullableCliString(options.observedAt),
+            profileViewedAt: normalizeNullableCliString(options.profileViewedAt),
+            notes: normalizeNullableCliString(options.notes)
+          });
+          const storedMotion = updateMotion(updatedMotion);
+          const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+          const prospect = account?.prospects.find((item) =>
+            item.name === personName
+            && item.title === personTitle
+            && (
+              !options.linkedinProfileUrl
+              || item.linkedinProfileUrl === normalizeNullableCliString(options.linkedinProfileUrl)
+            )
+          ) ?? null;
+
+          const result = {
+            motion: {
+              id: storedMotion.id,
+              name: storedMotion.name,
+              status: storedMotion.status
+            },
+            company,
+            createdCompany,
+            linkedCompany,
+            account,
+            prospect
+          };
+
+          if (options.json) {
+            console.log(JSON.stringify(result, null, 2));
+            return;
+          }
+
+          console.log(
+            [
+              `Motion Seed: ${storedMotion.name}`,
+              `Company: ${company.name}`,
+              `Created Company: ${createdCompany ? "yes" : "no"}`,
+              `Linked To Motion: ${linkedCompany ? "yes" : "already linked"}`,
+              `Person: ${prospect?.name ?? personName}`,
+              `Title: ${prospect?.title ?? personTitle}`,
+              `Prospect Queue: ${prospect?.queueState?.status ?? "selected"}`,
+              `Account Queue: ${account?.queueState?.status ?? "selected"}`
+            ].join("\n")
+          );
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
+          process.exitCode = 1;
+        }
+        return;
+      }
+
+      let storedMotion = motionSchema.parse(rawMotion);
+      if (queueStatus === "queued_for_research") {
+        storedMotion = updateMotion(setMotionTargetAccountQueue(storedMotion, company, {
+          status: queueStatus,
+          notes: options.queueNotes ?? null
+        }));
+      }
+
+      const queueSummary = buildMotionQueueSummary(storedMotion, [company], { companyId: company.id });
+      const packetSummary = buildMotionPacketSummary(storedMotion, [company], { companyId: company.id });
+      const queueItem = queueSummary.items[0] ?? null;
+      const packet = packetSummary.items[0] ?? null;
+      const result = {
+        motion: {
+          id: storedMotion.id,
+          name: storedMotion.name,
+          status: storedMotion.status
+        },
+        company,
+        createdCompany,
+        linkedCompany,
+        queue: queueItem ? {
+          status: queueItem.queueStatus,
+          source: queueItem.queueSource,
+          signalMatchCount: queueItem.signalMatchCount,
+          prospectCount: queueItem.prospectCount,
+          readyToSendCount: queueItem.readyToSendCount
+        } : null,
+        packet
+      };
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(
+        [
+          `Motion Seed: ${storedMotion.name}`,
+          `Company: ${company.name}`,
+          `Created Company: ${createdCompany ? "yes" : "no"}`,
+          `Linked To Motion: ${linkedCompany ? "yes" : "already linked"}`,
+          `Queue Status: ${result.queue?.status ?? "discovered"}`,
+          `Queue Source: ${result.queue?.source ?? "derived"}`,
+          `Packet: ${packet ? `${packet.packetKind} [${packet.claimState}]` : "none"}`
+        ].join("\n")
+      );
+    });
+
+  motion
     .command("discover")
     .description("Create or link a discovered company into a motion backlog so workers can research it.")
     .argument("<motion-id>", "Motion identifier")
@@ -334,46 +558,22 @@ Examples:
       }
 
       let company;
-      let createdCompany = false;
-      let linkedCompany = false;
-
-      if (hasCompanyId) {
-        const rawCompany = findCompanyById(options.company);
-        if (!rawCompany) {
-          console.error(`Company not found: ${options.company}`);
-          process.exitCode = 1;
-          return;
-        }
-
-        const updatedCompany = linkCompanyToMotion(rawCompany, motionId);
-        company = companySchema.parse(updatedCompany);
-        if (!companySchema.parse(rawCompany).motionIds.includes(motionId)) {
-          updateCompany(company);
-          linkedCompany = true;
-        }
-      } else {
-        const existing = findCompanyByIdentity(options.name, options.domain ?? null);
-        if (existing) {
-          const updatedCompany = linkCompanyToMotion(existing, motionId);
-          company = companySchema.parse(updatedCompany);
-          if (!companySchema.parse(existing).motionIds.includes(motionId)) {
-            updateCompany(company);
-            linkedCompany = true;
-          }
-        } else {
-          company = addCompany({
-            name: options.name,
-            domain: options.domain ?? null,
-            websiteUrl: options.websiteUrl ?? null,
-            linkedinCompanyUrl: options.linkedinCompanyUrl ?? null,
-            notes: options.notes ?? null,
-            tags: normalizeStringList(options.tag),
-            motionIds: [motionId]
-          });
-          insertCompany(company);
-          createdCompany = true;
-          linkedCompany = true;
-        }
+      let createdCompany;
+      let linkedCompany;
+      try {
+        ({ company, createdCompany, linkedCompany } = resolveMotionSeedCompany(motionId, {
+          companyId: hasCompanyId ? options.company : null,
+          companyName: hasCompanyName ? options.name : null,
+          domain: options.domain ?? null,
+          websiteUrl: options.websiteUrl ?? null,
+          linkedinCompanyUrl: options.linkedinCompanyUrl ?? null,
+          tags: normalizeStringList(options.tag),
+          notes: options.notes ?? null
+        }));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
       }
 
       let storedMotion = motionSchema.parse(rawMotion);
@@ -1464,6 +1664,116 @@ function normalizeMotionDiscoveryQueueStatus(value) {
   }
 
   return null;
+}
+
+/**
+ * @param {Record<string, any>} options
+ */
+function buildMotionSeedCompanySelector(options) {
+  const companyId = normalizeNullableCliString(options.company);
+  const companyName = normalizeNullableCliString(options.companyName);
+  const hasCompanyId = Boolean(companyId);
+  const hasCompanyName = Boolean(companyName);
+
+  if ((hasCompanyId && hasCompanyName) || (!hasCompanyId && !hasCompanyName)) {
+    return {
+      error: "Pass exactly one of --company or --company-name."
+    };
+  }
+
+  return {
+    error: null,
+    companyId,
+    companyName,
+    domain: normalizeNullableCliString(options.domain),
+    websiteUrl: normalizeNullableCliString(options.websiteUrl),
+    linkedinCompanyUrl: normalizeNullableCliString(options.linkedinCompanyUrl),
+    tags: normalizeStringList(options.tag),
+    notes: normalizeNullableCliString(options.companyNotes)
+  };
+}
+
+/**
+ * @param {string} motionId
+ * @param {{
+ *   companyId?: string | null | undefined,
+ *   companyName?: string | null | undefined,
+ *   domain?: string | null | undefined,
+ *   websiteUrl?: string | null | undefined,
+ *   linkedinCompanyUrl?: string | null | undefined,
+ *   tags?: string[] | null | undefined,
+ *   notes?: string | null | undefined
+ * }} input
+ */
+function resolveMotionSeedCompany(motionId, input) {
+  if (input.companyId) {
+    const rawCompany = findCompanyById(input.companyId);
+    if (!rawCompany) {
+      throw new Error(`Company not found: ${input.companyId}`);
+    }
+
+    const updatedCompany = linkCompanyToMotion(rawCompany, motionId);
+    const company = companySchema.parse(updatedCompany);
+    const alreadyLinked = companySchema.parse(rawCompany).motionIds.includes(motionId);
+    if (!alreadyLinked) {
+      updateCompany(company);
+    }
+
+    return {
+      company,
+      createdCompany: false,
+      linkedCompany: !alreadyLinked
+    };
+  }
+
+  if (!input.companyName) {
+    throw new Error("Company name is required when --company is not used.");
+  }
+
+  const existing = findCompanyByIdentity(input.companyName, input.domain ?? null);
+  if (existing) {
+    const updatedCompany = linkCompanyToMotion(existing, motionId);
+    const company = companySchema.parse(updatedCompany);
+    const alreadyLinked = companySchema.parse(existing).motionIds.includes(motionId);
+    if (!alreadyLinked) {
+      updateCompany(company);
+    }
+
+    return {
+      company,
+      createdCompany: false,
+      linkedCompany: !alreadyLinked
+    };
+  }
+
+  const company = addCompany({
+    name: input.companyName,
+    domain: input.domain ?? null,
+    websiteUrl: input.websiteUrl ?? null,
+    linkedinCompanyUrl: input.linkedinCompanyUrl ?? null,
+    notes: input.notes ?? null,
+    tags: input.tags ?? [],
+    motionIds: [motionId]
+  });
+  insertCompany(company);
+
+  return {
+    company,
+    createdCompany: true,
+    linkedCompany: true
+  };
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeNullableCliString(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
 }
 
 /**

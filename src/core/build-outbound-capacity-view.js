@@ -360,6 +360,14 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
     };
   }
 
+  if (inventoryShortfall > 0) {
+    return {
+      kind: "seed_motion_targets",
+      guidanceKey: "seed_motion_targets",
+      recommendedAction: `Seed more known companies or people directly into the active motion so the queue has real backlog to turn into ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.`
+    };
+  }
+
   return {
     kind: "fill_connection_request_deficit",
     guidanceKey: "fill_connection_request_deficit",

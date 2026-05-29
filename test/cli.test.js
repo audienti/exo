@@ -4198,9 +4198,9 @@ test("daily and next surface connection-request quota gaps and invitation defici
     assert.equal(afterQuotaDaily.capacity.linkedin.execution.remainingInvitationsToday, 25);
     assert.equal(afterQuotaDaily.capacity.linkedin.execution.inventoryShortfall, 25);
     assert.equal(afterQuotaDaily.items[0].cadenceEffect, "capacity_deficit");
-    assert.equal(afterQuotaDaily.items[0].source.kind, "fill_connection_request_deficit");
-    assert.equal(afterQuotaDaily.items[0].guidance.key, "fill_connection_request_deficit");
-    assert.match(afterQuotaDaily.items[0].recommendedAction, /build 25 more ready linkedin connection-request branches/i);
+    assert.equal(afterQuotaDaily.items[0].source.kind, "seed_motion_targets");
+    assert.equal(afterQuotaDaily.items[0].guidance.key, "seed_motion_targets");
+    assert.match(afterQuotaDaily.items[0].recommendedAction, /seed more known companies or people directly into the active motion/i);
 
     const afterQuotaNext = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
@@ -4211,9 +4211,9 @@ test("daily and next surface connection-request quota gaps and invitation defici
 
     assert.ok(["daily", "motion"].includes(afterQuotaNext.source));
     assert.equal(afterQuotaNext.status.effect, "capacity_deficit");
-    assert.equal(afterQuotaNext.guidance.key, "fill_connection_request_deficit");
-    assert.equal(afterQuotaNext.context.source.kind, "fill_connection_request_deficit");
-    assert.match(afterQuotaNext.nextMove, /build 25 more ready linkedin connection-request branches/i);
+    assert.equal(afterQuotaNext.guidance.key, "seed_motion_targets");
+    assert.equal(afterQuotaNext.context.source.kind, "seed_motion_targets");
+    assert.match(afterQuotaNext.nextMove, /seed more known companies or people directly into the active motion/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -4947,6 +4947,123 @@ test("motion discover links existing companies and creates new queued companies 
       packets.items.some((item) => item.companyId === createdAndQueued.company.id && item.queueStatus === "queued_for_research"),
       true
     );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("motion seed supports direct company seeding and person-first seeding into motion-owned target state", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-seed-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/motion-seed",
+          "--premise",
+          "This offer matters when the operator already knows the right company or person and needs direct motion seeding.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there current evidence this company needs more disciplined outbound execution?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const existingCompany = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Direct Seed Co",
+          "--domain",
+          "direct-seed.example",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const companySeed = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "seed",
+          motion.id,
+          "--company",
+          existingCompany.id,
+          "--queue-status",
+          "queued_for_research",
+          "--queue-notes",
+          "Seeded directly for immediate research.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(companySeed.createdCompany, false);
+    assert.equal(companySeed.linkedCompany, true);
+    assert.equal(companySeed.company.id, existingCompany.id);
+    assert.equal(companySeed.queue.status, "queued_for_research");
+    assert.equal(companySeed.packet.packetKind, "company_research");
+
+    const personSeed = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "seed",
+          motion.id,
+          "--company-name",
+          "Person First Seed Co",
+          "--domain",
+          "person-first-seed.example",
+          "--person-name",
+          "Alex Rivera",
+          "--person-title",
+          "Chief Revenue Officer",
+          "--why-relevant",
+          "Known best-fit executive target for the motion hypothesis.",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/alex-rivera-example",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(personSeed.createdCompany, true);
+    assert.equal(personSeed.linkedCompany, true);
+    assert.equal(personSeed.company.name, "Person First Seed Co");
+    assert.equal(personSeed.account.companyId, personSeed.company.id);
+    assert.equal(personSeed.account.queueState.status, "selected");
+    assert.equal(personSeed.prospect.name, "Alex Rivera");
+    assert.equal(personSeed.prospect.title, "Chief Revenue Officer");
+    assert.equal(personSeed.prospect.whyRelevant, "Known best-fit executive target for the motion hypothesis.");
+    assert.equal(personSeed.prospect.linkedinProfileUrl, "https://www.linkedin.com/in/alex-rivera-example");
+    assert.equal(personSeed.prospect.queueState.status, "selected");
+
+    const packets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(packets.counts.packetCount, 1);
+    assert.equal(packets.items[0].companyId, existingCompany.id);
+    assert.equal(packets.items[0].packetKind, "company_research");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
