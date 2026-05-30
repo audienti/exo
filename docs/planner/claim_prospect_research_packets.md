@@ -6,11 +6,13 @@ principles:
 do:
   - Open the first packet contract with `exo motion packet-brief {{firstClaimableProspectResearchPacketMotionId}} --packet {{firstClaimableProspectResearchPacketId}}` before you start, so the worker sees the exact scope and writeback path.
   - Claim the selected prospect packet before splitting work across agents.
+  - Before any live LinkedIn/browser step inside that packet, run `exo companies execution show <company-id> --capability linkedin --json` and honor the preferred transport, fallback transport, and failure classes.
   - Keep role truth, trigger window, identity tells, live signal, contact enrichment, through-line, opening plan, and cadence work together on the same prospect.
   - If the branch becomes genuinely ready, make sure the stored through-line, opening plan, and cadence state reflect that before completing the packet.
   - If the branch should stop, complete it into suppressed or exhausted state explicitly.
 avoid:
   - Do not split one prospect into five microtasks that all touch the same record independently.
+  - Do not let two workers write to the same company account in parallel.
   - Do not complete the packet while leaving durable findings outside Exo.
   - Do not mark a branch ready unless the stored artifacts actually support execution.
 writeback:

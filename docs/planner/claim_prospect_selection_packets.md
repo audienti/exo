@@ -11,6 +11,7 @@ do:
   - Complete the packet with `exo companies queue complete <company-id> --motion <motion-id> --worker <label>` after the chosen prospect set is in Exo.
 avoid:
   - Do not keep selecting people outside Exo.
+  - Do not let multiple workers add or edit prospects on the same company account in parallel.
   - Do not overfill the account beyond the motion's stakeholder target count.
   - Do not complete the packet before the selected prospect set is durable.
 writeback:

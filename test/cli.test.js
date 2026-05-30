@@ -5512,7 +5512,16 @@ test("motion packet-brief turns packet state into a worker contract with stable 
     assert.equal(researchBrief.packet.prospectId, prospectAdded.prospects[0].id);
     assert.equal(researchBrief.inputs.prospect.name, "Jamie Operator");
     assert.equal(
+      researchBrief.inputs.execution.companyExecutionCommand,
+      `exo companies execution show ${company.id} --capability linkedin --json`
+    );
+    assert.match(researchBrief.inputs.execution.serialWriteRule, /Do not run parallel writes/i);
+    assert.equal(
       researchBrief.writeback.supportingCommands.some((command) => command.includes("exo companies through-line set")),
+      true
+    );
+    assert.equal(
+      researchBrief.writeback.supportingCommands.some((command) => command.includes("exo companies execution show")),
       true
     );
     assert.equal(

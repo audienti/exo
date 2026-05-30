@@ -11,6 +11,7 @@ do:
   - Complete the packet with `exo companies queue complete <company-id> --motion <motion-id> --worker <label> --next-status researched`.
 avoid:
   - Do not research a queued company without claiming it first.
+  - Do not let another worker write to the same company account while this packet is active.
   - Do not leave research findings in scratch notes or browser tabs.
   - Do not mark the packet complete until the account is actually advanced to researched state.
 writeback:

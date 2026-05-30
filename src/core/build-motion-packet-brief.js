@@ -250,6 +250,11 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
         queueStatus: brief.prospect.queueStatus,
         contactPoints: brief.prospect.contactPoints
       },
+      execution: {
+        companyExecutionCommand: `exo companies execution show ${company.id} --capability linkedin --json`,
+        serialWriteRule: `Do not run parallel writes against ${company.name}. One worker should finish this company's prospect state changes before another worker touches the same account.`,
+        liveBrowserRule: "Before any browser-backed LinkedIn step, load the company execution plan and honor its preferred transport, fallback transport, and failure classes."
+      },
       signalMatches: brief.signalMatches.map((match) => ({
         id: match.id,
         signalName: match.signalName,
@@ -274,11 +279,13 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
       "A prospect-specific through-line is ready in Exo.",
       "A prospect-specific opening plan is ready in Exo.",
       "Cadence state is ready in Exo with a concrete next action.",
+      "Any live browser-backed validation followed the company execution plan instead of an unqualified browser session.",
       "The packet is completed or explicitly suppressed/exhausted with notes."
     ],
     writeback: {
       claimCommand: `exo companies prospects claim ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --worker <worker-label> --notes "Taking full prospect research and planning packet." --json`,
       supportingCommands: [
+        `exo companies execution show ${company.id} --capability linkedin --json`,
         `exo companies prospects update ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --role-truth-summary "What role this person actually owns" --trigger-window-summary "Why now is live" --identity-tells-summary "Specific identity clues" --live-signal-summary "Recent public activity or explicit no-signal finding" --source-url <source-url> --observed-at <iso-datetime> --json`,
         `exo companies prospects update ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --contact-point '{"kind":"email","value":"person@example.com","matchStatus":"same_person_verified","verificationStatus":"verified","confidence":"high","source":"provider-or-public-web","usableForOutreach":true}' --enrichment-status complete --source-tried gmail --source-tried public-web --json`,
         `exo companies through-line set ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --signal-match <signal-match-id> --specific-to-them "Specific to them" --shared-problem "Shared problem" --why-now "Why now" --legitimate-wedge "Legitimate wedge" --compression-line "One-sentence compression line" --json`,
@@ -293,7 +300,8 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
     },
     reviewSignals: [
       "The prospect has a real why-now spine, not just generic ICP fit.",
-      "The opening plan and cadence can survive direct operator use without re-synthesizing the branch."
+      "The opening plan and cadence can survive direct operator use without re-synthesizing the branch.",
+      "The worker did not bypass the company execution plan or split the same company across racing writes."
     ]
   };
 }
