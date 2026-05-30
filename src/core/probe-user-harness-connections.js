@@ -31,7 +31,7 @@ const CODEX_PLUGIN_CONNECTOR_MAP = {
 };
 
 const CLAUDE_PLUGIN_CONNECTOR_MAP = {
-  chrome: ["chrome-devtools-mcp", "chrome"],
+  chrome: ["chrome-devtools-mcp@claude-plugins-official", "chrome-devtools-mcp", "chrome-devtools", "chrome"],
   gmail: ["gmail"]
 };
 
@@ -391,6 +391,13 @@ function parseClaudePluginList(output) {
       pluginId,
       enabled: true
     });
+    const basePluginId = pluginId.split("@")[0];
+    if (basePluginId && basePluginId !== pluginId) {
+      plugins.set(basePluginId.toLowerCase(), {
+        pluginId,
+        enabled: true
+      });
+    }
   }
 
   return plugins;

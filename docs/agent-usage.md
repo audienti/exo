@@ -135,6 +135,15 @@ exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh -
 
 Use that only when the Gmail account resolves through a supported `runtime:gmail` harness connection such as `codex:gmail` or `claude:gmail`. It runs live inspection through the resolved runtime, then lands the result through the same governed Exo sync-writeback path as manual captures.
 
+For LinkedIn-backed inbound truth, the first built-in quick-mode live path now exists:
+
+```bash
+exo users harness probe <user-id> --runtime codex --connector chrome --json
+exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --apply --refresh --json
+```
+
+Use that only when the LinkedIn account resolves through a browser-profile-backed account with a trusted Chrome profile and the user also has a supported `runtime:chrome` harness connection such as `codex:chrome` or `claude:chrome`. It runs live inspection through the resolved runtime, then lands the result through the same governed Exo sync-writeback path as manual LinkedIn captures.
+
 If no native browser-control surface is available in the current session, say that explicitly before choosing any fallback path.
 
 ### Motion setup

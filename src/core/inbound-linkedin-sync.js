@@ -145,7 +145,7 @@ function buildQuickSurface(definition, section) {
  * @param {import("../schema/user.js").userSchema._type} user
  * @param {string | null} accountId
  */
-function resolveLinkedinAccount(user, accountId) {
+export function resolveLinkedinAccount(user, accountId) {
   if (accountId) {
     const account = user.accounts.find((candidate) => candidate.id === accountId);
     if (!account) {

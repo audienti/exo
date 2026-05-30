@@ -9,11 +9,12 @@ The first slice does three things:
 - stores the last known sync result for each enabled surface
 - stores normalized inbound observations that an agent can write back after inspecting a live surface
 - runs the first live retrieval slice for Gmail through supported `runtime:gmail` harness-backed accounts
+- runs the first live retrieval slice for LinkedIn quick-mode surfaces through a trusted Chrome profile plus a supported `runtime:chrome` harness
 
 The next management layer is `exo inbound review`, which combines that sync state with the concrete observations so the operator can see what actually needs a decision.
 
 It still does **not** do broad live retrieval by itself.
-Right now the only built-in live producer is Gmail through supported runtime-backed Gmail harness connections.
+Right now the built-in live producers are Gmail through supported runtime-backed Gmail harness connections and LinkedIn quick-mode surfaces through a trusted Chrome profile plus a supported runtime-backed Chrome harness.
 
 ## Canonical surfaces
 
@@ -66,8 +67,10 @@ Inspect one user's sync coverage:
 exo inbound sync show <user-id>
 exo inbound sync show <user-id> --capability linkedin --json
 exo users harness probe <user-id> --runtime codex --connector gmail --json
+exo users harness probe <user-id> --runtime codex --connector chrome --json
 exo inbound sync plan <user-id> --mode quick --json
 exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
+exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --apply --refresh --json
 exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
 exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
 exo inbound review <user-id> --json
@@ -142,7 +145,7 @@ Run rules:
 - ambiguous matches stay unlinked; explicit ids still win, but Exo rejects explicit ids that conflict with the resolved prospect context
 - `--refresh` returns a fresh inbox/daily/next summary after the writeback lands
 
-First live producer slice: Gmail through Codex
+First live producer slice: Gmail through supported runtimes
 
 ```bash
 exo inbound sync gmail-live <user-id> --account <account-id> --json
@@ -154,7 +157,7 @@ Gmail live rules:
 - this only works when the Gmail account resolves through a supported `runtime:gmail` harness connection such as `codex:gmail` or `claude:gmail`
 - Exo probes the resolved runtime first and refuses to fake a live retrieval when the Gmail connector is unavailable
 - connector failure becomes governed sync failure data for `gmail-inbox-threads`, not an unstructured crash
-- `--limit` controls how many recent inbox threads Codex should inspect
+- `--limit` controls how many recent inbox threads the resolved runtime should inspect
 - `--since` narrows the returned threads by newest relevant message time
 - `--apply` immediately writes the payload back through the generic sync-run engine
 - `--refresh` only makes sense with `--apply`, and returns fresh inbox/daily/next summaries
@@ -255,6 +258,24 @@ LinkedIn quick capture rules:
 - `actorProfileUrl` is enough for auto-linking when the prospect already has that exact LinkedIn profile stored in Exo
 - use `warning` when you saw real items but did not fully itemize them
 - use `failed` only when the surface could not actually be checked
+
+First live producer slice: LinkedIn quick-mode through supported runtimes
+
+```bash
+exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --json
+exo inbound sync linkedin-live <user-id> --account <account-id> --runtime claude --limit 10 --apply --refresh --json
+```
+
+LinkedIn live rules:
+
+- this only works when the LinkedIn account resolves through a browser-profile-backed account with a trusted Chrome profile and the user also has a supported `runtime:chrome` harness connection such as `codex:chrome` or `claude:chrome`
+- Exo probes the selected runtime first and refuses to fake a live retrieval when that Chrome harness is unavailable
+- runtime failure becomes governed sync failure data across the five quick LinkedIn surfaces, not an unstructured crash
+- `--runtime` is required whenever more than one supported Chrome harness exists for the user
+- `--limit` controls how many relevant items per surface the resolved runtime should inspect
+- the live path checks only the five authoritative quick surfaces: sent invitations, received invitations, messaging inbox, profile views, and following list
+- `--apply` immediately writes the payload back through the generic sync-run engine
+- `--refresh` only makes sense with `--apply`, and returns fresh inbox/daily/next summaries
 
 Enable or disable surfaces on one account:
 

@@ -132,8 +132,8 @@ export function describeExo() {
         purpose: "Inspect the canonical Audienti-style GTM action catalog that Exo uses for action readiness and execution briefs."
       },
       {
-        command: "exo inbound surfaces/surface/sync show/plan/linkedin/gmail/gmail-live/run/set/record/observations list/show/add",
-        purpose: "Inspect the canonical inbound truth surfaces, manage per-account sync policy, run the first live Gmail retrieval slice through Codex, and read or write normalized inbound observations."
+        command: "exo inbound surfaces/surface/sync show/plan/linkedin/linkedin-live/gmail/gmail-live/run/set/record/observations list/show/add",
+        purpose: "Inspect the canonical inbound truth surfaces, manage per-account sync policy, run the first live LinkedIn and Gmail retrieval slices through supported runtimes, and read or write normalized inbound observations."
       },
       {
         command: "exo inbound review",
@@ -180,7 +180,7 @@ export function describeExo() {
       "Browser-backed work should fail closed if no profile is attached or trusted.",
       "A ready profile means the local browser context looks structurally usable.",
       "Profile checks do not yet prove live LinkedIn, Sales Navigator, Gmail, or HubSpot auth.",
-      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through supported runtime:gmail harness-backed accounts, but LinkedIn and broader inbound retrieval still need dedicated producers.",
+      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through supported runtime:gmail harness-backed accounts, and LinkedIn quick-mode surfaces can now be retrieved live through a trusted Chrome profile plus a supported runtime:chrome harness, but broader inbound retrieval still needs dedicated producers.",
       "Configured weekly quotas on the claimed profile identity should govern outreach pacing. InMail credits are still a separate live observation, not a static config knob.",
       "Exo resolves browser identity. The agent runtime should choose the browser-control harness.",
       "In Codex, prefer the Chrome skill or native Chrome connector before Playwriter for Chrome-profile work."
@@ -268,6 +268,9 @@ export function describeExo() {
               "exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred --json",
               "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred --json",
               "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime claude --connector gmail --preferred --json",
+              "exo users harness add <user-id> --runtime codex --connector chrome --status unknown --json",
+              "exo users harness add <user-id> --runtime claude --connector chrome --status unknown --json",
+              "exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --json",
               "exo inbound sync gmail-live <user-id> --account <account-id> --json",
               "exo profiles list --json",
               "exo profiles capabilities --json",
@@ -313,13 +316,13 @@ export function describeExo() {
     currentLimitations: [
       "No MCP wrapper yet.",
       "No live browser auth probes yet.",
-      "Limited live inbound retrieval now exists for Gmail through supported runtime:gmail harness-backed accounts, but Exo still does not do LinkedIn or broader inbound retrieval by itself.",
+      "Limited live inbound retrieval now exists for Gmail and LinkedIn quick-mode surfaces through supported runtime adapters, but Exo still does not do broader LinkedIn or other inbound retrieval by itself.",
       "No profile-to-motion assignment yet.",
       "No automatic company population from motion retrieval yet.",
       "No real Sales Navigator retrieval yet.",
       "No automatic target-map or stakeholder-map generation yet, even though Exo can now persist manual target-account signal matches, prospects, through-lines, opening plans, and cadence state.",
       "No automatic prospect selection, through-line synthesis, or opening-plan generation yet. Agents still need to choose and write back the people, the reply-path hypothesis, and the first move explicitly.",
-      "Limited runtime auto-discovery now exists for Codex harness connectors through local Codex config inspection, but Exo still does not do full cross-runtime availability inspection or live connector auth probes by itself.",
+      "Limited runtime auto-discovery now exists for Codex harness connectors through local Codex config inspection and for Claude through CLI plugin and MCP inspection, but Exo still does not do full cross-runtime availability inspection or live connector auth probes by itself.",
       "No full multi-channel pacing model yet. Exo can now compute LinkedIn invitation deficit when the claimed browser profile has a stored quota, but broader channel saturation and capacity balancing are still future work.",
       "No public bug-reporting or feature-request intake yet. That is a future alpha feature, not current scope."
     ],

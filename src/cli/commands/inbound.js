@@ -10,6 +10,7 @@ import {
   recordInboundObservation
 } from "../../core/inbound-observations.js";
 import { buildLiveGmailInboundSyncPayload } from "../../core/inbound-gmail-live-sync.js";
+import { buildLiveLinkedinInboundSyncPayload } from "../../core/inbound-linkedin-live-sync.js";
 import { buildGmailInboundSyncPayload } from "../../core/inbound-gmail-sync.js";
 import { buildLinkedinInboundSyncPayload } from "../../core/inbound-linkedin-sync.js";
 import { buildInboundSyncRefreshSummary, prepareUserInboundSyncRun } from "../../core/inbound-sync-run.js";
@@ -65,6 +66,7 @@ Canonical inbound interface:
   exo inbound sync show <user-id>
   exo inbound sync plan <user-id> --mode quick
   exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
+  exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --apply --refresh --json
   exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --apply --refresh --json
   exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
   exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
@@ -76,9 +78,10 @@ Canonical inbound interface:
 Rules:
   - Start with the canonical truth surfaces, not the LinkedIn notifications bell.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
-  - Sync policy and observation storage exist now. Gmail also has a first live retrieval path through supported runtime:gmail harness connections, but broader live retrieval still does not.
+  - Sync policy and observation storage exist now. Gmail has a first live retrieval path through supported runtime:gmail harness connections, and LinkedIn quick-mode surfaces have a first live retrieval path through a trusted Chrome profile plus a supported runtime:chrome harness, but broader live retrieval still does not.
   - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
   - Use inbound sync linkedin when another agent already inspected LinkedIn quick-mode surfaces and needs Exo to build or apply the governed writeback payload.
+  - Use inbound sync linkedin-live when Exo itself should inspect LinkedIn quick-mode surfaces through a trusted Chrome profile plus a supported runtime:chrome harness.
   - Use inbound sync gmail when another agent already inspected Gmail and needs Exo to build or apply the governed writeback payload.
   - Use inbound sync gmail-live when Exo itself should inspect Gmail through a supported runtime:gmail harness-backed account in the current runtime.
   - Use inbound sync run when another agent already inspected the live surfaces and needs one governed writeback path for the whole pass.
@@ -287,6 +290,69 @@ Rules:
       }
 
       console.log(JSON.stringify(result.payload, null, 2));
+    });
+
+  sync
+    .command("linkedin-live")
+    .description("Inspect LinkedIn quick-mode surfaces through the resolved trusted Chrome profile and supported runtime:chrome harness.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--account <account-id>", "Connected LinkedIn account identifier; inferred when only one LinkedIn account exists")
+    .option("--runtime <runtime>", "Browser-control runtime to use when multiple supported harnesses exist, such as codex or claude")
+    .option("--connector <connector>", "Browser-control connector; currently chrome only")
+    .option("--limit <count>", "Maximum relevant items to inspect per LinkedIn surface")
+    .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
+    .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
+    .option("--json", "Emit machine-readable JSON")
+    .action(async (userId, options) => {
+      const rawUser = findUserById(userId);
+      if (!rawUser) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let result;
+      try {
+        result = await buildLiveLinkedinInboundSyncPayload(rawUser, listBrowserProfiles(), {
+          accountId: options.account ?? null,
+          runtime: options.runtime ?? null,
+          connector: options.connector ?? null,
+          limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      const response = {
+        probe: result.probe,
+        capture: result.capture,
+        payload: result.payload,
+        applied: null
+      };
+
+      if (options.apply || options.refresh) {
+        try {
+          response.applied = applyInboundSyncRunPayload(userId, result.payload, { refresh: Boolean(options.refresh) });
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(response, null, 2));
+        return;
+      }
+
+      if (response.applied) {
+        console.log(renderInboundSyncRun(response.applied));
+        return;
+      }
+
+      console.log(JSON.stringify(response, null, 2));
     });
 
   sync

@@ -52,6 +52,7 @@ Common patterns:
   exo inbound sync show <user-id> --json
   exo inbound sync plan <user-id> --mode quick --json
   exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
+  exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --apply --refresh --json
   exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --apply --refresh --json
   exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
   exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
