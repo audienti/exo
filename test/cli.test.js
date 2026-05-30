@@ -1681,6 +1681,39 @@ test("execution users can own mixed profile-backed and harness-backed accounts, 
     assert.equal(stickyGmailProfile.resolutionMode, "blocked-by-company-user-assignment");
     assert.match(stickyGmailProfile.blocker, /harness connection/i);
 
+    const linkedinExecution = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "execution", "show", company.id, "--capability", "linkedin", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(linkedinExecution.company.id, company.id);
+    assert.equal(linkedinExecution.resolvedProfile.id, linkedinProfile.id);
+    assert.equal(linkedinExecution.transport.mode, "chrome-profile");
+    assert.equal(linkedinExecution.transport.preferredTransport.tool, "chrome");
+    assert.equal(linkedinExecution.transport.fallbackTransport.tool, "profile-relay");
+    assert.ok(
+      linkedinExecution.transport.failureClasses.some((failure) => failure.key === "profile_selection_ambiguity")
+    );
+    assert.ok(
+      linkedinExecution.transport.recoveryHints.some((hint) => /multiple-browser|multiple-extension|unqualified Playwriter/i.test(hint))
+    );
+
+    const gmailExecution = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "execution", "show", company.id, "--capability", "gmail", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(gmailExecution.transport.mode, "harness-connection");
+    assert.equal(gmailExecution.transport.preferredTransport.tool, "codex:gmail");
+    assert.equal(gmailExecution.resolvedAccount.sourceType, "harness-connection");
+    assert.ok(
+      gmailExecution.transport.failureClasses.some((failure) => failure.key === "connector_unavailable")
+    );
+
     assert.equal(gmailProfile.verifiedCapabilities.includes("gmail"), true);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

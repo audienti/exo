@@ -41,6 +41,7 @@ The current scaffold supports:
 - `exo profiles resolve`
 - `exo profiles test`
 - `exo profiles remove`
+- `exo companies execution show`
 
 ## Discovery first
 
@@ -185,6 +186,42 @@ exo profiles resolve --capability linkedin --company <company-id> --json
 ```
 
 If a company has a pinned profile, `profiles resolve` should honor that assignment instead of drifting to another otherwise-valid browser identity.
+
+## Identity is not transport
+
+`profiles resolve` answers:
+
+- which browser
+- which profile
+- which company-pinned identity
+
+It does **not** fully answer:
+
+- which runtime transport to use first
+- when to prefer the native Chrome surface over a relay
+- how to recover when the browser-control path fails in a known way
+
+For that, use:
+
+```bash
+exo companies execution show <company-id> --capability linkedin --json
+```
+
+That surface is where Exo should carry durable recovery rules such as:
+
+- prefer native Chrome control first for Chrome-backed authenticated work
+- do not start an unqualified Playwriter or relay session when multiple profiles or extensions are attached
+- if a fallback relay is necessary, bind it explicitly to the resolved company profile
+- if the local relay is stale, clear it once and retry instead of looping blind
+- if LinkedIn invite UI hangs, break the send into observed steps and verify the resulting state before recording success
+
+Those are product-level failure classes, not one operator's folklore. The reusable classes are:
+
+- profile-selection ambiguity
+- stale transport listener
+- wrong signed-in account
+- UI hang without state change
+- connector unavailable
 
 ## What Exo verifies today
 

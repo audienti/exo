@@ -10,6 +10,7 @@ import {
 import { addCompany } from "../../core/add-company.js";
 import { assignCompanyProfile } from "../../core/assign-company-profile.js";
 import { assignCompanyUser } from "../../core/assign-company-user.js";
+import { buildCompanyExecutionView } from "../../core/build-company-execution-view.js";
 import { buildCompanyResearchBrief } from "../../core/build-company-research-brief.js";
 import { claimMotionProspectPacket } from "../../core/claim-motion-prospect-packet.js";
 import { claimMotionTargetAccountPacket } from "../../core/claim-target-account-packet.js";
@@ -36,7 +37,7 @@ import {
   updateCompany,
   updateMotion
 } from "../../db/database.js";
-import { browserProfileSchema } from "../../schema/browser-profile.js";
+import { browserProfileCapabilitySchema, browserProfileSchema } from "../../schema/browser-profile.js";
 import { normalizeRepeatedStringList, normalizeStringList } from "../../lib/collections.js";
 import { buildMotionQueueSummary, isMotionQueueStatus, withDerivedTargetAccountQueueState } from "../../lib/motion-queue.js";
 import { companySchema } from "../../schema/company.js";
@@ -60,6 +61,7 @@ Canonical companies interface:
   exo companies update <company-id>
   exo companies motions <company-id>
   exo companies research-brief <company-id>
+  exo companies execution show <company-id>
   exo companies queue show <company-id>
   exo companies queue set <company-id>
   exo companies queue claim <company-id>
@@ -210,6 +212,10 @@ Examples:
     .command("user")
     .description("Inspect or assign the sticky execution user for a company.");
 
+  const companyExecution = companies
+    .command("execution")
+    .description("Resolve the exact execution identity and transport plan for one company capability.");
+
   companyProfile
     .command("assign")
     .description("Pin one registered browser profile to a company for sticky engagement identity.")
@@ -315,6 +321,49 @@ Rules:
       }
 
       console.log(renderCompanySummary(updated));
+    });
+
+  companyExecution
+    .command("show")
+    .description("Show the resolved execution plan for one company capability.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--capability <capability>", "generic-web | linkedin | sales-navigator | gmail | hubspot")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies execution show <company-id> --capability linkedin
+  exo companies execution show <company-id> --capability linkedin --json
+
+Use this before live browser-backed work when you need one canonical answer to:
+  - which user and profile are pinned to this company?
+  - which transport should I try first in this runtime?
+  - what recovery pattern should I use if Chrome or the relay fails?
+`
+    )
+    .action((companyId, options) => {
+      const rawCompany = findCompanyById(companyId);
+      if (!rawCompany) {
+        console.error(`Company not found: ${companyId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const company = companySchema.parse(rawCompany);
+      const rawUser = company.engagementUserAssignment
+        ? findUserById(company.engagementUserAssignment.userId)
+        : null;
+      const execution = buildCompanyExecutionView(rawCompany, rawUser, listBrowserProfiles(), {
+        capability: browserProfileCapabilitySchema.parse(options.capability)
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(execution, null, 2));
+        return;
+      }
+
+      console.log(renderCompanyExecutionPlan(execution));
     });
 
   companies
@@ -2767,6 +2816,67 @@ function renderTouchList(companyName, motionName, prospect) {
     }
     if (touch.body) {
       lines.push(`  Body: ${touch.body}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {ReturnType<typeof buildCompanyExecutionView>} execution
+ */
+function renderCompanyExecutionPlan(execution) {
+  const lines = [
+    `Execution Plan: ${execution.company.name}`,
+    `Capability: ${execution.capability}`,
+    `Pinned User: ${execution.assignments.user?.label ?? "none"}`,
+    `Pinned Profile: ${execution.assignments.profile?.label ?? "none"}`,
+    `Transport Mode: ${execution.transport.mode}`,
+    `Transport Status: ${execution.transport.status}`
+  ];
+
+  if (execution.resolvedAccount) {
+    lines.push(`Resolved Account: ${execution.resolvedAccount.handle} (${execution.resolvedAccount.sourceType})`);
+    lines.push(`Resolution Reason: ${execution.resolvedAccount.reason}`);
+  }
+
+  if (execution.resolvedProfile) {
+    lines.push(`Browser: ${execution.resolvedProfile.browser}`);
+    lines.push(`Profile Directory: ${execution.resolvedProfile.profileDirectory}`);
+    lines.push(`Profile Path: ${execution.resolvedProfile.profilePath}`);
+  }
+
+  if (execution.transport.preferredTransport) {
+    lines.push(`Preferred Transport: ${execution.transport.preferredTransport.tool}`);
+    lines.push(`Preferred Reason: ${execution.transport.preferredTransport.reason}`);
+  }
+
+  if (execution.transport.fallbackTransport) {
+    lines.push(`Fallback Transport: ${execution.transport.fallbackTransport.tool}`);
+    lines.push(`Fallback Reason: ${execution.transport.fallbackTransport.reason}`);
+  }
+
+  if (execution.transport.blocker) {
+    lines.push(`Blocker: ${execution.transport.blocker}`);
+  }
+
+  lines.push("Runtime Checks:");
+  for (const check of execution.transport.runtimeChecks) {
+    lines.push(`- ${check}`);
+  }
+
+  if (execution.transport.failureClasses?.length) {
+    lines.push("Failure Classes:");
+    for (const failure of execution.transport.failureClasses) {
+      lines.push(`- ${failure.key}: ${failure.symptom}`);
+      lines.push(`  Rule: ${failure.operatorRule}`);
+    }
+  }
+
+  if (execution.transport.recoveryHints.length) {
+    lines.push("Recovery Hints:");
+    for (const hint of execution.transport.recoveryHints) {
+      lines.push(`- ${hint}`);
     }
   }
 

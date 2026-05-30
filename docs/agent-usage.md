@@ -202,8 +202,9 @@ This is the correct execution loop:
 3. pull one action brief
 4. if the action needs copy, pull `exo motion draft-brief ...` for the mapped draft surface
 5. have the chat write the copy from that stored context
-6. perform the action in the native browser harness
-7. immediately write back what really happened with `exo companies touches add ...`
+6. pull `exo companies execution show <company-id> --capability <capability> --json` and honor the resolved transport order and recovery hints
+7. perform the action in the native browser harness
+8. immediately write back what really happened with `exo companies touches add ...`
 
 Important execution rule:
 

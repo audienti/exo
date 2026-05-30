@@ -406,6 +406,11 @@ function buildExecutionSteps(actionView, action) {
     "Resolve the pinned company identity first and keep the same execution user or browser profile for the whole engagement."
   ];
 
+  if (action.platform === "linkedin" || action.platform === "email") {
+    const capability = action.platform === "linkedin" ? "linkedin" : "gmail";
+    steps.push(`Pull the canonical execution plan with exo companies execution show ${actionView.company.id} --capability ${capability} --json before you touch the live surface.`);
+  }
+
   if (action.platform === "linkedin") {
     steps.push("Use the native Chrome browser harness in this runtime before any fallback browser tool.");
   }
