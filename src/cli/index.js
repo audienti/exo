@@ -84,6 +84,7 @@ Common patterns:
   exo profiles capabilities --json
   exo profiles resolve --capability linkedin --json
   exo profiles test <profile-id>
+  exo profiles auth <profile-id> --runtime codex --json
   exo users add --label william-main --owner william
   exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred
   exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred

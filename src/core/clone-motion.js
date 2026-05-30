@@ -37,7 +37,9 @@ export function cloneMotionDefinition(rawMotion, patch) {
     motionPlan: {
       status: "pending",
       variants: []
-    }
+    },
+    engagementProfileAssignment: null,
+    engagementUserAssignment: null
   });
 
   return updateMotionDefinition(baseClone, {

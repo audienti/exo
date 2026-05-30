@@ -40,8 +40,11 @@ The current scaffold supports:
 - `exo profiles capabilities`
 - `exo profiles resolve`
 - `exo profiles test`
+- `exo profiles auth`
 - `exo profiles remove`
 - `exo companies execution show`
+- `exo motion profile assign`
+- `exo motion user assign`
 
 ## Discovery first
 
@@ -135,6 +138,22 @@ exo profiles capabilities --json
 exo profiles resolve --capability linkedin --json
 exo profiles show <profile-id>
 exo profiles test <profile-id>
+exo profiles auth <profile-id> --runtime codex --json
+```
+
+## Structural test vs live auth
+
+`exo profiles test` is structural.
+It checks whether the browser profile artifacts look usable on disk and whether local evidence still supports the declared capabilities.
+
+`exo profiles auth` is live.
+It uses a supported runtime:chrome adapter to verify whether the currently signed-in LinkedIn, Sales Navigator, Gmail, and HubSpot surfaces actually match the intended identity.
+
+Use both before unattended browser-backed work:
+
+```bash
+exo profiles test <profile-id> --json
+exo profiles auth <profile-id> --runtime codex --json
 ```
 
 ## Capabilities query
@@ -177,15 +196,18 @@ That gives two useful views:
 
 Discovery and verification are not enough on their own.
 
-Once a company is being worked, Exo should keep using one pinned identity consistently. The current first cut is company-level stickiness:
+Once a company is being worked, Exo should keep using one pinned identity consistently. The current first cut is company-level stickiness, with motion-level defaults when the company itself is not pinned:
 
 ```bash
 exo companies profile assign <company-id> --profile <profile-id> --reason "Use one identity consistently"
 exo companies profile show <company-id> --json
 exo profiles resolve --capability linkedin --company <company-id> --json
+exo motion user assign <motion-id> --user <user-id> --reason "Keep one execution identity for this motion" --json
+exo companies execution show <company-id> --motion <motion-id> --capability linkedin --json
 ```
 
 If a company has a pinned profile, `profiles resolve` should honor that assignment instead of drifting to another otherwise-valid browser identity.
+If a company is still unpinned but the motion has a default execution identity, `companies execution show --motion` should honor that motion default before falling back to a global browser profile.
 
 ## Identity is not transport
 

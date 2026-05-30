@@ -4,6 +4,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { addCompany } from "../../core/add-company.js";
+import { assignMotionProfile } from "../../core/assign-motion-profile.js";
+import { assignMotionUser } from "../../core/assign-motion-user.js";
 import { cloneMotionDefinition } from "../../core/clone-motion.js";
 import { buildMotionActionBrief, buildMotionActionView } from "../../core/build-motion-action-view.js";
 import { buildMotionIntake } from "../../core/build-motion-intake.js";
@@ -23,7 +25,9 @@ import {
   deleteMotion,
   findCompanyById,
   findCompanyByIdentity,
+  findBrowserProfileById,
   findMotionById,
+  findUserById,
   insertCompany,
   insertMotion,
   listBrowserProfiles,
@@ -50,6 +54,7 @@ import {
   renderMotionWritingBrief
 } from "../../artifacts/render-motion.js";
 import { buildMotionPacketSummary } from "../../lib/motion-packets.js";
+import { browserProfileSchema } from "../../schema/browser-profile.js";
 import { companySchema } from "../../schema/company.js";
 import { motionSchema } from "../../schema/motion.js";
 
@@ -86,9 +91,19 @@ Canonical motion interface:
   exo motion refresh
   exo motion list
   exo motion show
+  exo motion profile show/assign
+  exo motion user show/assign
   exo motion remove
 `
     );
+
+  const motionProfile = motion
+    .command("profile")
+    .description("Inspect or assign the sticky browser profile default for a motion.");
+
+  const motionUser = motion
+    .command("user")
+    .description("Inspect or assign the sticky execution-user default for a motion.");
 
   addMotionSeedOptions(
     motion
@@ -1368,6 +1383,181 @@ Examples:
       }
 
       console.log(renderMotionSummary(motion));
+    });
+
+  motionProfile
+    .command("assign")
+    .description("Pin one registered browser profile to a motion as the default execution identity.")
+    .argument("<motion-id>", "Motion identifier")
+    .requiredOption("--profile <profile-id>", "Browser profile identifier")
+    .option("--by <actor>", "Who made the assignment")
+    .option("--reason <reason>", "Why this profile is being pinned")
+    .option("--json", "Emit machine-readable JSON")
+    .action((motionId, options) => {
+      const rawMotion = findMotionById(motionId);
+      if (!rawMotion) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const rawProfile = findBrowserProfileById(options.profile);
+      if (!rawProfile) {
+        console.error(`Browser profile not found: ${options.profile}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const profile = browserProfileSchema.parse(rawProfile);
+      if (profile.status !== "ready") {
+        console.error(`Browser profile is not ready: ${profile.id} (${profile.status})`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let updated;
+      try {
+        updated = assignMotionProfile(rawMotion, rawProfile, {
+          assignedBy: options.by ?? null,
+          reason: options.reason ?? null
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+      updateMotion(updated);
+
+      if (options.json) {
+        console.log(JSON.stringify(updated, null, 2));
+        return;
+      }
+
+      console.log(`Motion ${updated.name} is now pinned to profile ${updated.engagementProfileAssignment?.label ?? profile.label}.`);
+    });
+
+  motionProfile
+    .command("show")
+    .description("Show the sticky browser profile default for a motion.")
+    .argument("<motion-id>", "Motion identifier")
+    .option("--json", "Emit machine-readable JSON")
+    .action((motionId, options) => {
+      const rawMotion = findMotionById(motionId);
+      if (!rawMotion) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const motionRecord = motionSchema.parse(rawMotion);
+      const profile = motionRecord.engagementProfileAssignment
+        ? findBrowserProfileById(motionRecord.engagementProfileAssignment.profileId)
+        : null;
+      const result = {
+        motion: {
+          id: motionRecord.id,
+          name: motionRecord.name,
+          status: motionRecord.status
+        },
+        assignment: motionRecord.engagementProfileAssignment,
+        profile
+      };
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      if (!result.assignment) {
+        console.log(`No sticky browser profile assignment for motion ${motionRecord.name}.`);
+        return;
+      }
+
+      console.log(`Motion ${motionRecord.name} is pinned to ${result.assignment.label} (${result.assignment.browser} / ${result.assignment.profileDirectory}).`);
+    });
+
+  motionUser
+    .command("assign")
+    .description("Pin one execution user to a motion so linked companies inherit the same default identity.")
+    .argument("<motion-id>", "Motion identifier")
+    .requiredOption("--user <user-id>", "Execution user identifier")
+    .option("--by <actor>", "Who made the assignment")
+    .option("--reason <reason>", "Why this user is being pinned")
+    .option("--json", "Emit machine-readable JSON")
+    .action((motionId, options) => {
+      const rawMotion = findMotionById(motionId);
+      if (!rawMotion) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const rawUser = findUserById(options.user);
+      if (!rawUser) {
+        console.error(`User not found: ${options.user}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let updated;
+      try {
+        updated = assignMotionUser(rawMotion, rawUser, listBrowserProfiles(), {
+          assignedBy: options.by ?? null,
+          reason: options.reason ?? null
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+      updateMotion(updated);
+
+      if (options.json) {
+        console.log(JSON.stringify(updated, null, 2));
+        return;
+      }
+
+      console.log(`Motion ${updated.name} is now pinned to user ${updated.engagementUserAssignment?.label ?? options.user}.`);
+    });
+
+  motionUser
+    .command("show")
+    .description("Show the sticky execution-user default for a motion.")
+    .argument("<motion-id>", "Motion identifier")
+    .option("--json", "Emit machine-readable JSON")
+    .action((motionId, options) => {
+      const rawMotion = findMotionById(motionId);
+      if (!rawMotion) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const motionRecord = motionSchema.parse(rawMotion);
+      const user = motionRecord.engagementUserAssignment
+        ? findUserById(motionRecord.engagementUserAssignment.userId)
+        : null;
+      const result = {
+        motion: {
+          id: motionRecord.id,
+          name: motionRecord.name,
+          status: motionRecord.status
+        },
+        assignment: motionRecord.engagementUserAssignment,
+        user
+      };
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      if (!result.assignment) {
+        console.log(`No sticky execution user assignment for motion ${motionRecord.name}.`);
+        return;
+      }
+
+      console.log(`Motion ${motionRecord.name} is pinned to user ${result.assignment.label}.`);
     });
 
   motion

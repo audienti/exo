@@ -45,6 +45,26 @@ export function renderBrowserProfileSummary(profile) {
     }
   }
 
+  if (profile.lastAuthProbeResult) {
+    lines.push("", "Last Auth Probe");
+    lines.push(`  Runtime: ${profile.lastAuthProbeResult.runtime}`);
+    lines.push(`  Checked At: ${profile.lastAuthProbeResult.checkedAt}`);
+    lines.push(`  Status: ${profile.lastAuthProbeResult.status}`);
+    lines.push(`  Summary: ${profile.lastAuthProbeResult.summary}`);
+
+    for (const warning of profile.lastAuthProbeResult.warnings) {
+      lines.push(`  WARN ${warning}`);
+    }
+
+    for (const capabilityCheck of profile.lastAuthProbeResult.capabilityChecks) {
+      const expected = capabilityCheck.expectedHandle ? ` expected=${capabilityCheck.expectedHandle}` : "";
+      const detected = capabilityCheck.detectedHandle ? ` detected=${capabilityCheck.detectedHandle}` : "";
+      lines.push(
+        `  ${capabilityCheck.verified ? "PASS" : "WARN"} auth:${capabilityCheck.capability}:${expected}${detected} ${capabilityCheck.details}`
+      );
+    }
+  }
+
   return lines.join("\n");
 }
 

@@ -8,6 +8,10 @@ import { premiseSchema } from "./premise.js";
 import { audienceHypothesisSchema } from "./audience-hypothesis.js";
 import { signalSchema } from "./signal.js";
 import { targetAccountSchema } from "./target-account.js";
+import {
+  companyEngagementProfileAssignmentSchema,
+  companyEngagementUserAssignmentSchema
+} from "./company.js";
 
 const statusSchema = z.enum(["draft", "active", "paused", "archived"]);
 
@@ -40,5 +44,7 @@ export const motionSchema = z.object({
     status: z.enum(["pending", "ready"]),
     variants: z.array(z.unknown()).default([])
   }),
-  nextSteps: z.array(z.string()).default([])
+  nextSteps: z.array(z.string()).default([]),
+  engagementProfileAssignment: companyEngagementProfileAssignmentSchema.nullable().default(null),
+  engagementUserAssignment: companyEngagementUserAssignmentSchema.nullable().default(null)
 });

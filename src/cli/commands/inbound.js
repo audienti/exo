@@ -10,6 +10,7 @@ import {
   recordInboundObservation
 } from "../../core/inbound-observations.js";
 import { buildLiveGmailInboundSyncPayload } from "../../core/inbound-gmail-live-sync.js";
+import { buildLiveInboundSyncPayload } from "../../core/inbound-live-sync.js";
 import { buildLiveLinkedinInboundSyncPayload } from "../../core/inbound-linkedin-live-sync.js";
 import { buildGmailInboundSyncPayload } from "../../core/inbound-gmail-sync.js";
 import { buildLinkedinInboundSyncPayload } from "../../core/inbound-linkedin-sync.js";
@@ -65,6 +66,7 @@ Canonical inbound interface:
   exo inbound surface <surface-key>
   exo inbound sync show <user-id>
   exo inbound sync plan <user-id> --mode quick
+  exo inbound sync live <user-id> --apply --refresh --json
   exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
   exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --apply --refresh --json
   exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --apply --refresh --json
@@ -78,12 +80,13 @@ Canonical inbound interface:
 Rules:
   - Start with the canonical truth surfaces, not the LinkedIn notifications bell.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
-  - Sync policy and observation storage exist now. Gmail has a first live retrieval path through supported runtime:gmail harness connections, and LinkedIn quick-mode surfaces have a first live retrieval path through a trusted Chrome profile plus a supported runtime:chrome harness, but broader live retrieval still does not.
+  - Sync policy and observation storage exist now. Gmail has a first live retrieval path through supported runtime adapters, including runtime:gmail harness connections and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn quick-mode surfaces also have a first live retrieval path through a trusted Chrome profile plus a supported runtime:chrome harness, but broader live retrieval still does not.
   - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
+  - Use inbound sync live when Exo itself should run one governed quick-mode inbound pass across every enabled Gmail and LinkedIn account that already has live retrieval support.
   - Use inbound sync linkedin when another agent already inspected LinkedIn quick-mode surfaces and needs Exo to build or apply the governed writeback payload.
   - Use inbound sync linkedin-live when Exo itself should inspect LinkedIn quick-mode surfaces through a trusted Chrome profile plus a supported runtime:chrome harness.
   - Use inbound sync gmail when another agent already inspected Gmail and needs Exo to build or apply the governed writeback payload.
-  - Use inbound sync gmail-live when Exo itself should inspect Gmail through a supported runtime:gmail harness-backed account in the current runtime.
+  - Use inbound sync gmail-live when Exo itself should inspect Gmail through either a supported runtime:gmail harness-backed account or a trusted Chrome profile plus a supported runtime:chrome harness.
   - Use inbound sync run when another agent already inspected the live surfaces and needs one governed writeback path for the whole pass.
   - Use inbound review when you need the management surface: what was checked, what needs a decision, what is stale, and what still needs itemization.
 `
@@ -235,6 +238,71 @@ Rules:
     });
 
   sync
+    .command("live")
+    .description("Inspect every enabled live-supported inbound account for one user, then optionally apply one governed quick-mode writeback.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--account <account-id>", "Only inspect one connected account")
+    .option("--capability <capability>", "Only inspect one capability like linkedin or gmail")
+    .option("--mode <mode>", "Currently quick only")
+    .option("--runtime <runtime>", "Preferred runtime override when multiple supported harnesses exist, such as codex or claude")
+    .option("--limit <count>", "Maximum relevant items to inspect per live surface")
+    .option("--since <iso-datetime>", "Only keep Gmail threads whose newest relevant message is at or after this time")
+    .option("--apply", "Apply the combined payload through exo inbound sync run semantics")
+    .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
+    .option("--json", "Emit machine-readable JSON")
+    .action(async (userId, options) => {
+      const rawUser = findUserById(userId);
+      if (!rawUser) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let result;
+      try {
+        result = await buildLiveInboundSyncPayload(rawUser, listBrowserProfiles(), {
+          accountId: options.account ?? null,
+          capability: options.capability ? browserProfileCapabilitySchema.parse(options.capability) : null,
+          mode: options.mode ?? "quick",
+          runtime: options.runtime ?? null,
+          limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null,
+          since: options.since ?? null
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      const response = {
+        ...result,
+        applied: null
+      };
+
+      if (options.apply || options.refresh) {
+        try {
+          response.applied = applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(response, null, 2));
+        return;
+      }
+
+      if (response.applied) {
+        console.log(renderInboundSyncRun(response.applied));
+        return;
+      }
+
+      console.log(JSON.stringify(response, null, 2));
+    });
+
+  sync
     .command("linkedin")
     .description("Turn one LinkedIn quick-mode capture into a governed sync payload and optionally apply it.")
     .argument("<user-id>", "Execution user identifier")
@@ -271,7 +339,7 @@ Rules:
 
       if (options.apply || options.refresh) {
         try {
-          result.applied = applyInboundSyncRunPayload(userId, built.payload, { refresh: Boolean(options.refresh) });
+          result.applied = applyInboundSyncRunPayload(rawUser, built.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -334,7 +402,7 @@ Rules:
 
       if (options.apply || options.refresh) {
         try {
-          response.applied = applyInboundSyncRunPayload(userId, result.payload, { refresh: Boolean(options.refresh) });
+          response.applied = applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -392,7 +460,7 @@ Rules:
 
       if (options.apply || options.refresh) {
         try {
-          result.applied = applyInboundSyncRunPayload(userId, built.payload, { refresh: Boolean(options.refresh) });
+          result.applied = applyInboundSyncRunPayload(rawUser, built.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -418,6 +486,8 @@ Rules:
     .description("Inspect Gmail through the resolved supported runtime, build a governed sync payload, and optionally apply it.")
     .argument("<user-id>", "Execution user identifier")
     .option("--account <account-id>", "Connected Gmail account identifier; inferred when only one Gmail account exists")
+    .option("--runtime <runtime>", "Live retrieval runtime to use when multiple supported harnesses exist, such as codex or claude")
+    .option("--connector <connector>", "Harness connector to use, such as gmail or chrome")
     .option("--limit <count>", "Maximum inbox threads to inspect from live Gmail")
     .option("--since <iso-datetime>", "Only keep threads whose newest relevant message is at or after this time")
     .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
@@ -433,8 +503,10 @@ Rules:
 
       let result;
       try {
-        result = await buildLiveGmailInboundSyncPayload(rawUser, {
+        result = await buildLiveGmailInboundSyncPayload(rawUser, listBrowserProfiles(), {
           accountId: options.account ?? null,
+          runtime: options.runtime ?? null,
+          connector: options.connector ?? null,
           limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null,
           since: options.since ?? null
         });
@@ -453,7 +525,7 @@ Rules:
 
       if (options.apply || options.refresh) {
         try {
-          response.applied = applyInboundSyncRunPayload(userId, result.payload, { refresh: Boolean(options.refresh) });
+          response.applied = applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -735,6 +807,9 @@ function collect(value, previous) {
 
 function loadJsonInput(filePath) {
   if (filePath === "-") {
+    if (process.stdin.isTTY) {
+      throw new Error("Expected JSON on stdin, but stdin is a terminal. Pipe input or pass --input <path>.");
+    }
     const stdin = fs.readFileSync(0, "utf8");
     return JSON.parse(stdin);
   }
@@ -743,16 +818,11 @@ function loadJsonInput(filePath) {
   return JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
 }
 
-function applyInboundSyncRunPayload(userId, payload, options = {}) {
-  const rawUser = findUserById(userId);
-  if (!rawUser) {
-    throw new Error(`User not found: ${userId}`);
-  }
-
+function applyInboundSyncRunPayload(rawUser, payload, options = {}) {
   const prepared = prepareUserInboundSyncRun(rawUser, payload, {
     rawMotions: listMotions()
   });
-  return applyPreparedInboundSyncRun(userId, prepared, options);
+  return applyPreparedInboundSyncRun(prepared.user.id, prepared, options);
 }
 
 function applyPreparedInboundSyncRun(userId, prepared, options = {}) {

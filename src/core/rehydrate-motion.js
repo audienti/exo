@@ -91,7 +91,9 @@ export function rehydrateMotion(rawMotion) {
         ? motionPlanVariants
         : (source.motionPlan?.variants ?? [])
     },
-    nextSteps: buildNextSteps(targetingProfile, suppressionPolicy, premise, audienceHypotheses, signals, readiness)
+    nextSteps: buildNextSteps(targetingProfile, suppressionPolicy, premise, audienceHypotheses, signals, readiness),
+    engagementProfileAssignment: source.engagementProfileAssignment ?? null,
+    engagementUserAssignment: source.engagementUserAssignment ?? null
   });
 
   return {

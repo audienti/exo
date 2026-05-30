@@ -99,6 +99,30 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
 }
 
 /**
+ * @param {string} runtime
+ * @param {string} connector
+ * @param {{ codexHome?: string | null | undefined, claudeCli?: string | null | undefined }} [options]
+ */
+export function probeRuntimeConnectorAvailability(runtime, connector, options = {}) {
+  const normalizedRuntime = normalizeNullableString(runtime) ?? "";
+  const normalizedConnector = normalizeNullableString(connector) ?? "";
+
+  return probeHarnessConnection(
+    {
+      id: `runtime-probe:${normalizedRuntime}:${normalizedConnector}`,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      updatedAt: "1970-01-01T00:00:00.000Z",
+      runtime: normalizedRuntime,
+      connector: normalizedConnector,
+      label: null,
+      status: "unknown",
+      notes: null
+    },
+    options
+  );
+}
+
+/**
  * @param {import("../schema/user.js").userHarnessConnectionSchema._type} connection
  * @param {{ codexHome?: string | null | undefined, claudeCli?: string | null | undefined }} [options]
  */

@@ -5,7 +5,7 @@ import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
 import { buildMotionQueueSummary, withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
-import { resolveUserConnection } from "./resolve-user-connection.js";
+import { resolveScopedExecutionAssignment } from "./resolve-scoped-execution-assignment.js";
 
 /**
  * @param {unknown} rawMotion
@@ -152,7 +152,7 @@ function buildCompanyTargetingState(company, motion, profiles, users, capability
   const missingEmailFallbackCount = prospects.filter(
     (prospect) => !prospect.email && (!prospect.openingPlan.fallbackChannel || prospect.openingPlan.fallbackChannel === "none")
   ).length;
-  const executionIdentity = resolveCompanyExecutionIdentity(company, profiles, users, capability, browserGate.resolvedProfile);
+  const executionIdentity = resolveCompanyExecutionIdentity(company, motion, profiles, users, capability, browserGate.resolvedProfile);
 
   let stage = "targeting-ready";
   if (!company.websiteUrl || !company.linkedinCompanyUrl) {
@@ -189,61 +189,62 @@ function buildCompanyTargetingState(company, motion, profiles, users, capability
 
 /**
  * @param {import("../schema/company.js").companySchema._type} company
+ * @param {import("../schema/motion.js").motionSchema._type} motion
  * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
  * @param {import("../schema/user.js").userSchema._type[]} users
  * @param {import("../schema/browser-profile.js").browserProfileCapabilitySchema._type} capability
  * @param {{ id: string, label: string, browser: string, profileDirectory: string, verifiedCapabilities: string[] } | null} globalResolvedProfile
  */
-function resolveCompanyExecutionIdentity(company, profiles, users, capability, globalResolvedProfile) {
-  const assignedUser = company.engagementUserAssignment
-    ? users.find((user) => user.id === company.engagementUserAssignment.userId) ?? null
-    : null;
-  const assignedUserResolution = assignedUser
-    ? resolveUserConnection(assignedUser, profiles, { capability }).resolved
-    : null;
+function resolveCompanyExecutionIdentity(company, motion, profiles, users, capability, globalResolvedProfile) {
+  const scoped = resolveScopedExecutionAssignment({
+    rawCompany: company,
+    rawMotion: motion,
+    rawProfiles: profiles,
+    rawUsers: users,
+    capability
+  });
 
-  if (assignedUserResolution) {
-    if (assignedUserResolution.browserProfile) {
-      const profile = profiles.find((candidate) => candidate.id === assignedUserResolution.browserProfile.id) ?? null;
+  if (scoped.resolvedAccount && scoped.assignedUser) {
+    if (scoped.resolvedAccount.browserProfile) {
+      const profile = profiles.find((candidate) => candidate.id === scoped.resolvedAccount.browserProfile.id) ?? null;
       const trusted = Boolean(profile && profile.status === "ready" && profile.verifiedCapabilities.includes(capability));
+      const scopeLabel = scoped.source === "company-user" ? "Company" : "Motion";
       return {
         status: trusted ? "pinned-ready" : "pinned-untrusted",
         message: trusted
-          ? `Company is pinned to user ${assignedUser.label} for ${capability} through ${profile.label}.`
-          : `Company is pinned to user ${assignedUser.label}, but the resolved browser profile is not trusted for ${capability}.`,
+          ? `${scopeLabel} is pinned to user ${scoped.assignedUser.label} for ${capability} through ${profile.label}.`
+          : `${scopeLabel} is pinned to user ${scoped.assignedUser.label}, but the resolved browser profile is not trusted for ${capability}.`,
         profile: profile ? buildProfilePreview(profile) : null,
         user: {
-          id: assignedUser.id,
-          label: assignedUser.label
+          id: scoped.assignedUser.id,
+          label: scoped.assignedUser.label
         }
       };
     }
 
+    const scopeLabel = scoped.source === "company-user" ? "Company" : "Motion";
     return {
-      status: assignedUserResolution.status === "ready" ? "pinned-ready" : "pinned-untrusted",
-      message: assignedUserResolution.status === "ready"
-        ? `Company is pinned to user ${assignedUser.label} for ${capability} through ${assignedUserResolution.harnessConnection.runtime}:${assignedUserResolution.harnessConnection.connector}.`
-        : `Company is pinned to user ${assignedUser.label}, but the resolved harness connection is not ready for ${capability}.`,
+      status: scoped.resolvedAccount.status === "ready" ? "pinned-ready" : "pinned-untrusted",
+      message: scoped.resolvedAccount.status === "ready"
+        ? `${scopeLabel} is pinned to user ${scoped.assignedUser.label} for ${capability} through ${scoped.resolvedAccount.harnessConnection.runtime}:${scoped.resolvedAccount.harnessConnection.connector}.`
+        : `${scopeLabel} is pinned to user ${scoped.assignedUser.label}, but the resolved harness connection is not ready for ${capability}.`,
       profile: null,
       user: {
-        id: assignedUser.id,
-        label: assignedUser.label
+        id: scoped.assignedUser.id,
+        label: scoped.assignedUser.label
       }
     };
   }
 
-  const assigned = company.engagementProfileAssignment
-    ? profiles.find((profile) => profile.id === company.engagementProfileAssignment.profileId) ?? null
-    : null;
-
-  if (assigned) {
-    const trusted = assigned.status === "ready" && assigned.verifiedCapabilities.includes(capability);
+  if (scoped.assignedProfile) {
+    const trusted = scoped.assignedProfile.status === "ready" && scoped.assignedProfile.verifiedCapabilities.includes(capability);
+    const scopeLabel = scoped.source === "company-profile" ? "Company" : "Motion";
     return {
       status: trusted ? "pinned-ready" : "pinned-untrusted",
       message: trusted
-        ? `Company is pinned to ${assigned.label} for ${capability}.`
-        : `Company is pinned to ${assigned.label}, but that profile is not trusted for ${capability}.`,
-      profile: buildProfilePreview(assigned),
+        ? `${scopeLabel} is pinned to ${scoped.assignedProfile.label} for ${capability}.`
+        : `${scopeLabel} is pinned to ${scoped.assignedProfile.label}, but that profile is not trusted for ${capability}.`,
+      profile: buildProfilePreview(scoped.assignedProfile),
       user: null
     };
   }

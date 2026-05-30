@@ -33,6 +33,7 @@ import {
   insertCompany,
   listBrowserProfiles,
   listCompanies,
+  listUsers,
   searchCompanies,
   updateCompany,
   updateMotion
@@ -328,16 +329,19 @@ Rules:
     .description("Show the resolved execution plan for one company capability.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--capability <capability>", "generic-web | linkedin | sales-navigator | gmail | hubspot")
+    .option("--motion <motion-id>", "Honor a motion-level execution default when the company itself is not pinned")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
       "after",
       `
 Examples:
   exo companies execution show <company-id> --capability linkedin
+  exo companies execution show <company-id> --motion <motion-id> --capability linkedin
   exo companies execution show <company-id> --capability linkedin --json
 
 Use this before live browser-backed work when you need one canonical answer to:
   - which user and profile are pinned to this company?
+  - whether the company is inheriting its sticky identity from a motion default instead of a company pin
   - which transport should I try first in this runtime?
   - what recovery pattern should I use if Chrome or the relay fails?
 `
@@ -351,11 +355,31 @@ Use this before live browser-backed work when you need one canonical answer to:
       }
 
       const company = companySchema.parse(rawCompany);
+      const rawMotion = options.motion ? findMotionById(options.motion) : null;
+      if (options.motion && !rawMotion) {
+        console.error(`Motion not found: ${options.motion}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (rawMotion && !company.motionIds.includes(rawMotion.id)) {
+        console.error(`Company ${company.name} is not linked to motion ${rawMotion.id}.`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const motion = rawMotion ? motionSchema.parse(rawMotion) : null;
       const rawUser = company.engagementUserAssignment
         ? findUserById(company.engagementUserAssignment.userId)
-        : null;
+        : motion?.engagementUserAssignment
+          ? findUserById(motion.engagementUserAssignment.userId)
+          : null;
+      const rawUsers = rawMotion || !rawUser
+        ? listUsers()
+        : [rawUser];
       const execution = buildCompanyExecutionView(rawCompany, rawUser, listBrowserProfiles(), {
-        capability: browserProfileCapabilitySchema.parse(options.capability)
+        capability: browserProfileCapabilitySchema.parse(options.capability),
+        rawMotion,
+        rawUsers
       });
 
       if (options.json) {
@@ -2829,6 +2853,8 @@ function renderCompanyExecutionPlan(execution) {
   const lines = [
     `Execution Plan: ${execution.company.name}`,
     `Capability: ${execution.capability}`,
+    `Motion Context: ${execution.motion ? `${execution.motion.name} (${execution.motion.id})` : "none"}`,
+    `Assignment Source: ${execution.assignmentSource}`,
     `Pinned User: ${execution.assignments.user?.label ?? "none"}`,
     `Pinned Profile: ${execution.assignments.profile?.label ?? "none"}`,
     `Transport Mode: ${execution.transport.mode}`,

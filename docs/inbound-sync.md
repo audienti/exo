@@ -8,7 +8,7 @@ The first slice does three things:
 - stores which of those surfaces are enabled on each connected user account
 - stores the last known sync result for each enabled surface
 - stores normalized inbound observations that an agent can write back after inspecting a live surface
-- runs the first live retrieval slice for Gmail through supported `runtime:gmail` harness-backed accounts
+- runs the first live retrieval slice for Gmail through supported runtime adapters, including `runtime:gmail` harness-backed accounts and trusted Chrome profiles plus `runtime:chrome` harnesses
 - runs the first live retrieval slice for LinkedIn quick-mode surfaces through a trusted Chrome profile plus a supported `runtime:chrome` harness
 
 The next management layer is `exo inbound review`, which combines that sync state with the concrete observations so the operator can see what actually needs a decision.
@@ -154,9 +154,9 @@ exo inbound sync gmail-live <user-id> --account <account-id> --limit 10 --since 
 
 Gmail live rules:
 
-- this only works when the Gmail account resolves through a supported `runtime:gmail` harness connection such as `codex:gmail` or `claude:gmail`
-- Exo probes the resolved runtime first and refuses to fake a live retrieval when the Gmail connector is unavailable
-- connector failure becomes governed sync failure data for `gmail-inbox-threads`, not an unstructured crash
+- this works in two governed shapes: a supported `runtime:gmail` harness-backed account such as `codex:gmail` or `claude:gmail`, or a browser-profile-backed Gmail account with a trusted Chrome profile plus a supported `runtime:chrome` harness such as `codex:chrome` or `claude:chrome`
+- Exo probes the resolved runtime first and refuses to fake a live retrieval when the selected live path is unavailable
+- runtime or connector failure becomes governed sync failure data for `gmail-inbox-threads`, not an unstructured crash
 - `--limit` controls how many recent inbox threads the resolved runtime should inspect
 - `--since` narrows the returned threads by newest relevant message time
 - `--apply` immediately writes the payload back through the generic sync-run engine

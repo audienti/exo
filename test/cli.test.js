@@ -1223,6 +1223,425 @@ test("profiles add/list/capabilities/test persists a browser profile with a pass
   }
 });
 
+test("profiles auth persists live signed-in readiness per capability through Codex", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-profile-auth-codex-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const fakeCodexPath = path.join(tempDir, "fake-codex");
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com", ".google.com", "mail.google.com", ".hubspot.com", "app.hubspot.com"],
+    historyUrls: [
+      "https://www.linkedin.com/feed/",
+      "https://www.linkedin.com/sales/home",
+      "https://mail.google.com/mail/u/0/#inbox",
+      "https://app.hubspot.com/contacts/245546701/contacts/list/view/all/"
+    ]
+  });
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."chrome@openai-bundled"]',
+      "enabled = true",
+      ""
+    ].join("\n")
+  );
+  writeFakeCodexCaptureScript(fakeCodexPath, {
+    status: "ready",
+    summary: "All declared browser capabilities appear signed in under the intended identities.",
+    runtime: "codex",
+    checkedAt: "2026-05-30T18:40:00.000Z",
+    warnings: [],
+    capabilityChecks: [
+      {
+        capability: "linkedin",
+        verified: true,
+        details: "Signed in to LinkedIn as wflanagan@audienti.com.",
+        expectedHandle: "wflanagan@audienti.com",
+        detectedHandle: "wflanagan@audienti.com",
+        sourceUrl: "https://www.linkedin.com/feed/"
+      },
+      {
+        capability: "sales-navigator",
+        verified: true,
+        details: "Sales Navigator is available under the same LinkedIn identity.",
+        expectedHandle: "wflanagan@audienti.com",
+        detectedHandle: "wflanagan@audienti.com",
+        sourceUrl: "https://www.linkedin.com/sales/home"
+      },
+      {
+        capability: "gmail",
+        verified: true,
+        details: "Signed in to Gmail as william@audienti.com.",
+        expectedHandle: "william@audienti.com",
+        detectedHandle: "william@audienti.com",
+        sourceUrl: "https://mail.google.com/mail/u/0/#inbox"
+      },
+      {
+        capability: "hubspot",
+        verified: true,
+        details: "Signed in to HubSpot as portal 245546701.",
+        expectedHandle: "245546701",
+        detectedHandle: "245546701",
+        sourceUrl: "https://app.hubspot.com/contacts/245546701/contacts/list/view/all/"
+      }
+    ]
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "auth-main",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "linkedin",
+          "--capability",
+          "sales-navigator",
+          "--capability",
+          "gmail",
+          "--capability",
+          "hubspot",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const claimed = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "claim",
+          profile.id,
+          "--account",
+          "linkedin:wflanagan@audienti.com",
+          "--account",
+          "sales-navigator:wflanagan@audienti.com",
+          "--account",
+          "gmail:william@audienti.com",
+          "--account",
+          "hubspot:245546701",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      EXO_CODEX_CLI: fakeCodexPath
+    };
+
+    const authed = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "profiles", "auth", claimed.id, "--runtime", "codex", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(authed.lastAuthProbeResult.status, "ready");
+    assert.equal(authed.lastAuthProbeResult.runtime, "codex");
+    assert.equal(authed.lastAuthProbeResult.capabilityChecks.length, 4);
+    assert.equal(
+      authed.lastAuthProbeResult.capabilityChecks.every((check) => check.verified),
+      true
+    );
+    assert.equal(authed.lastAuthProbeResult.capabilityChecks.find((check) => check.capability === "gmail").detectedHandle, "william@audienti.com");
+
+    const shown = JSON.parse(
+      execFileSync("node", [cliPath, "profiles", "show", profile.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(shown.lastAuthProbeResult.status, "ready");
+    assert.equal(shown.lastAuthProbeResult.capabilityChecks.find((check) => check.capability === "hubspot").expectedHandle, "245546701");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("profiles auth persists live signed-in readiness per capability through Claude", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-profile-auth-claude-"));
+  const fakeClaudePath = path.join(tempDir, "fake-claude");
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com", ".google.com", "mail.google.com", ".hubspot.com", "app.hubspot.com"],
+    historyUrls: [
+      "https://www.linkedin.com/feed/",
+      "https://www.linkedin.com/sales/home",
+      "https://mail.google.com/mail/u/0/#inbox",
+      "https://app.hubspot.com/contacts/245546701/contacts/list/view/all/"
+    ]
+  });
+
+  writeFakeClaudeScript(fakeClaudePath, {
+    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
+    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
+    structuredOutput: {
+      status: "ready",
+      summary: "All declared browser capabilities appear signed in under the intended identities.",
+      runtime: "claude",
+      checkedAt: "2026-05-30T18:45:00.000Z",
+      warnings: [],
+      capabilityChecks: [
+        {
+          capability: "linkedin",
+          verified: true,
+          details: "Signed in to LinkedIn as wflanagan@audienti.com.",
+          expectedHandle: "wflanagan@audienti.com",
+          detectedHandle: "wflanagan@audienti.com",
+          sourceUrl: "https://www.linkedin.com/feed/"
+        },
+        {
+          capability: "sales-navigator",
+          verified: true,
+          details: "Sales Navigator is available under the same LinkedIn identity.",
+          expectedHandle: "wflanagan@audienti.com",
+          detectedHandle: "wflanagan@audienti.com",
+          sourceUrl: "https://www.linkedin.com/sales/home"
+        },
+        {
+          capability: "gmail",
+          verified: true,
+          details: "Signed in to Gmail as william@audienti.com.",
+          expectedHandle: "william@audienti.com",
+          detectedHandle: "william@audienti.com",
+          sourceUrl: "https://mail.google.com/mail/u/0/#inbox"
+        },
+        {
+          capability: "hubspot",
+          verified: true,
+          details: "Signed in to HubSpot as portal 245546701.",
+          expectedHandle: "245546701",
+          detectedHandle: "245546701",
+          sourceUrl: "https://app.hubspot.com/contacts/245546701/contacts/list/view/all/"
+        }
+      ]
+    }
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "auth-claude-main",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "linkedin",
+          "--capability",
+          "sales-navigator",
+          "--capability",
+          "gmail",
+          "--capability",
+          "hubspot",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const claimed = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "claim",
+          profile.id,
+          "--account",
+          "linkedin:wflanagan@audienti.com",
+          "--account",
+          "sales-navigator:wflanagan@audienti.com",
+          "--account",
+          "gmail:william@audienti.com",
+          "--account",
+          "hubspot:245546701",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const env = {
+      ...process.env,
+      EXO_CLAUDE_CLI: fakeClaudePath
+    };
+
+    const authed = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "profiles", "auth", claimed.id, "--runtime", "claude", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(authed.lastAuthProbeResult.status, "ready");
+    assert.equal(authed.lastAuthProbeResult.runtime, "claude");
+    assert.equal(authed.lastAuthProbeResult.capabilityChecks.length, 4);
+    assert.equal(
+      authed.lastAuthProbeResult.capabilityChecks.every((check) => check.verified),
+      true
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("profiles auth records an invalid auth result when the selected runtime chrome harness is unavailable", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-profile-auth-fail-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const fakeCodexPath = path.join(tempDir, "fake-codex");
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com", ".google.com", "mail.google.com"],
+    historyUrls: [
+      "https://www.linkedin.com/feed/",
+      "https://www.linkedin.com/sales/home",
+      "https://mail.google.com/mail/u/0/#inbox"
+    ]
+  });
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."chrome@openai-bundled"]',
+      "enabled = false",
+      ""
+    ].join("\n")
+  );
+  writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "auth-fail-main",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "linkedin",
+          "--capability",
+          "gmail",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const claimed = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "claim",
+          profile.id,
+          "--account",
+          "linkedin:wflanagan@audienti.com",
+          "--account",
+          "gmail:william@audienti.com",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      EXO_CODEX_CLI: fakeCodexPath
+    };
+
+    const authed = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "profiles", "auth", claimed.id, "--runtime", "codex", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(authed.lastAuthProbeResult.status, "invalid");
+    assert.equal(authed.lastAuthProbeResult.runtime, "codex");
+    assert.equal(
+      authed.lastAuthProbeResult.capabilityChecks.every((check) => check.verified === false),
+      true
+    );
+    assert.match(authed.lastAuthProbeResult.capabilityChecks[0].details, /disabled|not available/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("profiles discover scans local browser roots before registration and annotates existing registrations", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-profiles-discover-"));
   const userDataDir = path.join(tempDir, "Chrome");
@@ -1990,6 +2409,349 @@ test("users harness probe inspects Codex plugin and MCP availability and can wri
     assert.equal(codexIcypeas.status, "available");
     assert.equal(claudeGmail.status, "available");
     assert.equal(claudeChrome.status, "available");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("motions can carry a sticky execution user that motion targeting and execution planning inherit by default", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-user-assignment-"));
+  const chrome = setupReadyChromeProfile(tempDir, {
+    historyUrls: ["https://www.linkedin.com/sales/home"]
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "motion-linkedin-profile",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when GTM teams need one sticky execution identity per motion.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there recent evidence the company widened product or GTM scope?",
+          "--title",
+          "Chief Revenue Officer",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Chainguard",
+          "--domain",
+          "chainguard.dev",
+          "--website-url",
+          "https://www.chainguard.dev",
+          "--linkedin-company-url",
+          "https://www.linkedin.com/company/chainguard-dev/",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "motion-owner", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "linkedin",
+        "--handle",
+        "motion-owner",
+        "--profile",
+        profile.id,
+        "--preferred",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const signalMatchesResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "signal-matches",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--signal",
+          motion.signals[0].id,
+          "--summary",
+          "Expanded GTM surface through a fresh product and partner push.",
+          "--source-url",
+          "https://www.chainguard.dev/news",
+          "--observed-at",
+          "2026-05-20T00:00:00.000Z",
+          "--confidence",
+          "high",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const signalMatchId = signalMatchesResult.signalMatches[0].id;
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Parm Uppal",
+          "--title",
+          "Chief Revenue Officer",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--signal-match",
+          signalMatchId,
+          "--why-relevant",
+          "Primary owner for credible GTM execution.",
+          "--active-channel",
+          "linkedin",
+          "--activity-type",
+          "own-post",
+          "--live-signal-summary",
+          "Recent post suggests active LinkedIn use.",
+          "--live-signal-url",
+          "https://www.linkedin.com/posts/parm-example",
+          "--live-signal-observed-at",
+          "2026-05-24T00:00:00.000Z",
+          "--freshness-band",
+          "15-30-days",
+          "--hook-strength",
+          "high",
+          "--engagement-rationale",
+          "Fresh posting supports a legitimate warmup.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospectId = prospectResult.prospects[0].id;
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--signal-match",
+        signalMatchId,
+        "--specific-to-them",
+        "Parm now owns GTM credibility.",
+        "--shared-problem",
+        "Generic outbound burns trust.",
+        "--why-now",
+        "Broader GTM scope creates pressure now.",
+        "--legitimate-wedge",
+        "Show a credible path to relevance.",
+        "--compression-line",
+        "Parm needs credible outbound now that GTM scope is wider.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--signal-match",
+        signalMatchId,
+        "--why-now",
+        "Fresh GTM expansion raises the cost of generic outreach.",
+        "--angle",
+        "Credible, signal-led outbound.",
+        "--reply-path",
+        "Ground the message in Parm's current GTM credibility problem.",
+        "--primary-channel",
+        "connection-request",
+        "--fallback-channel",
+        "email",
+        "--fallback-trigger",
+        "Use email only if LinkedIn stalls.",
+        "--first-move",
+        "Connection request",
+        "--first-message-goal",
+        "Start a reply, not a pitch.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospectId,
+        "--current-step",
+        "connection-request",
+        "--next-action",
+        "Send the first touch",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const targetingBefore = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "target", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(targetingBefore.overallStage, "targeting-ready");
+    assert.equal(targetingBefore.readyToTarget, true);
+    assert.equal(targetingBefore.readyToEngage, false);
+    assert.equal(targetingBefore.companyLoop.items[0].executionIdentity.status, "unassigned-global-ready");
+
+    const assignedMotion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "user",
+          "assign",
+          motion.id,
+          "--user",
+          user.id,
+          "--reason",
+          "Keep the whole motion on one execution identity.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(assignedMotion.engagementUserAssignment.userId, user.id);
+    assert.equal(assignedMotion.engagementProfileAssignment.profileId, profile.id);
+
+    const shownAssignment = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "user", "show", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(shownAssignment.assignment.userId, user.id);
+
+    const targetingAfter = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "target", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(targetingAfter.readyToEngage, true);
+    assert.equal(targetingAfter.companyLoop.items[0].executionIdentity.status, "pinned-ready");
+    assert.match(targetingAfter.companyLoop.items[0].executionIdentity.message, /Motion is pinned to user motion-owner/i);
+
+    const execution = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "execution",
+          "show",
+          company.id,
+          "--motion",
+          motion.id,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(execution.assignmentSource, "motion-user");
+    assert.equal(execution.motion.id, motion.id);
+    assert.equal(execution.resolvedProfile.id, profile.id);
+    assert.equal(execution.resolvedAccount.handle, "motion-owner");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2893,6 +3655,245 @@ test("inbound sync gmail-live inspects Gmail through Codex and can apply the gov
   }
 });
 
+test("inbound sync gmail-live inspects Gmail through Codex with a profile-backed Gmail account and runtime chrome harness", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-profile-codex-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const fakeCodexPath = path.join(tempDir, "fake-codex");
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".google.com", "mail.google.com"],
+    historyUrls: ["https://mail.google.com/mail/u/0/#inbox"]
+  });
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."chrome@openai-bundled"]',
+      "enabled = true",
+      ""
+    ].join("\n")
+  );
+  writeFakeCodexCaptureScript(fakeCodexPath, {
+    mode: "quick",
+    status: "success",
+    checkedAt: "2026-05-30T15:20:00.000Z",
+    itemCount: 1,
+    error: null,
+    threads: [
+      {
+        threadId: "thread-live-profile-1",
+        kind: "email_reply_received",
+        observedAt: "2026-05-30T15:15:00.000Z",
+        summary: "Alicia replied by email asking for a short workflow walkthrough.",
+        subject: "Re: Risk workflow question",
+        fromName: "Alicia Buyer",
+        fromEmail: "alicia@buyer.example",
+        actorTitle: null,
+        actorCompanyName: null,
+        threadUrl: null,
+        sourceUrl: null,
+        motionId: null,
+        companyId: null,
+        prospectId: null,
+        notes: null
+      }
+    ]
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "gmail-live-profile",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "gmail",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when outbound operators need governed inbox truth.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there active revenue complexity that makes a reply operationally important?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "VP Revenue Operations",
+          "--email",
+          "alicia@buyer.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "influences",
+          "--why-relevant",
+          "Owns the operational workflow pain that makes the inbound email relevant.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospect = prospectResult.prospects[0];
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-profile-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "chrome",
+        "--status",
+        "unknown",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "gmail-live-profile-user@example.com",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      EXO_CODEX_CLI: fakeCodexPath
+    };
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "gmail-live",
+          user.id,
+          "--account",
+          gmailAccountId,
+          "--runtime",
+          "codex",
+          "--limit",
+          "10",
+          "--since",
+          "2026-05-30T00:00:00.000Z",
+          "--apply",
+          "--refresh",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(result.probe.detectedStatus, "available");
+    assert.match(result.probe.reason, /chrome@openai-bundled/);
+    assert.equal(result.capture.status, "success");
+    assert.equal(result.capture.threadCount, 1);
+    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
+    assert.equal(result.applied.counts.createdObservationCount, 1);
+    assert.equal(result.applied.counts.successSurfaceCount, 1);
+    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
+
+    const observations = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(observations.counts.observationCount, 1);
+    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
+    assert.equal(observations.observations[0].motionId, motion.id);
+    assert.equal(observations.observations[0].companyId, company.id);
+    assert.equal(observations.observations[0].prospectId, prospect.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound sync gmail-live inspects Gmail through Claude and can apply the governed writeback", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-claude-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude");
@@ -3077,6 +4078,238 @@ test("inbound sync gmail-live inspects Gmail through Claude and can apply the go
   }
 });
 
+test("inbound sync gmail-live inspects Gmail through Claude with a profile-backed Gmail account and runtime chrome harness", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-profile-claude-"));
+  const fakeClaudePath = path.join(tempDir, "fake-claude");
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".google.com", "mail.google.com"],
+    historyUrls: ["https://mail.google.com/mail/u/0/#inbox"]
+  });
+
+  writeFakeClaudeScript(fakeClaudePath, {
+    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
+    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
+    structuredOutput: {
+      mode: "quick",
+      status: "success",
+      checkedAt: "2026-05-30T16:20:00.000Z",
+      itemCount: 1,
+      error: null,
+      threads: [
+        {
+          threadId: "thread-live-profile-claude-1",
+          kind: "email_reply_received",
+          observedAt: "2026-05-30T16:15:00.000Z",
+          summary: "Alicia replied by email asking for a short workflow walkthrough.",
+          subject: "Re: Risk workflow question",
+          fromName: "Alicia Buyer",
+          fromEmail: "alicia@buyer.example",
+          actorTitle: null,
+          actorCompanyName: null,
+          threadUrl: null,
+          sourceUrl: null,
+          motionId: null,
+          companyId: null,
+          prospectId: null,
+          notes: null
+        }
+      ]
+    }
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "gmail-live-profile-claude",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "gmail",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when outbound operators need governed inbox truth.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there active revenue complexity that makes a reply operationally important?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "VP Revenue Operations",
+          "--email",
+          "alicia@buyer.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "influences",
+          "--why-relevant",
+          "Owns the operational workflow pain that makes the inbound email relevant.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospect = prospectResult.prospects[0];
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-profile-claude-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "claude",
+        "--connector",
+        "chrome",
+        "--status",
+        "unknown",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "gmail-live-profile-claude-user@example.com",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const env = {
+      ...process.env,
+      EXO_CLAUDE_CLI: fakeClaudePath
+    };
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "gmail-live",
+          user.id,
+          "--account",
+          gmailAccountId,
+          "--runtime",
+          "claude",
+          "--limit",
+          "10",
+          "--since",
+          "2026-05-30T00:00:00.000Z",
+          "--apply",
+          "--refresh",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(result.probe.detectedStatus, "available");
+    assert.match(result.probe.reason, /Claude (plugin|MCP server)/i);
+    assert.equal(result.capture.status, "success");
+    assert.equal(result.capture.threadCount, 1);
+    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
+    assert.equal(result.applied.counts.createdObservationCount, 1);
+    assert.equal(result.applied.counts.successSurfaceCount, 1);
+    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
+
+    const observations = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(observations.counts.observationCount, 1);
+    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
+    assert.equal(observations.observations[0].motionId, motion.id);
+    assert.equal(observations.observations[0].companyId, company.id);
+    assert.equal(observations.observations[0].prospectId, prospect.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound sync gmail-live records governed failure when the Codex Gmail connector is unavailable", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-fail-"));
   const codexHome = path.join(tempDir, ".codex");
@@ -3143,6 +4376,154 @@ test("inbound sync gmail-live records governed failure when the Codex Gmail conn
           user.id,
           "--account",
           gmailAccountId,
+          "--apply",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(result.probe.detectedStatus, "unavailable");
+    assert.equal(result.capture.status, "failed");
+    assert.equal(result.capture.threadCount, 0);
+    assert.match(result.capture.error, /not available/i);
+    assert.equal(result.applied.counts.failedSurfaceCount, 1);
+    assert.equal(result.applied.counts.observationCount, 0);
+
+    const syncView = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const gmailSurface = syncView.accounts
+      .find((account) => account.accountId === gmailAccountId)
+      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
+    assert.equal(gmailSurface.lastRunStatus, "failed");
+    assert.match(gmailSurface.lastError, /not available/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync gmail-live records governed failure when the selected runtime chrome harness is unavailable for a profile-backed Gmail account", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-profile-fail-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const fakeCodexPath = path.join(tempDir, "fake-codex");
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".google.com", "mail.google.com"],
+    historyUrls: ["https://mail.google.com/mail/u/0/#inbox"]
+  });
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."chrome@openai-bundled"]',
+      "enabled = false",
+      ""
+    ].join("\n")
+  );
+  writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "gmail-live-profile-fail",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "gmail",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-profile-fail-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "chrome",
+        "--status",
+        "unknown",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "gmail-live-profile-fail-user@example.com",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      EXO_CODEX_CLI: fakeCodexPath
+    };
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "gmail-live",
+          user.id,
+          "--account",
+          gmailAccountId,
+          "--runtime",
+          "codex",
           "--apply",
           "--json"
         ],
@@ -4032,6 +5413,599 @@ test("inbound sync linkedin-live records governed failure when the selected runt
       .surfaces.find((surface) => surface.key === "linkedin-received-invitations");
     assert.equal(linkedinSurface.lastRunStatus, "failed");
     assert.match(linkedinSurface.lastError, /not available/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync live orchestrates one mixed-runtime quick pass and applies one governed writeback", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-live-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const fakeCodexPath = path.join(tempDir, "fake-codex");
+  const fakeClaudePath = path.join(tempDir, "fake-claude");
+  const chrome = setupReadyChromeProfile(tempDir, {
+    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/"]
+  });
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."gmail@openai-curated"]',
+      "enabled = true",
+      ""
+    ].join("\n")
+  );
+  writeFakeCodexCaptureScript(fakeCodexPath, {
+    mode: "quick",
+    status: "success",
+    checkedAt: "2026-05-30T19:10:00.000Z",
+    itemCount: 1,
+    error: null,
+    threads: [
+      {
+        threadId: "thread-live-combined-1",
+        kind: "email_reply_received",
+        observedAt: "2026-05-30T19:05:00.000Z",
+        summary: "Alicia replied by email asking for a short workflow walkthrough.",
+        subject: "Re: Risk workflow question",
+        fromName: "Alicia Buyer",
+        fromEmail: "alicia@buyer.example",
+        actorTitle: null,
+        actorCompanyName: null,
+        threadUrl: null,
+        sourceUrl: null,
+        motionId: null,
+        companyId: null,
+        prospectId: null,
+        notes: null
+      }
+    ]
+  });
+  writeFakeClaudeScript(fakeClaudePath, {
+    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
+    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
+    structuredOutput: {
+      mode: "quick",
+      sentInvitations: {
+        status: "success",
+        checkedAt: "2026-05-30T19:12:00.000Z",
+        itemCount: 0,
+        error: null,
+        items: []
+      },
+      receivedInvitations: {
+        status: "success",
+        checkedAt: "2026-05-30T19:13:00.000Z",
+        itemCount: 1,
+        error: null,
+        items: [
+          {
+            invitationId: "invite-live-combined-123",
+            kind: "connection_request_received",
+            observedAt: "2026-05-30T19:11:00.000Z",
+            summary: "Alicia Buyer sent a new inbound LinkedIn connection request.",
+            actorName: "Alicia Buyer",
+            actorTitle: null,
+            actorCompanyName: null,
+            actorHandle: null,
+            actorProfileUrl: "https://www.linkedin.com/in/alicia-buyer/",
+            sourceUrl: null,
+            motionId: null,
+            companyId: null,
+            prospectId: null,
+            notes: null
+          }
+        ]
+      },
+      messagingInbox: {
+        status: "success",
+        checkedAt: "2026-05-30T19:14:00.000Z",
+        itemCount: 0,
+        error: null,
+        items: []
+      },
+      profileViews: {
+        status: "success",
+        checkedAt: "2026-05-30T19:15:00.000Z",
+        itemCount: 0,
+        error: null,
+        items: []
+      },
+      followingList: {
+        status: "success",
+        checkedAt: "2026-05-30T19:16:00.000Z",
+        itemCount: 0,
+        error: null,
+        items: []
+      }
+    }
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "combined-live-profile",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when inbound truth has to land from both Gmail and LinkedIn in one governed pass.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there active workflow pressure that makes inbound replies or invites important?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "VP Revenue Operations",
+          "--email",
+          "alicia@buyer.example",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/alicia-buyer/",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "influences",
+          "--why-relevant",
+          "Owns the workflow pain that makes both the email reply and LinkedIn invite operationally relevant.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospect = prospectResult.prospects[0];
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "combined-live-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--status",
+        "unknown",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "claude",
+        "--connector",
+        "chrome",
+        "--status",
+        "unknown",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "combined-live-user",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "combined-live-user@buyer.example",
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      EXO_CODEX_CLI: fakeCodexPath,
+      EXO_CLAUDE_CLI: fakeClaudePath
+    };
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "inbound", "sync", "live", user.id, "--apply", "--refresh", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(result.mode, "quick");
+    assert.equal(result.accounts.length, 2);
+    assert.equal(result.payload.accounts.length, 2);
+    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).probe.runtime, "claude");
+    assert.equal(result.accounts.find((account) => account.account.id === gmailAccountId).probe.runtime, "codex");
+    assert.equal(result.applied.counts.checkedSurfaceCount, 6);
+    assert.equal(result.applied.counts.successSurfaceCount, 6);
+    assert.equal(result.applied.counts.observationCount, 2);
+    assert.equal(result.applied.refreshed.inbox.itemCount, 2);
+
+    const observations = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(observations.counts.observationCount, 2);
+    assert.equal(observations.observations.some((observation) => observation.kind === "email_reply_received"), true);
+    assert.equal(observations.observations.some((observation) => observation.kind === "connection_request_received"), true);
+    assert.equal(observations.observations.every((observation) => observation.motionId === motion.id), true);
+    assert.equal(observations.observations.every((observation) => observation.companyId === company.id), true);
+    assert.equal(observations.observations.some((observation) => observation.prospectId === prospect.id), true);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync live preserves mixed-account partial failure when Gmail fails and LinkedIn succeeds", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-live-partial-fail-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const fakeCodexPath = path.join(tempDir, "fake-codex");
+  const fakeClaudePath = path.join(tempDir, "fake-claude");
+  const chrome = setupReadyChromeProfile(tempDir, {
+    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/"]
+  });
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."gmail@openai-curated"]',
+      "enabled = false",
+      ""
+    ].join("\n")
+  );
+  writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
+  writeFakeClaudeScript(fakeClaudePath, {
+    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
+    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
+    structuredOutput: {
+      mode: "quick",
+      sentInvitations: { status: "success", checkedAt: "2026-05-30T19:12:00.000Z", itemCount: 0, error: null, items: [] },
+      receivedInvitations: {
+        status: "success",
+        checkedAt: "2026-05-30T19:13:00.000Z",
+        itemCount: 1,
+        error: null,
+        items: [
+          {
+            invitationId: "invite-live-partial-123",
+            kind: "connection_request_received",
+            observedAt: "2026-05-30T19:11:00.000Z",
+            summary: "Alicia Buyer sent a new inbound LinkedIn connection request.",
+            actorName: "Alicia Buyer",
+            actorTitle: null,
+            actorCompanyName: null,
+            actorHandle: null,
+            actorProfileUrl: "https://www.linkedin.com/in/alicia-buyer/",
+            sourceUrl: null,
+            motionId: null,
+            companyId: null,
+            prospectId: null,
+            notes: null
+          }
+        ]
+      },
+      messagingInbox: { status: "success", checkedAt: "2026-05-30T19:14:00.000Z", itemCount: 0, error: null, items: [] },
+      profileViews: { status: "success", checkedAt: "2026-05-30T19:15:00.000Z", itemCount: 0, error: null, items: [] },
+      followingList: { status: "success", checkedAt: "2026-05-30T19:16:00.000Z", itemCount: 0, error: null, items: [] }
+    }
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "combined-live-partial-profile",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when inbound truth has to survive partial connector failure.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there active workflow pressure that makes inbound replies or invites important?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "VP Revenue Operations",
+          "--email",
+          "alicia@buyer.example",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/alicia-buyer/",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "influences",
+          "--why-relevant",
+          "Owns the workflow pain that makes inbound routing operationally relevant.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospect = prospectResult.prospects[0];
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "combined-live-partial-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    execFileSync(
+      "node",
+      [cliPath, "users", "harness", "add", user.id, "--runtime", "codex", "--connector", "gmail", "--status", "unknown", "--json"],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+    execFileSync(
+      "node",
+      [cliPath, "users", "harness", "add", user.id, "--runtime", "claude", "--connector", "chrome", "--status", "unknown", "--json"],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "combined-live-partial-user",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "combined-live-partial-user@buyer.example",
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      EXO_CODEX_CLI: fakeCodexPath,
+      EXO_CLAUDE_CLI: fakeClaudePath
+    };
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "inbound", "sync", "live", user.id, "--apply", "--refresh", "--json"],
+        { cwd: tempDir, encoding: "utf8", env }
+      )
+    );
+
+    assert.equal(result.accounts.length, 2);
+    assert.equal(result.accounts.find((account) => account.account.id === gmailAccountId).probe.detectedStatus, "unavailable");
+    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).probe.detectedStatus, "available");
+    assert.equal(result.applied.counts.checkedSurfaceCount, 6);
+    assert.equal(result.applied.counts.successSurfaceCount, 5);
+    assert.equal(result.applied.counts.failedSurfaceCount, 1);
+    assert.equal(result.applied.counts.observationCount, 1);
+
+    const syncView = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const gmailSurface = syncView.accounts
+      .find((account) => account.accountId === gmailAccountId)
+      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
+    const linkedinSurface = syncView.accounts
+      .find((account) => account.accountId === linkedinAccountId)
+      .surfaces.find((surface) => surface.key === "linkedin-received-invitations");
+    assert.equal(gmailSurface.lastRunStatus, "failed");
+    assert.match(gmailSurface.lastError, /not available/i);
+    assert.equal(linkedinSurface.lastRunStatus, "success");
+    assert.equal(linkedinSurface.lastItemCount, 1);
+
+    const observations = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(observations.counts.observationCount, 1);
+    assert.equal(observations.observations[0].kind, "connection_request_received");
+    assert.equal(observations.observations[0].motionId, motion.id);
+    assert.equal(observations.observations[0].companyId, company.id);
+    assert.equal(observations.observations[0].prospectId, prospect.id);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -12344,6 +14318,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   assert.match(profileRootHelp, /exo profiles claim <profile-id> --label audienti-main/);
   assert.match(profileRootHelp, /exo profiles capabilities --json/);
   assert.match(profileRootHelp, /exo profiles resolve --capability linkedin --json/);
+  assert.match(profileRootHelp, /exo profiles auth <profile-id> --runtime codex --json/);
 
   const profileClaimHelp = execFileSync("node", [cliPath, "profiles", "claim", "--help"], {
     cwd: repoRoot,
@@ -12491,11 +14466,11 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected config portability surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/claim/complete/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign"),
+    about.currentCapabilities.some((item) => item.command === "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/claim/complete/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign/execution show"),
     "expected companies surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo motion intake/start/add/seed/discover/target/packets/packet-brief/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove"),
+    about.currentCapabilities.some((item) => item.command === "exo motion intake/start/add/seed/discover/target/packets/packet-brief/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/profile show/assign/user show/assign/remove"),
     "expected motion write surface to be listed in current capabilities"
   );
   assert.ok(
@@ -12507,7 +14482,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected canonical action catalog surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/linkedin/linkedin-live/gmail/gmail-live/run/set/record/observations list/show/add"),
+    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/live/linkedin/linkedin-live/gmail/gmail-live/run/set/record/observations list/show/add"),
     "expected inbound read/write surface to be listed in current capabilities"
   );
   assert.ok(
@@ -12523,7 +14498,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected next shorthand surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo profiles discover/add/claim/list/show/capabilities/resolve/test/remove"),
+    about.currentCapabilities.some((item) => item.command === "exo profiles discover/add/claim/list/show/capabilities/resolve/test/auth/remove"),
     "expected profile capability command surface to be listed in current capabilities"
   );
   assert.ok(
@@ -12581,6 +14556,10 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   assert.ok(
     about.browserProfileRules.some((item) => /inbound sync policy/i.test(item)),
     "expected browser profile rules to mention inbound sync policy"
+  );
+  assert.ok(
+    about.currentLimitations.some((item) => /Live browser auth probes now exist for trusted Chrome profiles/i.test(item)),
+    "expected limitations to mention the narrower live browser auth probe seam"
   );
   assert.ok(
     about.currentLimitations.some((item) => /Limited live inbound retrieval now exists for Gmail and LinkedIn quick-mode surfaces/i.test(item)),
