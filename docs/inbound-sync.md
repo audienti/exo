@@ -8,10 +8,12 @@ The first slice does three things:
 - stores which of those surfaces are enabled on each connected user account
 - stores the last known sync result for each enabled surface
 - stores normalized inbound observations that an agent can write back after inspecting a live surface
+- runs the first live retrieval slice for Gmail through a `codex:gmail` harness-backed account
 
 The next management layer is `exo inbound review`, which combines that sync state with the concrete observations so the operator can see what actually needs a decision.
 
-It does **not** yet do live retrieval by itself.
+It still does **not** do broad live retrieval by itself.
+Right now the only built-in live producer is Gmail through the local Codex runtime.
 
 ## Canonical surfaces
 
@@ -65,6 +67,7 @@ exo inbound sync show <user-id>
 exo inbound sync show <user-id> --capability linkedin --json
 exo users harness probe <user-id> --runtime codex --connector gmail --json
 exo inbound sync plan <user-id> --mode quick --json
+exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
 exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
 exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
 exo inbound review <user-id> --json
@@ -139,7 +142,24 @@ Run rules:
 - ambiguous matches stay unlinked; explicit ids still win, but Exo rejects explicit ids that conflict with the resolved prospect context
 - `--refresh` returns a fresh inbox/daily/next summary after the writeback lands
 
-First producer slice: Gmail capture
+First live producer slice: Gmail through Codex
+
+```bash
+exo inbound sync gmail-live <user-id> --account <account-id> --json
+exo inbound sync gmail-live <user-id> --account <account-id> --limit 10 --since 2026-05-30T00:00:00.000Z --apply --refresh --json
+```
+
+Gmail live rules:
+
+- this only works when the Gmail account resolves through a `codex:gmail` harness connection
+- Exo probes the current Codex runtime first and refuses to fake a live retrieval when the Gmail connector is unavailable
+- connector failure becomes governed sync failure data for `gmail-inbox-threads`, not an unstructured crash
+- `--limit` controls how many recent inbox threads Codex should inspect
+- `--since` narrows the returned threads by newest relevant message time
+- `--apply` immediately writes the payload back through the generic sync-run engine
+- `--refresh` only makes sense with `--apply`, and returns fresh inbox/daily/next summaries
+
+First manual producer slice: Gmail capture
 
 ```bash
 exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --json
@@ -172,7 +192,7 @@ Gmail capture shape:
 
 Gmail capture rules:
 
-- this is still agent-supplied live truth, not a built-in Gmail retriever
+- this is still agent-supplied live truth, not the built-in live Gmail path
 - `gmail` builds the governed `sync run` payload for `gmail-inbox-threads`
 - `fromEmail` is enough for auto-linking when the prospect already has that exact email stored in Exo
 - in Codex, use `exo users harness probe <user-id> --runtime codex --connector gmail --json` before the run to confirm the Gmail connector is actually enabled in the current runtime

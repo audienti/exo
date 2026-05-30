@@ -42,6 +42,46 @@ function seedBrowserEvidence(profilePath, input) {
   historyDb.close();
 }
 
+/**
+ * @param {string} filePath
+ * @param {unknown} capture
+ * @param {{ exitCode?: number | null }} [options]
+ */
+function writeFakeCodexCaptureScript(filePath, capture, options = {}) {
+  const exitCode = options.exitCode ?? null;
+  const lines = [
+    "#!/bin/sh",
+    'out=""',
+    'while [ "$#" -gt 0 ]; do',
+    '  case "$1" in',
+    '    -o|--output-last-message)',
+    '      out="$2"',
+    "      shift 2",
+    "      ;;",
+    '    *)',
+    "      shift",
+    "      ;;",
+    "  esac",
+    "done",
+    'if [ -z "$out" ]; then',
+    '  echo "missing output file" >&2',
+    "  exit 2",
+    "fi"
+  ];
+
+  if (exitCode !== null) {
+    lines.push(`exit ${exitCode}`);
+  } else {
+    lines.push(`cat > "$out" <<'JSON'`);
+    lines.push(JSON.stringify(capture, null, 2));
+    lines.push("JSON");
+  }
+
+  lines.push("");
+  fs.writeFileSync(filePath, lines.join("\n"));
+  fs.chmodSync(filePath, 0o755);
+}
+
 test("motion add seeds a motion, motion refresh updates it, and motion list sees it in the same workspace", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-cli-"));
 
@@ -2546,6 +2586,297 @@ test("inbound sync gmail turns one Gmail capture into governed writeback and can
     assert.equal(observations.observations[0].motionId, motion.id);
     assert.equal(observations.observations[0].companyId, company.id);
     assert.equal(observations.observations[0].prospectId, prospect.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync gmail-live inspects Gmail through Codex and can apply the governed writeback", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const fakeCodexPath = path.join(tempDir, "fake-codex");
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."gmail@openai-curated"]',
+      "enabled = true",
+      ""
+    ].join("\n")
+  );
+  writeFakeCodexCaptureScript(fakeCodexPath, {
+    mode: "quick",
+    status: "success",
+    checkedAt: "2026-05-30T15:10:00.000Z",
+    itemCount: 1,
+    error: null,
+    threads: [
+      {
+        threadId: "thread-live-1",
+        kind: "email_reply_received",
+        observedAt: "2026-05-30T15:05:00.000Z",
+        summary: "Alicia replied by email asking for a short workflow walkthrough.",
+        subject: "Re: Risk workflow question",
+        fromName: "Alicia Buyer",
+        fromEmail: "alicia@buyer.example",
+        actorTitle: null,
+        actorCompanyName: null,
+        threadUrl: null,
+        sourceUrl: null,
+        motionId: null,
+        companyId: null,
+        prospectId: null,
+        notes: null
+      }
+    ]
+  });
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when outbound operators need governed inbox truth.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there active revenue complexity that makes a reply operationally important?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "VP Revenue Operations",
+          "--email",
+          "alicia@buyer.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "influences",
+          "--why-relevant",
+          "Owns the operational workflow pain that makes the inbound email relevant.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospect = prospectResult.prospects[0];
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "gmail-live-user@example.com",
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      EXO_CODEX_CLI: fakeCodexPath
+    };
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "gmail-live",
+          user.id,
+          "--account",
+          gmailAccountId,
+          "--limit",
+          "10",
+          "--since",
+          "2026-05-30T00:00:00.000Z",
+          "--apply",
+          "--refresh",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(result.probe.detectedStatus, "available");
+    assert.match(result.probe.reason, /gmail@openai-curated/);
+    assert.equal(result.capture.status, "success");
+    assert.equal(result.capture.threadCount, 1);
+    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
+    assert.equal(result.applied.counts.createdObservationCount, 1);
+    assert.equal(result.applied.counts.successSurfaceCount, 1);
+    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
+
+    const observations = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(observations.counts.observationCount, 1);
+    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
+    assert.equal(observations.observations[0].motionId, motion.id);
+    assert.equal(observations.observations[0].companyId, company.id);
+    assert.equal(observations.observations[0].prospectId, prospect.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync gmail-live records governed failure when the Codex Gmail connector is unavailable", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-fail-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const fakeCodexPath = path.join(tempDir, "fake-codex");
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."gmail@openai-curated"]',
+      "enabled = false",
+      ""
+    ].join("\n")
+  );
+  writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-fail-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "gmail-live-fail-user@example.com",
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      EXO_CODEX_CLI: fakeCodexPath
+    };
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "gmail-live",
+          user.id,
+          "--account",
+          gmailAccountId,
+          "--apply",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(result.probe.detectedStatus, "unavailable");
+    assert.equal(result.capture.status, "failed");
+    assert.equal(result.capture.threadCount, 0);
+    assert.match(result.capture.error, /not available/i);
+    assert.equal(result.applied.counts.failedSurfaceCount, 1);
+    assert.equal(result.applied.counts.observationCount, 0);
+
+    const syncView = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const gmailSurface = syncView.accounts
+      .find((account) => account.accountId === gmailAccountId)
+      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
+    assert.equal(gmailSurface.lastRunStatus, "failed");
+    assert.match(gmailSurface.lastError, /not available/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -11146,6 +11477,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   assert.match(inboundHelp, /exo inbound sync plan <user-id> --mode quick/);
   assert.match(inboundHelp, /exo inbound sync linkedin <user-id> --account <account-id> --input/);
   assert.match(inboundHelp, /exo inbound sync gmail <user-id> --account <account-id> --input/);
+  assert.match(inboundHelp, /exo inbound sync gmail-live <user-id> --account <account-id>/);
   assert.match(inboundHelp, /exo inbound sync run <user-id> --input/);
   assert.match(inboundHelp, /exo inbound observations list <user-id>/);
 
@@ -11207,7 +11539,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected canonical action catalog surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/linkedin/gmail/run/set/record/observations list/show/add"),
+    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/linkedin/gmail/gmail-live/run/set/record/observations list/show/add"),
     "expected inbound read/write surface to be listed in current capabilities"
   );
   assert.ok(
@@ -11281,6 +11613,10 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   assert.ok(
     about.browserProfileRules.some((item) => /inbound sync policy/i.test(item)),
     "expected browser profile rules to mention inbound sync policy"
+  );
+  assert.ok(
+    about.currentLimitations.some((item) => /Limited live inbound retrieval now exists for Gmail/i.test(item)),
+    "expected limitations to mention the Gmail-only live retrieval seam"
   );
   assert.ok(
     about.currentLimitations.some((item) => /Limited runtime auto-discovery now exists for Codex harness connectors/i.test(item)),

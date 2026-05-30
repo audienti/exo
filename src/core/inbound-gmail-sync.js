@@ -100,7 +100,7 @@ export function buildGmailInboundSyncPayload(rawUser, input) {
  * @param {import("../schema/user.js").userSchema._type} user
  * @param {string | null} accountId
  */
-function resolveGmailAccount(user, accountId) {
+export function resolveGmailAccount(user, accountId) {
   if (accountId) {
     const account = user.accounts.find((candidate) => candidate.id === accountId);
     if (!account) {

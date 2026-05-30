@@ -9,6 +9,7 @@ import {
   parseInboundObservations,
   recordInboundObservation
 } from "../../core/inbound-observations.js";
+import { buildLiveGmailInboundSyncPayload } from "../../core/inbound-gmail-live-sync.js";
 import { buildGmailInboundSyncPayload } from "../../core/inbound-gmail-sync.js";
 import { buildLinkedinInboundSyncPayload } from "../../core/inbound-linkedin-sync.js";
 import { buildInboundSyncRefreshSummary, prepareUserInboundSyncRun } from "../../core/inbound-sync-run.js";
@@ -65,6 +66,7 @@ Canonical inbound interface:
   exo inbound sync plan <user-id> --mode quick
   exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
   exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --apply --refresh --json
+  exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
   exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
   exo inbound sync set <user-id> --account <account-id> --enable-surface linkedin-sent-invitations
   exo inbound sync record <user-id> --account <account-id> --surface linkedin-sent-invitations --status success
@@ -74,10 +76,11 @@ Canonical inbound interface:
 Rules:
   - Start with the canonical truth surfaces, not the LinkedIn notifications bell.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
-  - Sync policy and observation storage exist now. Live retrieval still does not.
+  - Sync policy and observation storage exist now. Gmail also has a first live retrieval path through codex:gmail, but broader live retrieval still does not.
   - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
   - Use inbound sync linkedin when another agent already inspected LinkedIn quick-mode surfaces and needs Exo to build or apply the governed writeback payload.
   - Use inbound sync gmail when another agent already inspected Gmail and needs Exo to build or apply the governed writeback payload.
+  - Use inbound sync gmail-live when Exo itself should inspect Gmail through a codex:gmail harness-backed account in the current runtime.
   - Use inbound sync run when another agent already inspected the live surfaces and needs one governed writeback path for the whole pass.
   - Use inbound review when you need the management surface: what was checked, what needs a decision, what is stale, and what still needs itemization.
 `
@@ -342,6 +345,67 @@ Rules:
       }
 
       console.log(JSON.stringify(result.payload, null, 2));
+    });
+
+  sync
+    .command("gmail-live")
+    .description("Inspect Gmail through the current Codex runtime, build a governed sync payload, and optionally apply it.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--account <account-id>", "Connected Gmail account identifier; inferred when only one Gmail account exists")
+    .option("--limit <count>", "Maximum inbox threads to inspect from live Gmail")
+    .option("--since <iso-datetime>", "Only keep threads whose newest relevant message is at or after this time")
+    .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
+    .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
+    .option("--json", "Emit machine-readable JSON")
+    .action(async (userId, options) => {
+      const rawUser = findUserById(userId);
+      if (!rawUser) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let result;
+      try {
+        result = await buildLiveGmailInboundSyncPayload(rawUser, {
+          accountId: options.account ?? null,
+          limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null,
+          since: options.since ?? null
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      const response = {
+        probe: result.probe,
+        capture: result.capture,
+        payload: result.payload,
+        applied: null
+      };
+
+      if (options.apply || options.refresh) {
+        try {
+          response.applied = applyInboundSyncRunPayload(userId, result.payload, { refresh: Boolean(options.refresh) });
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(response, null, 2));
+        return;
+      }
+
+      if (response.applied) {
+        console.log(renderInboundSyncRun(response.applied));
+        return;
+      }
+
+      console.log(JSON.stringify(response, null, 2));
     });
 
   sync
