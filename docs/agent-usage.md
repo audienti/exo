@@ -96,10 +96,11 @@ Do not default to copying the SQLite file directly unless the task is explicitly
 2. `exo profiles discover --json`
 3. `exo profiles capabilities --json`
 4. `exo profiles resolve --capability <capability> --json`
-5. If needed, `exo profiles add ... --json`
-6. `exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json`
-7. `exo profiles test <profile-id> --json`
-8. Refuse browser-backed work if the result is not trustworthy
+5. if the path resolves through a harness connector, run `exo users harness probe <user-id> --runtime <runtime> --connector <connector> --json`
+6. If needed, `exo profiles add ... --json`
+7. `exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json`
+8. `exo profiles test <profile-id> --json`
+9. Refuse browser-backed work if the result is not trustworthy
 
 ### Browser harness preference
 
@@ -116,6 +117,15 @@ Concrete preference:
 - in Codex, prefer the Chrome skill / native Chrome connector for Chrome-backed authenticated work
 - in Claude, prefer the native browser-use/browser-control surface available in that runtime
 - do not default to Playwriter just because it exists
+
+For harness-backed work in Codex, Exo can now inspect the local Codex config and tell you whether stored connectors like `gmail`, `chrome`, or named MCP servers are actually enabled:
+
+```bash
+exo users harness probe <user-id> --runtime codex --json
+exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json
+```
+
+Treat that as transport preflight, not as proof of live auth inside the provider.
 
 If no native browser-control surface is available in the current session, say that explicitly before choosing any fallback path.
 

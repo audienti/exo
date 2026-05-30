@@ -1720,6 +1720,130 @@ test("execution users can own mixed profile-backed and harness-backed accounts, 
   }
 });
 
+test("users harness probe inspects Codex plugin and MCP availability and can write back detected statuses", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-harness-probe-"));
+  const codexHome = path.join(tempDir, ".codex");
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."gmail@openai-curated"]',
+      "enabled = true",
+      "",
+      '[plugins."chrome@openai-bundled"]',
+      "enabled = false",
+      "",
+      "[mcp_servers.icypeas]",
+      "enabled = true",
+      ""
+    ].join("\n")
+  );
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "probe-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    for (const [runtime, connector] of [
+      ["codex", "gmail"],
+      ["codex", "chrome"],
+      ["codex", "icypeas"],
+      ["claude", "gmail"]
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "harness",
+          "add",
+          user.id,
+          "--runtime",
+          runtime,
+          "--connector",
+          connector,
+          "--status",
+          "unknown",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      );
+    }
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome
+    };
+
+    const probe = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "harness", "probe", user.id, "--runtime", "codex", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(probe.counts.connectionCount, 3);
+    assert.equal(probe.counts.availableCount, 2);
+    assert.equal(probe.counts.unavailableCount, 1);
+    assert.equal(probe.counts.unknownCount, 0);
+
+    const gmailProbe = probe.probes.find((item) => item.connector === "gmail");
+    const chromeProbe = probe.probes.find((item) => item.connector === "chrome");
+    const icypeasProbe = probe.probes.find((item) => item.connector === "icypeas");
+
+    assert.equal(gmailProbe.detectedStatus, "available");
+    assert.match(gmailProbe.reason, /gmail@openai-curated/);
+    assert.equal(chromeProbe.detectedStatus, "unavailable");
+    assert.match(chromeProbe.reason, /chrome@openai-bundled/);
+    assert.equal(icypeasProbe.detectedStatus, "available");
+    assert.match(icypeasProbe.reason, /MCP server icypeas/i);
+
+    const writebackResult = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "harness", "probe", user.id, "--writeback", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+    assert.equal(writebackResult.counts.updatedCount, 3);
+
+    const shown = JSON.parse(
+      execFileSync("node", [cliPath, "users", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const codexGmail = shown.harnessConnections.find((item) => item.runtime === "codex" && item.connector === "gmail");
+    const codexChrome = shown.harnessConnections.find((item) => item.runtime === "codex" && item.connector === "chrome");
+    const codexIcypeas = shown.harnessConnections.find((item) => item.runtime === "codex" && item.connector === "icypeas");
+    const claudeGmail = shown.harnessConnections.find((item) => item.runtime === "claude" && item.connector === "gmail");
+
+    assert.equal(codexGmail.status, "available");
+    assert.equal(codexChrome.status, "unavailable");
+    assert.equal(codexIcypeas.status, "available");
+    assert.equal(claudeGmail.status, "unknown");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound surfaces, per-account sync policy, and sync-state memory persist on connected user accounts", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-"));
   const userDataDir = path.join(tempDir, "Chrome");
@@ -10969,6 +11093,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   });
   assert.match(usersHelp, /exo users add --label william-main --owner william/);
   assert.match(usersHelp, /exo users harness add <user-id> --runtime codex --connector chrome --status available/);
+  assert.match(usersHelp, /exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json/);
   assert.match(usersHelp, /exo users accounts add <user-id> --capability linkedin/);
   assert.match(usersHelp, /exo users resolve <user-id> --capability gmail --json/);
 
@@ -11102,7 +11227,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected profile capability command surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo users add/list/show/harness add/accounts add/resolve"),
+    about.currentCapabilities.some((item) => item.command === "exo users add/list/show/harness add/probe/accounts add/resolve"),
     "expected execution-user surface to be listed in current capabilities"
   );
   assert.ok(
@@ -11156,6 +11281,10 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   assert.ok(
     about.browserProfileRules.some((item) => /inbound sync policy/i.test(item)),
     "expected browser profile rules to mention inbound sync policy"
+  );
+  assert.ok(
+    about.currentLimitations.some((item) => /Limited runtime auto-discovery now exists for Codex harness connectors/i.test(item)),
+    "expected limitations to mention the narrower Codex-only runtime discovery seam"
   );
   assert.ok(
     about.operatingRules.some((item) => /system of record/i.test(item)),

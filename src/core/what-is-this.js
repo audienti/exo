@@ -172,8 +172,8 @@ export function describeExo() {
         purpose: "Discover local browser profiles, claim them as business identities, store account-level weekly outreach quotas, verify claimed capabilities, resolve the right browser identity, and query capability coverage for browser-backed Exo work."
       },
       {
-        command: "exo users add/list/show/harness add/accounts add/resolve",
-        purpose: "Manage human execution identities that own connected accounts across browser profiles and harness connectors, then resolve the right account for each capability."
+        command: "exo users add/list/show/harness add/probe/accounts add/resolve",
+        purpose: "Manage human execution identities that own connected accounts across browser profiles and harness connectors, probe the current runtime for callable harness paths, and then resolve the right account for each capability."
       }
     ],
     browserProfileRules: [
@@ -263,6 +263,7 @@ export function describeExo() {
               "exo profiles discover --json",
               "exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json",
               "exo users add --label william-main --owner william --json",
+              "exo users harness probe <user-id> --runtime codex --json",
               "exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred --json",
               "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred --json",
               "exo profiles list --json",
@@ -315,7 +316,7 @@ export function describeExo() {
       "No real Sales Navigator retrieval yet.",
       "No automatic target-map or stakeholder-map generation yet, even though Exo can now persist manual target-account signal matches, prospects, through-lines, opening plans, and cadence state.",
       "No automatic prospect selection, through-line synthesis, or opening-plan generation yet. Agents still need to choose and write back the people, the reply-path hypothesis, and the first move explicitly.",
-      "No runtime auto-discovery for harness connectors yet. Exo can now store user-level harness connections, but it still does not inspect Codex-vs-Claude runtime availability by itself.",
+      "Limited runtime auto-discovery now exists for Codex harness connectors through local Codex config inspection, but Exo still does not do full cross-runtime availability inspection or live connector auth probes by itself.",
       "No full multi-channel pacing model yet. Exo can now compute LinkedIn invitation deficit when the claimed browser profile has a stored quota, but broader channel saturation and capacity balancing are still future work.",
       "No public bug-reporting or feature-request intake yet. That is a future alpha feature, not current scope."
     ],

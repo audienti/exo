@@ -2,6 +2,7 @@
 // @ts-check
 
 import { addUser } from "../../core/add-user.js";
+import { probeUserHarnessConnections } from "../../core/probe-user-harness-connections.js";
 import { resolveUserConnection } from "../../core/resolve-user-connection.js";
 import { upsertUserConnectedAccount, upsertUserHarnessConnection } from "../../core/upsert-user-harness-connection.js";
 import {
@@ -14,7 +15,7 @@ import {
   listUsers,
   updateUser
 } from "../../db/database.js";
-import { renderUserList, renderUserSummary } from "../../artifacts/render-user.js";
+import { renderUserHarnessProbe, renderUserList, renderUserSummary } from "../../artifacts/render-user.js";
 import { browserProfileCapabilitySchema } from "../../schema/browser-profile.js";
 import { userHarnessConnectionStatusSchema, userSchema } from "../../schema/user.js";
 
@@ -31,6 +32,7 @@ export function registerUsers(program) {
 Examples:
   exo users add --label william-main --owner william
   exo users harness add <user-id> --runtime codex --connector chrome --status available
+  exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json
   exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred
   exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred
   exo users resolve <user-id> --capability gmail --json
@@ -144,6 +146,40 @@ Rules:
       }
 
       console.log(renderUserSummary(updated));
+    });
+
+  harness
+    .command("probe")
+    .description("Inspect the current runtime config and infer which stored harness connectors are actually callable.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--runtime <runtime>", "Filter to one runtime such as codex")
+    .option("--connector <connector>", "Filter to one connector such as gmail or chrome")
+    .option("--writeback", "Persist detected statuses back onto the matching harness connections")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const raw = findUserById(userId);
+      if (!raw) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const result = probeUserHarnessConnections(raw, {
+        runtime: options.runtime ?? null,
+        connector: options.connector ?? null,
+        writeback: Boolean(options.writeback)
+      });
+
+      if (options.writeback) {
+        updateUser(result.updatedUser);
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderUserHarnessProbe(result));
     });
 
   const accounts = users

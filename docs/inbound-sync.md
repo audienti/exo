@@ -63,6 +63,7 @@ Inspect one user's sync coverage:
 ```bash
 exo inbound sync show <user-id>
 exo inbound sync show <user-id> --capability linkedin --json
+exo users harness probe <user-id> --runtime codex --connector gmail --json
 exo inbound sync plan <user-id> --mode quick --json
 exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
 exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
@@ -174,6 +175,7 @@ Gmail capture rules:
 - this is still agent-supplied live truth, not a built-in Gmail retriever
 - `gmail` builds the governed `sync run` payload for `gmail-inbox-threads`
 - `fromEmail` is enough for auto-linking when the prospect already has that exact email stored in Exo
+- in Codex, use `exo users harness probe <user-id> --runtime codex --connector gmail --json` before the run to confirm the Gmail connector is actually enabled in the current runtime
 - `--apply` immediately writes the payload back through the generic sync-run engine
 - `--refresh` only makes sense with `--apply`, and returns fresh inbox/daily/next summaries
 
