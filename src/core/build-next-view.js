@@ -6,6 +6,7 @@ import { buildMotionReport } from "./build-motion-report.js";
 import { describeExo } from "./what-is-this.js";
 import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
+import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
 
 /**
  * @param {{
@@ -294,7 +295,7 @@ function selectExecutionNext(prospects) {
       };
     }
 
-    if (lastOutcome === "sent" && step === "connection-request") {
+    if (isConnectionRequestInFlight(cadence)) {
       return {
         kind: "wait_for_connection_response",
         guidanceKey: "wait_for_connection_response",

@@ -7,6 +7,7 @@ import { userSchema } from "../schema/user.js";
 import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
 import { buildMotionQueueSummary, isReadyConnectionRequestProspect } from "../lib/motion-queue.js";
 import { buildMotionPacketSummary } from "../lib/motion-packets.js";
+import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
 
 const BUSINESS_DAYS_PER_WEEK = 5;
 
@@ -77,10 +78,7 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       && isSameLocalDate(touch.occurredAt, now)
     ).length
   ), 0);
-  const pendingInvitations = scopedProspects.filter(({ prospect }) =>
-    prospect.cadenceState.currentStep === "connection-request"
-    && prospect.cadenceState.lastTouchOutcome === "sent"
-  ).length;
+  const pendingInvitations = scopedProspects.filter(({ prospect }) => isPendingInvitationFromPriorWork(prospect, now)).length;
   const readyConnectionRequests = scopedProspects.filter(({ prospect }) => isReadyConnectionRequestProspect(prospect)).length;
   const consideredMotionCount = new Set(scopedAccounts.map(({ motion }) => motion.id)).size;
   const consideredCompanyCount = new Set(scopedAccounts.map(({ account }) => account.companyId)).size;
@@ -359,6 +357,35 @@ function isSameLocalDate(iso, now) {
     && date.getMonth() === now.getMonth()
     && date.getDate() === now.getDate()
   );
+}
+
+/**
+ * @param {{
+ *   cadenceState: {
+ *     currentStep: string | null,
+ *     lastTouchOutcome: string | null,
+ *     lastTouchAt: string | null
+ *   },
+ *   touches: Array<{
+ *     surface: string,
+ *     direction: string,
+ *     occurredAt: string
+ *   }>
+ * }} prospect
+ * @param {Date} now
+ */
+function isPendingInvitationFromPriorWork(prospect, now) {
+  if (!isConnectionRequestInFlight(prospect.cadenceState)) {
+    return false;
+  }
+
+  const latestOutboundInviteTouch = [...prospect.touches]
+    .filter((touch) => touch.surface === "connection_request" && touch.direction === "outbound")
+    .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt))
+    .at(-1);
+  const referenceAt = latestOutboundInviteTouch?.occurredAt ?? prospect.cadenceState.lastTouchAt ?? null;
+
+  return referenceAt ? !isSameLocalDate(referenceAt, now) : true;
 }
 
 /**

@@ -10,6 +10,7 @@ import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
 import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
 import { hasUsableEmailFallback } from "../lib/prospect-contacts.js";
+import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
 import { buildOutboundCapacityView } from "./build-outbound-capacity-view.js";
 
 const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
@@ -629,13 +630,16 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
   }
 
   if (
-    cadence.lastTouchOutcome === "sent"
-    && (!cadence.nextActionDueAt || cadence.nextActionDueAt > now)
+    isConnectionRequestInFlight(cadence)
+    || (
+      cadence.lastTouchOutcome === "sent"
+      && (!cadence.nextActionDueAt || cadence.nextActionDueAt > now)
+    )
   ) {
-    const waitingWhy = cadence.currentStep === "connection-request"
+    const waitingWhy = isConnectionRequestInFlight(cadence)
       ? `${prospect.name} already has a connection request in flight, so the primary branch is waiting on an external trigger.`
       : `${prospect.name} already has an outbound branch in flight, so the primary branch is waiting on an external trigger.`;
-    const waitingNextMove = cadence.currentStep === "connection-request"
+    const waitingNextMove = isConnectionRequestInFlight(cadence)
       ? `Wait for ${prospect.name} to accept or reply to the connection request before escalating.`
       : `Wait on ${prospect.name}'s current outbound branch unless a stronger inbound event or due checkpoint changes the plan.`;
     const supportAction = selectParallelSupportAction(motionSupportProspects, currentSupportProspect);
@@ -682,7 +686,7 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
           kind: supportAction.kind
         },
         waitingBranch: {
-          kind: cadence.currentStep === "connection-request" ? "wait_for_connection_response" : "wait_for_response",
+          kind: isConnectionRequestInFlight(cadence) ? "wait_for_connection_response" : "wait_for_response",
           nextMove: waitingNextMove,
           why: waitingWhy
         }
@@ -699,7 +703,7 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
       whyItMatters: waitingWhy,
       recommendedAction: waitingNextMove,
       guidance: buildPlannerGuidance(
-        cadence.currentStep === "connection-request" ? "wait_for_connection_response" : "wait_for_response",
+        isConnectionRequestInFlight(cadence) ? "wait_for_connection_response" : "wait_for_response",
         {
           ...guidanceContext,
           recommendedAction: waitingNextMove,
@@ -790,7 +794,7 @@ function inferCadenceGuidanceKey(cadence, waiting) {
     }
   }
 
-  if (cadence.lastTouchOutcome === "sent" && cadence.currentStep === "connection-request") {
+  if (isConnectionRequestInFlight(cadence)) {
     return "wait_for_connection_response";
   }
 

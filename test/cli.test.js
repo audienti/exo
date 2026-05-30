@@ -3459,7 +3459,7 @@ test("daily surfaces a parallel support action while a live outbound branch wait
         "--last-touch-channel",
         "connection-request",
         "--last-touch-outcome",
-        "sent",
+        "pending",
         "--last-touch-at",
         "2026-05-27T11:46:51.000Z",
         "--next-action",
@@ -4512,7 +4512,7 @@ test("daily and next surface connection-request quota gaps and invitation defici
         "--last-touch-channel",
         "connection-request",
         "--last-touch-outcome",
-        "sent",
+        "pending",
         "--last-touch-at",
         "2026-05-28T11:46:51.000Z",
         "--next-action",
@@ -6258,6 +6258,276 @@ test("next falls back to the focus motion path when no due daily item exists", (
     assert.equal(next.status.kind, "needs-company-targeting");
     assert.equal(next.status.priority, "action");
     assert.equal(next.guidance.key, "clear_motion_blocker");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("next treats a pending connection request as a waiting branch instead of resurfacing stale first-touch copy", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-next-pending-connection-"));
+  const userDataDir = path.join(tempDir, "Chrome");
+  const profileDirectory = "Profile 4";
+  const profilePath = path.join(userDataDir, profileDirectory);
+  const browserCommand = path.join(tempDir, "fake-chrome");
+
+  fs.mkdirSync(profilePath, { recursive: true });
+  fs.writeFileSync(browserCommand, "#!/bin/sh\nexit 0\n");
+  fs.writeFileSync(
+    path.join(userDataDir, "Local State"),
+    JSON.stringify({
+      profile: {
+        info_cache: {
+          [profileDirectory]: { name: "Pending Connection LinkedIn" }
+        }
+      }
+    })
+  );
+  fs.writeFileSync(path.join(profilePath, "Preferences"), JSON.stringify({ profile: { name: "Pending Connection LinkedIn" } }));
+  seedBrowserEvidence(profilePath, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/sales/home"]
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "pending-connection-main",
+          "--user-data-dir",
+          userDataDir,
+          "--profile-directory",
+          profileDirectory,
+          "--browser-command",
+          browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/next-pending-connection",
+          "--premise",
+          "This offer matters when outbound systems need to hold live branches correctly instead of replaying stale launch prompts.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is the company actively scaling outbound or GTM coverage?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Pending Queue Co",
+          "--domain",
+          "pending-queue.example",
+          "--website-url",
+          "https://pending-queue.example",
+          "--linkedin-company-url",
+          "https://www.linkedin.com/company/pending-queue/",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    execFileSync(
+      "node",
+      [cliPath, "companies", "profile", "assign", company.id, "--profile", profile.id, "--json"],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "signal-matches",
+        "add",
+        company.id,
+        "--motion",
+        motion.id,
+        "--signal",
+        motion.signals[0].id,
+        "--summary",
+        "Recent outbound expansion makes message quality and branch discipline matter now.",
+        "--source-label",
+        "company-site",
+        "--confidence",
+        "high",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const prospect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Tom Nielsen",
+          "--title",
+          "Chief Revenue Officer",
+          "--email",
+          "tom.nielsen@pending-queue.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--why-relevant",
+          "Tom owns the primary branch.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    ).prospects[0];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--specific-to-them",
+        "Tom is newly carrying the CRO path.",
+        "--shared-problem",
+        "A scaling GTM story can weaken message relevance if the branch logic is sloppy.",
+        "--why-now",
+        "The motion should hold active branches correctly instead of replaying stale launch prompts.",
+        "--legitimate-wedge",
+        "Use the active connection-request branch to show why the planner has to understand in-flight work.",
+        "--compression-line",
+        "Tom already has a live invite out, so the planner should wait instead of pretending the first touch never happened.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--why-now",
+        "The branch is already live.",
+        "--angle",
+        "Hold in-flight branches correctly.",
+        "--reply-path",
+        "Do not replay stale first-touch guidance after a connection request is already out.",
+        "--primary-channel",
+        "connection-request",
+        "--fallback-channel",
+        "email",
+        "--fallback-trigger",
+        "Escalate later only if the branch truly stalls.",
+        "--first-move",
+        "Send the first connection request.",
+        "--first-message-goal",
+        "Start the conversation.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--current-step",
+        "connection-request",
+        "--last-touch-channel",
+        "connection-request",
+        "--last-touch-outcome",
+        "pending",
+        "--last-touch-at",
+        "2026-05-28T11:46:51.000Z",
+        "--next-action",
+        "Connection request is the first planned touch once launch is approved.",
+        "--next-action-due-at",
+        "2026-05-29T11:46:51.000Z",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.equal(next.source, "motion");
+    assert.equal(next.context.company.name, "Pending Queue Co");
+    assert.equal(next.context.prospect.name, "Tom Nielsen");
+    assert.equal(next.status.priority, "action");
+    assert.equal(next.status.effect, "supporting_waiting_branch");
+    assert.equal(next.guidance.key, "expand_motion_inventory");
+    assert.match(next.nextMove, /build more ready first-touch inventory/i);
+    assert.equal(next.context.waitingBranch.kind, "wait_for_connection_response");
+    assert.match(next.context.waitingBranch.nextMove, /wait for tom nielsen to accept or reply to the connection request/i);
+    assert.doesNotMatch(next.context.waitingBranch.nextMove, /first planned touch once launch is approved/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
