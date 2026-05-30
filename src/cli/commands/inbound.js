@@ -76,11 +76,11 @@ Canonical inbound interface:
 Rules:
   - Start with the canonical truth surfaces, not the LinkedIn notifications bell.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
-  - Sync policy and observation storage exist now. Gmail also has a first live retrieval path through codex:gmail, but broader live retrieval still does not.
+  - Sync policy and observation storage exist now. Gmail also has a first live retrieval path through supported runtime:gmail harness connections, but broader live retrieval still does not.
   - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
   - Use inbound sync linkedin when another agent already inspected LinkedIn quick-mode surfaces and needs Exo to build or apply the governed writeback payload.
   - Use inbound sync gmail when another agent already inspected Gmail and needs Exo to build or apply the governed writeback payload.
-  - Use inbound sync gmail-live when Exo itself should inspect Gmail through a codex:gmail harness-backed account in the current runtime.
+  - Use inbound sync gmail-live when Exo itself should inspect Gmail through a supported runtime:gmail harness-backed account in the current runtime.
   - Use inbound sync run when another agent already inspected the live surfaces and needs one governed writeback path for the whole pass.
   - Use inbound review when you need the management surface: what was checked, what needs a decision, what is stale, and what still needs itemization.
 `
@@ -349,7 +349,7 @@ Rules:
 
   sync
     .command("gmail-live")
-    .description("Inspect Gmail through the current Codex runtime, build a governed sync payload, and optionally apply it.")
+    .description("Inspect Gmail through the resolved supported runtime, build a governed sync payload, and optionally apply it.")
     .argument("<user-id>", "Execution user identifier")
     .option("--account <account-id>", "Connected Gmail account identifier; inferred when only one Gmail account exists")
     .option("--limit <count>", "Maximum inbox threads to inspect from live Gmail")

@@ -180,7 +180,7 @@ export function describeExo() {
       "Browser-backed work should fail closed if no profile is attached or trusted.",
       "A ready profile means the local browser context looks structurally usable.",
       "Profile checks do not yet prove live LinkedIn, Sales Navigator, Gmail, or HubSpot auth.",
-      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through a codex:gmail harness-backed account, but LinkedIn and broader inbound retrieval still need dedicated producers.",
+      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through supported runtime:gmail harness-backed accounts, but LinkedIn and broader inbound retrieval still need dedicated producers.",
       "Configured weekly quotas on the claimed profile identity should govern outreach pacing. InMail credits are still a separate live observation, not a static config knob.",
       "Exo resolves browser identity. The agent runtime should choose the browser-control harness.",
       "In Codex, prefer the Chrome skill or native Chrome connector before Playwriter for Chrome-profile work."
@@ -264,8 +264,10 @@ export function describeExo() {
               "exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json",
               "exo users add --label william-main --owner william --json",
               "exo users harness probe <user-id> --runtime codex --json",
+              "exo users harness probe <user-id> --runtime claude --json",
               "exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred --json",
               "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred --json",
+              "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime claude --connector gmail --preferred --json",
               "exo inbound sync gmail-live <user-id> --account <account-id> --json",
               "exo profiles list --json",
               "exo profiles capabilities --json",
@@ -311,7 +313,7 @@ export function describeExo() {
     currentLimitations: [
       "No MCP wrapper yet.",
       "No live browser auth probes yet.",
-      "Limited live inbound retrieval now exists for Gmail through a codex:gmail harness-backed account, but Exo still does not do LinkedIn or broader inbound retrieval by itself.",
+      "Limited live inbound retrieval now exists for Gmail through supported runtime:gmail harness-backed accounts, but Exo still does not do LinkedIn or broader inbound retrieval by itself.",
       "No profile-to-motion assignment yet.",
       "No automatic company population from motion retrieval yet.",
       "No real Sales Navigator retrieval yet.",

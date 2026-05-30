@@ -8,12 +8,12 @@ The first slice does three things:
 - stores which of those surfaces are enabled on each connected user account
 - stores the last known sync result for each enabled surface
 - stores normalized inbound observations that an agent can write back after inspecting a live surface
-- runs the first live retrieval slice for Gmail through a `codex:gmail` harness-backed account
+- runs the first live retrieval slice for Gmail through supported `runtime:gmail` harness-backed accounts
 
 The next management layer is `exo inbound review`, which combines that sync state with the concrete observations so the operator can see what actually needs a decision.
 
 It still does **not** do broad live retrieval by itself.
-Right now the only built-in live producer is Gmail through the local Codex runtime.
+Right now the only built-in live producer is Gmail through supported runtime-backed Gmail harness connections.
 
 ## Canonical surfaces
 
@@ -151,8 +151,8 @@ exo inbound sync gmail-live <user-id> --account <account-id> --limit 10 --since 
 
 Gmail live rules:
 
-- this only works when the Gmail account resolves through a `codex:gmail` harness connection
-- Exo probes the current Codex runtime first and refuses to fake a live retrieval when the Gmail connector is unavailable
+- this only works when the Gmail account resolves through a supported `runtime:gmail` harness connection such as `codex:gmail` or `claude:gmail`
+- Exo probes the resolved runtime first and refuses to fake a live retrieval when the Gmail connector is unavailable
 - connector failure becomes governed sync failure data for `gmail-inbox-threads`, not an unstructured crash
 - `--limit` controls how many recent inbox threads Codex should inspect
 - `--since` narrows the returned threads by newest relevant message time
@@ -195,7 +195,7 @@ Gmail capture rules:
 - this is still agent-supplied live truth, not the built-in live Gmail path
 - `gmail` builds the governed `sync run` payload for `gmail-inbox-threads`
 - `fromEmail` is enough for auto-linking when the prospect already has that exact email stored in Exo
-- in Codex, use `exo users harness probe <user-id> --runtime codex --connector gmail --json` before the run to confirm the Gmail connector is actually enabled in the current runtime
+- use `exo users harness probe <user-id> --runtime <runtime> --connector gmail --json` before the run to confirm the Gmail connector is actually enabled in the current runtime
 - `--apply` immediately writes the payload back through the generic sync-run engine
 - `--refresh` only makes sense with `--apply`, and returns fresh inbox/daily/next summaries
 

@@ -82,6 +82,61 @@ function writeFakeCodexCaptureScript(filePath, capture, options = {}) {
   fs.chmodSync(filePath, 0o755);
 }
 
+/**
+ * @param {string} filePath
+ * @param {{
+ *   plugins?: string[],
+ *   mcpLines?: string[],
+ *   structuredOutput?: unknown
+ * }} [options]
+ */
+function writeFakeClaudeScript(filePath, options = {}) {
+  const plugins = options.plugins ?? [];
+  const mcpLines = options.mcpLines ?? [];
+  const structuredOutput = options.structuredOutput ?? { mode: "quick", status: "failed", checkedAt: null, itemCount: 0, error: "missing structured output", threads: [] };
+
+  const lines = [
+    "#!/bin/sh",
+    'if [ "$1" = "plugins" ] && [ "$2" = "list" ]; then',
+    '  echo "Installed plugins:"'
+  ];
+
+  for (const plugin of plugins) {
+    lines.push(`  echo "  ❯ ${plugin}"`);
+  }
+
+  lines.push("  exit 0");
+  lines.push("fi");
+  lines.push('if [ "$1" = "mcp" ] && [ "$2" = "list" ]; then');
+  if (mcpLines.length) {
+    for (const line of mcpLines) {
+      lines.push(`  echo '${line.replace(/'/g, "'\\''")}'`);
+    }
+  } else {
+    lines.push('  echo "No MCP servers configured"');
+  }
+  lines.push("  exit 0");
+  lines.push("fi");
+  lines.push('if [ "$1" = "-p" ]; then');
+  lines.push("  cat <<'JSON'");
+  lines.push(JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: "",
+    structured_output: structuredOutput
+  }));
+  lines.push("JSON");
+  lines.push("  exit 0");
+  lines.push("fi");
+  lines.push('echo "unsupported fake claude invocation" >&2');
+  lines.push("exit 2");
+  lines.push("");
+
+  fs.writeFileSync(filePath, lines.join("\n"));
+  fs.chmodSync(filePath, 0o755);
+}
+
 test("motion add seeds a motion, motion refresh updates it, and motion list sees it in the same workspace", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-cli-"));
 
@@ -1763,6 +1818,7 @@ test("execution users can own mixed profile-backed and harness-backed accounts, 
 test("users harness probe inspects Codex plugin and MCP availability and can write back detected statuses", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-harness-probe-"));
   const codexHome = path.join(tempDir, ".codex");
+  const fakeClaudePath = path.join(tempDir, "fake-claude");
 
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(
@@ -1779,6 +1835,10 @@ test("users harness probe inspects Codex plugin and MCP availability and can wri
       ""
     ].join("\n")
   );
+  writeFakeClaudeScript(fakeClaudePath, {
+    plugins: ["gmail"],
+    mcpLines: ["plugin:gmail:gmail: connected - ✓ Connected"]
+  });
 
   try {
     const user = JSON.parse(
@@ -1819,7 +1879,8 @@ test("users harness probe inspects Codex plugin and MCP availability and can wri
 
     const env = {
       ...process.env,
-      CODEX_HOME: codexHome
+      CODEX_HOME: codexHome,
+      EXO_CLAUDE_CLI: fakeClaudePath
     };
 
     const probe = JSON.parse(
@@ -1861,7 +1922,7 @@ test("users harness probe inspects Codex plugin and MCP availability and can wri
         }
       )
     );
-    assert.equal(writebackResult.counts.updatedCount, 3);
+    assert.equal(writebackResult.counts.updatedCount, 4);
 
     const shown = JSON.parse(
       execFileSync("node", [cliPath, "users", "show", user.id, "--json"], {
@@ -1878,7 +1939,7 @@ test("users harness probe inspects Codex plugin and MCP availability and can wri
     assert.equal(codexGmail.status, "available");
     assert.equal(codexChrome.status, "unavailable");
     assert.equal(codexIcypeas.status, "available");
-    assert.equal(claudeGmail.status, "unknown");
+    assert.equal(claudeGmail.status, "available");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2759,6 +2820,190 @@ test("inbound sync gmail-live inspects Gmail through Codex and can apply the gov
 
     assert.equal(result.probe.detectedStatus, "available");
     assert.match(result.probe.reason, /gmail@openai-curated/);
+    assert.equal(result.capture.status, "success");
+    assert.equal(result.capture.threadCount, 1);
+    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
+    assert.equal(result.applied.counts.createdObservationCount, 1);
+    assert.equal(result.applied.counts.successSurfaceCount, 1);
+    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
+
+    const observations = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(observations.counts.observationCount, 1);
+    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
+    assert.equal(observations.observations[0].motionId, motion.id);
+    assert.equal(observations.observations[0].companyId, company.id);
+    assert.equal(observations.observations[0].prospectId, prospect.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync gmail-live inspects Gmail through Claude and can apply the governed writeback", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-claude-"));
+  const fakeClaudePath = path.join(tempDir, "fake-claude");
+
+  writeFakeClaudeScript(fakeClaudePath, {
+    plugins: ["gmail"],
+    mcpLines: ["plugin:gmail:gmail: connected - ✓ Connected"],
+    structuredOutput: {
+      mode: "quick",
+      status: "success",
+      checkedAt: "2026-05-30T16:10:00.000Z",
+      itemCount: 1,
+      error: null,
+      threads: [
+        {
+          threadId: "thread-live-claude-1",
+          kind: "email_reply_received",
+          observedAt: "2026-05-30T16:05:00.000Z",
+          summary: "Alicia replied by email asking for a short workflow walkthrough.",
+          subject: "Re: Risk workflow question",
+          fromName: "Alicia Buyer",
+          fromEmail: "alicia@buyer.example",
+          actorTitle: null,
+          actorCompanyName: null,
+          threadUrl: null,
+          sourceUrl: null,
+          motionId: null,
+          companyId: null,
+          prospectId: null,
+          notes: null
+        }
+      ]
+    }
+  });
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when outbound operators need governed inbox truth.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there active revenue complexity that makes a reply operationally important?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "VP Revenue Operations",
+          "--email",
+          "alicia@buyer.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "influences",
+          "--why-relevant",
+          "Owns the operational workflow pain that makes the inbound email relevant.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospect = prospectResult.prospects[0];
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-claude-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "gmail-live-claude-user@example.com",
+          "--runtime",
+          "claude",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const env = {
+      ...process.env,
+      EXO_CLAUDE_CLI: fakeClaudePath
+    };
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "gmail-live",
+          user.id,
+          "--account",
+          gmailAccountId,
+          "--limit",
+          "10",
+          "--since",
+          "2026-05-30T00:00:00.000Z",
+          "--apply",
+          "--refresh",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(result.probe.detectedStatus, "available");
+    assert.match(result.probe.reason, /Claude plugin gmail/i);
     assert.equal(result.capture.status, "success");
     assert.equal(result.capture.threadCount, 1);
     assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");

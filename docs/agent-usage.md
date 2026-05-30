@@ -133,7 +133,7 @@ For Gmail-backed inbound truth, the first built-in live path now exists:
 exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
 ```
 
-Use that only when the Gmail account resolves through `codex:gmail`. It runs live inspection through the current Codex runtime, then lands the result through the same governed Exo sync-writeback path as manual captures.
+Use that only when the Gmail account resolves through a supported `runtime:gmail` harness connection such as `codex:gmail` or `claude:gmail`. It runs live inspection through the resolved runtime, then lands the result through the same governed Exo sync-writeback path as manual captures.
 
 If no native browser-control surface is available in the current session, say that explicitly before choosing any fallback path.
 

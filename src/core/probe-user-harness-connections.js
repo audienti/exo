@@ -1,5 +1,6 @@
 // @ts-check
 
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,13 +30,19 @@ const CODEX_PLUGIN_CONNECTOR_MAP = {
   superpowers: ["superpowers@openai-curated"]
 };
 
+const CLAUDE_PLUGIN_CONNECTOR_MAP = {
+  chrome: ["chrome-devtools-mcp", "chrome"],
+  gmail: ["gmail"]
+};
+
 /**
  * @param {unknown} rawUser
  * @param {{
  *   runtime?: string | null | undefined,
  *   connector?: string | null | undefined,
  *   writeback?: boolean | undefined,
- *   codexHome?: string | null | undefined
+ *   codexHome?: string | null | undefined,
+ *   claudeCli?: string | null | undefined
  * }} [options]
  */
 export function probeUserHarnessConnections(rawUser, options = {}) {
@@ -51,7 +58,8 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
   let updatedUser = user;
   const probes = selectedConnections.map((connection) => {
     const probe = probeHarnessConnection(connection, {
-      codexHome: options.codexHome ?? null
+      codexHome: options.codexHome ?? null,
+      claudeCli: options.claudeCli ?? null
     });
 
     if (options.writeback && probe.detectedStatus !== connection.status) {
@@ -92,13 +100,17 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
 
 /**
  * @param {import("../schema/user.js").userHarnessConnectionSchema._type} connection
- * @param {{ codexHome?: string | null | undefined }} [options]
+ * @param {{ codexHome?: string | null | undefined, claudeCli?: string | null | undefined }} [options]
  */
 function probeHarnessConnection(connection, options = {}) {
   const runtime = connection.runtime.trim().toLowerCase();
 
   if (runtime === "codex") {
     return probeCodexHarnessConnection(connection, options);
+  }
+
+  if (runtime === "claude") {
+    return probeClaudeHarnessConnection(connection, options);
   }
 
   return {
@@ -191,6 +203,76 @@ function probeCodexHarnessConnection(connection, options = {}) {
 }
 
 /**
+ * @param {import("../schema/user.js").userHarnessConnectionSchema._type} connection
+ * @param {{ claudeCli?: string | null | undefined }} [options]
+ */
+function probeClaudeHarnessConnection(connection, options = {}) {
+  const claudeCli = normalizeNullableString(options.claudeCli)
+    ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI)
+    ?? "claude";
+  const base = {
+    connectionId: connection.id,
+    runtime: connection.runtime,
+    connector: connection.connector,
+    label: connection.label,
+    storedStatus: connection.status,
+    source: {
+      kind: "claude-cli",
+      path: claudeCli
+    }
+  };
+
+  let summary;
+  try {
+    summary = readClaudeRuntimeSummary(claudeCli);
+  } catch (error) {
+    return {
+      ...base,
+      detectedStatus: "unknown",
+      willWriteback: false,
+      supported: true,
+      reason: error instanceof Error ? error.message : String(error),
+      evidence: []
+    };
+  }
+
+  const pluginProbe = findClaudePluginProbe(connection.connector, summary.plugins);
+  if (pluginProbe) {
+    return {
+      ...base,
+      detectedStatus: "available",
+      willWriteback: connection.status !== "available",
+      supported: true,
+      reason: `Claude plugin ${pluginProbe.pluginId} is installed for ${connection.connector}.`,
+      evidence: [`plugin:${pluginProbe.pluginId}`]
+    };
+  }
+
+  const mcpProbe = findClaudeMcpProbe(connection.connector, summary.mcpServers);
+  if (mcpProbe) {
+    return {
+      ...base,
+      detectedStatus: "available",
+      willWriteback: connection.status !== "available",
+      supported: true,
+      reason: `Claude MCP server ${mcpProbe.serverName} is available for ${connection.connector}.`,
+      evidence: [`mcp_server:${mcpProbe.serverName}`]
+    };
+  }
+
+  const candidates = CLAUDE_PLUGIN_CONNECTOR_MAP[connection.connector.trim().toLowerCase()] ?? [];
+  const candidateText = candidates.length ? candidates.join(", ") : connection.connector;
+  return {
+    ...base,
+    detectedStatus: "unavailable",
+    willWriteback: connection.status !== "unavailable",
+    supported: true,
+    reason: `Claude runtime did not expose a plugin or MCP server matching ${candidateText} for ${connection.connector}.`,
+    evidence: []
+  };
+}
+
+/**
  * @param {string} configPath
  */
 function readCodexConfigSummary(configPath) {
@@ -270,6 +352,115 @@ function findCodexPluginProbe(connector, plugins) {
  */
 function findCodexMcpProbe(connector, mcpServers) {
   return mcpServers.get(connector.trim().toLowerCase()) ?? null;
+}
+
+/**
+ * @param {string} claudeCli
+ */
+function readClaudeRuntimeSummary(claudeCli) {
+  const pluginOutput = execFileSync(claudeCli, ["plugins", "list"], {
+    encoding: "utf8",
+    maxBuffer: 10 * 1024 * 1024
+  });
+  const mcpOutput = execFileSync(claudeCli, ["mcp", "list"], {
+    encoding: "utf8",
+    maxBuffer: 10 * 1024 * 1024
+  });
+
+  return {
+    plugins: parseClaudePluginList(pluginOutput),
+    mcpServers: parseClaudeMcpList(mcpOutput)
+  };
+}
+
+/**
+ * @param {string} output
+ */
+function parseClaudePluginList(output) {
+  /** @type {Map<string, { pluginId: string, enabled: boolean }>} */
+  const plugins = new Map();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const match = line.match(/^[❯*-]?\s*([a-z0-9._-]+(?:@[a-z0-9._-]+)?)$/i);
+    if (!match) {
+      continue;
+    }
+
+    const pluginId = match[1];
+    plugins.set(pluginId.toLowerCase(), {
+      pluginId,
+      enabled: true
+    });
+  }
+
+  return plugins;
+}
+
+/**
+ * @param {string} output
+ */
+function parseClaudeMcpList(output) {
+  /** @type {Map<string, { serverName: string, enabled: boolean }>} */
+  const mcpServers = new Map();
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line.length) {
+      continue;
+    }
+
+    const pluginMatch = line.match(/^plugin:([^:]+):([^:]+):/i);
+    if (pluginMatch) {
+      const serverName = pluginMatch[2];
+      mcpServers.set(serverName.toLowerCase(), {
+        serverName,
+        enabled: true
+      });
+      continue;
+    }
+
+    const directMatch = line.match(/^([a-z0-9._-]+)\s*:/i);
+    if (directMatch) {
+      const serverName = directMatch[1];
+      mcpServers.set(serverName.toLowerCase(), {
+        serverName,
+        enabled: true
+      });
+    }
+  }
+
+  return mcpServers;
+}
+
+/**
+ * @param {string} connector
+ * @param {Map<string, { pluginId: string, enabled: boolean }>} plugins
+ */
+function findClaudePluginProbe(connector, plugins) {
+  const candidates = CLAUDE_PLUGIN_CONNECTOR_MAP[connector.trim().toLowerCase()] ?? [];
+  for (const pluginId of candidates) {
+    const match = plugins.get(pluginId.toLowerCase()) ?? null;
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * @param {string} connector
+ * @param {Map<string, { serverName: string, enabled: boolean }>} mcpServers
+ */
+function findClaudeMcpProbe(connector, mcpServers) {
+  const candidates = CLAUDE_PLUGIN_CONNECTOR_MAP[connector.trim().toLowerCase()] ?? [];
+  for (const candidate of candidates) {
+    const match = mcpServers.get(candidate.toLowerCase()) ?? null;
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
 }
 
 /**

@@ -123,13 +123,14 @@ const gmailCaptureOutputSchema = {
  *   limit?: number | null,
  *   since?: string | null,
  *   codexCli?: string | null,
- *   codexHome?: string | null
+ *   codexHome?: string | null,
+ *   claudeCli?: string | null
  * }} [options]
  */
 export async function buildLiveGmailInboundSyncPayload(rawUser, options = {}) {
   const user = userSchema.parse(rawUser);
   const account = resolveGmailAccount(user, normalizeNullableString(options.accountId));
-  const harnessConnection = requireCodexGmailHarnessConnection(user, account);
+  const harnessConnection = requireGmailHarnessConnection(user, account);
   const limit = normalizePositiveInteger(options.limit, DEFAULT_GMAIL_THREAD_LIMIT, "limit");
   const since = normalizeNullableString(options.since);
   if (since) {
@@ -139,7 +140,8 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, options = {}) {
   const probeResult = probeUserHarnessConnections(user, {
     runtime: harnessConnection.runtime,
     connector: harnessConnection.connector,
-    codexHome: options.codexHome ?? null
+    codexHome: options.codexHome ?? null,
+    claudeCli: options.claudeCli ?? null
   });
   const probe = probeResult.probes.find((candidate) => candidate.connectionId === harnessConnection.id) ?? {
     connectionId: harnessConnection.id,
@@ -162,16 +164,18 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, options = {}) {
   let rawCapture;
   if (probe.detectedStatus !== "available") {
     rawCapture = buildFailedCapture(
-      `Codex Gmail connector is not available for ${account.handle}: ${probe.reason}`
+      `${harnessConnection.runtime} Gmail connector is not available for ${account.handle}: ${probe.reason}`
     );
   } else {
     try {
-      rawCapture = await captureGmailInboxThroughCodex({
+      rawCapture = await captureGmailInbox({
+        runtime: harnessConnection.runtime.trim().toLowerCase(),
         handle: account.handle,
         limit,
         since,
         codexCli: options.codexCli ?? normalizeNullableString(process.env.EXO_CODEX_CLI) ?? "codex",
-        codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null
+        codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
+        claudeCli: options.claudeCli ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI) ?? "claude"
       });
     } catch (error) {
       rawCapture = buildFailedCapture(error instanceof Error ? error.message : String(error));
@@ -200,6 +204,29 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, options = {}) {
     capture: built.capture,
     payload: built.payload
   };
+}
+
+/**
+ * @param {{
+ *   runtime: string,
+ *   handle: string,
+ *   limit: number,
+ *   since: string | null,
+ *   codexCli: string,
+ *   codexHome: string | null,
+ *   claudeCli: string
+ * }} input
+ */
+async function captureGmailInbox(input) {
+  if (input.runtime === "codex") {
+    return captureGmailInboxThroughCodex(input);
+  }
+
+  if (input.runtime === "claude") {
+    return captureGmailInboxThroughClaude(input);
+  }
+
+  throw new Error(`Gmail live sync is not implemented for runtime ${input.runtime}.`);
 }
 
 /**
@@ -262,7 +289,7 @@ async function captureGmailInboxThroughCodex(input) {
  * @param {import("../schema/user.js").userSchema._type} user
  * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
  */
-function requireCodexGmailHarnessConnection(user, account) {
+function requireGmailHarnessConnection(user, account) {
   if (account.sourceType !== "harness-connection") {
     throw new Error(`Gmail account ${account.id} does not resolve through a harness connection.`);
   }
@@ -272,15 +299,65 @@ function requireCodexGmailHarnessConnection(user, account) {
     throw new Error(`Harness connection not found for Gmail account ${account.id}.`);
   }
 
-  if (harnessConnection.runtime.trim().toLowerCase() !== "codex") {
-    throw new Error(`Gmail live sync currently requires a codex:gmail harness connection, found ${harnessConnection.runtime}:${harnessConnection.connector}.`);
+  if (harnessConnection.connector.trim().toLowerCase() !== "gmail") {
+    throw new Error(`Gmail live sync currently requires a runtime:gmail harness connection, found ${harnessConnection.runtime}:${harnessConnection.connector}.`);
   }
 
-  if (harnessConnection.connector.trim().toLowerCase() !== "gmail") {
-    throw new Error(`Gmail live sync currently requires a codex:gmail harness connection, found ${harnessConnection.runtime}:${harnessConnection.connector}.`);
+  const runtime = harnessConnection.runtime.trim().toLowerCase();
+  if (!["codex", "claude"].includes(runtime)) {
+    throw new Error(`Gmail live sync currently supports codex:gmail or claude:gmail, found ${harnessConnection.runtime}:${harnessConnection.connector}.`);
   }
 
   return harnessConnection;
+}
+
+/**
+ * @param {{
+ *   handle: string,
+ *   limit: number,
+ *   since: string | null,
+ *   claudeCli: string
+ * }} input
+ */
+async function captureGmailInboxThroughClaude(input) {
+  const prompt = buildGmailLiveCapturePrompt(input.handle, input.limit, input.since);
+  const schema = JSON.stringify(gmailCaptureOutputSchema);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-gmail-live-claude-"));
+  const args = [
+    "-p",
+    "--output-format",
+    "json",
+    "--json-schema",
+    schema,
+    "--permission-mode",
+    "dontAsk",
+    "--no-session-persistence",
+    prompt
+  ];
+
+  try {
+    const { stdout } = await execFileAsync(input.claudeCli, args, {
+      cwd: tempDir,
+      env: process.env,
+      maxBuffer: 10 * 1024 * 1024
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(String(stdout));
+    } catch (error) {
+      throw new Error(`Claude Gmail capture returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    const capture = parsed?.structured_output;
+    if (!capture) {
+      throw new Error("Claude Gmail capture did not return structured_output.");
+    }
+
+    return gmailInboundSyncCaptureSchema.parse(capture);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 /**
