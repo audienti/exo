@@ -13,8 +13,9 @@ import { userSchema } from "../schema/user.js";
 /**
  * @param {unknown} rawUser
  * @param {unknown} rawPayload
+ * @param {{ rawMotions?: unknown[] | undefined }} [options]
  */
-export function prepareUserInboundSyncRun(rawUser, rawPayload) {
+export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
   const user = userSchema.parse(rawUser);
   const payload = inboundSyncRunPayloadSchema.parse(rawPayload);
   const processedAt = new Date().toISOString();
@@ -84,6 +85,8 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload) {
           companyId: observationInput.companyId,
           prospectId: observationInput.prospectId,
           notes: observationInput.notes
+        }, {
+          rawMotions: options.rawMotions
         });
         const existingDraft = observationDraftsByDedupeKey.get(observation.dedupeKey) ?? null;
         observationDraftsByDedupeKey.set(observation.dedupeKey, mergeInboundObservation(existingDraft, observation));

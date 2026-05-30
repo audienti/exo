@@ -5,6 +5,7 @@ import { browserProfileCapabilitySchema } from "../schema/browser-profile.js";
 import { inboundObservationKindSchema, inboundObservationSchema, inboundSurfaceKeySchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { findInboundSurfaceDefinition } from "../lib/inbound-surface-catalog.js";
+import { resolveInboundObservationLinks } from "./resolve-inbound-observation-links.js";
 
 /**
  * @param {unknown} rawUser
@@ -27,8 +28,9 @@ import { findInboundSurfaceDefinition } from "../lib/inbound-surface-catalog.js"
  *   prospectId?: string | null,
  *   notes?: string | null
  * }} input
+ * @param {{ rawMotions?: unknown[] | undefined }} [options]
  */
-export function recordInboundObservation(rawUser, input) {
+export function recordInboundObservation(rawUser, input, options = {}) {
   const user = userSchema.parse(rawUser);
   const account = user.accounts.find((candidate) => candidate.id === input.accountId);
   if (!account) {
@@ -50,6 +52,13 @@ export function recordInboundObservation(rawUser, input) {
     throw new Error(`Observation kind ${kind} does not apply to inbound surface ${surfaceKey}.`);
   }
 
+  const resolvedLinks = resolveInboundObservationLinks(options.rawMotions ?? [], {
+    motionId: input.motionId,
+    companyId: input.companyId,
+    prospectId: input.prospectId,
+    actorHandle: input.actorHandle,
+    actorProfileUrl: input.actorProfileUrl
+  });
   const now = new Date().toISOString();
   const normalizedExternalId = normalizeNullableString(input.externalId);
   const dedupeKey = normalizedExternalId
@@ -77,9 +86,9 @@ export function recordInboundObservation(rawUser, input) {
     threadUrl: normalizeNullableString(input.threadUrl),
     sourceUrl: normalizeNullableString(input.sourceUrl),
     summary: input.summary.trim(),
-    motionId: normalizeNullableString(input.motionId),
-    companyId: normalizeNullableString(input.companyId),
-    prospectId: normalizeNullableString(input.prospectId),
+    motionId: resolvedLinks.motionId,
+    companyId: resolvedLinks.companyId,
+    prospectId: resolvedLinks.prospectId,
     notes: normalizeNullableString(input.notes)
   });
 }

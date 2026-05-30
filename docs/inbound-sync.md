@@ -64,6 +64,7 @@ Inspect one user's sync coverage:
 exo inbound sync show <user-id>
 exo inbound sync show <user-id> --capability linkedin --json
 exo inbound sync plan <user-id> --mode quick --json
+exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
 exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
 exo inbound review <user-id> --json
 ```
@@ -133,6 +134,8 @@ Run rules:
 - `warning` and `failed` must explain what was partial or broken
 - `failed` cannot carry observations
 - if `itemCount` is larger than the itemized observations, Exo preserves that gap so inbound review can call it out
+- when a stored prospect has an exact matching email or LinkedIn profile URL, Exo auto-links the observation to that prospect, its company, and its motion during writeback
+- ambiguous matches stay unlinked; explicit ids still win, but Exo rejects explicit ids that conflict with the resolved prospect context
 - `--refresh` returns a fresh inbox/daily/next summary after the writeback lands
 
 First producer slice: Gmail capture
@@ -170,8 +173,66 @@ Gmail capture rules:
 
 - this is still agent-supplied live truth, not a built-in Gmail retriever
 - `gmail` builds the governed `sync run` payload for `gmail-inbox-threads`
+- `fromEmail` is enough for auto-linking when the prospect already has that exact email stored in Exo
 - `--apply` immediately writes the payload back through the generic sync-run engine
 - `--refresh` only makes sense with `--apply`, and returns fresh inbox/daily/next summaries
+
+First browser-backed producer slice: LinkedIn quick capture
+
+```bash
+exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --json
+exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
+```
+
+LinkedIn quick capture shape:
+
+```json
+{
+  "mode": "quick",
+  "sentInvitations": {
+    "status": "success",
+    "checkedAt": "2026-05-30T14:10:00.000Z",
+    "items": []
+  },
+  "receivedInvitations": {
+    "status": "success",
+    "checkedAt": "2026-05-30T14:12:00.000Z",
+    "items": [
+      {
+        "invitationId": "invite-123",
+        "kind": "connection_request_received",
+        "observedAt": "2026-05-30T14:11:00.000Z",
+        "actorName": "Alicia Buyer",
+        "summary": "Alicia Buyer sent us a new inbound connection request."
+      }
+    ]
+  },
+  "messagingInbox": {
+    "status": "success",
+    "checkedAt": "2026-05-30T14:14:00.000Z",
+    "items": []
+  },
+  "profileViews": {
+    "status": "success",
+    "checkedAt": "2026-05-30T14:15:00.000Z",
+    "items": []
+  },
+  "followingList": {
+    "status": "success",
+    "checkedAt": "2026-05-30T14:16:00.000Z",
+    "items": []
+  }
+}
+```
+
+LinkedIn quick capture rules:
+
+- this is the agent-facing quick-mode producer for the five authoritative LinkedIn surfaces
+- for now it supports `quick` mode only
+- each section maps to one canonical Exo inbound surface under the hood
+- `actorProfileUrl` is enough for auto-linking when the prospect already has that exact LinkedIn profile stored in Exo
+- use `warning` when you saw real items but did not fully itemize them
+- use `failed` only when the surface could not actually be checked
 
 Enable or disable surfaces on one account:
 
@@ -215,6 +276,10 @@ Inspect stored observations:
 exo inbound observations list <user-id> --json
 exo inbound observations show <observation-id> --json
 ```
+
+Manual observation rule:
+
+- `exo inbound observations add` uses the same exact-match auto-linking as `sync run`, so actor email and actor LinkedIn profile URL should be supplied whenever they are known
 
 ## Design rule
 

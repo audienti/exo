@@ -132,7 +132,7 @@ export function describeExo() {
         purpose: "Inspect the canonical Audienti-style GTM action catalog that Exo uses for action readiness and execution briefs."
       },
       {
-        command: "exo inbound surfaces/surface/sync show/plan/gmail/run/set/record/observations list/show/add",
+        command: "exo inbound surfaces/surface/sync show/plan/linkedin/gmail/run/set/record/observations list/show/add",
         purpose: "Inspect the canonical inbound truth surfaces, manage per-account sync policy, and read or write normalized inbound observations before live retrieval exists."
       },
       {

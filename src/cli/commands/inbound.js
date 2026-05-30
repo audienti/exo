@@ -10,6 +10,7 @@ import {
   recordInboundObservation
 } from "../../core/inbound-observations.js";
 import { buildGmailInboundSyncPayload } from "../../core/inbound-gmail-sync.js";
+import { buildLinkedinInboundSyncPayload } from "../../core/inbound-linkedin-sync.js";
 import { buildInboundSyncRefreshSummary, prepareUserInboundSyncRun } from "../../core/inbound-sync-run.js";
 import {
   buildUserInboundSyncPlan,
@@ -62,6 +63,7 @@ Canonical inbound interface:
   exo inbound surface <surface-key>
   exo inbound sync show <user-id>
   exo inbound sync plan <user-id> --mode quick
+  exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
   exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --apply --refresh --json
   exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
   exo inbound sync set <user-id> --account <account-id> --enable-surface linkedin-sent-invitations
@@ -74,6 +76,7 @@ Rules:
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
   - Sync policy and observation storage exist now. Live retrieval still does not.
   - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
+  - Use inbound sync linkedin when another agent already inspected LinkedIn quick-mode surfaces and needs Exo to build or apply the governed writeback payload.
   - Use inbound sync gmail when another agent already inspected Gmail and needs Exo to build or apply the governed writeback payload.
   - Use inbound sync run when another agent already inspected the live surfaces and needs one governed writeback path for the whole pass.
   - Use inbound review when you need the management surface: what was checked, what needs a decision, what is stale, and what still needs itemization.
@@ -226,6 +229,64 @@ Rules:
     });
 
   sync
+    .command("linkedin")
+    .description("Turn one LinkedIn quick-mode capture into a governed sync payload and optionally apply it.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--account <account-id>", "Connected LinkedIn account identifier; inferred when only one LinkedIn account exists")
+    .requiredOption("--input <path>", "Path to a LinkedIn capture JSON file, or - to read JSON from stdin")
+    .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
+    .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const rawUser = findUserById(userId);
+      if (!rawUser) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let built;
+      try {
+        built = buildLinkedinInboundSyncPayload(rawUser, {
+          accountId: options.account ?? null,
+          capture: loadJsonInput(options.input)
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      const result = {
+        capture: built.capture,
+        payload: built.payload,
+        applied: null
+      };
+
+      if (options.apply || options.refresh) {
+        try {
+          result.applied = applyInboundSyncRunPayload(userId, built.payload, { refresh: Boolean(options.refresh) });
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
+          process.exitCode = 1;
+          return;
+        }
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      if (result.applied) {
+        console.log(renderInboundSyncRun(result.applied));
+        return;
+      }
+
+      console.log(JSON.stringify(result.payload, null, 2));
+    });
+
+  sync
     .command("gmail")
     .description("Turn one Gmail inbox capture into a governed sync payload and optionally apply it.")
     .argument("<user-id>", "Execution user identifier")
@@ -309,7 +370,9 @@ Rules:
 
       let prepared;
       try {
-        prepared = prepareUserInboundSyncRun(rawUser, payload);
+        prepared = prepareUserInboundSyncRun(rawUser, payload, {
+          rawMotions: listMotions()
+        });
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
@@ -518,6 +581,8 @@ Rules:
         companyId: options.company ?? null,
         prospectId: options.prospect ?? null,
         notes: options.notes ?? null
+      }, {
+        rawMotions: listMotions()
       });
       const existing = findInboundObservationByDedupeKey(observation.dedupeKey);
       const merged = mergeInboundObservation(existing, observation);
@@ -554,7 +619,9 @@ function applyInboundSyncRunPayload(userId, payload, options = {}) {
     throw new Error(`User not found: ${userId}`);
   }
 
-  const prepared = prepareUserInboundSyncRun(rawUser, payload);
+  const prepared = prepareUserInboundSyncRun(rawUser, payload, {
+    rawMotions: listMotions()
+  });
   return applyPreparedInboundSyncRun(userId, prepared, options);
 }
 

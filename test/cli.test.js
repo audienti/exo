@@ -2265,6 +2265,65 @@ test("inbound sync gmail turns one Gmail capture into governed writeback and can
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-"));
 
   try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when outbound operators need governed inbox truth.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there active revenue complexity that makes a reply operationally important?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "VP Revenue Operations",
+          "--email",
+          "alicia@buyer.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "influences",
+          "--why-relevant",
+          "Owns the operational workflow pain that makes the inbound email relevant.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospect = prospectResult.prospects[0];
+
     const user = JSON.parse(
       execFileSync("node", [cliPath, "users", "add", "--label", "gmail-user", "--owner", "william", "--json"], {
         cwd: tempDir,
@@ -2360,6 +2419,197 @@ test("inbound sync gmail turns one Gmail capture into governed writeback and can
     assert.equal(observations.counts.observationCount, 1);
     assert.equal(observations.observations[0].kind, "email_reply_received");
     assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
+    assert.equal(observations.observations[0].motionId, motion.id);
+    assert.equal(observations.observations[0].companyId, company.id);
+    assert.equal(observations.observations[0].prospectId, prospect.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync linkedin turns one LinkedIn quick capture into governed writeback and can apply it", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when inbound LinkedIn truth has to land on the right branch automatically.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there active GTM pressure that makes inbound connection requests important?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospectResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "VP Revenue Operations",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/alicia-buyer/",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "influences",
+          "--why-relevant",
+          "Owns the workflow pain that makes the inbound connection request worth routing immediately.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const prospect = prospectResult.prospects[0];
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "linkedin-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "linkedin-user",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    const capturePath = path.join(tempDir, "linkedin-capture.json");
+    fs.writeFileSync(
+      capturePath,
+      JSON.stringify(
+        {
+          mode: "quick",
+          sentInvitations: {
+            status: "success",
+            checkedAt: "2026-05-30T14:10:00.000Z",
+            items: []
+          },
+          receivedInvitations: {
+            status: "success",
+            checkedAt: "2026-05-30T14:12:00.000Z",
+            items: [
+              {
+                invitationId: "invite-123",
+                kind: "connection_request_received",
+                observedAt: "2026-05-30T14:11:00.000Z",
+                actorName: "Alicia Buyer",
+                actorProfileUrl: "https://www.linkedin.com/in/alicia-buyer/",
+                summary: "Alicia Buyer sent us a new inbound connection request."
+              }
+            ]
+          },
+          messagingInbox: {
+            status: "success",
+            checkedAt: "2026-05-30T14:14:00.000Z",
+            items: []
+          },
+          profileViews: {
+            status: "success",
+            checkedAt: "2026-05-30T14:15:00.000Z",
+            items: []
+          },
+          followingList: {
+            status: "success",
+            checkedAt: "2026-05-30T14:16:00.000Z",
+            items: []
+          }
+        },
+        null,
+        2
+      )
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "inbound", "sync", "linkedin", user.id, "--account", linkedinAccountId, "--input", capturePath, "--apply", "--refresh", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(result.capture.mode, "quick");
+    assert.equal(result.capture.sectionCount, 5);
+    assert.equal(result.capture.sections[1].surfaceKey, "linkedin-received-invitations");
+    assert.equal(result.capture.sections[1].observationCount, 1);
+    assert.equal(result.payload.accounts[0].surfaces[1].surfaceKey, "linkedin-received-invitations");
+    assert.equal(result.applied.counts.checkedSurfaceCount, 5);
+    assert.equal(result.applied.counts.observationCount, 1);
+    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
+    assert.match(result.applied.refreshed.daily.topItem.recommendedAction, /accept or decline/i);
+
+    const syncView = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const linkedinSurface = syncView.accounts
+      .find((account) => account.accountId === linkedinAccountId)
+      .surfaces.find((surface) => surface.key === "linkedin-received-invitations");
+    assert.equal(linkedinSurface.lastRunStatus, "success");
+    assert.equal(linkedinSurface.lastItemCount, 1);
+    assert.equal(linkedinSurface.lastObservedAt, "2026-05-30T14:12:00.000Z");
+
+    const observations = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(observations.counts.observationCount, 1);
+    assert.equal(observations.observations[0].kind, "connection_request_received");
+    assert.equal(observations.observations[0].summary, "Alicia Buyer sent us a new inbound connection request.");
+    assert.equal(observations.observations[0].motionId, motion.id);
+    assert.equal(observations.observations[0].companyId, company.id);
+    assert.equal(observations.observations[0].prospectId, prospect.id);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2678,6 +2928,8 @@ test("inbox ranks inbound observations into an operator-facing triage view with 
           "Parm Uppal",
           "--title",
           "Chief Revenue Officer",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/parm-uppal/",
           "--buying-committee-role",
           "primary_business_owner",
           "--decision-authority",
@@ -2764,14 +3016,10 @@ test("inbox ranks inbound observations into an operator-facing triage view with 
         "2026-05-28T13:00:00.000Z",
         "--actor-name",
         "Parm Uppal",
+        "--actor-profile-url",
+        "https://www.linkedin.com/in/parm-uppal/",
         "--summary",
         "Parm viewed our profile after the connection request.",
-        "--motion",
-        motion.id,
-        "--company",
-        company.id,
-        "--prospect",
-        prospect.id,
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
@@ -2795,14 +3043,10 @@ test("inbox ranks inbound observations into an operator-facing triage view with 
         "2026-05-28T14:00:00.000Z",
         "--actor-name",
         "Parm Uppal",
+        "--actor-profile-url",
+        "https://www.linkedin.com/in/parm-uppal/",
         "--summary",
         "Parm replied in the LinkedIn inbox.",
-        "--motion",
-        motion.id,
-        "--company",
-        company.id,
-        "--prospect",
-        prospect.id,
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
@@ -10775,6 +11019,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   assert.match(inboundHelp, /exo inbound surfaces/);
   assert.match(inboundHelp, /exo inbound sync show <user-id>/);
   assert.match(inboundHelp, /exo inbound sync plan <user-id> --mode quick/);
+  assert.match(inboundHelp, /exo inbound sync linkedin <user-id> --account <account-id> --input/);
   assert.match(inboundHelp, /exo inbound sync gmail <user-id> --account <account-id> --input/);
   assert.match(inboundHelp, /exo inbound sync run <user-id> --input/);
   assert.match(inboundHelp, /exo inbound observations list <user-id>/);
@@ -10837,7 +11082,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected canonical action catalog surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/gmail/run/set/record/observations list/show/add"),
+    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/linkedin/gmail/run/set/record/observations list/show/add"),
     "expected inbound read/write surface to be listed in current capabilities"
   );
   assert.ok(
