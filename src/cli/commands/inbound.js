@@ -1,16 +1,26 @@
 #!/usr/bin/env node
 // @ts-check
 
+import fs from "node:fs";
+import path from "node:path";
 import {
   buildInboundObservationListView,
   mergeInboundObservation,
   parseInboundObservations,
   recordInboundObservation
 } from "../../core/inbound-observations.js";
-import { buildUserInboundSyncView, recordUserInboundSyncRun, setUserInboundSyncPolicy } from "../../core/user-inbound-sync.js";
+import { buildInboundSyncRefreshSummary, prepareUserInboundSyncRun } from "../../core/inbound-sync-run.js";
+import {
+  buildUserInboundSyncPlan,
+  buildUserInboundSyncView,
+  recordUserInboundSyncRun,
+  setUserInboundSyncPolicy
+} from "../../core/user-inbound-sync.js";
 import {
   findInboundObservationByDedupeKey,
   findInboundObservationById,
+  listBrowserProfiles,
+  listUsers,
   findUserById,
   listCompanies,
   listInboundObservations,
@@ -24,11 +34,18 @@ import {
   renderInboundObservationList,
   renderInboundSurfaceCatalog,
   renderInboundSurfaceDetail,
+  renderInboundSyncPlan,
+  renderInboundSyncRun,
   renderUserInboundSync
 } from "../../artifacts/render-inbound.js";
 import { buildInboundReviewView } from "../../core/build-inbound-review-view.js";
 import { browserProfileCapabilitySchema } from "../../schema/browser-profile.js";
-import { inboundObservationKindSchema, inboundSyncRunStatusSchema } from "../../schema/inbound.js";
+import {
+  inboundObservationKindSchema,
+  inboundSyncPlanModeSchema,
+  inboundSyncRunPayloadSchema,
+  inboundSyncRunStatusSchema
+} from "../../schema/inbound.js";
 import { findInboundSurfaceDefinition, listInboundSurfaceCatalog } from "../../lib/inbound-surface-catalog.js";
 
 export function registerInbound(program) {
@@ -43,6 +60,8 @@ Canonical inbound interface:
   exo inbound surfaces
   exo inbound surface <surface-key>
   exo inbound sync show <user-id>
+  exo inbound sync plan <user-id> --mode quick
+  exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
   exo inbound sync set <user-id> --account <account-id> --enable-surface linkedin-sent-invitations
   exo inbound sync record <user-id> --account <account-id> --surface linkedin-sent-invitations --status success
   exo inbound observations list <user-id>
@@ -52,6 +71,8 @@ Rules:
   - Start with the canonical truth surfaces, not the LinkedIn notifications bell.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
   - Sync policy and observation storage exist now. Live retrieval still does not.
+  - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
+  - Use inbound sync run when another agent already inspected the live surfaces and needs one governed writeback path for the whole pass.
   - Use inbound review when you need the management surface: what was checked, what needs a decision, what is stale, and what still needs itemization.
 `
     );
@@ -167,6 +188,122 @@ Rules:
       }
 
       console.log(renderUserInboundSync(result));
+    });
+
+  sync
+    .command("plan")
+    .description("Build the agent-facing run contract for a quick, normal, or full inbound sync pass.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--account <account-id>", "Filter to one connected account")
+    .option("--capability <capability>", "Filter to one capability like linkedin or gmail")
+    .option("--mode <mode>", "quick | normal | full")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const rawUser = findUserById(userId);
+      if (!rawUser) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const capability = options.capability ? browserProfileCapabilitySchema.parse(options.capability) : null;
+      const mode = options.mode ? inboundSyncPlanModeSchema.parse(options.mode) : "quick";
+      const result = buildUserInboundSyncPlan(rawUser, {
+        accountId: options.account ?? null,
+        capability,
+        mode
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderInboundSyncPlan(result));
+    });
+
+  sync
+    .command("run")
+    .description("Write back one governed inbound sync pass from a JSON payload captured by another agent.")
+    .argument("<user-id>", "Execution user identifier")
+    .requiredOption("--input <path>", "Path to a JSON payload file, or - to read JSON from stdin")
+    .option("--refresh", "Return a fresh inbox/daily/next summary after writeback")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const rawUser = findUserById(userId);
+      if (!rawUser) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let payload;
+      try {
+        payload = inboundSyncRunPayloadSchema.parse(loadJsonInput(options.input));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      let prepared;
+      try {
+        prepared = prepareUserInboundSyncRun(rawUser, payload);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      let createdObservationCount = 0;
+      let updatedObservationCount = 0;
+      const storedObservations = prepared.observations.map((observation) => {
+        const existing = findInboundObservationByDedupeKey(observation.dedupeKey);
+        const merged = mergeInboundObservation(existing, observation);
+        upsertInboundObservation(merged);
+        if (existing) {
+          updatedObservationCount += 1;
+        } else {
+          createdObservationCount += 1;
+        }
+        return merged;
+      });
+      updateUser(prepared.updatedUser);
+
+      const result = {
+        user: prepared.user,
+        processedAt: prepared.processedAt,
+        mode: prepared.mode,
+        counts: {
+          ...prepared.counts,
+          createdObservationCount,
+          updatedObservationCount
+        },
+        followUpCommands: prepared.followUpCommands,
+        accounts: prepared.accounts,
+        observations: storedObservations,
+        refreshed: null
+      };
+
+      if (options.refresh) {
+        const refreshedUser = findUserById(userId);
+        const refreshedObservations = listInboundObservations({ userId });
+        result.refreshed = buildInboundSyncRefreshSummary({
+          rawUser: refreshedUser,
+          rawUsers: listUsers(),
+          rawMotions: listMotions(),
+          rawCompanies: listCompanies(),
+          rawProfiles: listBrowserProfiles(),
+          rawObservations: refreshedObservations
+        });
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderInboundSyncRun(result));
     });
 
   sync
@@ -379,4 +516,14 @@ Rules:
 function collect(value, previous) {
   previous.push(value);
   return previous;
+}
+
+function loadJsonInput(filePath) {
+  if (filePath === "-") {
+    const stdin = fs.readFileSync(0, "utf8");
+    return JSON.parse(stdin);
+  }
+
+  const resolvedPath = path.resolve(process.cwd(), filePath);
+  return JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
 }

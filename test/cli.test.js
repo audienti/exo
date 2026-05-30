@@ -1951,6 +1951,316 @@ test("inbound surfaces, per-account sync policy, and sync-state memory persist o
   }
 });
 
+test("inbound sync plan turns sync policy and freshness into a concrete quick, normal, and full run contract", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-plan-"));
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "plan-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "plan-linkedin",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccount = withLinkedin.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount, "expected the LinkedIn account to be present");
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "plan-gmail",
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccount = withGmail.accounts.find((account) => account.capability === "gmail");
+    assert.ok(gmailAccount, "expected the Gmail account to be present");
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "sync",
+        "record",
+        user.id,
+        "--account",
+        linkedinAccount.id,
+        "--surface",
+        "linkedin-sent-invitations",
+        "--status",
+        "warning",
+        "--item-count",
+        "1",
+        "--error",
+        "Needs itemization",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "sync",
+        "record",
+        user.id,
+        "--account",
+        gmailAccount.id,
+        "--surface",
+        "gmail-inbox-threads",
+        "--status",
+        "success",
+        "--item-count",
+        "0",
+        "--observed-at",
+        "2026-05-29T12:00:00.000Z",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const quick = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "inbound", "sync", "plan", user.id, "--capability", "linkedin", "--mode", "quick", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(quick.mode, "quick");
+    assert.equal(quick.accounts.length, 1);
+    assert.equal(quick.accounts[0].phases.length, 1);
+    assert.equal(quick.accounts[0].phases[0].key, "primary");
+    const quickSurfaces = quick.accounts[0].phases.flatMap((phase) => phase.surfaces);
+    assert.deepEqual(
+      quickSurfaces.map((surface) => surface.key),
+      [
+        "linkedin-sent-invitations",
+        "linkedin-received-invitations",
+        "linkedin-messaging-inbox",
+        "linkedin-profile-views",
+        "linkedin-following-list"
+      ]
+    );
+    assert.equal(quickSurfaces.some((surface) => surface.key === "linkedin-comment-replies"), false);
+    assert.equal(quickSurfaces[0].freshnessState, "warning");
+    assert.match(quickSurfaces[0].successRecordCommand, new RegExp(`exo inbound sync record ${user.id}`));
+    assert.match(quickSurfaces[0].exampleObservationCommand, new RegExp(`--account ${linkedinAccount.id}`));
+
+    const normal = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "inbound", "sync", "plan", user.id, "--capability", "linkedin", "--mode", "normal", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(normal.accounts[0].phases.some((phase) => phase.key === "secondary"), true);
+    const normalSurfaces = normal.accounts[0].phases.flatMap((phase) => phase.surfaces);
+    assert.equal(normalSurfaces.some((surface) => surface.key === "linkedin-followers-list"), true);
+    assert.equal(normalSurfaces.some((surface) => surface.key === "linkedin-comment-replies"), true);
+
+    const full = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "inbound", "sync", "plan", user.id, "--capability", "linkedin", "--mode", "full", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const fullSurfaces = full.accounts[0].phases.flatMap((phase) => phase.surfaces);
+    const catchUpSurface = fullSurfaces.find((surface) => surface.key === "linkedin-catch-up-updates");
+    assert.ok(catchUpSurface, "expected the disabled catch-up surface to appear in full mode");
+    assert.equal(catchUpSurface.phase, "optional");
+    assert.equal(catchUpSurface.enabled, false);
+    assert.equal(catchUpSurface.freshnessState, "disabled");
+    assert.match(full.followUpCommands[0], new RegExp(`exo inbox --user ${user.id}`));
+    assert.equal(full.counts.freshness.warning, 1);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync run writes back one governed pass and refreshes inbox, daily, and next", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-run-"));
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "run-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "run-linkedin",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    const inputPath = path.join(tempDir, "inbound-sync.json");
+    fs.writeFileSync(
+      inputPath,
+      JSON.stringify(
+        {
+          mode: "quick",
+          accounts: [
+            {
+              accountId: linkedinAccountId,
+              surfaces: [
+                {
+                  surfaceKey: "linkedin-sent-invitations",
+                  status: "success",
+                  itemCount: 0,
+                  observations: []
+                },
+                {
+                  surfaceKey: "linkedin-received-invitations",
+                  status: "success",
+                  itemCount: 1,
+                  observedAt: "2026-05-30T14:00:00.000Z",
+                  observations: [
+                    {
+                      kind: "connection_request_received",
+                      externalId: "invite-123",
+                      observedAt: "2026-05-30T14:00:00.000Z",
+                      actorName: "Alicia Buyer",
+                      summary: "Alicia Buyer sent us a new inbound connection request."
+                    }
+                  ]
+                },
+                {
+                  surfaceKey: "linkedin-messaging-inbox",
+                  status: "success",
+                  itemCount: 0,
+                  observations: []
+                },
+                {
+                  surfaceKey: "linkedin-profile-views",
+                  status: "success",
+                  itemCount: 0,
+                  observations: []
+                },
+                {
+                  surfaceKey: "linkedin-following-list",
+                  status: "success",
+                  itemCount: 0,
+                  observations: []
+                }
+              ]
+            }
+          ]
+        },
+        null,
+        2
+      )
+    );
+
+    const runResult = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "inbound", "sync", "run", user.id, "--input", inputPath, "--refresh", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(runResult.mode, "quick");
+    assert.equal(runResult.counts.checkedSurfaceCount, 5);
+    assert.equal(runResult.counts.successSurfaceCount, 5);
+    assert.equal(runResult.counts.failedSurfaceCount, 0);
+    assert.equal(runResult.counts.warningSurfaceCount, 0);
+    assert.equal(runResult.counts.observationCount, 1);
+    assert.equal(runResult.counts.createdObservationCount, 1);
+    assert.equal(runResult.counts.updatedObservationCount, 0);
+    assert.equal(runResult.accounts[0].surfaces[1].surfaceKey, "linkedin-received-invitations");
+    assert.equal(runResult.accounts[0].surfaces[1].itemCount, 1);
+    assert.equal(runResult.refreshed.inbox.itemCount, 1);
+    assert.match(runResult.refreshed.daily.topItem.recommendedAction, /accept or decline/i);
+    assert.match(runResult.refreshed.next.nextMove, /accept or decline/i);
+    assert.equal(runResult.followUpCommands[2], `exo next --user ${user.id} --json`);
+
+    const syncView = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const linkedinAccount = syncView.accounts.find((account) => account.accountId === linkedinAccountId);
+    const receivedInvites = linkedinAccount.surfaces.find((surface) => surface.key === "linkedin-received-invitations");
+    assert.equal(receivedInvites.lastRunStatus, "success");
+    assert.equal(receivedInvites.lastItemCount, 1);
+    assert.equal(receivedInvites.lastObservedAt, "2026-05-30T14:00:00.000Z");
+
+    const observations = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(observations.counts.observationCount, 1);
+    assert.equal(observations.observations[0].summary, "Alicia Buyer sent us a new inbound connection request.");
+    assert.equal(observations.observations[0].kind, "connection_request_received");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound observations can be written back as normalized state without live retrieval", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-observations-"));
   const userDataDir = path.join(tempDir, "Chrome");
@@ -10360,6 +10670,8 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   });
   assert.match(inboundHelp, /exo inbound surfaces/);
   assert.match(inboundHelp, /exo inbound sync show <user-id>/);
+  assert.match(inboundHelp, /exo inbound sync plan <user-id> --mode quick/);
+  assert.match(inboundHelp, /exo inbound sync run <user-id> --input/);
   assert.match(inboundHelp, /exo inbound observations list <user-id>/);
 
   const inboxHelp = execFileSync("node", [cliPath, "inbox", "--help"], {
@@ -10420,8 +10732,8 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected canonical action catalog surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/set/record/observations list/show/add"),
-    "expected inbound read\/write surface to be listed in current capabilities"
+    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/run/set/record/observations list/show/add"),
+    "expected inbound read/write surface to be listed in current capabilities"
   );
   assert.ok(
     about.currentCapabilities.some((item) => item.command === "exo inbox"),
@@ -10462,6 +10774,10 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo inbound surfaces --json"),
     "expected bootstrap sequence to include inbound surface discovery"
+  );
+  assert.ok(
+    about.agentUsage.bootstrapSequence.includes("exo inbound sync plan <user-id> --mode quick --json"),
+    "expected bootstrap sequence to include the inbound sync plan"
   );
   assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo inbound observations list <user-id> --json"),

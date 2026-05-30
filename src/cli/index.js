@@ -50,6 +50,8 @@ Common patterns:
   exo motion remove <motion-id>
   exo inbound surfaces --json
   exo inbound sync show <user-id> --json
+  exo inbound sync plan <user-id> --mode quick --json
+  exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
   exo inbound review <user-id> --json
   exo inbound observations list <user-id> --json
   exo inbound observations add <user-id> --account <account-id> --surface linkedin-messaging-inbox --kind inbound_reply_received --observed-at 2026-05-28T14:00:00.000Z --summary "Prospect replied in LinkedIn" --json

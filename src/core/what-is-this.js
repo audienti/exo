@@ -132,7 +132,7 @@ export function describeExo() {
         purpose: "Inspect the canonical Audienti-style GTM action catalog that Exo uses for action readiness and execution briefs."
       },
       {
-        command: "exo inbound surfaces/surface/sync show/set/record/observations list/show/add",
+        command: "exo inbound surfaces/surface/sync show/plan/run/set/record/observations list/show/add",
         purpose: "Inspect the canonical inbound truth surfaces, manage per-account sync policy, and read or write normalized inbound observations before live retrieval exists."
       },
       {
@@ -196,6 +196,7 @@ export function describeExo() {
         "exo users list --json",
         "exo inbound surfaces --json",
         "exo inbound sync show <user-id> --json",
+        "exo inbound sync plan <user-id> --mode quick --json",
         "exo inbound review <user-id> --json",
         "exo inbound observations list <user-id> --json",
         "exo inbox --user <user-id> --json",
@@ -308,7 +309,7 @@ export function describeExo() {
     currentLimitations: [
       "No MCP wrapper yet.",
       "No live browser auth probes yet.",
-      "No live inbound retrieval yet. Exo can now store inbound sync policy, last-run sync memory, and normalized inbound observations, but it does not yet pull inbox or LinkedIn state by itself.",
+      "No live inbound retrieval yet. Exo can now store inbound sync policy, last-run sync memory, normalized inbound observations, and governed bulk sync writeback, but it does not yet pull inbox or LinkedIn state by itself.",
       "No profile-to-motion assignment yet.",
       "No automatic company population from motion retrieval yet.",
       "No real Sales Navigator retrieval yet.",

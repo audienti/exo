@@ -63,8 +63,77 @@ Inspect one user's sync coverage:
 ```bash
 exo inbound sync show <user-id>
 exo inbound sync show <user-id> --capability linkedin --json
+exo inbound sync plan <user-id> --mode quick --json
+exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
 exo inbound review <user-id> --json
 ```
+
+Build the actual run contract for a sync pass:
+
+```bash
+exo inbound sync plan <user-id> --mode quick
+exo inbound sync plan <user-id> --mode normal --capability linkedin --json
+exo inbound sync plan <user-id> --mode full --account <account-id>
+```
+
+Modes:
+
+- `quick`: enabled authoritative surfaces only
+- `normal`: enabled authoritative surfaces first, then enabled supplementary surfaces
+- `full`: everything in `normal`, plus disabled optional surfaces that may be worth widening into during a reconciliation pass
+
+Write back one inspected sync pass:
+
+```bash
+exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
+cat ./inbound-sync.json | exo inbound sync run <user-id> --input - --json
+```
+
+Payload shape:
+
+```json
+{
+  "mode": "quick",
+  "accounts": [
+    {
+      "accountId": "linkedin-account-id",
+      "surfaces": [
+        {
+          "surfaceKey": "linkedin-received-invitations",
+          "status": "success",
+          "itemCount": 1,
+          "observedAt": "2026-05-30T14:00:00.000Z",
+          "observations": [
+            {
+              "kind": "connection_request_received",
+              "externalId": "invite-123",
+              "observedAt": "2026-05-30T14:00:00.000Z",
+              "actorName": "Alicia Buyer",
+              "summary": "Alicia Buyer sent us a new inbound connection request."
+            }
+          ]
+        },
+        {
+          "surfaceKey": "linkedin-sent-invitations",
+          "status": "warning",
+          "itemCount": 1,
+          "error": "Saw one pending invite but did not itemize it before leaving the page.",
+          "observations": []
+        }
+      ]
+    }
+  ]
+}
+```
+
+Run rules:
+
+- the payload mode is governed, not decorative; `quick` cannot write back supplementary-only surfaces
+- `success` cannot carry an error
+- `warning` and `failed` must explain what was partial or broken
+- `failed` cannot carry observations
+- if `itemCount` is larger than the itemized observations, Exo preserves that gap so inbound review can call it out
+- `--refresh` returns a fresh inbox/daily/next summary after the writeback lands
 
 Enable or disable surfaces on one account:
 

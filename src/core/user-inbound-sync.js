@@ -2,8 +2,10 @@
 
 import { browserProfileCapabilitySchema } from "../schema/browser-profile.js";
 import { userSchema } from "../schema/user.js";
-import { inboundSyncRunStatusSchema, inboundSurfaceStateSchema } from "../schema/inbound.js";
+import { inboundSyncPlanModeSchema, inboundSyncRunStatusSchema, inboundSurfaceStateSchema } from "../schema/inbound.js";
 import { findInboundSurfaceDefinition, listInboundSurfaceCatalog } from "../lib/inbound-surface-catalog.js";
+
+export const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * @param {unknown} rawUser
@@ -30,6 +32,81 @@ export function buildUserInboundSyncView(rawUser, options = {}) {
       staleSurfaceCount: accounts.reduce((sum, account) => sum + account.staleSurfaceCount, 0),
       failedSurfaceCount: accounts.reduce((sum, account) => sum + account.failedSurfaceCount, 0)
     },
+    accounts
+  };
+}
+
+/**
+ * @param {unknown} rawUser
+ * @param {{
+ *   capability?: import("../schema/browser-profile.js").browserProfileCapabilitySchema._type | null,
+ *   accountId?: string | null,
+ *   mode?: import("../schema/inbound.js").inboundSyncPlanModeSchema._type | null,
+ *   now?: string | null
+ * }} [options]
+ */
+export function buildUserInboundSyncPlan(rawUser, options = {}) {
+  const user = userSchema.parse(rawUser);
+  const capability = options.capability ? browserProfileCapabilitySchema.parse(options.capability) : null;
+  const mode = inboundSyncPlanModeSchema.parse(options.mode ?? "quick");
+  const now = options.now ?? new Date().toISOString();
+  const syncView = buildUserInboundSyncView(user, { capability });
+  const accountId = options.accountId ?? null;
+
+  if (accountId && !syncView.accounts.some((account) => account.accountId === accountId)) {
+    throw new Error(`User account not found: ${accountId}`);
+  }
+
+  const accounts = syncView.accounts
+    .filter((account) => !accountId || account.accountId === accountId)
+    .map((account) => buildAccountSyncPlan(user.id, account, { mode, now }))
+    .filter((account) => account.includedSurfaceCount > 0);
+
+  const includedSurfaces = accounts.flatMap((account) => account.phases.flatMap((phase) => phase.surfaces));
+  const freshnessCounts = includedSurfaces.reduce(
+    (counts, surface) => ({
+      disabled: counts.disabled + (surface.freshnessState === "disabled" ? 1 : 0),
+      failed: counts.failed + (surface.freshnessState === "failed" ? 1 : 0),
+      fresh: counts.fresh + (surface.freshnessState === "fresh" ? 1 : 0),
+      never: counts.never + (surface.freshnessState === "never" ? 1 : 0),
+      stale: counts.stale + (surface.freshnessState === "stale" ? 1 : 0),
+      warning: counts.warning + (surface.freshnessState === "warning" ? 1 : 0)
+    }),
+    { disabled: 0, failed: 0, fresh: 0, never: 0, stale: 0, warning: 0 }
+  );
+  const dueSurfaceCount = freshnessCounts.never + freshnessCounts.failed + freshnessCounts.warning + freshnessCounts.stale;
+  const capabilityLabels = [...new Set(accounts.map((account) => humanizeCapability(account.capability)))];
+
+  return {
+    user: {
+      id: user.id,
+      label: user.label,
+      owner: user.owner
+    },
+    generatedAt: now,
+    mode,
+    headline: buildPlanHeadline(mode, capabilityLabels),
+    counts: {
+      accountCount: accounts.length,
+      includedSurfaceCount: includedSurfaces.length,
+      primarySurfaceCount: includedSurfaces.filter((surface) => surface.phase === "primary").length,
+      secondarySurfaceCount: includedSurfaces.filter((surface) => surface.phase === "secondary").length,
+      optionalSurfaceCount: includedSurfaces.filter((surface) => surface.phase === "optional").length,
+      dueSurfaceCount,
+      freshSurfaceCount: freshnessCounts.fresh,
+      freshness: freshnessCounts
+    },
+    rules: [
+      "Start with the canonical truth surfaces, not the LinkedIn notifications bell.",
+      "Write one observation per real inbound change. Do not stop at surface-level counts when concrete items exist.",
+      "Record every checked surface, even if it was empty, so Exo can distinguish silence from unchecked state.",
+      "After the pass, rerun inbox, daily, and next so Exo recomputes from the fresh truth."
+    ],
+    followUpCommands: [
+      `exo inbox --user ${user.id} --json`,
+      `exo daily --user ${user.id} --json`,
+      "exo next --json"
+    ],
     accounts
   };
 }
@@ -187,16 +264,64 @@ export function recordUserInboundSyncRun(rawUser, input) {
 }
 
 /**
+ * @param {{
+ *   lastRunStatus: "never" | "success" | "warning" | "failed",
+ *   lastObservedAt?: string | null,
+ *   lastSyncedAt?: string | null
+ * }} surface
+ * @param {string} now
+ */
+export function classifyInboundSurfaceFreshness(surface, now) {
+  if (surface.lastRunStatus === "never") {
+    return {
+      reason: "never",
+      dueAt: "1970-01-01T00:00:00.000Z"
+    };
+  }
+
+  if (surface.lastRunStatus === "failed") {
+    return {
+      reason: "failed",
+      dueAt: surface.lastSyncedAt ?? "1970-01-01T00:00:00.000Z"
+    };
+  }
+
+  const freshnessTime = surface.lastObservedAt ?? surface.lastSyncedAt;
+  if (!freshnessTime) {
+    return {
+      reason: "never",
+      dueAt: "1970-01-01T00:00:00.000Z"
+    };
+  }
+
+  const freshnessMs = Date.parse(freshnessTime);
+  const nowMs = Date.parse(now);
+  if (Number.isNaN(freshnessMs) || Number.isNaN(nowMs)) {
+    return null;
+  }
+
+  if (surface.lastRunStatus === "warning" || nowMs - freshnessMs > INBOUND_SYNC_STALE_MS) {
+    return {
+      reason: surface.lastRunStatus === "warning" ? "warning" : "stale",
+      dueAt: freshnessTime
+    };
+  }
+
+  return null;
+}
+
+/**
  * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
  */
 function buildAccountInboundView(account) {
-  const surfaces = materializeSurfaceStates(account).map((state) => {
+  const surfaces = materializeSurfaceStates(account).map((state, index) => {
     const definition = findInboundSurfaceDefinition(state.surfaceKey);
     if (!definition) {
       return null;
     }
 
     return {
+      catalogOrder: index,
       key: definition.key,
       label: definition.label,
       summary: definition.summary,
@@ -227,6 +352,115 @@ function buildAccountInboundView(account) {
 }
 
 /**
+ * @param {string} userId
+ * @param {ReturnType<typeof buildAccountInboundView>} account
+ * @param {{
+ *   mode: import("../schema/inbound.js").inboundSyncPlanModeSchema._type,
+ *   now: string
+ * }} input
+ */
+function buildAccountSyncPlan(userId, account, input) {
+  const surfaces = account.surfaces
+    .map((surface) => buildSurfaceSyncPlan(userId, account, surface, input))
+    .filter(Boolean)
+    .sort(compareSurfaceSyncPlans);
+
+  const phases = ["primary", "secondary", "optional"]
+    .map((phase) => ({
+      key: phase,
+      label: phase === "primary" ? "Check now" : phase === "secondary" ? "Check after primary truth surfaces" : "Optional coverage",
+      surfaces: surfaces.filter((surface) => surface.phase === phase)
+    }))
+    .filter((phase) => phase.surfaces.length);
+
+  return {
+    accountId: account.accountId,
+    capability: account.capability,
+    handle: account.handle,
+    label: account.label,
+    preferred: account.preferred,
+    sourceType: account.sourceType,
+    includedSurfaceCount: surfaces.length,
+    phases
+  };
+}
+
+/**
+ * @param {string} userId
+ * @param {ReturnType<typeof buildAccountInboundView>} account
+ * @param {ReturnType<typeof buildAccountInboundView>["surfaces"][number]} surface
+ * @param {{
+ *   mode: import("../schema/inbound.js").inboundSyncPlanModeSchema._type,
+ *   now: string
+ * }} input
+ */
+function buildSurfaceSyncPlan(userId, account, surface, input) {
+  const modePolicy = classifySurfaceMode(surface, input.mode);
+  if (!modePolicy) {
+    return null;
+  }
+
+  const freshness = surface.enabled ? classifyInboundSurfaceFreshness(surface, input.now) : null;
+  const freshnessState = !surface.enabled
+    ? "disabled"
+    : freshness?.reason ?? "fresh";
+  const freshnessDueAt = freshness?.dueAt ?? null;
+
+  return {
+    key: surface.key,
+    label: surface.label,
+    summary: surface.summary,
+    truthLevel: surface.truthLevel,
+    retrievalMode: surface.retrievalMode,
+    enabled: surface.enabled,
+    phase: modePolicy.phase,
+    phaseRank: modePolicy.phaseRank,
+    catalogOrder: surface.catalogOrder,
+    freshnessState,
+    freshnessDueAt,
+    lastRunStatus: surface.lastRunStatus,
+    lastSyncedAt: surface.lastSyncedAt,
+    lastObservedAt: surface.lastObservedAt,
+    lastItemCount: surface.lastItemCount,
+    lastError: surface.lastError,
+    whyThisPass: describeSurfacePassReason(surface, modePolicy, freshnessState),
+    observationKinds: surface.observationKinds,
+    inspectCommand: `exo inbound surface ${surface.key} --json`,
+    exampleObservationCommand: [
+      `exo inbound observations add ${userId}`,
+      `--account ${account.accountId}`,
+      `--surface ${surface.key}`,
+      `--kind ${surface.observationKinds[0]}`,
+      "--observed-at <iso-datetime>",
+      '--summary "<what changed>"'
+    ].join(" "),
+    successRecordCommand: [
+      `exo inbound sync record ${userId}`,
+      `--account ${account.accountId}`,
+      `--surface ${surface.key}`,
+      "--status success",
+      "--item-count <count>",
+      "--observed-at <iso-datetime>"
+    ].join(" "),
+    warningRecordCommand: [
+      `exo inbound sync record ${userId}`,
+      `--account ${account.accountId}`,
+      `--surface ${surface.key}`,
+      "--status warning",
+      '--error "<what was partial or ambiguous>"',
+      "--item-count <count>"
+    ].join(" "),
+    failedRecordCommand: [
+      `exo inbound sync record ${userId}`,
+      `--account ${account.accountId}`,
+      `--surface ${surface.key}`,
+      "--status failed",
+      '--error "<why the surface could not be checked>"'
+    ].join(" ")
+  };
+}
+
+/**
  * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
  */
 function materializeSurfaceStates(account) {
@@ -244,6 +478,125 @@ function materializeSurfaceStates(account) {
       lastError: configuredStates.get(definition.key)?.lastError ?? null
     })
   );
+}
+
+/**
+ * @param {ReturnType<typeof buildAccountInboundView>["surfaces"][number]} surface
+ * @param {import("../schema/inbound.js").inboundSyncPlanModeSchema._type} mode
+ */
+function classifySurfaceMode(surface, mode) {
+  if (mode === "quick") {
+    if (!surface.enabled || surface.truthLevel !== "authoritative") {
+      return null;
+    }
+
+    return {
+      phase: "primary",
+      phaseRank: 0
+    };
+  }
+
+  if (mode === "normal") {
+    if (!surface.enabled) {
+      return null;
+    }
+
+    return {
+      phase: surface.truthLevel === "authoritative" ? "primary" : "secondary",
+      phaseRank: surface.truthLevel === "authoritative" ? 0 : 1
+    };
+  }
+
+  if (surface.enabled) {
+    return {
+      phase: surface.truthLevel === "authoritative" ? "primary" : "secondary",
+      phaseRank: surface.truthLevel === "authoritative" ? 0 : 1
+    };
+  }
+
+  return {
+    phase: "optional",
+    phaseRank: 2
+  };
+}
+
+/**
+ * @param {ReturnType<typeof buildAccountInboundView>["surfaces"][number]} surface
+ * @param {{ phase: string }} modePolicy
+ * @param {"disabled" | "failed" | "fresh" | "never" | "stale" | "warning"} freshnessState
+ */
+function describeSurfacePassReason(surface, modePolicy, freshnessState) {
+  const freshnessReason = (() => {
+    switch (freshnessState) {
+      case "never":
+        return "This surface has never been checked.";
+      case "failed":
+        return "The last sync failed, so truth here is untrusted.";
+      case "warning":
+        return "The last sync completed with a warning, so truth here may be partial.";
+      case "stale":
+        return "The last sync is older than Exo's freshness window.";
+      case "disabled":
+        return "This surface is disabled in sync policy and should only be included during a full reconciliation pass if you want to widen coverage.";
+      default:
+        return "This surface is currently fresh, but it still belongs in this sync mode.";
+    }
+  })();
+
+  const modeReason = modePolicy.phase === "primary"
+    ? "Treat it as a primary truth surface in this pass."
+    : modePolicy.phase === "secondary"
+      ? "Treat it as secondary coverage after the primary truth surfaces."
+      : "Treat it as optional coverage after the enabled surfaces are done.";
+
+  return `${freshnessReason} ${modeReason}`;
+}
+
+/**
+ * @param {ReturnType<typeof buildSurfaceSyncPlan>} left
+ * @param {ReturnType<typeof buildSurfaceSyncPlan>} right
+ */
+function compareSurfaceSyncPlans(left, right) {
+  return (
+    left.phaseRank - right.phaseRank
+    || left.catalogOrder - right.catalogOrder
+  );
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundSyncPlanModeSchema._type} mode
+ * @param {string[]} capabilityLabels
+ */
+function buildPlanHeadline(mode, capabilityLabels) {
+  const target = capabilityLabels.length ? capabilityLabels.join(" and ") : "connected accounts";
+
+  switch (mode) {
+    case "quick":
+      return `Check the primary ${target} truth surfaces first, write back concrete observations, and refresh the planner immediately.`;
+    case "normal":
+      return `Run the standard ${target} inbound pass: primary truth surfaces first, supplementary coverage second, then refresh the planner.`;
+    default:
+      return `Run a full ${target} reconciliation pass, including optional disabled surfaces if you want wider coverage.`;
+  }
+}
+
+/**
+ * @param {string} capability
+ */
+function humanizeCapability(capability) {
+  switch (capability) {
+    case "linkedin":
+      return "LinkedIn";
+    case "gmail":
+      return "Gmail";
+    case "sales-navigator":
+      return "Sales Navigator";
+    default:
+      return capability
+        .split("-")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+  }
 }
 
 /**

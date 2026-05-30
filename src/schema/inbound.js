@@ -20,6 +20,10 @@ export const inboundRetrievalModeSchema = z.enum(["browser-capture", "connector"
 
 export const inboundSyncRunStatusSchema = z.enum(["never", "success", "warning", "failed"]);
 
+export const inboundSyncPlanModeSchema = z.enum(["quick", "normal", "full"]);
+
+export const inboundSyncWriteStatusSchema = z.enum(["success", "warning", "failed"]);
+
 export const inboundObservationKindSchema = z.enum([
   "connection_request_pending",
   "connection_request_accepted",
@@ -83,4 +87,41 @@ export const inboundObservationSchema = z.object({
   companyId: z.string().min(1).nullable().default(null),
   prospectId: z.string().min(1).nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null)
+});
+
+export const inboundSyncRunObservationInputSchema = z.object({
+  kind: inboundObservationKindSchema,
+  observedAt: z.string().datetime(),
+  summary: z.string().trim().min(1).max(280),
+  externalId: z.string().trim().min(1).nullable().default(null),
+  actorName: z.string().trim().min(1).nullable().default(null),
+  actorTitle: z.string().trim().min(1).nullable().default(null),
+  actorCompanyName: z.string().trim().min(1).nullable().default(null),
+  actorHandle: z.string().trim().min(1).nullable().default(null),
+  actorProfileUrl: z.string().url().nullable().default(null),
+  threadUrl: z.string().url().nullable().default(null),
+  sourceUrl: z.string().url().nullable().default(null),
+  motionId: z.string().min(1).nullable().default(null),
+  companyId: z.string().min(1).nullable().default(null),
+  prospectId: z.string().min(1).nullable().default(null),
+  notes: z.string().trim().min(1).nullable().default(null)
+});
+
+export const inboundSyncRunSurfaceInputSchema = z.object({
+  surfaceKey: inboundSurfaceKeySchema,
+  status: inboundSyncWriteStatusSchema,
+  observedAt: z.string().datetime().nullable().default(null),
+  itemCount: z.coerce.number().int().min(0).nullable().default(null),
+  error: z.string().trim().min(1).nullable().default(null),
+  observations: z.array(inboundSyncRunObservationInputSchema).default([])
+});
+
+export const inboundSyncRunAccountInputSchema = z.object({
+  accountId: z.string().min(1),
+  surfaces: z.array(inboundSyncRunSurfaceInputSchema).min(1)
+});
+
+export const inboundSyncRunPayloadSchema = z.object({
+  mode: inboundSyncPlanModeSchema.default("quick"),
+  accounts: z.array(inboundSyncRunAccountInputSchema).min(1)
 });

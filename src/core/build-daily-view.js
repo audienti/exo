@@ -2,7 +2,7 @@
 
 import { buildInboxView } from "./build-inbox-view.js";
 import { buildInboundReviewView } from "./build-inbound-review-view.js";
-import { buildUserInboundSyncView } from "./user-inbound-sync.js";
+import { buildUserInboundSyncView, classifyInboundSurfaceFreshness } from "./user-inbound-sync.js";
 import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
@@ -12,8 +12,6 @@ import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
 import { hasUsableEmailFallback } from "../lib/prospect-contacts.js";
 import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
 import { buildOutboundCapacityView } from "./build-outbound-capacity-view.js";
-
-const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * @param {unknown} rawUser
@@ -380,7 +378,7 @@ function buildSyncPlannerItem({ user, motions, assignedCompanyIds, observationCo
         .filter((surface) => surface.enabled && surface.truthLevel === "authoritative")
         .map((surface) => ({
           ...surface,
-          freshness: classifySurfaceFreshness(surface, now)
+          freshness: classifyInboundSurfaceFreshness(surface, now)
         }))
         .filter((surface) => surface.freshness);
 
@@ -813,45 +811,6 @@ function inferCadenceGuidanceKey(cadence, waiting) {
  * }} surface
  * @param {string} now
  */
-function classifySurfaceFreshness(surface, now) {
-  if (surface.lastRunStatus === "never") {
-    return {
-      reason: "never",
-      dueAt: "1970-01-01T00:00:00.000Z"
-    };
-  }
-
-  if (surface.lastRunStatus === "failed") {
-    return {
-      reason: "failed",
-      dueAt: surface.lastSyncedAt ?? "1970-01-01T00:00:00.000Z"
-    };
-  }
-
-  const freshnessTime = surface.lastObservedAt ?? surface.lastSyncedAt;
-  if (!freshnessTime) {
-    return {
-      reason: "never",
-      dueAt: "1970-01-01T00:00:00.000Z"
-    };
-  }
-
-  const freshnessMs = Date.parse(freshnessTime);
-  const nowMs = Date.parse(now);
-  if (Number.isNaN(freshnessMs) || Number.isNaN(nowMs)) {
-    return null;
-  }
-
-  if (surface.lastRunStatus === "warning" || nowMs - freshnessMs > INBOUND_SYNC_STALE_MS) {
-    return {
-      reason: surface.lastRunStatus === "warning" ? "warning" : "stale",
-      dueAt: freshnessTime
-    };
-  }
-
-  return null;
-}
-
 /**
  * @param {ReturnType<typeof buildDailyItem>} left
  * @param {ReturnType<typeof buildDailyItem>} right
