@@ -51,6 +51,7 @@ Common patterns:
   exo inbound surfaces --json
   exo inbound sync show <user-id> --json
   exo inbound sync plan <user-id> --mode quick --json
+  exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --apply --refresh --json
   exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
   exo inbound review <user-id> --json
   exo inbound observations list <user-id> --json

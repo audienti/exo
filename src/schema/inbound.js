@@ -125,3 +125,30 @@ export const inboundSyncRunPayloadSchema = z.object({
   mode: inboundSyncPlanModeSchema.default("quick"),
   accounts: z.array(inboundSyncRunAccountInputSchema).min(1)
 });
+
+export const gmailInboundThreadCaptureSchema = z.object({
+  threadId: z.string().trim().min(1),
+  kind: z.enum(["email_reply_received", "email_thread_updated"]).default("email_thread_updated"),
+  observedAt: z.string().datetime(),
+  summary: z.string().trim().min(1).max(280),
+  subject: z.string().trim().min(1).nullable().default(null),
+  fromName: z.string().trim().min(1).nullable().default(null),
+  fromEmail: z.string().trim().min(1).nullable().default(null),
+  actorTitle: z.string().trim().min(1).nullable().default(null),
+  actorCompanyName: z.string().trim().min(1).nullable().default(null),
+  threadUrl: z.string().url().nullable().default(null),
+  sourceUrl: z.string().url().nullable().default(null),
+  motionId: z.string().min(1).nullable().default(null),
+  companyId: z.string().min(1).nullable().default(null),
+  prospectId: z.string().min(1).nullable().default(null),
+  notes: z.string().trim().min(1).nullable().default(null)
+});
+
+export const gmailInboundSyncCaptureSchema = z.object({
+  mode: inboundSyncPlanModeSchema.default("quick"),
+  status: inboundSyncWriteStatusSchema.default("success"),
+  checkedAt: z.string().datetime().nullable().default(null),
+  itemCount: z.coerce.number().int().min(0).nullable().default(null),
+  error: z.string().trim().min(1).nullable().default(null),
+  threads: z.array(gmailInboundThreadCaptureSchema).default([])
+});

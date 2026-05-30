@@ -135,6 +135,44 @@ Run rules:
 - if `itemCount` is larger than the itemized observations, Exo preserves that gap so inbound review can call it out
 - `--refresh` returns a fresh inbox/daily/next summary after the writeback lands
 
+First producer slice: Gmail capture
+
+```bash
+exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --json
+exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --apply --refresh --json
+```
+
+Gmail capture shape:
+
+```json
+{
+  "mode": "quick",
+  "status": "success",
+  "checkedAt": "2026-05-30T14:05:00.000Z",
+  "threads": [
+    {
+      "threadId": "189f7d0c123",
+      "kind": "email_reply_received",
+      "observedAt": "2026-05-30T14:02:00.000Z",
+      "fromName": "Alicia Buyer",
+      "fromEmail": "alicia@buyer.example",
+      "subject": "Re: Risk workflow question",
+      "summary": "Alicia replied by email asking for a short overview of the workflow.",
+      "motionId": "motion-id",
+      "companyId": "company-id",
+      "prospectId": "prospect-id"
+    }
+  ]
+}
+```
+
+Gmail capture rules:
+
+- this is still agent-supplied live truth, not a built-in Gmail retriever
+- `gmail` builds the governed `sync run` payload for `gmail-inbox-threads`
+- `--apply` immediately writes the payload back through the generic sync-run engine
+- `--refresh` only makes sense with `--apply`, and returns fresh inbox/daily/next summaries
+
 Enable or disable surfaces on one account:
 
 ```bash

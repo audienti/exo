@@ -2261,6 +2261,110 @@ test("inbound sync run writes back one governed pass and refreshes inbox, daily,
   }
 });
 
+test("inbound sync gmail turns one Gmail capture into governed writeback and can apply it", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-"));
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "gmail-user@example.com",
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const capturePath = path.join(tempDir, "gmail-capture.json");
+    fs.writeFileSync(
+      capturePath,
+      JSON.stringify(
+        {
+          mode: "quick",
+          status: "success",
+          checkedAt: "2026-05-30T14:05:00.000Z",
+          threads: [
+            {
+              threadId: "thread-789",
+              kind: "email_reply_received",
+              observedAt: "2026-05-30T14:02:00.000Z",
+              fromName: "Alicia Buyer",
+              fromEmail: "alicia@buyer.example",
+              subject: "Re: Risk workflow question",
+              summary: "Alicia replied by email asking for a short overview of the workflow."
+            }
+          ]
+        },
+        null,
+        2
+      )
+    );
+
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "inbound", "sync", "gmail", user.id, "--account", gmailAccountId, "--input", capturePath, "--apply", "--refresh", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    assert.equal(result.capture.status, "success");
+    assert.equal(result.capture.threadCount, 1);
+    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
+    assert.equal(result.applied.counts.observationCount, 1);
+    assert.equal(result.applied.counts.createdObservationCount, 1);
+    assert.equal(result.applied.counts.successSurfaceCount, 1);
+    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
+    assert.equal(result.applied.refreshed.inbox.topItem.summary, "Alicia replied by email asking for a short overview of the workflow.");
+
+    const syncView = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const gmailSurface = syncView.accounts
+      .find((account) => account.accountId === gmailAccountId)
+      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
+    assert.equal(gmailSurface.lastRunStatus, "success");
+    assert.equal(gmailSurface.lastItemCount, 1);
+    assert.equal(gmailSurface.lastObservedAt, "2026-05-30T14:05:00.000Z");
+
+    const observations = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(observations.counts.observationCount, 1);
+    assert.equal(observations.observations[0].kind, "email_reply_received");
+    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound observations can be written back as normalized state without live retrieval", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-observations-"));
   const userDataDir = path.join(tempDir, "Chrome");
@@ -10671,6 +10775,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   assert.match(inboundHelp, /exo inbound surfaces/);
   assert.match(inboundHelp, /exo inbound sync show <user-id>/);
   assert.match(inboundHelp, /exo inbound sync plan <user-id> --mode quick/);
+  assert.match(inboundHelp, /exo inbound sync gmail <user-id> --account <account-id> --input/);
   assert.match(inboundHelp, /exo inbound sync run <user-id> --input/);
   assert.match(inboundHelp, /exo inbound observations list <user-id>/);
 
@@ -10732,7 +10837,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected canonical action catalog surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/run/set/record/observations list/show/add"),
+    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/gmail/run/set/record/observations list/show/add"),
     "expected inbound read/write surface to be listed in current capabilities"
   );
   assert.ok(
