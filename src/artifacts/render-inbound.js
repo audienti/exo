@@ -117,6 +117,310 @@ export function renderUserInboundSync(result) {
 /**
  * @param {{
  *   user: { label: string, owner: string | null },
+ *   generatedAt: string,
+ *   mode: "quick" | "normal" | "full",
+ *   headline: string,
+ *   counts: {
+ *     accountCount: number,
+ *     includedSurfaceCount: number,
+ *     primarySurfaceCount: number,
+ *     secondarySurfaceCount: number,
+ *     optionalSurfaceCount: number,
+ *     dueSurfaceCount: number,
+ *     freshSurfaceCount: number,
+ *     freshness: {
+ *       disabled: number,
+ *       failed: number,
+ *       fresh: number,
+ *       never: number,
+ *       stale: number,
+ *       warning: number
+ *     }
+ *   },
+ *   rules: string[],
+ *   followUpCommands: string[],
+ *   accounts: Array<{
+ *     accountId: string,
+ *     capability: string,
+ *     handle: string,
+ *     preferred: boolean,
+ *     sourceType: string,
+ *     includedSurfaceCount: number,
+ *     phases: Array<{
+ *       key: string,
+ *       label: string,
+ *       surfaces: Array<{
+ *         key: string,
+ *         label: string,
+ *         summary: string,
+ *         truthLevel: string,
+ *         retrievalMode: string,
+ *         freshnessState: string,
+ *         lastRunStatus: string,
+ *         lastSyncedAt: string | null,
+ *         lastObservedAt: string | null,
+ *         lastItemCount: number | null,
+ *         lastError: string | null,
+ *         whyThisPass: string,
+ *         observationKinds: string[],
+ *         inspectCommand: string,
+ *         exampleObservationCommand: string,
+ *         successRecordCommand: string,
+ *         warningRecordCommand: string,
+ *         failedRecordCommand: string
+ *       }>
+ *     }>
+ *   }>
+ * }} result
+ */
+export function renderInboundSyncPlan(result) {
+  const lines = [
+    `Inbound Sync Plan: ${result.user.label}  [${result.mode}]`,
+    `Owner: ${result.user.owner ?? "unknown"}`,
+    `Generated: ${result.generatedAt}`,
+    `Headline: ${result.headline}`,
+    `Accounts: ${result.counts.accountCount}`,
+    `Included Surfaces: ${result.counts.includedSurfaceCount}`,
+    `Primary: ${result.counts.primarySurfaceCount}  Secondary: ${result.counts.secondarySurfaceCount}  Optional: ${result.counts.optionalSurfaceCount}`,
+    `Needs Refresh: ${result.counts.dueSurfaceCount}  Fresh: ${result.counts.freshSurfaceCount}`,
+    `Freshness Detail: never=${result.counts.freshness.never} failed=${result.counts.freshness.failed} warning=${result.counts.freshness.warning} stale=${result.counts.freshness.stale} disabled=${result.counts.freshness.disabled}`
+  ];
+
+  if (result.rules.length) {
+    lines.push("");
+    lines.push("Rules:");
+    for (const rule of result.rules) {
+      lines.push(`  - ${rule}`);
+    }
+  }
+
+  for (const account of result.accounts) {
+    lines.push("");
+    lines.push(
+      `Account: ${account.capability}:${account.handle}${account.preferred ? " (preferred)" : ""}  source:${account.sourceType}  surfaces:${account.includedSurfaceCount}`
+    );
+
+    for (const phase of account.phases) {
+      lines.push(`  ${phase.label}:`);
+
+      for (const [index, surface] of phase.surfaces.entries()) {
+        lines.push(
+          `    ${index + 1}. ${surface.label}  [${surface.truthLevel} / ${surface.retrievalMode} / ${surface.freshnessState}]`
+        );
+        lines.push(`       ${surface.summary}`);
+        lines.push(`       Why: ${surface.whyThisPass}`);
+        lines.push(
+          `       Last: status=${surface.lastRunStatus} synced=${surface.lastSyncedAt ?? "never"} observed=${surface.lastObservedAt ?? "none"} items=${surface.lastItemCount ?? "unknown"}`
+        );
+        if (surface.lastError) {
+          lines.push(`       Error: ${surface.lastError}`);
+        }
+        lines.push(`       Kinds: ${surface.observationKinds.join(", ")}`);
+        lines.push(`       Inspect: ${surface.inspectCommand}`);
+        lines.push(`       Add observation: ${surface.exampleObservationCommand}`);
+        lines.push(`       Record success: ${surface.successRecordCommand}`);
+        lines.push(`       Record warning: ${surface.warningRecordCommand}`);
+        lines.push(`       Record failure: ${surface.failedRecordCommand}`);
+      }
+    }
+  }
+
+  if (result.followUpCommands.length) {
+    lines.push("");
+    lines.push("After The Pass:");
+    for (const command of result.followUpCommands) {
+      lines.push(`  - ${command}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {{
+ *   user: { label: string, owner: string | null },
+ *   processedAt: string,
+ *   mode: "quick" | "normal" | "full",
+ *   counts: {
+ *     accountCount: number,
+ *     checkedSurfaceCount: number,
+ *     successSurfaceCount: number,
+ *     warningSurfaceCount: number,
+ *     failedSurfaceCount: number,
+ *     observationCount: number,
+ *     createdObservationCount: number,
+ *     updatedObservationCount: number,
+ *     itemizationGapCount: number
+ *   },
+ *   followUpCommands: string[],
+ *   accounts: Array<{
+ *     accountId: string,
+ *     capability: string,
+ *     handle: string,
+ *     preferred: boolean,
+ *     sourceType: string,
+ *     checkedSurfaceCount: number,
+ *     observationCount: number,
+ *     surfaces: Array<{
+ *       surfaceKey: string,
+ *       status: string,
+ *       observedAt: string | null,
+ *       itemCount: number | null,
+ *       error: string | null,
+ *       observationCount: number,
+ *       itemizationGapCount: number
+ *     }>
+ *   }>,
+ *   refreshed?: null | {
+ *     inbox: {
+ *       itemCount: number,
+ *       highPriorityCount: number,
+ *       uncheckedSurfaceCount: number,
+ *       topItem: null | {
+ *         summary: string,
+ *         recommendedAction: string,
+ *         priority: string,
+ *         status: string
+ *       }
+ *     },
+ *     daily: {
+ *       itemCount: number,
+ *       dueNowCount: number,
+ *       waitingCount: number,
+ *       topItem: null | {
+ *         recommendedAction: string,
+ *         priority: string,
+ *         state: string,
+ *         cadenceEffect: string
+ *       }
+ *     },
+ *     next: {
+ *       headline: string,
+ *       nextMove: string,
+ *       why: string | null,
+ *       source: string,
+ *       status: {
+ *         kind: string | null,
+ *         priority: string | null,
+ *         effect: string | null,
+ *         dueAt: string | null
+ *       }
+ *     }
+ *   }
+ * }} result
+ */
+export function renderInboundSyncRun(result) {
+  const lines = [
+    `Inbound Sync Run: ${result.user.label}  [${result.mode}]`,
+    `Owner: ${result.user.owner ?? "unknown"}`,
+    `Processed: ${result.processedAt}`,
+    `Accounts: ${result.counts.accountCount}`,
+    `Checked Surfaces: ${result.counts.checkedSurfaceCount}`,
+    `Success: ${result.counts.successSurfaceCount}  Warning: ${result.counts.warningSurfaceCount}  Failed: ${result.counts.failedSurfaceCount}`,
+    `Observations: ${result.counts.observationCount}  Created: ${result.counts.createdObservationCount}  Updated: ${result.counts.updatedObservationCount}`,
+    `Itemization Gaps: ${result.counts.itemizationGapCount}`
+  ];
+
+  for (const account of result.accounts) {
+    lines.push("");
+    lines.push(
+      `Account: ${account.capability}:${account.handle}${account.preferred ? " (preferred)" : ""}  source:${account.sourceType}  checked:${account.checkedSurfaceCount}  observations:${account.observationCount}`
+    );
+
+    for (const surface of account.surfaces) {
+      lines.push(
+        `  - ${surface.surfaceKey}  status:${surface.status}  items:${surface.itemCount ?? "unknown"}  observations:${surface.observationCount}`
+      );
+      if (surface.observedAt) {
+        lines.push(`    observedAt:${surface.observedAt}`);
+      }
+      if (surface.itemizationGapCount) {
+        lines.push(`    itemizationGap:${surface.itemizationGapCount}`);
+      }
+      if (surface.error) {
+        lines.push(`    error:${surface.error}`);
+      }
+    }
+  }
+
+  if (result.refreshed) {
+    lines.push("");
+    lines.push("Refreshed:");
+    lines.push(
+      `  Inbox: items=${result.refreshed.inbox.itemCount} high=${result.refreshed.inbox.highPriorityCount} unchecked=${result.refreshed.inbox.uncheckedSurfaceCount}`
+    );
+    if (result.refreshed.inbox.topItem) {
+      lines.push(`  Inbox Top: ${result.refreshed.inbox.topItem.summary}`);
+      lines.push(`  Inbox Next: ${result.refreshed.inbox.topItem.recommendedAction}`);
+    }
+    lines.push(
+      `  Daily: items=${result.refreshed.daily.itemCount} due=${result.refreshed.daily.dueNowCount} waiting=${result.refreshed.daily.waitingCount}`
+    );
+    if (result.refreshed.daily.topItem) {
+      lines.push(`  Daily Next: ${result.refreshed.daily.topItem.recommendedAction}`);
+    }
+    lines.push(`  Next: ${result.refreshed.next.nextMove}`);
+    if (result.refreshed.next.why) {
+      lines.push(`  Next Why: ${result.refreshed.next.why}`);
+    }
+  }
+
+  if (result.followUpCommands.length) {
+    lines.push("");
+    lines.push("Follow Up:");
+    for (const command of result.followUpCommands) {
+      lines.push(`  - ${command}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {{
+ *   counts: {
+ *     cueCount: number,
+ *     openCount: number,
+ *     resolvedCount: number,
+ *     dismissedCount: number
+ *   },
+ *   cues: Array<{
+ *     id: string,
+ *     capability: string,
+ *     surfaceKey: string,
+ *     kind: string,
+ *     source: string,
+ *     status: string,
+ *     observedAt: string,
+ *     resolvedAt: string | null,
+ *     summary: string
+ *   }>
+ * }} result
+ */
+export function renderInboundCueList(result) {
+  const lines = [
+    "Inbound Cues",
+    `Total: ${result.counts.cueCount}`,
+    `Open: ${result.counts.openCount}  Resolved: ${result.counts.resolvedCount}  Dismissed: ${result.counts.dismissedCount}`
+  ];
+
+  if (!result.cues.length) {
+    lines.push("No inbound cues.");
+    return lines.join("\n");
+  }
+
+  for (const cue of result.cues) {
+    lines.push(`- ${cue.id}  ${cue.capability}:${cue.surfaceKey}  [${cue.kind} / ${cue.source} / ${cue.status}]`);
+    lines.push(`  Observed: ${cue.observedAt}  Resolved: ${cue.resolvedAt ?? "open"}`);
+    lines.push(`  ${cue.summary}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {{
+ *   user: { label: string, owner: string | null },
  *   counts: { observationCount: number, accountCount: number, surfaceCount: number },
  *   observations: Array<{
  *     id: string,

@@ -3,6 +3,7 @@
 
 import { addBrowserProfile } from "../../core/add-browser-profile.js";
 import { claimBrowserProfile } from "../../core/claim-browser-profile.js";
+import { probeBrowserProfileAuth } from "../../core/probe-browser-profile-auth.js";
 import { retestBrowserProfile } from "../../core/retest-browser-profile.js";
 import {
   deleteBrowserProfile,
@@ -56,6 +57,7 @@ Typical flow:
   exo profiles capabilities --json
   exo profiles resolve --capability linkedin --json
   exo profiles test <profile-id>
+  exo profiles auth <profile-id> --runtime codex --json
 `
     );
 
@@ -574,6 +576,53 @@ Examples:
       }
 
       const updated = retestBrowserProfile(raw);
+      updateBrowserProfile(updated);
+
+      if (options.json) {
+        console.log(JSON.stringify(updated, null, 2));
+        return;
+      }
+
+      console.log(renderBrowserProfileSummary(updated));
+    });
+
+  profiles
+    .command("auth")
+    .description("Probe live signed-in readiness for a registered browser profile and persist the latest auth result.")
+    .argument("<profile-id>", "Browser profile identifier")
+    .requiredOption("--runtime <runtime>", "codex | claude")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Use this command before browser-backed work when structural profile checks are not enough.
+
+It currently verifies live signed-in readiness for the declared browser-backed capabilities on a trusted Chrome profile through the selected runtime.
+
+Examples:
+  exo profiles auth <profile-id> --runtime codex
+  exo profiles auth <profile-id> --runtime claude --json
+`
+    )
+    .action(async (profileId, options) => {
+      const raw = findBrowserProfileById(profileId);
+      if (!raw) {
+        console.error(`Browser profile not found: ${profileId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let updated;
+      try {
+        updated = await probeBrowserProfileAuth(raw, {
+          runtime: options.runtime
+        });
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
       updateBrowserProfile(updated);
 
       if (options.json) {

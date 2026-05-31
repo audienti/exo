@@ -67,7 +67,9 @@ export function buildMotionProspectView(rawMotion, options = {}) {
             id: selectedProspect.companyId,
             name: selectedProspect.companyName,
             websiteUrl: selectedProspect.websiteUrl,
-            linkedinCompanyUrl: selectedProspect.linkedinCompanyUrl
+            linkedinCompanyUrl: selectedProspect.linkedinCompanyUrl,
+            logoSourceUrl: selectedProspect.companyLogoSourceUrl,
+            logoUrl: selectedProspect.companyLogoUrl
           },
           prospect: selectedProspect,
           signalMatches: selectedProspect.signalMatches,
@@ -102,6 +104,8 @@ function buildProspectView(account, prospect) {
     companyName: account.companyName,
     websiteUrl: account.websiteUrl,
     linkedinCompanyUrl: account.linkedinCompanyUrl,
+    companyLogoSourceUrl: account.companyLogoSourceUrl,
+    companyLogoUrl: account.companyLogoUrl,
     prospectId: prospect.id,
     name: prospect.name,
     title: prospect.title,
@@ -110,6 +114,8 @@ function buildProspectView(account, prospect) {
     fitConfidence: prospect.fitConfidence,
     whyRelevant: prospect.whyRelevant,
     linkedinProfileUrl: prospect.linkedinProfileUrl,
+    avatarSourceUrl: prospect.avatarSourceUrl,
+    avatarUrl: prospect.avatarUrl,
     email: prospect.email,
     hasEmailFallback: hasUsableEmailFallback(prospect),
     bestEmailContactPoint: selectBestEmailContactPoint(prospect),

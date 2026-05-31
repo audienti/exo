@@ -33,6 +33,15 @@ export const browserProfileCapabilityCheckSchema = z.object({
   details: z.string().min(1)
 });
 
+export const browserProfileAuthCapabilityCheckSchema = z.object({
+  capability: browserProfileCapabilitySchema,
+  verified: z.boolean(),
+  details: z.string().min(1),
+  expectedHandle: z.string().trim().min(1).nullable().default(null),
+  detectedHandle: z.string().trim().min(1).nullable().default(null),
+  sourceUrl: z.string().trim().min(1).nullable().default(null)
+});
+
 export const browserProfileIdentityScopeSchema = z.enum(["unknown", "work", "personal", "shared"]);
 
 export const browserProfileIdentityAccountSchema = z.object({
@@ -69,6 +78,15 @@ export const browserProfileTestResultSchema = z.object({
   warnings: z.array(z.string()).default([])
 });
 
+export const browserProfileAuthProbeResultSchema = z.object({
+  status: browserProfileStatusSchema,
+  summary: z.string().min(1),
+  runtime: z.string().trim().min(1),
+  checkedAt: z.string().datetime(),
+  capabilityChecks: z.array(browserProfileAuthCapabilityCheckSchema).default([]),
+  warnings: z.array(z.string()).default([])
+});
+
 export const browserProfileSchema = z.object({
   id: z.string().min(1),
   createdAt: z.string().datetime(),
@@ -98,5 +116,7 @@ export const browserProfileSchema = z.object({
   notes: z.string().nullable(),
   status: browserProfileStatusSchema,
   lastTestedAt: z.string().datetime().nullable(),
-  lastTestResult: browserProfileTestResultSchema.nullable()
+  lastTestResult: browserProfileTestResultSchema.nullable(),
+  lastAuthProbedAt: z.string().datetime().nullable().default(null),
+  lastAuthProbeResult: browserProfileAuthProbeResultSchema.nullable().default(null)
 });

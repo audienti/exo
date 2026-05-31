@@ -1,0 +1,3363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exo Motion Workspace Projection</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090b0f;
+      --panel: #11141a;
+      --panel-strong: #171b23;
+      --panel-soft: #0d1015;
+      --line: rgba(255, 255, 255, 0.09);
+      --line-strong: rgba(255, 255, 255, 0.16);
+      --text: #eef2f8;
+      --muted: #98a4b5;
+      --cold: #667387;
+      --accent: #346bff;
+      --accent-soft: rgba(52, 107, 255, 0.16);
+      --good: #33c28c;
+      --good-soft: rgba(51, 194, 140, 0.14);
+      --warn: #f0a44d;
+      --warn-soft: rgba(240, 164, 77, 0.14);
+      --drift: #f06f7e;
+      --drift-soft: rgba(240, 111, 126, 0.14);
+      --disabled: #778294;
+      --disabled-soft: rgba(119, 130, 148, 0.16);
+      --radius: 20px;
+      --radius-sm: 13px;
+      --shadow: 0 22px 60px rgba(0, 0, 0, 0.32);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background:
+        radial-gradient(circle at top left, rgba(52, 107, 255, 0.18), transparent 26%),
+        linear-gradient(180deg, #090b0f 0%, #07090d 100%);
+      color: var(--text);
+      font-family: "Manrope", sans-serif;
+    }
+
+    body {
+      padding: 24px;
+    }
+
+    h1, h2, h3, h4, p, ul {
+      margin: 0;
+    }
+
+    ul {
+      padding-left: 18px;
+    }
+
+    code {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.9em;
+    }
+
+    .page-shell {
+      max-width: 1600px;
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+
+    .hero,
+    .section,
+    .rail-panel,
+    .gap-section {
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(180deg, rgba(18, 22, 28, 0.98), rgba(12, 15, 21, 0.98));
+      box-shadow: var(--shadow);
+    }
+
+    .hero {
+      padding: 28px;
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(320px, 1fr);
+      gap: 24px;
+      border-color: rgba(52, 107, 255, 0.2);
+    }
+
+    .hero h1 {
+      margin-top: 10px;
+      font-size: clamp(2.1rem, 4vw, 3.2rem);
+      line-height: 0.98;
+      letter-spacing: -0.05em;
+      max-width: 12ch;
+    }
+
+    .hero-copy {
+      color: var(--muted);
+      max-width: 70ch;
+      line-height: 1.65;
+      margin-top: 14px;
+    }
+
+    .hero-metrics {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .metric-card {
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.012));
+    }
+
+    .metric-card span,
+    .note-card span,
+    .surface-field span,
+    .kv-grid span,
+    .mini-metrics span,
+    .rail-meta,
+    .mini-eyebrow,
+    .section-eyebrow {
+      display: block;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .metric-card strong,
+    .note-card strong,
+    .surface-field strong,
+    .kv-grid strong,
+    .lane-head strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 1rem;
+    }
+
+    .eyebrow,
+    .mini-eyebrow,
+    .section-eyebrow {
+      color: var(--accent);
+      font-family: "IBM Plex Mono", monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+    }
+
+    .eyebrow {
+      font-size: 0.78rem;
+    }
+
+    .mini-eyebrow,
+    .section-eyebrow {
+      font-size: 0.7rem;
+    }
+
+    .content-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .main-column {
+      display: grid;
+      gap: 18px;
+    }
+
+    .section {
+      padding: 24px;
+    }
+
+    .section-head,
+    .subsection-head,
+    .account-truth-head,
+    .motion-card-head,
+    .surface-card-head,
+    .prep-card-head,
+    .engagement-card-head,
+    .rail-card-head,
+    .lane-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .section-head h2,
+    .subsection-head h3 {
+      margin-top: 10px;
+      letter-spacing: -0.04em;
+    }
+
+    .section-head p,
+    .subsection-head p,
+    .motion-card p,
+    .prep-card p,
+    .engagement-card p,
+    .surface-summary,
+    .surface-action,
+    .gap-card p,
+    .rail-card p {
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .summary-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .summary-chip {
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.022);
+    }
+
+    .summary-chip strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 1rem;
+    }
+
+    .truth-stack,
+    .motion-grid,
+    .gap-grid {
+      display: grid;
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .account-truth-group {
+      padding: 18px;
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.018);
+    }
+
+    .account-truth-head h3,
+    .motion-card h3 {
+      margin-top: 8px;
+      font-size: 1.3rem;
+      letter-spacing: -0.04em;
+    }
+
+    .surface-grid,
+    .motion-grid {
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    }
+
+    .surface-grid {
+      display: grid;
+      gap: 12px;
+      margin-top: 14px;
+    }
+
+    .surface-card,
+    .motion-card,
+    .prep-card,
+    .engagement-card,
+    .rail-card,
+    .gap-card,
+    .note-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(18, 21, 28, 0.98), rgba(13, 16, 21, 0.98));
+    }
+
+    .surface-card,
+    .motion-card,
+    .prep-card,
+    .engagement-card,
+    .rail-card,
+    .gap-card {
+      padding: 16px;
+    }
+
+    .tone-danger {
+      border-color: rgba(239, 139, 139, 0.36);
+      background: linear-gradient(180deg, rgba(52, 24, 30, 0.82), rgba(18, 12, 15, 0.98));
+    }
+
+    .tone-warning {
+      border-color: rgba(240, 164, 77, 0.32);
+      background: linear-gradient(180deg, rgba(55, 35, 20, 0.74), rgba(18, 13, 10, 0.98));
+    }
+
+    .tone-accent {
+      border-color: rgba(52, 107, 255, 0.32);
+      background: linear-gradient(180deg, rgba(20, 35, 68, 0.8), rgba(12, 16, 26, 0.98));
+    }
+
+    .tone-good {
+      border-color: rgba(51, 194, 140, 0.3);
+      background: linear-gradient(180deg, rgba(18, 43, 35, 0.74), rgba(11, 16, 15, 0.98));
+    }
+
+    .tone-disabled {
+      opacity: 0.72;
+      border-color: rgba(108, 119, 133, 0.25);
+    }
+
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      font-size: 0.72rem;
+      line-height: 1;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-family: "IBM Plex Mono", monospace;
+    }
+
+    .chip-good {
+      color: var(--good);
+      border-color: rgba(123, 220, 177, 0.26);
+      background: var(--good-soft);
+    }
+
+    .chip-warning {
+      color: var(--warn);
+      border-color: rgba(214, 155, 109, 0.26);
+      background: var(--warn-soft);
+    }
+
+    .chip-danger {
+      color: var(--drift);
+      border-color: rgba(239, 139, 139, 0.26);
+      background: var(--drift-soft);
+    }
+
+    .chip-accent {
+      color: var(--accent);
+      border-color: rgba(52, 107, 255, 0.26);
+      background: var(--accent-soft);
+    }
+
+    .chip-quiet {
+      color: var(--muted);
+      border-color: rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .chip-disabled {
+      color: var(--disabled);
+      border-color: rgba(108, 119, 133, 0.24);
+      background: var(--disabled-soft);
+    }
+
+    .surface-card h4,
+    .prep-card h4,
+    .engagement-card h4,
+    .rail-card h4,
+    .gap-card h4 {
+      margin-top: 8px;
+      font-size: 1rem;
+      letter-spacing: -0.03em;
+    }
+
+    .surface-summary,
+    .surface-action,
+    .tight-copy {
+      margin-top: 12px;
+    }
+
+    .entity-row {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      min-width: 0;
+    }
+
+    .entity-copy {
+      min-width: 0;
+    }
+
+    .entity-copy h4 {
+      margin-top: 6px;
+    }
+
+    .entity-subline {
+      margin-top: 6px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .entity-support-row {
+      margin-top: 14px;
+    }
+
+    .avatar {
+      position: relative;
+      flex: 0 0 auto;
+      width: 46px;
+      height: 46px;
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #131821;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+    }
+
+    .avatar-company {
+      width: 40px;
+      height: 40px;
+      border-radius: 14px;
+    }
+
+    .avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .avatar-fallback {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .avatar-theme-0 { background: linear-gradient(135deg, #355cff, #182a60); }
+    .avatar-theme-1 { background: linear-gradient(135deg, #00a7e1, #114168); }
+    .avatar-theme-2 { background: linear-gradient(135deg, #7f4dff, #342163); }
+    .avatar-theme-3 { background: linear-gradient(135deg, #13b57c, #163f38); }
+    .avatar-theme-4 { background: linear-gradient(135deg, #ef8c3d, #5b2e12); }
+    .avatar-theme-5 { background: linear-gradient(135deg, #f05f7a, #5e1e31); }
+
+    .company-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .company-pill-copy {
+      min-width: 0;
+    }
+
+    .company-pill-copy strong,
+    .company-pill-copy span {
+      display: block;
+    }
+
+    .company-pill-copy strong {
+      font-size: 0.88rem;
+      line-height: 1.2;
+    }
+
+    .company-pill-copy span {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.74rem;
+    }
+
+    .surface-field-grid,
+    .metric-strip,
+    .motion-note-grid,
+    .kv-grid,
+    .gap-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .surface-field-grid,
+    .metric-strip,
+    .motion-note-grid,
+    .kv-grid {
+      margin-top: 14px;
+    }
+
+    .surface-field-grid,
+    .kv-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .kv-grid-dense {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .surface-field,
+    .summary-chip,
+    .metric-card,
+    .note-card {
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.024);
+    }
+
+    .surface-foot,
+    .mini-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .mini-metrics span,
+    .surface-foot span {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+
+    .motion-grid {
+      display: grid;
+      margin-top: 18px;
+    }
+
+    .motion-actions {
+      margin-top: 14px;
+    }
+
+    .motion-actions span {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .motion-actions li {
+      color: var(--text);
+      margin-top: 6px;
+      line-height: 1.45;
+    }
+
+    .lane-section + .lane-section {
+      margin-top: 20px;
+    }
+
+    .lane-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .lane-column {
+      padding: 0;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(18, 21, 28, 0.98), rgba(12, 15, 20, 0.98));
+      min-height: 220px;
+      overflow: hidden;
+    }
+
+    .lane-stack {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+      background: rgba(7, 9, 13, 0.28);
+    }
+
+    .lane-head {
+      padding: 16px 16px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.018);
+    }
+
+    .empty-state {
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px dashed rgba(255, 255, 255, 0.12);
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.02);
+      line-height: 1.5;
+    }
+
+    .right-rail {
+      position: sticky;
+      top: 24px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .rail-panel {
+      padding: 18px;
+    }
+
+    .rail-panel h3 {
+      margin-top: 8px;
+      letter-spacing: -0.03em;
+    }
+
+    .rail-stack {
+      display: grid;
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .rail-meta {
+      margin-top: 10px;
+    }
+
+    .gap-section {
+      padding: 24px;
+    }
+
+    .gap-grid {
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      margin-top: 18px;
+    }
+
+    .regen {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(52, 107, 255, 0.2);
+      background: rgba(52, 107, 255, 0.08);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    @media (max-width: 1200px) {
+      .content-grid,
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .right-rail {
+        position: static;
+      }
+    }
+
+    @media (max-width: 760px) {
+      body {
+        padding: 14px;
+      }
+
+      .summary-strip,
+      .surface-field-grid,
+      .metric-strip,
+      .motion-note-grid,
+      .kv-grid,
+      .kv-grid-dense {
+        grid-template-columns: 1fr;
+      }
+
+      .section,
+      .hero,
+      .gap-section,
+      .rail-panel {
+        padding: 18px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">Workspace</div>
+        <h1>See what is ready, blocked, waiting, and due.</h1>
+        <p class="hero-copy">Track truth coverage, motion pressure, prep gaps, and live prospect branches in one place so you can work the next best move fast.</p>
+      </div>
+      <div class="hero-metrics">
+        <div class="metric-card">
+          <span>Generated</span>
+          <strong>May 30, 2026, 9:41 PM</strong>
+        </div>
+        <div class="metric-card">
+          <span>Workload</span>
+          <strong>2 due now · 1 waiting</strong>
+        </div>
+        <div class="metric-card">
+          <span>Truth coverage</span>
+          <strong>6 stale · 3 unchecked · 1 actionable</strong>
+        </div>
+        <div class="metric-card">
+          <span>LinkedIn deficit</span>
+          <strong>25 branches short today</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-eyebrow">Truth strip</div>
+          <h2>What needs review, what is fresh, and what is missing</h2>
+        </div>
+        <p>See which connected surfaces are quiet, stale, unchecked, or actively worth opening because work is sitting there.</p>
+      </div>
+      <div class="summary-strip">
+        <div class="summary-chip">
+          <span>Connected accounts</span>
+          <strong>4</strong>
+        </div>
+        <div class="summary-chip">
+          <span>Enabled surfaces</span>
+          <strong>8</strong>
+        </div>
+        <div class="summary-chip">
+          <span>Unchecked surfaces</span>
+          <strong>2</strong>
+        </div>
+        <div class="summary-chip">
+          <span>Itemization gaps</span>
+          <strong>0</strong>
+        </div>
+      </div>
+      <div class="truth-stack">
+        <section class="account-truth-group">
+          <div class="account-truth-head">
+            <div>
+              <div class="mini-eyebrow">linkedin</div>
+              <h3>omalab-main</h3>
+            </div>
+            <p>1 actionable surface · 2 unchecked surfaces · 8 tracked surfaces</p>
+          </div>
+          <div class="surface-grid">
+                  <article class="surface-card tone-danger">
+                    <div class="surface-card-head">
+                      <div>
+                        <div class="mini-eyebrow">supplementary</div>
+                        <h4>Comment Replies</h4>
+                      </div>
+                      <div class="chip-row"><span class="chip chip-danger">Never</span><span class="chip chip-danger">Unchecked</span></div>
+                    </div>
+                    <p class="surface-summary">Comment Replies has not been checked yet.</p>
+                    <div class="surface-field-grid">
+                      
+                            <div class="surface-field">
+                              <span>lastRunStatus</span>
+                              <strong>never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastSyncedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastObservedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastItemCount</span>
+                              <strong>none</strong>
+                            </div>
+                          
+                    </div>
+                    <div class="surface-foot">
+                      <span>Never checked</span>
+                      <span>never</span>
+                    </div>
+                    <p class="surface-action">Run this surface check before trusting silence.</p>
+                  </article>
+                
+                  <article class="surface-card tone-danger">
+                    <div class="surface-card-head">
+                      <div>
+                        <div class="mini-eyebrow">supplementary</div>
+                        <h4>Followers</h4>
+                      </div>
+                      <div class="chip-row"><span class="chip chip-danger">Never</span><span class="chip chip-danger">Unchecked</span></div>
+                    </div>
+                    <p class="surface-summary">Followers has not been checked yet.</p>
+                    <div class="surface-field-grid">
+                      
+                            <div class="surface-field">
+                              <span>lastRunStatus</span>
+                              <strong>never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastSyncedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastObservedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastItemCount</span>
+                              <strong>none</strong>
+                            </div>
+                          
+                    </div>
+                    <div class="surface-foot">
+                      <span>Never checked</span>
+                      <span>never</span>
+                    </div>
+                    <p class="surface-action">Run this surface check before trusting silence.</p>
+                  </article>
+                
+                  <article class="surface-card tone-accent">
+                    <div class="surface-card-head">
+                      <div>
+                        <div class="mini-eyebrow">authoritative</div>
+                        <h4>Sent Invitations</h4>
+                      </div>
+                      <div class="chip-row"><span class="chip chip-good">Success</span><span class="chip chip-accent">Actionable</span><span class="chip chip-warning">Stale</span></div>
+                    </div>
+                    <p class="surface-summary">Sent Invitations was checked and currently has 1 pending or changed outbound invitation record.</p>
+                    <div class="surface-field-grid">
+                      
+                            <div class="surface-field">
+                              <span>lastRunStatus</span>
+                              <strong>success</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastSyncedAt</span>
+                              <strong>May 29, 2026, 8:23 AM</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastObservedAt</span>
+                              <strong>May 29, 2026, 8:22 AM</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastItemCount</span>
+                              <strong>1</strong>
+                            </div>
+                          
+                    </div>
+                    <div class="surface-foot">
+                      <span>Actionable and stale</span>
+                      <span>37h</span>
+                    </div>
+                    <p class="surface-action">Review pending and changed invites for accepts, withdrawals, or stale requests.</p>
+                  </article>
+                
+                  <article class="surface-card tone-warning">
+                    <div class="surface-card-head">
+                      <div>
+                        <div class="mini-eyebrow">authoritative</div>
+                        <h4>Following List</h4>
+                      </div>
+                      <div class="chip-row"><span class="chip chip-good">Success</span><span class="chip chip-warning">Stale</span></div>
+                    </div>
+                    <p class="surface-summary">Following List was checked and is currently quiet.</p>
+                    <div class="surface-field-grid">
+                      
+                            <div class="surface-field">
+                              <span>lastRunStatus</span>
+                              <strong>success</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastSyncedAt</span>
+                              <strong>May 29, 2026, 8:23 AM</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastObservedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastItemCount</span>
+                              <strong>0</strong>
+                            </div>
+                          
+                    </div>
+                    <div class="surface-foot">
+                      <span>Stale</span>
+                      <span>37h</span>
+                    </div>
+                    <p class="surface-action">No action from this surface right now.</p>
+                  </article>
+                
+                  <article class="surface-card tone-warning">
+                    <div class="surface-card-head">
+                      <div>
+                        <div class="mini-eyebrow">authoritative</div>
+                        <h4>Messaging Inbox</h4>
+                      </div>
+                      <div class="chip-row"><span class="chip chip-good">Success</span><span class="chip chip-warning">Stale</span></div>
+                    </div>
+                    <p class="surface-summary">Messaging Inbox was checked and is currently quiet.</p>
+                    <div class="surface-field-grid">
+                      
+                            <div class="surface-field">
+                              <span>lastRunStatus</span>
+                              <strong>success</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastSyncedAt</span>
+                              <strong>May 29, 2026, 8:23 AM</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastObservedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastItemCount</span>
+                              <strong>0</strong>
+                            </div>
+                          
+                    </div>
+                    <div class="surface-foot">
+                      <span>Stale</span>
+                      <span>37h</span>
+                    </div>
+                    <p class="surface-action">No action from this surface right now.</p>
+                  </article>
+                
+                  <article class="surface-card tone-warning">
+                    <div class="surface-card-head">
+                      <div>
+                        <div class="mini-eyebrow">authoritative</div>
+                        <h4>Profile Views</h4>
+                      </div>
+                      <div class="chip-row"><span class="chip chip-good">Success</span><span class="chip chip-warning">Stale</span></div>
+                    </div>
+                    <p class="surface-summary">Profile Views was checked and is currently quiet.</p>
+                    <div class="surface-field-grid">
+                      
+                            <div class="surface-field">
+                              <span>lastRunStatus</span>
+                              <strong>success</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastSyncedAt</span>
+                              <strong>May 29, 2026, 8:23 AM</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastObservedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastItemCount</span>
+                              <strong>0</strong>
+                            </div>
+                          
+                    </div>
+                    <div class="surface-foot">
+                      <span>Stale</span>
+                      <span>37h</span>
+                    </div>
+                    <p class="surface-action">No action from this surface right now.</p>
+                  </article>
+                
+                  <article class="surface-card tone-warning">
+                    <div class="surface-card-head">
+                      <div>
+                        <div class="mini-eyebrow">authoritative</div>
+                        <h4>Received Invitations</h4>
+                      </div>
+                      <div class="chip-row"><span class="chip chip-good">Success</span><span class="chip chip-warning">Stale</span></div>
+                    </div>
+                    <p class="surface-summary">Received Invitations was checked and is currently quiet.</p>
+                    <div class="surface-field-grid">
+                      
+                            <div class="surface-field">
+                              <span>lastRunStatus</span>
+                              <strong>success</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastSyncedAt</span>
+                              <strong>May 29, 2026, 8:23 AM</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastObservedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastItemCount</span>
+                              <strong>0</strong>
+                            </div>
+                          
+                    </div>
+                    <div class="surface-foot">
+                      <span>Stale</span>
+                      <span>37h</span>
+                    </div>
+                    <p class="surface-action">No action from this surface right now.</p>
+                  </article>
+                
+                  <article class="surface-card tone-disabled">
+                    <div class="surface-card-head">
+                      <div>
+                        <div class="mini-eyebrow">unknown</div>
+                        <h4>LinkedIn Catch Up Updates</h4>
+                      </div>
+                      <div class="chip-row"><span class="chip chip-danger">Never</span><span class="chip chip-danger">Unchecked</span><span class="chip chip-disabled">Disabled</span></div>
+                    </div>
+                    <p class="surface-summary">Never checked</p>
+                    <div class="surface-field-grid">
+                      
+                            <div class="surface-field">
+                              <span>lastRunStatus</span>
+                              <strong>never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastSyncedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastObservedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastItemCount</span>
+                              <strong>none</strong>
+                            </div>
+                          
+                    </div>
+                    <div class="surface-foot">
+                      <span>Never checked</span>
+                      <span>never</span>
+                    </div>
+                    
+                  </article>
+                </div>
+        </section>
+      
+        <section class="account-truth-group">
+          <div class="account-truth-head">
+            <div>
+              <div class="mini-eyebrow">sales-navigator</div>
+              <h3>omalab-main</h3>
+            </div>
+            <p>0 actionable surfaces · 0 unchecked surfaces · 0 tracked surfaces</p>
+          </div>
+          <div class="surface-grid"><div class="empty-state">No governed inbound surfaces are exposed for this account yet.</div></div>
+        </section>
+      
+        <section class="account-truth-group">
+          <div class="account-truth-head">
+            <div>
+              <div class="mini-eyebrow">gmail</div>
+              <h3>omalab-main</h3>
+            </div>
+            <p>0 actionable surfaces · 0 unchecked surfaces · 1 tracked surface</p>
+          </div>
+          <div class="surface-grid">
+                  <article class="surface-card tone-warning">
+                    <div class="surface-card-head">
+                      <div>
+                        <div class="mini-eyebrow">authoritative</div>
+                        <h4>Inbox Threads</h4>
+                      </div>
+                      <div class="chip-row"><span class="chip chip-good">Success</span><span class="chip chip-warning">Stale</span></div>
+                    </div>
+                    <p class="surface-summary">Inbox Threads was checked and is currently quiet.</p>
+                    <div class="surface-field-grid">
+                      
+                            <div class="surface-field">
+                              <span>lastRunStatus</span>
+                              <strong>success</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastSyncedAt</span>
+                              <strong>May 29, 2026, 8:23 AM</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastObservedAt</span>
+                              <strong>Never</strong>
+                            </div>
+                          
+                            <div class="surface-field">
+                              <span>lastItemCount</span>
+                              <strong>0</strong>
+                            </div>
+                          
+                    </div>
+                    <div class="surface-foot">
+                      <span>Stale</span>
+                      <span>37h</span>
+                    </div>
+                    <p class="surface-action">No action from this surface right now.</p>
+                  </article>
+                </div>
+        </section>
+      
+        <section class="account-truth-group">
+          <div class="account-truth-head">
+            <div>
+              <div class="mini-eyebrow">hubspot</div>
+              <h3>245546701</h3>
+            </div>
+            <p>0 actionable surfaces · 0 unchecked surfaces · 0 tracked surfaces</p>
+          </div>
+          <div class="surface-grid"><div class="empty-state">No governed inbound surfaces are exposed for this account yet.</div></div>
+        </section>
+      </div>
+    </section>
+
+    <div class="content-grid">
+      <div class="main-column">
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <div class="section-eyebrow">Motion overview</div>
+              <h2>Where each motion is moving or stuck</h2>
+            </div>
+            <p>See volume, ready branches, due work, sending coverage, and the next actions that matter most inside each motion.</p>
+          </div>
+          <div class="motion-grid">
+        <article class="motion-card">
+          <div class="motion-card-head">
+            <div>
+              <div class="mini-eyebrow">Draft</div>
+              <h3>frank-feral-bobcat</h3>
+            </div>
+            <div class="chip-row">
+              <span class="chip chip-warning">not engageable</span>
+              <span class="chip chip-quiet">Needs Company Targeting</span>
+            </div>
+          </div>
+          <div class="metric-strip">
+            <div>
+              <span>Updated</span>
+              <strong>May 30, 2026, 8:11 PM</strong>
+            </div>
+            <div>
+              <span>Motion queue</span>
+              <strong>0 companys · 0 prospects · 0 ready branchs</strong>
+            </div>
+            <div>
+              <span>Planner pressure</span>
+              <strong>0 due nows · 0 waitings · 0 review items</strong>
+            </div>
+          </div>
+          <div class="motion-note-grid">
+            <div class="note-card">
+              <span>Browser gate</span>
+              <strong>Ready</strong>
+              <p>A trusted linkedin browser identity is available for engagement.</p>
+            </div>
+            <div class="note-card">
+              <span>Execution identity</span>
+              <strong>No execution identity data</strong>
+              <p>Pinned sending identity coverage across the companies in this motion.</p>
+            </div>
+          </div>
+          <div class="motion-actions">
+            <span>Top next actions</span>
+            <ul>
+              <li>Link target companies to frank-feral-bobcat before trying to build prospect plans.</li>
+            </ul>
+          </div>
+        </article>
+      
+        <article class="motion-card">
+          <div class="motion-card-head">
+            <div>
+              <div class="mini-eyebrow">Draft</div>
+              <h3>scarlet-eager-lemur</h3>
+            </div>
+            <div class="chip-row">
+              <span class="chip chip-warning">not engageable</span>
+              <span class="chip chip-quiet">Needs Company Targeting</span>
+            </div>
+          </div>
+          <div class="metric-strip">
+            <div>
+              <span>Updated</span>
+              <strong>May 30, 2026, 8:11 PM</strong>
+            </div>
+            <div>
+              <span>Motion queue</span>
+              <strong>0 companys · 0 prospects · 0 ready branchs</strong>
+            </div>
+            <div>
+              <span>Planner pressure</span>
+              <strong>0 due nows · 0 waitings · 0 review items</strong>
+            </div>
+          </div>
+          <div class="motion-note-grid">
+            <div class="note-card">
+              <span>Browser gate</span>
+              <strong>Ready</strong>
+              <p>A trusted linkedin browser identity is available for engagement.</p>
+            </div>
+            <div class="note-card">
+              <span>Execution identity</span>
+              <strong>No execution identity data</strong>
+              <p>Pinned sending identity coverage across the companies in this motion.</p>
+            </div>
+          </div>
+          <div class="motion-actions">
+            <span>Top next actions</span>
+            <ul>
+              <li>Link target companies to scarlet-eager-lemur before trying to build prospect plans.</li>
+            </ul>
+          </div>
+        </article>
+      
+        <article class="motion-card">
+          <div class="motion-card-head">
+            <div>
+              <div class="mini-eyebrow">Active</div>
+              <h3>plum-orange-gazelle</h3>
+            </div>
+            <div class="chip-row">
+              <span class="chip chip-warning">not engageable</span>
+              <span class="chip chip-quiet">Targeting Ready</span>
+            </div>
+          </div>
+          <div class="metric-strip">
+            <div>
+              <span>Updated</span>
+              <strong>May 29, 2026, 10:08 PM</strong>
+            </div>
+            <div>
+              <span>Motion queue</span>
+              <strong>7 companys · 13 prospects · 3 ready branchs</strong>
+            </div>
+            <div>
+              <span>Planner pressure</span>
+              <strong>1 due now · 1 waiting · 1 review item</strong>
+            </div>
+          </div>
+          <div class="motion-note-grid">
+            <div class="note-card">
+              <span>Browser gate</span>
+              <strong>Ready</strong>
+              <p>A trusted linkedin browser identity is available for engagement.</p>
+            </div>
+            <div class="note-card">
+              <span>Execution identity</span>
+              <strong>5 Pinned Ready · 2 Unassigned Global Ready</strong>
+              <p>Pinned sending identity coverage across the companies in this motion.</p>
+            </div>
+          </div>
+          <div class="motion-actions">
+            <span>Top next actions</span>
+            <ul>
+              <li>Pin a trusted linkedin profile to Semgrep before engagement so the motion launches from one consistent identity.</li><li>Pin a trusted linkedin profile to Snyk before engagement so the motion launches from one consistent identity.</li>
+            </ul>
+          </div>
+        </article>
+      
+        <article class="motion-card">
+          <div class="motion-card-head">
+            <div>
+              <div class="mini-eyebrow">Draft</div>
+              <h3>proud-sage-jay</h3>
+            </div>
+            <div class="chip-row">
+              <span class="chip chip-warning">not engageable</span>
+              <span class="chip chip-quiet">Needs Company Research</span>
+            </div>
+          </div>
+          <div class="metric-strip">
+            <div>
+              <span>Updated</span>
+              <strong>May 26, 2026, 3:08 PM</strong>
+            </div>
+            <div>
+              <span>Motion queue</span>
+              <strong>5 companys · 3 prospects · 3 ready branchs</strong>
+            </div>
+            <div>
+              <span>Planner pressure</span>
+              <strong>0 due nows · 0 waitings · 0 review items</strong>
+            </div>
+          </div>
+          <div class="motion-note-grid">
+            <div class="note-card">
+              <span>Browser gate</span>
+              <strong>Ready</strong>
+              <p>A trusted linkedin browser identity is available for engagement.</p>
+            </div>
+            <div class="note-card">
+              <span>Execution identity</span>
+              <strong>5 Pinned Ready</strong>
+              <p>Pinned sending identity coverage across the companies in this motion.</p>
+            </div>
+          </div>
+          <div class="motion-actions">
+            <span>Top next actions</span>
+            <ul>
+              <li>Complete canonical website and LinkedIn company identity for Atome Philippines. Then run exo companies research-brief d271a159-00a5-45f4-8abf-5893c9081215 --motion 1cadcd8c-7be0-475c-be7e-6241e23d9373 --json.</li><li>Find verified direct-email fallbacks for BillEase where possible. LinkedIn is still the only ready channel for some chosen prospects.</li><li>Complete canonical website and LinkedIn company identity for Home Credit Philippines. Then run exo companies research-brief d28f743a-105d-403e-a7c0-b6c341b851ad --motion 1cadcd8c-7be0-475c-be7e-6241e23d9373 --json.</li>
+            </ul>
+          </div>
+        </article>
+      </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <div class="section-eyebrow">Prep pipeline</div>
+              <h2>Prep gaps before outreach starts</h2>
+            </div>
+            <p>Company prep and prospect prep stay separate so you can see why something is not launch-ready before it ever becomes an engagement problem.</p>
+          </div>
+          
+    <section class="lane-section">
+      <div class="subsection-head">
+        <div>
+          <div class="mini-eyebrow">Derived from current Exo state</div>
+          <h3>Company prep lanes</h3>
+        </div>
+        <p>See which accounts still need identity, research, prospect selection, or branch buildout.</p>
+      </div>
+      <div class="lane-grid">
+        
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Needs company identity</h4>
+                    <p>Website or LinkedIn company identity is still missing.</p>
+                  </div>
+                  <strong>4</strong>
+                </div>
+                <div class="lane-stack">
+                  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-0">
+      <span class="avatar-fallback">A</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Atome Philippines</h4>
+            <p class="entity-subline">canonical identity still incomplete</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Discovered</span>
+        <span>0 signals</span>
+        <span>0 prospects</span>
+      </div>
+      <p>Canonical website or LinkedIn identity is still missing.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>0</strong></div>
+        <div><span>opening plans ready</span><strong>0</strong></div>
+        <div><span>cadence ready</span><strong>0</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-0">
+      <span class="avatar-fallback">H</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Home Credit Philippines</h4>
+            <p class="entity-subline">canonical identity still incomplete</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Discovered</span>
+        <span>0 signals</span>
+        <span>0 prospects</span>
+      </div>
+      <p>Canonical website or LinkedIn identity is still missing.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>0</strong></div>
+        <div><span>opening plans ready</span><strong>0</strong></div>
+        <div><span>cadence ready</span><strong>0</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-3">
+      <span class="avatar-fallback">S</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Salmon</h4>
+            <p class="entity-subline">canonical identity still incomplete</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Discovered</span>
+        <span>0 signals</span>
+        <span>0 prospects</span>
+      </div>
+      <p>Canonical website or LinkedIn identity is still missing.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>0</strong></div>
+        <div><span>opening plans ready</span><strong>0</strong></div>
+        <div><span>cadence ready</span><strong>0</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-5">
+      <span class="avatar-fallback">T</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Tendo by Tonik</h4>
+            <p class="entity-subline">canonical identity still incomplete</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Discovered</span>
+        <span>0 signals</span>
+        <span>0 prospects</span>
+      </div>
+      <p>Canonical website or LinkedIn identity is still missing.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>0</strong></div>
+        <div><span>opening plans ready</span><strong>0</strong></div>
+        <div><span>cadence ready</span><strong>0</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Queued for research</h4>
+                    <p>Identity exists, but research is not complete yet.</p>
+                  </div>
+                  <strong>0</strong>
+                </div>
+                <div class="lane-stack">
+                  <div class="empty-state">Nothing in this lane right now.</div>
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Researched / pick prospects</h4>
+                    <p>Signals are in, but prospect selection is still open.</p>
+                  </div>
+                  <strong>0</strong>
+                </div>
+                <div class="lane-stack">
+                  <div class="empty-state">Nothing in this lane right now.</div>
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Selected / build branches</h4>
+                    <p>Prospects exist, but branch scaffolding is incomplete.</p>
+                  </div>
+                  <strong>0</strong>
+                </div>
+                <div class="lane-stack">
+                  <div class="empty-state">Nothing in this lane right now.</div>
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Targeting ready</h4>
+                    <p>Company prep is already usable for outreach branches.</p>
+                  </div>
+                  <strong>8</strong>
+                </div>
+                <div class="lane-stack">
+                  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-0">
+      <span class="avatar-fallback">B</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>BillEase</h4>
+            <p class="entity-subline">billease.ph</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Ready</span>
+        <span>5 signals</span>
+        <span>3 prospects</span>
+      </div>
+      <p>Company identity, signal work, and branch scaffolding are already in place.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>3</strong></div>
+        <div><span>opening plans ready</span><strong>3</strong></div>
+        <div><span>cadence ready</span><strong>3</strong></div>
+        <div><span>missing email fallback</span><strong>3</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-3">
+      <span class="avatar-fallback">C</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Chainguard</h4>
+            <p class="entity-subline">chainguard.dev</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Ready</span>
+        <span>4 signals</span>
+        <span>2 prospects</span>
+      </div>
+      <p>Company identity, signal work, and branch scaffolding are already in place.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>2</strong></div>
+        <div><span>opening plans ready</span><strong>2</strong></div>
+        <div><span>cadence ready</span><strong>2</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-5">
+      <span class="avatar-fallback">C</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Cribl</h4>
+            <p class="entity-subline">cribl.io</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Ready</span>
+        <span>2 signals</span>
+        <span>1 prospect</span>
+      </div>
+      <p>Company identity, signal work, and branch scaffolding are already in place.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>1</strong></div>
+        <div><span>opening plans ready</span><strong>1</strong></div>
+        <div><span>cadence ready</span><strong>1</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-2">
+      <span class="avatar-fallback">R</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Rubrik</h4>
+            <p class="entity-subline">rubrik.com</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Ready</span>
+        <span>2 signals</span>
+        <span>2 prospects</span>
+      </div>
+      <p>Company identity, signal work, and branch scaffolding are already in place.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>2</strong></div>
+        <div><span>opening plans ready</span><strong>2</strong></div>
+        <div><span>cadence ready</span><strong>2</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-0">
+      <span class="avatar-fallback">S</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Semgrep</h4>
+            <p class="entity-subline">semgrep.dev</p>
+          </div>
+        </div>
+        <span class="chip chip-warning">Unassigned Global Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Ready</span>
+        <span>4 signals</span>
+        <span>2 prospects</span>
+      </div>
+      <p>Company identity, signal work, and branch scaffolding are already in place.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>2</strong></div>
+        <div><span>opening plans ready</span><strong>2</strong></div>
+        <div><span>cadence ready</span><strong>2</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-4">
+      <span class="avatar-fallback">S</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Snyk</h4>
+            <p class="entity-subline">snyk.io</p>
+          </div>
+        </div>
+        <span class="chip chip-warning">Unassigned Global Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Ready</span>
+        <span>3 signals</span>
+        <span>2 prospects</span>
+      </div>
+      <p>Company identity, signal work, and branch scaffolding are already in place.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>2</strong></div>
+        <div><span>opening plans ready</span><strong>2</strong></div>
+        <div><span>cadence ready</span><strong>2</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-4">
+      <span class="avatar-fallback">T</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Tines</h4>
+            <p class="entity-subline">tines.com</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Ready</span>
+        <span>2 signals</span>
+        <span>2 prospects</span>
+      </div>
+      <p>Company identity, signal work, and branch scaffolding are already in place.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>2</strong></div>
+        <div><span>opening plans ready</span><strong>2</strong></div>
+        <div><span>cadence ready</span><strong>2</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-company avatar-theme-5">
+      <span class="avatar-fallback">W</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Wiz</h4>
+            <p class="entity-subline">wiz.io</p>
+          </div>
+        </div>
+        <span class="chip chip-good">Pinned Ready</span>
+      </div>
+      <div class="mini-metrics">
+        <span>Ready</span>
+        <span>4 signals</span>
+        <span>2 prospects</span>
+      </div>
+      <p>Company identity, signal work, and branch scaffolding are already in place.</p>
+      <div class="kv-grid">
+        <div><span>through-lines ready</span><strong>2</strong></div>
+        <div><span>opening plans ready</span><strong>2</strong></div>
+        <div><span>cadence ready</span><strong>2</strong></div>
+        <div><span>missing email fallback</span><strong>0</strong></div>
+      </div>
+    </article>
+  
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Suppressed</h4>
+                    <p>This company is intentionally out of play.</p>
+                  </div>
+                  <strong>0</strong>
+                </div>
+                <div class="lane-stack">
+                  <div class="empty-state">Nothing in this lane right now.</div>
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Exhausted</h4>
+                    <p>No more viable company work is exposed right now.</p>
+                  </div>
+                  <strong>0</strong>
+                </div>
+                <div class="lane-stack">
+                  <div class="empty-state">Nothing in this lane right now.</div>
+                </div>
+              </section>
+            
+      </div>
+    </section>
+  
+          
+    <section class="lane-section">
+      <div class="subsection-head">
+        <div>
+          <div class="mini-eyebrow">Derived from current Exo state</div>
+          <h3>Prospect prep lanes</h3>
+        </div>
+        <p>See which people still need a through-line, first move, cadence, or fallback coverage.</p>
+      </div>
+      <div class="lane-grid">
+        
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Needs through-line</h4>
+                    <p>The branch still lacks a why-talk line.</p>
+                  </div>
+                  <strong>0</strong>
+                </div>
+                <div class="lane-stack">
+                  <div class="empty-state">Nothing in this lane right now.</div>
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Needs opening plan</h4>
+                    <p>The first move is not defensible yet.</p>
+                  </div>
+                  <strong>0</strong>
+                </div>
+                <div class="lane-stack">
+                  <div class="empty-state">Nothing in this lane right now.</div>
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Needs cadence state</h4>
+                    <p>Exo does not yet expose a usable current step.</p>
+                  </div>
+                  <strong>0</strong>
+                </div>
+                <div class="lane-stack">
+                  <div class="empty-state">Nothing in this lane right now.</div>
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Contact enrichment pending</h4>
+                    <p>Core branch logic exists, but fallback coverage is still open.</p>
+                  </div>
+                  <strong>4</strong>
+                </div>
+                <div class="lane-stack">
+                  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-5">
+      <span class="avatar-fallback">BS</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Brian Spoljarick</h4>
+            <p class="entity-subline">AVP - AMER Growth</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-warning">engagement live</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Wiz</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>Core branch logic exists, but direct-channel fallback work is still open.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Pending</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-1">
+      <span class="avatar-fallback">DS</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Daniel Stanc</h4>
+            <p class="entity-subline">VP of Collections</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">not launched</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>BillEase</span>
+        <span>connection request → none</span>
+      </div>
+      <p>Core branch logic exists, but direct-channel fallback work is still open.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Pending</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-0">
+      <span class="avatar-fallback">GS</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Georg Steiger</h4>
+            <p class="entity-subline">CEO &amp; Co-founder</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">not launched</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>BillEase</span>
+        <span>connection request → none</span>
+      </div>
+      <p>Core branch logic exists, but direct-channel fallback work is still open.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Pending</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-5">
+      <span class="avatar-fallback">TM</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Taras Mykhalyshyn</h4>
+            <p class="entity-subline">VP of Customer Lifecycle Management</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">not launched</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>BillEase</span>
+        <span>connection request → none</span>
+      </div>
+      <p>Core branch logic exists, but direct-channel fallback work is still open.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Pending</strong></div>
+      </div>
+    </article>
+  
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Ready but weak fallback</h4>
+                    <p>Primary path exists, but direct fallback is still thin.</p>
+                  </div>
+                  <strong>5</strong>
+                </div>
+                <div class="lane-stack">
+                  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-2">
+      <span class="avatar-fallback">AM</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Austin Martin</h4>
+            <p class="entity-subline">Executive Vice President, Strategy and Operations</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">not launched</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Snyk</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>The branch is ready on the primary path, but direct fallback coverage is still thin.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Exhausted</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-2">
+      <span class="avatar-fallback">GS</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Garrett Souza</h4>
+            <p class="entity-subline">VP, Worldwide Sales</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">not launched</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Semgrep</span>
+        <span>direct message → inmail</span>
+      </div>
+      <p>The branch is ready on the primary path, but direct fallback coverage is still thin.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Exhausted</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-3">
+      <span class="avatar-fallback">JW</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Jim Wangler</h4>
+            <p class="entity-subline">VP Sales, US East &amp; EMEA</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">not launched</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Semgrep</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>The branch is ready on the primary path, but direct fallback coverage is still thin.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Exhausted</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-2">
+      <span class="avatar-fallback">JP</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Joseph Patti</h4>
+            <p class="entity-subline">Regional Director, East</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-warning">engagement live</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Wiz</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>The branch is ready on the primary path, but direct fallback coverage is still thin.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Exhausted</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-1">
+      <span class="avatar-fallback">MP</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Mike Pyle</h4>
+            <p class="entity-subline">Chief Revenue Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-warning">engagement live</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Cribl</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>The branch is ready on the primary path, but direct fallback coverage is still thin.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Exhausted</strong></div>
+      </div>
+    </article>
+  
+                </div>
+              </section>
+            
+              <section class="lane-column">
+                <div class="lane-head">
+                  <div>
+                    <h4>Prep complete</h4>
+                    <p>Prep is done; engagement state is separate.</p>
+                  </div>
+                  <strong>7</strong>
+                </div>
+                <div class="lane-stack">
+                  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-4">
+      <span class="avatar-fallback">BC</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Blake Coolidge</h4>
+            <p class="entity-subline">Head of GTM Initiatives</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-warning">engagement live</span>
+          <span class="chip chip-accent">warmup ready</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Tines</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>Through-line, opening plan, cadence, and fallback coverage are all in decent shape.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Complete</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-0">
+      <span class="avatar-fallback">JG</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Jesse Green</h4>
+            <p class="entity-subline">Chief Revenue Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-warning">engagement live</span>
+          <span class="chip chip-accent">warmup ready</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Rubrik</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>Through-line, opening plan, cadence, and fallback coverage are all in decent shape.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Complete</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-3">
+      <span class="avatar-fallback">MT</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Mike Tornincasa</h4>
+            <p class="entity-subline">Chief Business Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-warning">engagement live</span>
+          <span class="chip chip-accent">warmup ready</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Rubrik</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>Through-line, opening plan, cadence, and fallback coverage are all in decent shape.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Complete</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-1">
+      <span class="avatar-fallback">PU</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Parm Uppal</h4>
+            <p class="entity-subline">Chief Revenue Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-warning">engagement live</span>
+          <span class="chip chip-accent">warmup ready</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Chainguard</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>Through-line, opening plan, cadence, and fallback coverage are all in decent shape.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Complete</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-1">
+      <span class="avatar-fallback">RC</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Ryan Carlson</h4>
+            <p class="entity-subline">President</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">not launched</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Chainguard</span>
+        <span>inmail → none</span>
+      </div>
+      <p>Through-line, opening plan, cadence, and fallback coverage are all in decent shape.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Complete</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-0">
+      <span class="avatar-fallback">TT</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Terry Tripp</h4>
+            <p class="entity-subline">Chief Revenue Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-warning">engagement live</span>
+          <span class="chip chip-accent">warmup ready</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Tines</span>
+        <span>connection request → inmail</span>
+      </div>
+      <p>Through-line, opening plan, cadence, and fallback coverage are all in decent shape.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Complete</strong></div>
+      </div>
+    </article>
+  
+    <article class="prep-card">
+      <div class="prep-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-3">
+      <span class="avatar-fallback">TN</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Tom Nielsen</h4>
+            <p class="entity-subline">Chief Revenue Officer (CRO)</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">not launched</span>
+          <span class="chip chip-quiet">no live warmup</span>
+        </div>
+      </div>
+      <div class="mini-metrics">
+        <span>Snyk</span>
+        <span>connection request → email</span>
+      </div>
+      <p>Through-line, opening plan, cadence, and fallback coverage are all in decent shape.</p>
+      <div class="kv-grid">
+        <div><span>queue</span><strong>Ready</strong></div>
+        <div><span>through-line</span><strong>Ready</strong></div>
+        <div><span>opening plan</span><strong>Ready</strong></div>
+        <div><span>contact enrichment</span><strong>Complete</strong></div>
+      </div>
+    </article>
+  
+                </div>
+              </section>
+            
+      </div>
+    </section>
+  
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <div>
+              <div class="section-eyebrow">Engagement pipeline</div>
+              <h2>Live prospect branches</h2>
+            </div>
+            <p>Grouped by what you would actually do next: send, wait, unblock, handle a reply, or stop working that branch for now.</p>
+          </div>
+          <div class="lane-grid">
+            
+                  <section class="lane-column">
+                    <div class="lane-head">
+                      <div>
+                        <h4>Ready</h4>
+                        <p>Prepared branches that still need their first governed move.</p>
+                      </div>
+                      <strong>7</strong>
+                    </div>
+                    <div class="lane-stack">
+                      
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-1">
+      <span class="avatar-fallback">DS</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Daniel Stanc</h4>
+            <p class="entity-subline">VP of Collections</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-danger">overdue</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-0">
+      <span class="avatar-fallback">B</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>BillEase</strong>
+        <span>billease.ph</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: none</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Not Started</strong></div>
+        <div><span>last touch</span><strong>Never</strong></div>
+        <div><span>due time</span><strong>May 26, 2026, 4:03 PM</strong></div>
+      </div>
+      <p class="tight-copy">No touch recorded in Exo.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Send the first LinkedIn connection request tied to LenderLink and broader payment-surface expansion.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-0">
+      <span class="avatar-fallback">GS</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Georg Steiger</h4>
+            <p class="entity-subline">CEO &amp; Co-founder</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-danger">overdue</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-0">
+      <span class="avatar-fallback">B</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>BillEase</strong>
+        <span>billease.ph</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: none</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Not Started</strong></div>
+        <div><span>last touch</span><strong>Never</strong></div>
+        <div><span>due time</span><strong>May 26, 2026, 4:03 PM</strong></div>
+      </div>
+      <p class="tight-copy">No touch recorded in Exo.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Send the first LinkedIn connection request tied to LenderLink and BillEase&#39;s expansion into broader financial services.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-5">
+      <span class="avatar-fallback">TM</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">proud-sage-jay</div>
+            <h4>Taras Mykhalyshyn</h4>
+            <p class="entity-subline">VP of Customer Lifecycle Management</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-danger">overdue</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-0">
+      <span class="avatar-fallback">B</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>BillEase</strong>
+        <span>billease.ph</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: none</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Not Started</strong></div>
+        <div><span>last touch</span><strong>Never</strong></div>
+        <div><span>due time</span><strong>May 26, 2026, 4:03 PM</strong></div>
+      </div>
+      <p class="tight-copy">No touch recorded in Exo.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Send the first LinkedIn connection request tied to LenderLink and broader spend-surface expansion.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-3">
+      <span class="avatar-fallback">TN</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Tom Nielsen</h4>
+            <p class="entity-subline">Chief Revenue Officer (CRO)</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-danger">overdue</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-4">
+      <span class="avatar-fallback">S</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Snyk</strong>
+        <span>snyk.io</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: email</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Not Started</strong></div>
+        <div><span>last touch</span><strong>Never</strong></div>
+        <div><span>due time</span><strong>May 30, 2026, 9:41 PM</strong></div>
+      </div>
+      <p class="tight-copy">No touch recorded in Exo.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Send a short LinkedIn connection request anchored on his CRO arrival, the 2026 AI platform expansion, and the challenge of proving customer value as the story widens.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-2">
+      <span class="avatar-fallback">GS</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Garrett Souza</h4>
+            <p class="entity-subline">VP, Worldwide Sales</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">untimed</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-0">
+      <span class="avatar-fallback">S</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Semgrep</strong>
+        <span>semgrep.dev</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: direct message</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Direct Message</strong></div>
+        <div><span>last outcome</span><strong>Not Started</strong></div>
+        <div><span>last touch</span><strong>Never</strong></div>
+        <div><span>due time</span><strong>Never</strong></div>
+      </div>
+      <p class="tight-copy">No touch recorded in Exo.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Send a short LinkedIn direct message from the existing Garrett connection path when capacity allows.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-3">
+      <span class="avatar-fallback">JW</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Jim Wangler</h4>
+            <p class="entity-subline">VP Sales, US East &amp; EMEA</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">untimed</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-0">
+      <span class="avatar-fallback">S</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Semgrep</strong>
+        <span>semgrep.dev</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Not Started</strong></div>
+        <div><span>last touch</span><strong>Never</strong></div>
+        <div><span>due time</span><strong>Never</strong></div>
+      </div>
+      <p class="tight-copy">No touch recorded in Exo.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Send a short LinkedIn connection request to Jim when capacity allows.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-2">
+      <span class="avatar-fallback">AM</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Austin Martin</h4>
+            <p class="entity-subline">Executive Vice President, Strategy and Operations</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">untimed</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-4">
+      <span class="avatar-fallback">S</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Snyk</strong>
+        <span>snyk.io</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Not Started</strong></div>
+        <div><span>last touch</span><strong>Never</strong></div>
+        <div><span>due time</span><strong>Never</strong></div>
+      </div>
+      <p class="tight-copy">No touch recorded in Exo.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Send a short LinkedIn connection request anchored on his CHEWS post, Snyk&#39;s 2026 AI platform expansion, and the difficulty of making a broader story land consistently with serious buyers.</p>
+    </article>
+  
+                    </div>
+                  </section>
+                
+                  <section class="lane-column">
+                    <div class="lane-head">
+                      <div>
+                        <h4>Sent / pending</h4>
+                        <p>Touches are in flight and waiting on the other side.</p>
+                      </div>
+                      <strong>8</strong>
+                    </div>
+                    <div class="lane-stack">
+                      
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-2">
+      <span class="avatar-fallback">JP</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Joseph Patti</h4>
+            <p class="entity-subline">Regional Director, East</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-danger">overdue</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-5">
+      <span class="avatar-fallback">W</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Wiz</strong>
+        <span>wiz.io</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Pending</strong></div>
+        <div><span>last touch</span><strong>May 29, 2026, 8:55 PM</strong></div>
+        <div><span>due time</span><strong>May 29, 2026, 2:22 PM</strong></div>
+      </div>
+      <p class="tight-copy">Sent first LinkedIn connection request to Joseph Patti on the ready Wiz support branch.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Wait for Joseph Patti to accept or reply to the connection request before escalating.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-1">
+      <span class="avatar-fallback">MP</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Mike Pyle</h4>
+            <p class="entity-subline">Chief Revenue Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-danger">overdue</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-5">
+      <span class="avatar-fallback">C</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Cribl</strong>
+        <span>cribl.io</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Pending</strong></div>
+        <div><span>last touch</span><strong>May 29, 2026, 9:40 PM</strong></div>
+        <div><span>due time</span><strong>May 29, 2026, 9:38 PM</strong></div>
+      </div>
+      <p class="tight-copy">Sent LinkedIn connection request to Mike Pyle after live profile validation in governed Chrome.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Wait for Mike Pyle to accept or reply to the connection request before escalating.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-4">
+      <span class="avatar-fallback">BC</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Blake Coolidge</h4>
+            <p class="entity-subline">Head of GTM Initiatives</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">untimed</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-4">
+      <span class="avatar-fallback">T</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Tines</strong>
+        <span>tines.com</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Pending</strong></div>
+        <div><span>last touch</span><strong>May 29, 2026, 10:08 PM</strong></div>
+        <div><span>due time</span><strong>Never</strong></div>
+      </div>
+      <p class="tight-copy">Sent Blake Coolidge a LinkedIn connection request via the direct invite flow after the visible profile Connect path failed to change state.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Wait for Blake Coolidge to accept or reply to the connection request before escalating.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-0">
+      <span class="avatar-fallback">TT</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Terry Tripp</h4>
+            <p class="entity-subline">Chief Revenue Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">untimed</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-4">
+      <span class="avatar-fallback">T</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Tines</strong>
+        <span>tines.com</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Pending</strong></div>
+        <div><span>last touch</span><strong>May 29, 2026, 10:03 PM</strong></div>
+        <div><span>due time</span><strong>Never</strong></div>
+      </div>
+      <p class="tight-copy">Sent Terry Tripp a LinkedIn connection request via the direct invite flow after the visible profile Connect path failed to change state.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Wait for Terry Tripp to accept or reply to the connection request before escalating.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-3">
+      <span class="avatar-fallback">MT</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Mike Tornincasa</h4>
+            <p class="entity-subline">Chief Business Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">untimed</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-2">
+      <span class="avatar-fallback">R</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Rubrik</strong>
+        <span>rubrik.com</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Pending</strong></div>
+        <div><span>last touch</span><strong>May 29, 2026, 9:53 PM</strong></div>
+        <div><span>due time</span><strong>Never</strong></div>
+      </div>
+      <p class="tight-copy">Sent LinkedIn connection request to Mike Tornincasa anchored on Rubrik&#39;s FY27 momentum, new CRO transition, and broader platform narrative.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Wait for Mike Tornincasa to accept or reply to the connection request before escalating.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-0">
+      <span class="avatar-fallback">JG</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Jesse Green</h4>
+            <p class="entity-subline">Chief Revenue Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">untimed</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-2">
+      <span class="avatar-fallback">R</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Rubrik</strong>
+        <span>rubrik.com</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Pending</strong></div>
+        <div><span>last touch</span><strong>May 29, 2026, 9:50 PM</strong></div>
+        <div><span>due time</span><strong>Never</strong></div>
+      </div>
+      <p class="tight-copy">Sent LinkedIn connection request to Jesse Green anchored on his CRO promotion and Rubrik&#39;s broader platform narrative.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Wait for Jesse Green to accept or reply to the connection request before escalating.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-5">
+      <span class="avatar-fallback">BS</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Brian Spoljarick</h4>
+            <p class="entity-subline">AVP - AMER Growth</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">untimed</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-5">
+      <span class="avatar-fallback">W</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Wiz</strong>
+        <span>wiz.io</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Sent</strong></div>
+        <div><span>last touch</span><strong>May 29, 2026, 2:21 PM</strong></div>
+        <div><span>due time</span><strong>Never</strong></div>
+      </div>
+      <p class="tight-copy">Sent first LinkedIn connection request to Brian Spoljarick on the ready Wiz branch.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Verify Brian live in the browser and send the first LinkedIn connection request once launch is approved.</p>
+    </article>
+  
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-1">
+      <span class="avatar-fallback">PU</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Parm Uppal</h4>
+            <p class="entity-subline">Chief Revenue Officer</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-quiet">untimed</span>
+          <span class="chip chip-warning">inbound review</span>
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-3">
+      <span class="avatar-fallback">C</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Chainguard</strong>
+        <span>chainguard.dev</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: connection request</span>
+        <span>fallback: inmail</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>Connection Request</strong></div>
+        <div><span>last outcome</span><strong>Sent</strong></div>
+        <div><span>last touch</span><strong>May 27, 2026, 7:46 AM</strong></div>
+        <div><span>due time</span><strong>Never</strong></div>
+      </div>
+      <p class="tight-copy">Sent LinkedIn connection request to Parm Uppal anchored on GTM hiring and Chainguard&#39;s broader 2026 product rollout.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Connection request is the first planned touch once launch is approved.</p>
+    </article>
+  
+                    </div>
+                  </section>
+                
+                  <section class="lane-column">
+                    <div class="lane-head">
+                      <div>
+                        <h4>Waiting</h4>
+                        <p>Branches intentionally held in reserve or waiting on a checkpoint.</p>
+                      </div>
+                      <strong>1</strong>
+                    </div>
+                    <div class="lane-stack">
+                      
+    <article class="engagement-card">
+      <div class="engagement-card-head">
+        <div class="entity-row">
+          
+    <span class="avatar avatar-person avatar-theme-1">
+      <span class="avatar-fallback">RC</span>
+    </span>
+  
+          <div class="entity-copy">
+            <div class="mini-eyebrow">plum-orange-gazelle</div>
+            <h4>Ryan Carlson</h4>
+            <p class="entity-subline">President</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <span class="chip chip-accent">timed</span>
+          
+        </div>
+      </div>
+      <div class="entity-support-row">
+        
+    <div class="company-pill">
+      
+    <span class="avatar avatar-company avatar-theme-3">
+      <span class="avatar-fallback">C</span>
+    </span>
+  
+      <div class="company-pill-copy">
+        <strong>Chainguard</strong>
+        <span>chainguard.dev</span>
+      </div>
+    </div>
+  
+      </div>
+      <div class="mini-metrics">
+        <span>primary: inmail</span>
+        <span>fallback: none</span>
+      </div>
+      <div class="kv-grid kv-grid-dense">
+        <div><span>current step</span><strong>InMail</strong></div>
+        <div><span>last outcome</span><strong>Not Started</strong></div>
+        <div><span>last touch</span><strong>Never</strong></div>
+        <div><span>due time</span><strong>Dec 31, 9999, 6:59 PM</strong></div>
+      </div>
+      <p class="tight-copy">No touch recorded in Exo.</p>
+      <p class="tight-copy"><strong>Next action:</strong> Keep the sponsor-ready InMail on hold unless the CRO branch needs executive escalation.</p>
+    </article>
+  
+                    </div>
+                  </section>
+                
+                  <section class="lane-column">
+                    <div class="lane-head">
+                      <div>
+                        <h4>Blocked</h4>
+                        <p>Primary path failed or the channel blocked.</p>
+                      </div>
+                      <strong>0</strong>
+                    </div>
+                    <div class="lane-stack">
+                      <div class="empty-state">No prospects in this lane right now.</div>
+                    </div>
+                  </section>
+                
+                  <section class="lane-column">
+                    <div class="lane-head">
+                      <div>
+                        <h4>Reply / accepted</h4>
+                        <p>Cold-start phase is over; live response handling takes over.</p>
+                      </div>
+                      <strong>0</strong>
+                    </div>
+                    <div class="lane-stack">
+                      <div class="empty-state">No prospects in this lane right now.</div>
+                    </div>
+                  </section>
+                
+                  <section class="lane-column">
+                    <div class="lane-head">
+                      <div>
+                        <h4>Exhausted</h4>
+                        <p>No further governed move is exposed here right now.</p>
+                      </div>
+                      <strong>0</strong>
+                    </div>
+                    <div class="lane-stack">
+                      <div class="empty-state">No prospects in this lane right now.</div>
+                    </div>
+                  </section>
+                
+          </div>
+        </section>
+
+        <section class="gap-section">
+          <div class="section-head">
+            <div>
+              <div class="section-eyebrow">Model gaps</div>
+              <h2>What this workspace still cannot show cleanly</h2>
+            </div>
+            <p>These are the main places where the workspace still has to infer structure because the underlying fields are not explicit yet.</p>
+          </div>
+          <div class="gap-grid">
+        <article class="gap-card">
+          <h4>Freshness still uses a simple clock</h4>
+          <p>Fresh vs stale is currently based on elapsed time since the last sync or observed item, not a surface-specific service level.</p>
+        </article>
+      
+        <article class="gap-card">
+          <h4>Prep stages are inferred</h4>
+          <p>Company and prospect prep still have to be assembled from queue status, through-lines, opening plans, cadence state, and contact enrichment because there is no single prep-stage field yet.</p>
+        </article>
+      
+        <article class="gap-card">
+          <h4>Some accounts still have no visible truth inventory</h4>
+          <p>sales-navigator:omalab-main, hubspot:245546701 expose no visible inbound surfaces here, so quiet cannot yet be separated from not instrumented.</p>
+        </article>
+      
+        <article class="gap-card">
+          <h4>Some branches still have launch-state ambiguity</h4>
+          <p>2 branches still read like a first-touch plan even though touches are already recorded. A canonical launch-state field would remove that ambiguity.</p>
+        </article>
+      </div>
+        </section>
+      </div>
+
+      <aside class="right-rail">
+        <section class="rail-panel">
+          <div class="section-eyebrow">Due now</div>
+          <h3>Immediate planner pressure</h3>
+          <div class="rail-stack">
+            
+    <article class="rail-card">
+      <div class="rail-card-head">
+        <h4>LinkedIn capacity deficit</h4>
+        <span class="chip chip-danger">Due Now</span>
+      </div>
+      <p>Seed more known companies or people directly into the active motion so the queue has real backlog to turn into 25 more ready LinkedIn connection-request branches today.</p>
+      <div class="rail-meta">LinkedIn outbound capacity · May 30, 2026, 9:41 PM</div>
+    </article>
+  
+    <article class="rail-card">
+      <div class="rail-card-head">
+        <h4>Snyk / Tom Nielsen</h4>
+        <span class="chip chip-danger">Due Now</span>
+      </div>
+      <p>Send a short LinkedIn connection request anchored on his CRO arrival, the 2026 AI platform expansion, and the challenge of proving customer value as the story widens.</p>
+      <div class="rail-meta">plum-orange-gazelle · May 30, 2026, 9:41 PM</div>
+    </article>
+  
+          </div>
+        </section>
+
+        <section class="rail-panel">
+          <div class="section-eyebrow">Waiting</div>
+          <h3>Held branches</h3>
+          <div class="rail-stack">
+            
+    <article class="rail-card">
+      <div class="rail-card-head">
+        <h4>Chainguard / Ryan Carlson</h4>
+        <span class="chip chip-warning">Waiting Until</span>
+      </div>
+      <p>Keep the sponsor-ready InMail on hold unless the CRO branch needs executive escalation.</p>
+      <div class="rail-meta">plum-orange-gazelle · Dec 31, 9999, 6:59 PM</div>
+    </article>
+  
+          </div>
+        </section>
+
+        <section class="rail-panel">
+          <div class="section-eyebrow">Review items</div>
+          <h3>Inbound review surface</h3>
+          <div class="rail-stack">
+            
+    <article class="rail-card">
+      <div class="rail-card-head">
+        <h4>Chainguard / Parm Uppal</h4>
+        <span class="chip chip-quiet">Low</span>
+      </div>
+      <p>Parm Uppal&#39;s LinkedIn connection request is still pending in Sent Invitations.</p>
+      <div class="rail-meta">linkedin-sent-invitations · May 29, 2026, 8:22 AM</div>
+      <p class="tight-copy"><strong>Recommended:</strong> Keep Parm Uppal&#39;s connection request patient for now and recheck it later.</p>
+    </article>
+  
+          </div>
+          <div class="regen">
+            <div class="mini-eyebrow">Regenerate</div>
+            <code>exo report workspace --user 00d08a04-c0b5-457c-8cb0-205c81593224 --out ./prototype/motion-workspace.html</code>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </div>
+</body>
+</html>

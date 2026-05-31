@@ -12,6 +12,8 @@ export function renderMotionSummary(motion) {
     `URL: ${motion.offer.sourceUrl}`,
     `Created: ${motion.createdAt}`,
     `Updated: ${motion.updatedAt}`,
+    `Pinned User: ${motion.engagementUserAssignment?.label ?? "none"}`,
+    `Pinned Profile: ${motion.engagementProfileAssignment?.label ?? "none"}`,
     "",
     "Premise",
     `  Statement: ${motion.premise.statement ?? "none"}`,

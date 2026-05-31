@@ -132,8 +132,8 @@ export function describeExo() {
         purpose: "Inspect the canonical Audienti-style GTM action catalog that Exo uses for action readiness and execution briefs."
       },
       {
-        command: "exo inbound surfaces/surface/sync show/set/record/observations list/show/add",
-        purpose: "Inspect the canonical inbound truth surfaces, manage per-account sync policy, and read or write normalized inbound observations before live retrieval exists."
+        command: "exo inbound surfaces/surface/cues add/list/resolve/sync show/plan/live/linkedin/linkedin-live/gmail/gmail-live/run/set/record/observations list/show/add",
+        purpose: "Inspect the canonical inbound truth surfaces, record ambient inbound cues, manage per-account sync policy, run one governed mixed-account live inbound pass plus the first direct LinkedIn and Gmail live retrieval slices through supported runtimes, and read or write normalized inbound observations."
       },
       {
         command: "exo inbound review",
@@ -145,7 +145,7 @@ export function describeExo() {
       },
       {
         command: "exo daily",
-        purpose: "Show the planner agenda that reconciles prospect cadence, inbound observations, and configured connection-request pacing into due-now, waiting, deficit, and inbound-overridden next moves."
+        purpose: "Show the planner agenda that reconciles prospect cadence, inbound observations, ambient sync cues, working-hours windows, and configured connection-request pacing into due-now, waiting, deficit, and inbound-overridden next moves."
       },
       {
         command: "exo next",
@@ -156,31 +156,35 @@ export function describeExo() {
         purpose: "Render one unified motion report that combines setup, readiness, company progress, prospect progress, and next actions."
       },
       {
+        command: "exo report workspace",
+        purpose: "Render one read-only workspace projection across inbound truth surfaces, motions, prep state, engagement state, and planner pressure."
+      },
+      {
         command: "exo config export/import",
         purpose: "Export and import motions, companies, browser profiles, and execution users as portable Exo configuration."
       },
       {
-        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/claim/complete/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign",
-        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, and pin either a sticky engagement profile or a cross-capability execution user when outreach starts."
+        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/claim/complete/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign/execution show",
+        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, pin either a sticky engagement profile or a cross-capability execution user when outreach starts, and inspect the resolved execution plan with optional motion-level fallback."
       },
       {
-        command: "exo motion intake/start/add/seed/discover/target/packets/packet-brief/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/remove",
-        purpose: "Ask one intake question at a time before launch, start a motion from an offer URL, force reuse-or-branch decisions when that URL already exists, evaluate targeting readiness, inspect targeted prospects and writing inputs, inspect prospect-scoped action readiness and execution briefs, inspect Audienti-style draft cases, inspect one compact single-surface draft brief for chat writing, and then create, branch, refine, pause, resume, archive, restart, refresh, enumerate, inspect, and remove offer-driven motion state built around premise, audience hypotheses, and motion-specific signals."
+        command: "exo motion intake/start/add/seed/discover/target/packets/packet-brief/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/profile show/assign/user show/assign/remove",
+        purpose: "Ask one intake question at a time before launch, start a motion from an offer URL, force reuse-or-branch decisions when that URL already exists, evaluate targeting readiness, inspect targeted prospects and writing inputs, inspect prospect-scoped action readiness and execution briefs, inspect Audienti-style draft cases, inspect one compact single-surface draft brief for chat writing, assign one sticky execution identity at motion scope, and then create, branch, refine, pause, resume, archive, restart, refresh, enumerate, inspect, and remove offer-driven motion state built around premise, audience hypotheses, and motion-specific signals."
       },
       {
-        command: "exo profiles discover/add/claim/list/show/capabilities/resolve/test/remove",
-        purpose: "Discover local browser profiles, claim them as business identities, store account-level weekly outreach quotas, verify claimed capabilities, resolve the right browser identity, and query capability coverage for browser-backed Exo work."
+        command: "exo profiles discover/add/claim/list/show/capabilities/resolve/test/auth/remove",
+        purpose: "Discover local browser profiles, claim them as business identities, store account-level weekly outreach quotas, verify claimed capabilities, probe live signed-in readiness, resolve the right browser identity, and query capability coverage for browser-backed Exo work."
       },
       {
-        command: "exo users add/list/show/harness add/accounts add/resolve",
-        purpose: "Manage human execution identities that own connected accounts across browser profiles and harness connectors, then resolve the right account for each capability."
+        command: "exo users add/list/show/working-hours show/set/harness add/probe/accounts add/resolve",
+        purpose: "Manage human execution identities that own connected accounts across browser profiles and harness connectors, define the user's working-hours window for planner pressure, probe the current runtime for callable harness paths, and then resolve the right account for each capability."
       }
     ],
     browserProfileRules: [
       "Browser-backed work should fail closed if no profile is attached or trusted.",
       "A ready profile means the local browser context looks structurally usable.",
       "Profile checks do not yet prove live LinkedIn, Sales Navigator, Gmail, or HubSpot auth.",
-      "Inbound sync policy and normalized inbound observations can now be governed per connected account, but actual retrieval still needs a live sync implementation.",
+      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through supported runtime adapters, including runtime:gmail harness-backed accounts and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn quick-mode surfaces can also be retrieved live through a trusted Chrome profile plus a supported runtime:chrome harness, but broader inbound retrieval still needs dedicated producers.",
       "Configured weekly quotas on the claimed profile identity should govern outreach pacing. InMail credits are still a separate live observation, not a static config knob.",
       "Exo resolves browser identity. The agent runtime should choose the browser-control harness.",
       "In Codex, prefer the Chrome skill or native Chrome connector before Playwriter for Chrome-profile work."
@@ -196,6 +200,8 @@ export function describeExo() {
         "exo users list --json",
         "exo inbound surfaces --json",
         "exo inbound sync show <user-id> --json",
+        "exo inbound sync plan <user-id> --mode quick --json",
+        "exo inbound cues list <user-id> --json",
         "exo inbound review <user-id> --json",
         "exo inbound observations list <user-id> --json",
         "exo inbox --user <user-id> --json",
@@ -262,8 +268,16 @@ export function describeExo() {
               "exo profiles discover --json",
               "exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json",
               "exo users add --label william-main --owner william --json",
+              "exo users harness probe <user-id> --runtime codex --json",
+              "exo users harness probe <user-id> --runtime claude --json",
               "exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred --json",
               "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred --json",
+              "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime claude --connector gmail --preferred --json",
+              "exo users harness add <user-id> --runtime codex --connector chrome --status unknown --json",
+              "exo users harness add <user-id> --runtime claude --connector chrome --status unknown --json",
+              "exo profiles auth <profile-id> --runtime codex --json",
+              "exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --json",
+              "exo inbound sync gmail-live <user-id> --account <account-id> --json",
               "exo profiles list --json",
               "exo profiles capabilities --json",
               "exo users list --json",
@@ -307,14 +321,15 @@ export function describeExo() {
     gettingStarted: buildGettingStarted(stateSummary),
     currentLimitations: [
       "No MCP wrapper yet.",
-      "No live browser auth probes yet.",
-      "No live inbound retrieval yet. Exo can now store inbound sync policy, last-run sync memory, and normalized inbound observations, but it does not yet pull inbox or LinkedIn state by itself.",
-      "No profile-to-motion assignment yet.",
+      "Live browser auth probes now exist for trusted Chrome profiles through supported runtime:chrome adapters, but Exo still does not do broader cross-browser auth proof or live non-browser connector auth proof by itself.",
+      "Limited live inbound retrieval now exists for Gmail and LinkedIn quick-mode surfaces through supported runtime adapters, but Exo still does not do broader LinkedIn or other inbound retrieval by itself.",
+      "Ambient inbound cues and working-hours-aware sync pressure now exist, but cues are still suspicion rather than truth and the planner still depends on governed sync runs to confirm what actually changed.",
+      "Motion-level sticky execution defaults now exist, but canonical company execution still needs explicit motion context when the same company belongs to more than one motion.",
       "No automatic company population from motion retrieval yet.",
       "No real Sales Navigator retrieval yet.",
       "No automatic target-map or stakeholder-map generation yet, even though Exo can now persist manual target-account signal matches, prospects, through-lines, opening plans, and cadence state.",
       "No automatic prospect selection, through-line synthesis, or opening-plan generation yet. Agents still need to choose and write back the people, the reply-path hypothesis, and the first move explicitly.",
-      "No runtime auto-discovery for harness connectors yet. Exo can now store user-level harness connections, but it still does not inspect Codex-vs-Claude runtime availability by itself.",
+      "Limited runtime auto-discovery now exists for Codex harness connectors through local Codex config inspection and for Claude through CLI plugin and MCP inspection, but Exo still does not do full cross-runtime availability inspection or live connector auth probes by itself.",
       "No full multi-channel pacing model yet. Exo can now compute LinkedIn invitation deficit when the claimed browser profile has a stored quota, but broader channel saturation and capacity balancing are still future work.",
       "No public bug-reporting or feature-request intake yet. That is a future alpha feature, not current scope."
     ],

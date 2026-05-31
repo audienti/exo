@@ -8,6 +8,7 @@ import {
   findUserById,
   listBrowserProfiles,
   listCompanies,
+  listInboundCues,
   listInboundObservations,
   listMotions,
   listUsers
@@ -75,6 +76,12 @@ Rules:
         rawProfiles: listBrowserProfiles(),
         rawUsers,
         rawObservations,
+        rawCues: rawUser
+          ? listInboundCues({
+              userId: rawUser.id,
+              status: "open"
+            })
+          : [],
         filters: {
           motionId: options.motion ?? null,
           companyId: options.company ?? null,

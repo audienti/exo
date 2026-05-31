@@ -17,6 +17,7 @@ import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
  *   rawProfiles: unknown[],
  *   rawUsers: unknown[],
  *   rawObservations: unknown[],
+ *   rawCues?: unknown[] | undefined,
  *   filters?: {
  *     motionId?: string | null | undefined,
  *     companyId?: string | null | undefined,
@@ -30,6 +31,7 @@ export function buildNextView(input) {
 
   if (input.rawUser) {
     const daily = buildDailyView(input.rawUser, input.rawMotions, input.rawCompanies, input.rawProfiles, input.rawObservations, {
+      rawCues: input.rawCues ?? [],
       motionId: filters.motionId ?? null,
       companyId: filters.companyId ?? null,
       prospectId: filters.prospectId ?? null,

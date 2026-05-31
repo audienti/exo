@@ -33,6 +33,7 @@ import {
   insertCompany,
   listBrowserProfiles,
   listCompanies,
+  listUsers,
   searchCompanies,
   updateCompany,
   updateMotion
@@ -106,6 +107,7 @@ Rules:
     .option("--domain <domain>", "Company domain")
     .option("--website-url <url>", "Company website URL")
     .option("--linkedin-company-url <url>", "LinkedIn company URL")
+    .option("--logo-source-url <url>", "Source image URL for the company logo")
     .option("--tag <tag>", "Company tag", collect, [])
     .option("--motion <motion-id>", "Linked motion id", collect, [])
     .option("--notes <notes>", "Freeform notes")
@@ -144,6 +146,7 @@ Notes:
         domain: options.domain ?? null,
         websiteUrl: options.websiteUrl ?? null,
         linkedinCompanyUrl: options.linkedinCompanyUrl ?? null,
+        logoSourceUrl: options.logoSourceUrl ?? null,
         notes: options.notes ?? null,
         tags: normalizeStringList(options.tag),
         motionIds: normalizeStringList(options.motion)
@@ -328,16 +331,19 @@ Rules:
     .description("Show the resolved execution plan for one company capability.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--capability <capability>", "generic-web | linkedin | sales-navigator | gmail | hubspot")
+    .option("--motion <motion-id>", "Honor a motion-level execution default when the company itself is not pinned")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
       "after",
       `
 Examples:
   exo companies execution show <company-id> --capability linkedin
+  exo companies execution show <company-id> --motion <motion-id> --capability linkedin
   exo companies execution show <company-id> --capability linkedin --json
 
 Use this before live browser-backed work when you need one canonical answer to:
   - which user and profile are pinned to this company?
+  - whether the company is inheriting its sticky identity from a motion default instead of a company pin
   - which transport should I try first in this runtime?
   - what recovery pattern should I use if Chrome or the relay fails?
 `
@@ -351,11 +357,31 @@ Use this before live browser-backed work when you need one canonical answer to:
       }
 
       const company = companySchema.parse(rawCompany);
+      const rawMotion = options.motion ? findMotionById(options.motion) : null;
+      if (options.motion && !rawMotion) {
+        console.error(`Motion not found: ${options.motion}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (rawMotion && !company.motionIds.includes(rawMotion.id)) {
+        console.error(`Company ${company.name} is not linked to motion ${rawMotion.id}.`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const motion = rawMotion ? motionSchema.parse(rawMotion) : null;
       const rawUser = company.engagementUserAssignment
         ? findUserById(company.engagementUserAssignment.userId)
-        : null;
+        : motion?.engagementUserAssignment
+          ? findUserById(motion.engagementUserAssignment.userId)
+          : null;
+      const rawUsers = rawMotion || !rawUser
+        ? listUsers()
+        : [rawUser];
       const execution = buildCompanyExecutionView(rawCompany, rawUser, listBrowserProfiles(), {
-        capability: browserProfileCapabilitySchema.parse(options.capability)
+        capability: browserProfileCapabilitySchema.parse(options.capability),
+        rawMotion,
+        rawUsers
       });
 
       if (options.json) {
@@ -405,6 +431,7 @@ Examples:
     .option("--domain <domain>", "Company domain")
     .option("--website-url <url>", "Company website URL")
     .option("--linkedin-company-url <url>", "LinkedIn company URL")
+    .option("--logo-source-url <url>", "Source image URL for the company logo")
     .option("--tag <tag>", "Replace company tags with the provided set", collect, [])
     .option("--motion <motion-id>", "Replace linked motion ids with the provided set", collect, [])
     .option("--notes <notes>", "Freeform notes")
@@ -442,6 +469,9 @@ Rules:
       }
       if (options.linkedinCompanyUrl !== undefined) {
         patch.linkedinCompanyUrl = options.linkedinCompanyUrl;
+      }
+      if (options.logoSourceUrl !== undefined) {
+        patch.logoSourceUrl = options.logoSourceUrl;
       }
       if (options.notes !== undefined) {
         patch.notes = options.notes;
@@ -728,6 +758,7 @@ Use this when the agent needs the chosen people of record before writing or brow
     .requiredOption("--why-relevant <text>", "Short reason this person matters for the motion")
     .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
     .option("--linkedin-profile-url <url>", "LinkedIn profile URL")
+    .option("--avatar-source-url <url>", "Source image URL for the prospect avatar")
     .option("--email <email>", "Direct email when known")
     .option("--buying-committee-role <role>", "Buying committee role")
     .option("--decision-authority <authority>", "Decision authority: buys, blocks, sponsors, influences, observes, unknown")
@@ -869,6 +900,7 @@ Rules:
     .option("--title <title>", "Prospect title")
     .option("--why-relevant <text>", "Short reason this person matters for the motion")
     .option("--linkedin-profile-url <url>", "LinkedIn profile URL")
+    .option("--avatar-source-url <url>", "Source image URL for the prospect avatar")
     .option("--email <email>", "Direct email when known")
     .option("--buying-committee-role <role>", "Buying committee role")
     .option("--decision-authority <authority>", "Decision authority: buys, blocks, sponsors, influences, observes, unknown")
@@ -2072,6 +2104,7 @@ function buildProspectInputFromOptions(options) {
     name: options.name,
     title: options.title,
     linkedinProfileUrl: options.linkedinProfileUrl,
+    avatarSourceUrl: options.avatarSourceUrl,
     email: options.email,
     buyingCommitteeRole: normalizeBuyingCommitteeRole(options.buyingCommitteeRole),
     decisionAuthority: normalizeDecisionAuthority(options.decisionAuthority),
@@ -2829,6 +2862,8 @@ function renderCompanyExecutionPlan(execution) {
   const lines = [
     `Execution Plan: ${execution.company.name}`,
     `Capability: ${execution.capability}`,
+    `Motion Context: ${execution.motion ? `${execution.motion.name} (${execution.motion.id})` : "none"}`,
+    `Assignment Source: ${execution.assignmentSource}`,
     `Pinned User: ${execution.assignments.user?.label ?? "none"}`,
     `Pinned Profile: ${execution.assignments.profile?.label ?? "none"}`,
     `Transport Mode: ${execution.transport.mode}`,

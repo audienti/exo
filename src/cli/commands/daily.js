@@ -3,7 +3,7 @@
 
 import { renderDaily } from "../../artifacts/render-daily.js";
 import { buildDailyView } from "../../core/build-daily-view.js";
-import { findUserById, listBrowserProfiles, listCompanies, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
+import { findUserById, listBrowserProfiles, listCompanies, listInboundCues, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
 
 /**
  * @param {import("commander").Command} program
@@ -44,6 +44,10 @@ Rules:
         prospectId: options.prospect ?? null
       });
       const result = buildDailyView(user, listMotions(), listCompanies(), listBrowserProfiles(), observations, {
+        rawCues: listInboundCues({
+          userId: user.id,
+          status: "open"
+        }),
         motionId: options.motion ?? null,
         companyId: options.company ?? null,
         prospectId: options.prospect ?? null,

@@ -1,19 +1,19 @@
 // @ts-check
 
+import { inboundCueSchema } from "../schema/inbound.js";
 import { buildInboxView } from "./build-inbox-view.js";
 import { buildInboundReviewView } from "./build-inbound-review-view.js";
-import { buildUserInboundSyncView } from "./user-inbound-sync.js";
+import { buildUserInboundSyncView, classifyInboundSurfaceFreshness } from "./user-inbound-sync.js";
 import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
+import { classifyUserWorkingHours } from "./working-hours.js";
 import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
 import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
 import { hasUsableEmailFallback } from "../lib/prospect-contacts.js";
 import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
 import { buildOutboundCapacityView } from "./build-outbound-capacity-view.js";
-
-const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * @param {unknown} rawUser
@@ -23,6 +23,7 @@ const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
  * @param {unknown[]} rawObservations
  * @param {{
  *   now?: string | null | undefined,
+ *   rawCues?: unknown[] | undefined,
  *   motionId?: string | null | undefined,
  *   companyId?: string | null | undefined,
  *   prospectId?: string | null | undefined,
@@ -62,12 +63,14 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
     companyId: options.companyId ?? null,
     prospectId: options.prospectId ?? null
   });
+  const cues = (options.rawCues ?? []).map((cue) => inboundCueSchema.parse(cue));
 
   const syncPlannerItem = buildSyncPlannerItem({
     user,
     motions,
     assignedCompanyIds,
     observationCount: rawObservations.length,
+    cues,
     now,
     options
   });
@@ -359,8 +362,10 @@ function buildInboundReviewPlannerItems(review) {
  *   motions: import("../schema/motion.js").motionSchema._type[],
  *   assignedCompanyIds: Set<string>,
  *   observationCount: number,
+ *   cues: import("../schema/inbound.js").inboundCueSchema._type[],
  *   now: string,
  *   options: {
+ *     rawCues?: unknown[] | undefined,
  *     motionId?: string | null | undefined,
  *     companyId?: string | null | undefined,
  *     prospectId?: string | null | undefined,
@@ -368,8 +373,18 @@ function buildInboundReviewPlannerItems(review) {
  *   }
  * }} input
  */
-function buildSyncPlannerItem({ user, motions, assignedCompanyIds, observationCount, now, options }) {
-  if (!assignedCompanyIds.size || observationCount > 0 || options.prospectId) {
+function buildSyncPlannerItem({ user, motions, assignedCompanyIds, observationCount, cues, now, options }) {
+  if (!assignedCompanyIds.size || options.prospectId) {
+    return null;
+  }
+
+  const openCues = cues.filter((cue) =>
+    cue.userId === user.id
+    && cue.status === "open"
+    && (!options.motionId || cue.motionId === options.motionId)
+    && (!options.companyId || cue.companyId === options.companyId)
+  );
+  if (observationCount > 0 && !openCues.length) {
     return null;
   }
 
@@ -380,20 +395,21 @@ function buildSyncPlannerItem({ user, motions, assignedCompanyIds, observationCo
         .filter((surface) => surface.enabled && surface.truthLevel === "authoritative")
         .map((surface) => ({
           ...surface,
-          freshness: classifySurfaceFreshness(surface, now)
+          freshness: classifyInboundSurfaceFreshness(surface, now)
         }))
         .filter((surface) => surface.freshness);
-
-      if (!staleSurfaces.length) {
+      const accountCues = openCues.filter((cue) => cue.accountId === account.accountId);
+      if (!staleSurfaces.length && !accountCues.length) {
         return null;
       }
 
       return {
         account,
-        staleSurfaces
+        staleSurfaces,
+        cues: accountCues
       };
     })
-    .filter(Boolean);
+    .filter((entry) => entry && (entry.staleSurfaces.length || entry.cues.length));
 
   if (!relevantAccounts.length) {
     return null;
@@ -402,19 +418,42 @@ function buildSyncPlannerItem({ user, motions, assignedCompanyIds, observationCo
   const filteredMotion = options.motionId
     ? motions.find((motion) => motion.id === options.motionId) ?? null
     : null;
+  const workingHours = classifyUserWorkingHours(user, now);
+  const hasCue = relevantAccounts.some((entry) => entry.cues.length > 0);
   const capabilityLabels = [...new Set(relevantAccounts.map((entry) => humanizeCapability(entry.account.capability)))];
   const staleSurfaceLabels = relevantAccounts.flatMap((entry) => entry.staleSurfaces.map((surface) => surface.label));
+  const cueSurfaceLabels = relevantAccounts.flatMap((entry) => entry.cues.map((cue) => cueLabelForAccount(entry.account, cue.surfaceKey)));
+  const surfaceLabels = [...new Set([...staleSurfaceLabels, ...cueSurfaceLabels])];
   const neverOrFailed = relevantAccounts.some((entry) =>
     entry.staleSurfaces.some((surface) => surface.freshness.reason === "never" || surface.freshness.reason === "failed")
   );
-  const reasonSummary = neverOrFailed
-    ? "enabled inbound surfaces have never been checked yet or have a failed sync state"
-    : "enabled inbound surfaces are stale enough that the planner should refresh them before trusting silence";
-  const whyItMatters = `Exo has no fresh inbound truth for ${capabilityLabels.join(" and ")}, so the planner should refresh those surfaces before trusting the absence of replies, accepts, or attention signals.`;
-  const recommendedAction = `Run a quick inbound sync for ${capabilityLabels.join(" and ")}, record any observations you find, mark the surfaces checked, and then rerun inbox, daily, and next.`;
-  const earliestDueAt = relevantAccounts
+  const reasonSummary = hasCue
+    ? "ambient cues suggest something changed on live inbound surfaces even though Exo has not checked the canonical truth yet"
+    : neverOrFailed
+      ? "enabled inbound surfaces have never been checked yet or have a failed sync state"
+      : "enabled inbound surfaces are stale enough that the planner should refresh them before trusting silence";
+  const whyItMatters = hasCue
+    ? `While doing other governed work, the agent saw ambient inbound cues on ${surfaceLabels.join(", ")}. That is not canonical truth by itself, but it is enough smoke that Exo should check the real surfaces before trusting silence.`
+    : `Exo has no fresh inbound truth for ${capabilityLabels.join(" and ")}, so the planner should refresh those surfaces before trusting the absence of replies, accepts, or attention signals.`;
+  const baseRecommendedAction = hasCue
+    ? `Run a quick inbound sync for ${capabilityLabels.join(" and ")}, starting with ${surfaceLabels.join(", ")}, because the agent saw ambient cue${openCues.length === 1 ? "" : "s"} that something may have changed.`
+    : `Run a quick inbound sync for ${capabilityLabels.join(" and ")}, record any observations you find, mark the surfaces checked, and then rerun inbox, daily, and next.`;
+  const naturalDueAt = relevantAccounts
     .flatMap((entry) => entry.staleSurfaces.map((surface) => surface.freshness.dueAt))
+    .concat(openCues.map((cue) => cue.observedAt))
     .sort()[0] ?? now;
+  const dueAt = workingHours.openNow
+    ? naturalDueAt
+    : workingHours.nextOpenAt ?? naturalDueAt;
+  const recommendedAction = workingHours.openNow
+    ? baseRecommendedAction
+    : `${baseRecommendedAction} Queue that sync for the next open working hours window instead of forcing it right now.`;
+  const state = workingHours.openNow ? "due_now" : "waiting_until";
+  const priority = workingHours.openNow ? "action" : "wait";
+  const priorityRank = workingHours.openNow ? 0.45 : 2.9;
+  const cadenceEffect = workingHours.openNow
+    ? hasCue ? "sync_hint_detected" : "sync_needed"
+    : "sync_waiting_for_working_hours";
 
   return {
     motion: filteredMotion
@@ -433,38 +472,48 @@ function buildSyncPlannerItem({ user, motions, assignedCompanyIds, observationCo
     prospect: {
       id: `inbound-sync:${user.id}`,
       name: "Inbound sync",
-      title: `${staleSurfaceLabels.length} authoritative surface${staleSurfaceLabels.length === 1 ? "" : "s"} need refresh`
+      title: hasCue
+        ? `${surfaceLabels.length} surface${surfaceLabels.length === 1 ? "" : "s"} have cue-driven sync pressure`
+        : `${surfaceLabels.length} authoritative surface${surfaceLabels.length === 1 ? "" : "s"} need refresh`
     },
     cadence: {
       currentStep: null,
       nextAction: recommendedAction,
-      nextActionDueAt: earliestDueAt,
+      nextActionDueAt: dueAt,
       lastTouchOutcome: null
     },
     guidance: buildPlannerGuidance("sync_inbound_surfaces", {
       motionId: filteredMotion?.id ?? "",
       motionName: filteredMotion?.name ?? "active motions",
       recommendedAction,
-      dueAt: earliestDueAt,
+      dueAt,
       whyItMatters,
       accountCapabilityList: capabilityLabels.join(", "),
-      surfaceList: staleSurfaceLabels.join(", "),
+      surfaceList: surfaceLabels.join(", "),
       syncReason: reasonSummary
     }),
-    state: "due_now",
-    priority: "action",
-    priorityRank: 0.5,
-    cadenceEffect: "sync_needed",
-    dueAt: earliestDueAt,
+    state,
+    priority,
+    priorityRank,
+    cadenceEffect,
+    dueAt,
     whyItMatters,
     recommendedAction,
     source: {
       type: "inbound_sync",
-      kind: neverOrFailed ? "sync_needed" : "sync_stale",
+      kind: hasCue ? "sync_hint" : neverOrFailed ? "sync_needed" : "sync_stale",
       accountCount: relevantAccounts.length,
-      surfaceCount: staleSurfaceLabels.length
+      surfaceCount: surfaceLabels.length
     }
   };
+}
+
+/**
+ * @param {ReturnType<typeof buildUserInboundSyncView>["accounts"][number]} account
+ * @param {string} surfaceKey
+ */
+function cueLabelForAccount(account, surfaceKey) {
+  return account.surfaces.find((surface) => surface.key === surfaceKey)?.label ?? surfaceKey;
 }
 
 /**
@@ -813,45 +862,6 @@ function inferCadenceGuidanceKey(cadence, waiting) {
  * }} surface
  * @param {string} now
  */
-function classifySurfaceFreshness(surface, now) {
-  if (surface.lastRunStatus === "never") {
-    return {
-      reason: "never",
-      dueAt: "1970-01-01T00:00:00.000Z"
-    };
-  }
-
-  if (surface.lastRunStatus === "failed") {
-    return {
-      reason: "failed",
-      dueAt: surface.lastSyncedAt ?? "1970-01-01T00:00:00.000Z"
-    };
-  }
-
-  const freshnessTime = surface.lastObservedAt ?? surface.lastSyncedAt;
-  if (!freshnessTime) {
-    return {
-      reason: "never",
-      dueAt: "1970-01-01T00:00:00.000Z"
-    };
-  }
-
-  const freshnessMs = Date.parse(freshnessTime);
-  const nowMs = Date.parse(now);
-  if (Number.isNaN(freshnessMs) || Number.isNaN(nowMs)) {
-    return null;
-  }
-
-  if (surface.lastRunStatus === "warning" || nowMs - freshnessMs > INBOUND_SYNC_STALE_MS) {
-    return {
-      reason: surface.lastRunStatus === "warning" ? "warning" : "stale",
-      dueAt: freshnessTime
-    };
-  }
-
-  return null;
-}
-
 /**
  * @param {ReturnType<typeof buildDailyItem>} left
  * @param {ReturnType<typeof buildDailyItem>} right

@@ -3,6 +3,7 @@
 import { buildMotionDraftView } from "./build-motion-draft-view.js";
 import { buildMotionProspectView } from "./build-motion-prospect-view.js";
 import { listActionCatalog, normalizeActionKey } from "../lib/action-catalog.js";
+import { motionSchema } from "../schema/motion.js";
 
 /**
  * @param {unknown} rawMotion
@@ -30,7 +31,7 @@ export function buildMotionActionView(rawMotion, options, rawCompany = null) {
 
   const brief = prospectView.writingBrief;
   const draftSurfaces = new Map(draftView.surfaces.map((surface) => [surface.key, surface]));
-  const executionIdentity = buildExecutionIdentity(rawCompany);
+  const executionIdentity = buildExecutionIdentity(rawCompany, rawMotion);
 
   const actions = listActionCatalog()
     .map((definition) => buildActionState(brief, definition, draftSurfaces, executionIdentity))
@@ -409,6 +410,7 @@ function buildExecutionSteps(actionView, action) {
   if (action.platform === "linkedin" || action.platform === "email") {
     const capability = action.platform === "linkedin" ? "linkedin" : "gmail";
     steps.push(`Pull the canonical execution plan with exo companies execution show ${actionView.company.id} --capability ${capability} --json before you touch the live surface.`);
+    steps.push("While doing the live action, take one cheap ambient glance for unread badges, invite indicators, or thread movement. If you see smoke, record an inbound cue in Exo instead of pretending that hint is canonical truth.");
   }
 
   if (action.platform === "linkedin") {
@@ -528,10 +530,14 @@ function deriveWritebackSurface(action) {
 
 /**
  * @param {unknown | null} rawCompany
+ * @param {unknown} rawMotion
  */
-function buildExecutionIdentity(rawCompany) {
+function buildExecutionIdentity(rawCompany, rawMotion) {
+  const motion = motionSchema.parse(rawMotion);
   const userAssignment = rawCompany && typeof rawCompany === "object" ? rawCompany.engagementUserAssignment : null;
   const assignment = rawCompany && typeof rawCompany === "object" ? rawCompany.engagementProfileAssignment : null;
+  const motionUserAssignment = motion.engagementUserAssignment;
+  const motionAssignment = motion.engagementProfileAssignment;
 
   if (userAssignment) {
     return {
@@ -545,7 +551,31 @@ function buildExecutionIdentity(rawCompany) {
     };
   }
 
+  if (motionUserAssignment) {
+    return {
+      status: "pinned-motion-user",
+      message: `Pinned to motion user ${motionUserAssignment.label}. Resolve the needed account by capability before acting.`,
+      label: motionUserAssignment.label,
+      userId: motionUserAssignment.userId,
+      profileId: motionAssignment?.profileId ?? null,
+      browser: motionAssignment?.browser ?? null,
+      profileDirectory: motionAssignment?.profileDirectory ?? null
+    };
+  }
+
   if (!assignment) {
+    if (motionAssignment) {
+      return {
+        status: "pinned-motion",
+        message: `Pinned to motion profile ${motionAssignment.label} on ${motionAssignment.browser} ${motionAssignment.profileDirectory}.`,
+        label: motionAssignment.label,
+        userId: null,
+        profileId: motionAssignment.profileId,
+        browser: motionAssignment.browser,
+        profileDirectory: motionAssignment.profileDirectory
+      };
+    }
+
     return {
       status: "unassigned",
       message: "No sticky company profile is pinned yet. Resolve or assign one before live browser work.",

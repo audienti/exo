@@ -2,29 +2,31 @@
 
 import { browserProfileCapabilitySchema, browserProfileSchema } from "../schema/browser-profile.js";
 import { companySchema } from "../schema/company.js";
+import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
-import { resolveUserConnection } from "./resolve-user-connection.js";
+import { resolveScopedExecutionAssignment } from "./resolve-scoped-execution-assignment.js";
 
 /**
  * @param {unknown} rawCompany
  * @param {unknown | null} rawUser
  * @param {unknown[]} rawProfiles
- * @param {{ capability: string }} input
+ * @param {{ capability: string, rawMotion?: unknown | null, rawUsers?: unknown[] | null }} input
  */
 export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, input) {
   const company = companySchema.parse(rawCompany);
   const capability = browserProfileCapabilitySchema.parse(input.capability);
   const profiles = rawProfiles.map((profile) => browserProfileSchema.parse(profile));
   const user = rawUser ? userSchema.parse(rawUser) : null;
-  const resolvedAccount = user
-    ? resolveUserConnection(user, profiles, { capability }).resolved
-    : null;
-  const assignedProfile = company.engagementProfileAssignment
-    ? profiles.find((profile) => profile.id === company.engagementProfileAssignment.profileId) ?? null
-    : null;
-  const resolvedProfile = resolvedAccount?.browserProfile
-    ? profiles.find((profile) => profile.id === resolvedAccount.browserProfile.id) ?? null
-    : assignedProfile;
+  const motion = input.rawMotion ? motionSchema.parse(input.rawMotion) : null;
+  const scoped = resolveScopedExecutionAssignment({
+    rawCompany: company,
+    rawMotion: motion,
+    rawProfiles: profiles,
+    rawUsers: input.rawUsers ?? (user ? [user] : []),
+    capability
+  });
+  const resolvedAccount = scoped.resolvedAccount;
+  const resolvedProfile = scoped.resolvedProfile;
 
   return {
     company: {
@@ -32,26 +34,33 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
       name: company.name,
       domain: company.domain
     },
+    motion: motion
+      ? {
+          id: motion.id,
+          name: motion.name
+        }
+      : null,
     capability,
+    assignmentSource: scoped.source,
     assignments: {
-      user: company.engagementUserAssignment
+      user: scoped.assignedUser
         ? {
-            userId: company.engagementUserAssignment.userId,
-            label: company.engagementUserAssignment.label,
-            owner: company.engagementUserAssignment.owner,
-            accountRefs: company.engagementUserAssignment.accountRefs,
-            assignedAt: company.engagementUserAssignment.assignedAt,
-            reason: company.engagementUserAssignment.reason
+            userId: scoped.assignedUser.id,
+            label: scoped.assignedUser.label,
+            owner: scoped.assignedUser.owner,
+            accountRefs: scoped.assignedUser.accounts.map((account) => `${account.capability}:${account.handle}`),
+            assignedAt: scoped.userAssignmentRecord?.assignedAt ?? null,
+            reason: scoped.userAssignmentRecord?.reason ?? null
           }
         : null,
-      profile: company.engagementProfileAssignment
+      profile: scoped.assignedProfile
         ? {
-            profileId: company.engagementProfileAssignment.profileId,
-            label: company.engagementProfileAssignment.label,
-            browser: company.engagementProfileAssignment.browser,
-            profileDirectory: company.engagementProfileAssignment.profileDirectory,
-            assignedAt: company.engagementProfileAssignment.assignedAt,
-            reason: company.engagementProfileAssignment.reason
+            profileId: scoped.assignedProfile.id,
+            label: scoped.assignedProfile.label,
+            browser: scoped.assignedProfile.browser,
+            profileDirectory: scoped.assignedProfile.profileDirectory,
+            assignedAt: scoped.profileAssignmentRecord?.assignedAt ?? scoped.userAssignmentRecord?.assignedAt ?? null,
+            reason: scoped.profileAssignmentRecord?.reason ?? scoped.userAssignmentRecord?.reason ?? null
           }
         : null
     },
@@ -97,7 +106,17 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
  * @param {{
  *   company: import("../schema/company.js").companySchema._type,
  *   capability: import("../schema/browser-profile.js").browserProfileCapabilitySchema._type,
- *   resolvedAccount: ReturnType<typeof resolveUserConnection>["resolved"],
+ *   resolvedAccount: {
+ *     accountId: string,
+ *     capability: string,
+ *     handle: string,
+ *     label: string | null,
+ *     sourceType: string,
+ *     status: string,
+ *     reason: string,
+ *     browserProfile: unknown,
+ *     harnessConnection: unknown
+ *   } | null,
  *   resolvedProfile: import("../schema/browser-profile.js").browserProfileSchema._type | null
  * }} input
  */

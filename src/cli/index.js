@@ -40,6 +40,7 @@ Common patterns:
   exo motion start --url https://example.com/product --existing continue --json
   exo motion target <motion-id> --json
   exo report motion <motion-id>
+  exo report workspace --user <user-id> --out ./motion-workspace.html
   exo motion clone <motion-id> --audience "BNPL modernization leaders" --segment bnpl --json
   exo motion update <motion-id> --audience "Traditional FI risk owners" --title "Chief Risk Officer" --segment traditional-fi --json
   exo motion add --config ./actico.motion.json --json
@@ -50,6 +51,12 @@ Common patterns:
   exo motion remove <motion-id>
   exo inbound surfaces --json
   exo inbound sync show <user-id> --json
+  exo inbound sync plan <user-id> --mode quick --json
+  exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
+  exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --apply --refresh --json
+  exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --apply --refresh --json
+  exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
+  exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
   exo inbound review <user-id> --json
   exo inbound observations list <user-id> --json
   exo inbound observations add <user-id> --account <account-id> --surface linkedin-messaging-inbox --kind inbound_reply_received --observed-at 2026-05-28T14:00:00.000Z --summary "Prospect replied in LinkedIn" --json
@@ -78,6 +85,7 @@ Common patterns:
   exo profiles capabilities --json
   exo profiles resolve --capability linkedin --json
   exo profiles test <profile-id>
+  exo profiles auth <profile-id> --runtime codex --json
   exo users add --label william-main --owner william
   exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred
   exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred

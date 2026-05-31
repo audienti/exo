@@ -21,7 +21,7 @@ Exo is a stateful local operating layer. The important thing is not just running
 1. `cd` to the Exo repo root before calling the CLI if shared local state matters.
 2. Prefer `--json` whenever Exo output will feed another step.
 3. Resolve browser profile state before browser-backed work.
-4. Once a company is being worked, prefer its pinned browser identity over fresh profile resolution.
+4. Once a company is being worked, prefer its company pin first, then its motion-level default identity, over fresh profile resolution.
 5. Fail closed if the required browser profile is missing, `warning`, or `invalid` and the action is sensitive or unattended.
 6. Use Exo nouns and verbs. Do not invent horizontal actions as if they are Exo features.
 7. Prefer `exo config export --json` over copying `.exo/exo.db` when the goal is handoff or portability.
@@ -96,10 +96,20 @@ Do not default to copying the SQLite file directly unless the task is explicitly
 2. `exo profiles discover --json`
 3. `exo profiles capabilities --json`
 4. `exo profiles resolve --capability <capability> --json`
-5. If needed, `exo profiles add ... --json`
-6. `exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json`
-7. `exo profiles test <profile-id> --json`
-8. Refuse browser-backed work if the result is not trustworthy
+5. if the path resolves through a harness connector, run `exo users harness probe <user-id> --runtime <runtime> --connector <connector> --json`
+6. If needed, `exo profiles add ... --json`
+7. `exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json`
+8. `exo profiles test <profile-id> --json`
+9. `exo profiles auth <profile-id> --runtime <runtime> --json`
+10. Refuse browser-backed work if the result is not trustworthy
+
+When the agent is already doing browser-backed work on Gmail or LinkedIn, do one cheap ambient glance for unread or invite movement before leaving the surface. If you see smoke, record a cue instead of inventing truth:
+
+```bash
+exo inbound cues add <user-id> --account <account-id> --surface linkedin-messaging-inbox --kind unread_message_badge --observed-at <iso-datetime> --summary "Saw something worth checking while doing another action." --json
+```
+
+Use that when the runtime saw a badge or hint but did not actually inspect the canonical inbox or invitation surface yet.
 
 ### Browser harness preference
 
@@ -117,6 +127,58 @@ Concrete preference:
 - in Claude, prefer the native browser-use/browser-control surface available in that runtime
 - do not default to Playwriter just because it exists
 
+For harness-backed work in Codex, Exo can now inspect the local Codex config and tell you whether stored connectors like `gmail`, `chrome`, or named MCP servers are actually enabled:
+
+```bash
+exo users harness probe <user-id> --runtime codex --json
+exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json
+```
+
+Treat that as transport preflight, not as proof of live auth inside the provider.
+
+For Gmail-backed inbound truth, the first built-in live path now exists:
+
+```bash
+exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
+```
+
+Use that only when the Gmail account resolves through either a supported `runtime:gmail` harness connection such as `codex:gmail` or `claude:gmail`, or the shared-state browser model: a browser-profile-backed Gmail account with a trusted Chrome profile plus a supported `runtime:chrome` harness such as `codex:chrome` or `claude:chrome`. It runs live inspection through the resolved runtime, then lands the result through the same governed Exo sync-writeback path as manual captures.
+
+For LinkedIn-backed inbound truth, the first built-in quick-mode live path now exists:
+
+```bash
+exo users harness probe <user-id> --runtime codex --connector chrome --json
+exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --apply --refresh --json
+```
+
+Use that only when the LinkedIn account resolves through a browser-profile-backed account with a trusted Chrome profile and the user also has a supported `runtime:chrome` harness connection such as `codex:chrome` or `claude:chrome`. It runs live inspection through the resolved runtime, then lands the result through the same governed Exo sync-writeback path as manual LinkedIn captures.
+
+When both Gmail and LinkedIn truth need to land together, prefer the orchestrated pass:
+
+```bash
+exo inbound sync live <user-id> --apply --refresh --json
+```
+
+That command composes the enabled live-supported accounts for `quick` mode and applies one governed writeback instead of splitting the pass into separate commands.
+
+### Working-hours-aware sync pressure
+
+Inbound sync pressure is no longer just a freshness timer. It is also gated by the execution user's working-hours policy.
+
+Inspect or set it with:
+
+```bash
+exo users working-hours show <user-id> --json
+exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 09:00 --end 17:00 --json
+```
+
+Planner behavior:
+
+- fresh ambient cue during an open window: sync is due now
+- fresh ambient cue outside the window: queue sync for the next open window
+- cues are suspicion, not truth
+- a governed sync resolves matching open cues automatically
+
 If no native browser-control surface is available in the current session, say that explicitly before choosing any fallback path.
 
 ### Motion setup
@@ -126,6 +188,7 @@ If no native browser-control surface is available in the current session, say th
 3. Persist the returned `motion.id`
 4. `exo motion show <motion-id> --json` when the full stored object is needed later
 5. `exo motion target <motion-id> --json` when you need one governed answer about targeting readiness
+6. `exo motion user assign <motion-id> --user <user-id> --json` when one execution identity should govern the whole motion by default
 
 The motion setup call should usually define:
 
@@ -155,6 +218,12 @@ Agents should also not silently create a new motion when the same offer URL alre
 13. `exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action "Send the first touch" --json` before execution or drafting
 14. `exo companies profile assign <company-id> --profile <profile-id> --json` when engagement starts
 15. `exo companies profile show <company-id> --json` to inspect the pinned identity
+
+If the same identity should govern the whole motion before company-level overrides exist, use:
+
+- `exo motion user assign <motion-id> --user <user-id> --json`
+- `exo motion profile assign <motion-id> --profile <profile-id> --json`
+- `exo companies execution show <company-id> --motion <motion-id> --capability linkedin --json`
 
 ### Company research
 

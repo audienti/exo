@@ -7,6 +7,7 @@ import {
   withDerivedProspectContacts
 } from "../lib/prospect-contacts.js";
 import { applyManualProspectQueueState, isMotionQueueStatus } from "../lib/motion-queue.js";
+import { normalizeImageProxyFields } from "../lib/image-proxy.js";
 import {
   finalizeTargetAccountUpdate,
   normalizeNullableString,
@@ -21,6 +22,7 @@ import {
  *   name: string,
  *   title: string,
  *   linkedinProfileUrl?: string | null | undefined,
+ *   avatarSourceUrl?: string | null | undefined,
  *   email?: string | null | undefined,
  *   buyingCommitteeRole?: import("../schema/target-account.js").prospectSchema._type["buyingCommitteeRole"],
  *   decisionAuthority?: import("../schema/target-account.js").prospectSchema._type["decisionAuthority"],
@@ -105,12 +107,15 @@ import {
 export function recordMotionProspect(rawMotion, rawCompany, input) {
   const { motion, company, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
   const normalizedSignalMatchIds = normalizeSignalMatchIds(baseAccount, company.name, input.signalMatchIds);
+  const avatar = normalizeImageProxyFields(input.avatarSourceUrl);
 
   const nextProspect = {
     id: crypto.randomUUID(),
     name: input.name,
     title: input.title,
     linkedinProfileUrl: normalizeOptionalNullableString(input.linkedinProfileUrl),
+    avatarSourceUrl: avatar.sourceUrl,
+    avatarUrl: avatar.proxyUrl,
     email: normalizeOptionalNullableString(input.email),
     buyingCommitteeRole: input.buyingCommitteeRole,
     decisionAuthority: input.decisionAuthority,
@@ -192,6 +197,8 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
     domain: company.domain,
     websiteUrl: company.websiteUrl,
     linkedinCompanyUrl: company.linkedinCompanyUrl,
+    companyLogoSourceUrl: company.logoSourceUrl,
+    companyLogoUrl: company.logoUrl,
     lastResearchAt: now,
     prospects
   });
@@ -207,6 +214,7 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
  *   name?: string | undefined,
  *   title?: string | undefined,
  *   linkedinProfileUrl?: string | null | undefined,
+ *   avatarSourceUrl?: string | null | undefined,
  *   email?: string | null | undefined,
  *   buyingCommitteeRole?: import("../schema/target-account.js").prospectSchema._type["buyingCommitteeRole"],
  *   decisionAuthority?: import("../schema/target-account.js").prospectSchema._type["decisionAuthority"],
@@ -299,6 +307,7 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
   const normalizedSignalMatchIds = input.signalMatchIds === undefined
     ? undefined
     : normalizeSignalMatchIds(baseAccount, company.name, input.signalMatchIds);
+  const avatar = normalizeImageProxyFields(input.avatarSourceUrl);
 
   const updatedProspects = baseAccount.prospects.map((prospect) => {
     if (prospect.id !== input.prospectId) {
@@ -313,6 +322,14 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
         normalizeOptionalNullableString(input.linkedinProfileUrl) === undefined
           ? existing.linkedinProfileUrl
           : normalizeOptionalNullableString(input.linkedinProfileUrl),
+      avatarSourceUrl:
+        avatar.sourceUrl === undefined
+          ? existing.avatarSourceUrl
+          : avatar.sourceUrl,
+      avatarUrl:
+        avatar.proxyUrl === undefined
+          ? existing.avatarUrl
+          : avatar.proxyUrl,
       email:
         normalizeOptionalNullableString(input.email) === undefined
           ? existing.email
@@ -418,6 +435,8 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
     domain: company.domain,
     websiteUrl: company.websiteUrl,
     linkedinCompanyUrl: company.linkedinCompanyUrl,
+    companyLogoSourceUrl: company.logoSourceUrl,
+    companyLogoUrl: company.logoUrl,
     lastResearchAt: now,
     prospects: updatedProspects
   });
@@ -444,6 +463,8 @@ function upsertProspect(prospects, nextProspect, limit, now) {
         name: nextProspect.name,
         title: nextProspect.title,
         linkedinProfileUrl: nextProspect.linkedinProfileUrl ?? null,
+        avatarSourceUrl: nextProspect.avatarSourceUrl ?? null,
+        avatarUrl: nextProspect.avatarUrl ?? null,
         email: nextProspect.email ?? null,
         buyingCommitteeRole: nextProspect.buyingCommitteeRole ?? "other",
         decisionAuthority: nextProspect.decisionAuthority ?? "unknown",
@@ -486,6 +507,8 @@ function upsertProspect(prospects, nextProspect, limit, now) {
       name: nextProspect.name,
       title: nextProspect.title,
       linkedinProfileUrl: nextProspect.linkedinProfileUrl ?? existing.linkedinProfileUrl,
+      avatarSourceUrl: nextProspect.avatarSourceUrl ?? existing.avatarSourceUrl,
+      avatarUrl: nextProspect.avatarUrl ?? existing.avatarUrl,
       email: nextProspect.email ?? existing.email,
       buyingCommitteeRole: nextProspect.buyingCommitteeRole ?? existing.buyingCommitteeRole,
       decisionAuthority: nextProspect.decisionAuthority ?? existing.decisionAuthority,
