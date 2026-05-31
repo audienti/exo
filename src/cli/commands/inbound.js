@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { buildInboundCueListView, buildInboundCueDedupeKey, recordInboundCue, resolveInboundCue } from "../../core/inbound-cues.js";
 import {
   buildInboundObservationListView,
   mergeInboundObservation,
@@ -22,18 +23,23 @@ import {
   setUserInboundSyncPolicy
 } from "../../core/user-inbound-sync.js";
 import {
+  findInboundCueByDedupeKey,
+  findInboundCueById,
   findInboundObservationByDedupeKey,
   findInboundObservationById,
   listBrowserProfiles,
+  listInboundCues,
   listUsers,
   findUserById,
   listCompanies,
   listInboundObservations,
   listMotions,
   updateUser,
+  upsertInboundCue,
   upsertInboundObservation
 } from "../../db/database.js";
 import {
+  renderInboundCueList,
   renderInboundReview,
   renderInboundObservationDetail,
   renderInboundObservationList,
@@ -44,8 +50,11 @@ import {
   renderUserInboundSync
 } from "../../artifacts/render-inbound.js";
 import { buildInboundReviewView } from "../../core/build-inbound-review-view.js";
+import { classifyUserWorkingHours } from "../../core/working-hours.js";
 import { browserProfileCapabilitySchema } from "../../schema/browser-profile.js";
 import {
+  inboundCueKindSchema,
+  inboundCueStatusSchema,
   inboundObservationKindSchema,
   inboundSyncPlanModeSchema,
   inboundSyncRunPayloadSchema,
@@ -64,6 +73,8 @@ Canonical inbound interface:
   exo inbound review <user-id>
   exo inbound surfaces
   exo inbound surface <surface-key>
+  exo inbound cues add <user-id> --capability gmail --surface gmail-inbox-threads --kind unread_message_badge --observed-at <iso> --summary "Saw something worth checking"
+  exo inbound cues list <user-id> --json
   exo inbound sync show <user-id>
   exo inbound sync plan <user-id> --mode quick
   exo inbound sync live <user-id> --apply --refresh --json
@@ -79,6 +90,7 @@ Canonical inbound interface:
 
 Rules:
   - Start with the canonical truth surfaces, not the LinkedIn notifications bell.
+  - Notification dots and unread badges are ambient cues, not canonical truth. Record them as cues or trigger a sync; do not treat them as observations by themselves.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
   - Sync policy and observation storage exist now. Gmail has a first live retrieval path through supported runtime adapters, including runtime:gmail harness connections and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn quick-mode surfaces also have a first live retrieval path through a trusted Chrome profile plus a supported runtime:chrome harness, but broader live retrieval still does not.
   - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
@@ -174,6 +186,197 @@ Rules:
       }
 
       console.log(renderInboundSurfaceDetail(result));
+    });
+
+  const cues = inbound
+    .command("cues")
+    .description("Record or inspect ambient inbound cues that suggest sync is worth doing without claiming canonical truth.");
+
+  cues
+    .command("add")
+    .description("Record one ambient inbound cue and optionally trigger a governed live sync when the window is open.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--account <account-id>", "Connected account identifier")
+    .option("--capability <capability>", "Capability such as linkedin or gmail; used when --account is omitted")
+    .requiredOption("--surface <surface-key>", "Canonical surface this cue points toward")
+    .requiredOption("--kind <kind>", "Cue kind such as unread_message_badge or invite_badge")
+    .requiredOption("--observed-at <iso-datetime>", "When the cue was seen")
+    .requiredOption("--summary <text>", "Short summary of what the agent saw")
+    .option("--source <source>", "action_glance | manual_hint | runtime_capture")
+    .option("--motion <motion-id>", "Optional linked motion")
+    .option("--company <company-id>", "Optional linked company")
+    .option("--prospect <prospect-id>", "Optional linked prospect")
+    .option("--notes <notes>", "Optional notes")
+    .option("--auto-sync", "If working hours are open and the account is live-supported, run a quick live sync immediately")
+    .option("--refresh", "When auto-sync succeeds, return refreshed inbox/daily/next summaries")
+    .option("--json", "Emit machine-readable JSON")
+    .action(async (userId, options) => {
+      const rawUser = findUserById(userId);
+      if (!rawUser) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      let cue;
+      try {
+        const cueInput = {
+          accountId: options.account ?? null,
+          capability: options.capability ?? null,
+          surfaceKey: options.surface,
+          kind: options.kind,
+          source: options.source ?? null,
+          observedAt: options.observedAt,
+          summary: options.summary,
+          motionId: options.motion ?? null,
+          companyId: options.company ?? null,
+          prospectId: options.prospect ?? null,
+          notes: options.notes ?? null
+        };
+        const draftCue = recordInboundCue(rawUser, cueInput);
+        const existingCue = findInboundCueByDedupeKey(
+          buildInboundCueDedupeKey(
+            draftCue.accountId,
+            draftCue.surfaceKey,
+            inboundCueKindSchema.parse(options.kind)
+          )
+        );
+        cue = existingCue
+          ? recordInboundCue(rawUser, cueInput, { existingCue })
+          : draftCue;
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+        return;
+      }
+
+      const storedCue = upsertInboundCue(cue);
+      const response = {
+        cue: storedCue,
+        autoSync: null,
+        applied: null
+      };
+
+      if (options.autoSync) {
+        const workingHours = classifyUserWorkingHours(rawUser, new Date().toISOString());
+        if (!workingHours.openNow) {
+          response.autoSync = {
+            status: "deferred",
+            reason: workingHours.summary,
+            nextOpenAt: workingHours.nextOpenAt
+          };
+        } else {
+          try {
+            const live = await buildLiveInboundSyncPayload(rawUser, listBrowserProfiles(), {
+              accountId: storedCue.accountId,
+              mode: "quick"
+            });
+            response.autoSync = {
+              status: "captured",
+              reason: `Ran a quick live inbound sync for ${storedCue.capability}.`,
+              nextOpenAt: workingHours.nextOpenAt
+            };
+            response.applied = applyInboundSyncRunPayload(rawUser, live.payload, { refresh: Boolean(options.refresh) });
+          } catch (error) {
+            response.autoSync = {
+              status: "failed",
+              reason: error instanceof Error ? error.message : String(error),
+              nextOpenAt: workingHours.nextOpenAt
+            };
+          }
+        }
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(response, null, 2));
+        return;
+      }
+
+      if (response.applied) {
+        console.log(renderInboundSyncRun(response.applied));
+        return;
+      }
+
+      console.log(renderInboundCueList(buildInboundCueListView([storedCue], { userId })));
+    });
+
+  cues
+    .command("list")
+    .description("List ambient inbound cues for one execution user.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--account <account-id>", "Filter to one connected account")
+    .option("--capability <capability>", "Filter to one capability like linkedin or gmail")
+    .option("--status <status>", "open | resolved | dismissed")
+    .option("--motion <motion-id>", "Filter to one motion")
+    .option("--company <company-id>", "Filter to one company")
+    .option("--prospect <prospect-id>", "Filter to one prospect")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const rawUser = findUserById(userId);
+      if (!rawUser) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const result = buildInboundCueListView(
+        listInboundCues({
+          userId,
+          accountId: options.account ?? null,
+          capability: options.capability ?? null,
+          status: options.status ? inboundCueStatusSchema.parse(options.status) : null,
+          motionId: options.motion ?? null,
+          companyId: options.company ?? null,
+          prospectId: options.prospect ?? null
+        }),
+        { userId }
+      );
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderInboundCueList(result));
+    });
+
+  cues
+    .command("resolve")
+    .description("Resolve or dismiss one ambient inbound cue after the operator checked the real truth surface.")
+    .argument("<user-id>", "Execution user identifier")
+    .requiredOption("--cue <cue-id>", "Cue identifier")
+    .option("--status <status>", "resolved | dismissed")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      if (!findUserById(userId)) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const rawCue = findInboundCueById(options.cue);
+      if (!rawCue) {
+        console.error(`Inbound cue not found: ${options.cue}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const cue = resolveInboundCue(rawCue, {
+          status: options.status ?? "resolved"
+        });
+        upsertInboundCue(cue);
+
+        if (options.json) {
+          console.log(JSON.stringify({ cue }, null, 2));
+          return;
+        }
+
+        console.log(renderInboundCueList(buildInboundCueListView([cue], { userId })));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
     });
 
   const sync = inbound
@@ -828,6 +1031,7 @@ function applyInboundSyncRunPayload(rawUser, payload, options = {}) {
 function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
   let createdObservationCount = 0;
   let updatedObservationCount = 0;
+  let resolvedCueCount = 0;
   const storedObservations = prepared.observations.map((observation) => {
     const existing = findInboundObservationByDedupeKey(observation.dedupeKey);
     const merged = mergeInboundObservation(existing, observation);
@@ -839,6 +1043,31 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
     }
     return merged;
   });
+  for (const account of prepared.accounts) {
+    const resolvedSurfaceKeys = account.surfaces
+      .filter((surface) => surface.status !== "failed")
+      .map((surface) => surface.surfaceKey);
+    if (!resolvedSurfaceKeys.length) {
+      continue;
+    }
+
+    const openCues = listInboundCues({
+      userId,
+      accountId: account.accountId,
+      status: "open"
+    });
+    for (const rawCue of openCues) {
+      if (!resolvedSurfaceKeys.includes(rawCue.surfaceKey)) {
+        continue;
+      }
+
+      const resolvedCue = resolveInboundCue(rawCue, {
+        status: "resolved"
+      });
+      upsertInboundCue(resolvedCue);
+      resolvedCueCount += 1;
+    }
+  }
   updateUser(prepared.updatedUser);
 
   const result = {
@@ -848,7 +1077,8 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
     counts: {
       ...prepared.counts,
       createdObservationCount,
-      updatedObservationCount
+      updatedObservationCount,
+      resolvedCueCount
     },
     followUpCommands: prepared.followUpCommands,
     accounts: prepared.accounts,
@@ -865,7 +1095,11 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
       rawMotions: listMotions(),
       rawCompanies: listCompanies(),
       rawProfiles: listBrowserProfiles(),
-      rawObservations: refreshedObservations
+      rawObservations: refreshedObservations,
+      rawCues: listInboundCues({
+        userId,
+        status: "open"
+      })
     });
   }
 

@@ -40,6 +40,7 @@ Common patterns:
   exo motion start --url https://example.com/product --existing continue --json
   exo motion target <motion-id> --json
   exo report motion <motion-id>
+  exo report workspace --user <user-id> --out ./motion-workspace.html
   exo motion clone <motion-id> --audience "BNPL modernization leaders" --segment bnpl --json
   exo motion update <motion-id> --audience "Traditional FI risk owners" --title "Chief Risk Officer" --segment traditional-fi --json
   exo motion add --config ./actico.motion.json --json

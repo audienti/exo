@@ -128,6 +128,41 @@ const migrations = [
         ON inbound_observations (account_id, observed_at DESC);
       `);
     }
+  },
+  {
+    version: 8,
+    name: "add-inbound-cues-table",
+    up(database) {
+      database.exec(`
+        CREATE TABLE IF NOT EXISTS inbound_cues (
+          id TEXT PRIMARY KEY,
+          dedupe_key TEXT NOT NULL UNIQUE,
+          user_id TEXT NOT NULL,
+          account_id TEXT NOT NULL,
+          capability TEXT NOT NULL,
+          surface_key TEXT NOT NULL,
+          cue_kind TEXT NOT NULL,
+          cue_status TEXT NOT NULL,
+          observed_at TEXT NOT NULL,
+          recorded_at TEXT NOT NULL,
+          resolved_at TEXT,
+          motion_id TEXT,
+          company_id TEXT,
+          prospect_id TEXT,
+          payload_json TEXT NOT NULL
+        );
+      `);
+
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS inbound_cues_by_user_status_observed
+        ON inbound_cues (user_id, cue_status, observed_at DESC);
+      `);
+
+      database.exec(`
+        CREATE INDEX IF NOT EXISTS inbound_cues_by_account_status_observed
+        ON inbound_cues (account_id, cue_status, observed_at DESC);
+      `);
+    }
   }
 ];
 

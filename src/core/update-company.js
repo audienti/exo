@@ -1,6 +1,7 @@
 // @ts-check
 
 import { companySchema } from "../schema/company.js";
+import { normalizeImageProxyFields } from "../lib/image-proxy.js";
 
 /**
  * @param {unknown} rawCompany
@@ -9,6 +10,7 @@ import { companySchema } from "../schema/company.js";
  *   domain?: string | null,
  *   websiteUrl?: string | null,
  *   linkedinCompanyUrl?: string | null,
+ *   logoSourceUrl?: string | null,
  *   notes?: string | null,
  *   tags?: string[],
  *   motionIds?: string[]
@@ -16,6 +18,7 @@ import { companySchema } from "../schema/company.js";
  */
 export function updateCompanyRecord(rawCompany, patch) {
   const company = companySchema.parse(rawCompany);
+  const logo = normalizeImageProxyFields(patch.logoSourceUrl);
 
   return companySchema.parse({
     ...company,
@@ -27,6 +30,8 @@ export function updateCompanyRecord(rawCompany, patch) {
       patch.linkedinCompanyUrl !== undefined
         ? normalizeNullableString(patch.linkedinCompanyUrl)
         : company.linkedinCompanyUrl,
+    logoSourceUrl: logo.sourceUrl === undefined ? company.logoSourceUrl : logo.sourceUrl,
+    logoUrl: logo.proxyUrl === undefined ? company.logoUrl : logo.proxyUrl,
     notes: patch.notes !== undefined ? normalizeNullableString(patch.notes) : company.notes,
     tags: patch.tags !== undefined ? patch.tags : company.tags,
     motionIds: patch.motionIds !== undefined ? patch.motionIds : company.motionIds

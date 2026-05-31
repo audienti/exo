@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { buildDailyView } from "../src/core/build-daily-view.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(repoRoot, "src", "cli", "index.js");
@@ -1055,7 +1056,7 @@ test("database migrations upgrade legacy motion payloads before motion list and 
     const migratedRow = migratedDb.prepare("SELECT payload_json FROM motions WHERE id = ?").get(legacyMotionId);
     migratedDb.close();
 
-    assert.equal(versionRow.user_version, 7);
+    assert.equal(versionRow.user_version, 8);
 
     const migratedPayload = JSON.parse(migratedRow.payload_json);
     assert.match(migratedPayload.name, generatedMotionNamePattern);
@@ -2414,6 +2415,347 @@ test("users harness probe inspects Codex plugin and MCP availability and can wri
   }
 });
 
+test("users working-hours can be configured and shown", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-working-hours-"));
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "hours-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const updated = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "working-hours",
+          "set",
+          user.id,
+          "--timezone",
+          "America/New_York",
+          "--weekday",
+          "sun",
+          "--weekday",
+          "mon",
+          "--weekday",
+          "tue",
+          "--weekday",
+          "wed",
+          "--weekday",
+          "thu",
+          "--weekday",
+          "fri",
+          "--weekday",
+          "sat",
+          "--start",
+          "09:00",
+          "--end",
+          "17:00",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(updated.workingHours.mode, "scheduled");
+    assert.equal(updated.workingHours.timezone, "America/New_York");
+    assert.deepEqual(updated.workingHours.weekdays, ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]);
+    assert.equal(updated.workingHours.startLocalTime, "09:00");
+    assert.equal(updated.workingHours.endLocalTime, "17:00");
+
+    const shown = JSON.parse(
+      execFileSync("node", [cliPath, "users", "working-hours", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(shown.user.id, user.id);
+    assert.equal(shown.workingHours.mode, "scheduled");
+    assert.equal(shown.workingHours.timezone, "America/New_York");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound cues can be added, listed, and resolved", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-cues-"));
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "cue-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "cue-user@example.com",
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    const added = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "cues",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--surface",
+          "gmail-inbox-threads",
+          "--kind",
+          "unread_message_badge",
+          "--observed-at",
+          "2026-05-30T14:20:00.000Z",
+          "--summary",
+          "Saw unread Gmail activity while working another branch.",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(added.cue.userId, user.id);
+    assert.equal(added.cue.accountId, gmailAccountId);
+    assert.equal(added.cue.status, "open");
+
+    const listed = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "cues", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(listed.counts.openCount, 1);
+    assert.equal(listed.cues[0].surfaceKey, "gmail-inbox-threads");
+    assert.equal(listed.cues[0].kind, "unread_message_badge");
+
+    const resolved = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "inbound", "cues", "resolve", user.id, "--cue", added.cue.id, "--status", "resolved", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(resolved.cue.id, added.cue.id);
+    assert.equal(resolved.cue.status, "resolved");
+    assert.equal(typeof resolved.cue.resolvedAt, "string");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("daily inbound sync pressure respects working hours and fresh ambient cues", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-working-hours-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when operators need governed inbox attention instead of blind silence.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is the branch waiting on fresh inbound truth?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "hours-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "hours-user@example.com",
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "user",
+        "assign",
+        company.id,
+        "--user",
+        user.id,
+        "--reason",
+        "Use the same human identity for governed inbox work.",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    const rawUser = JSON.parse(
+      execFileSync("node", [cliPath, "users", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    rawUser.workingHours = {
+      mode: "scheduled",
+      timezone: "America/New_York",
+      weekdays: ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
+      startLocalTime: "09:00",
+      endLocalTime: "17:00"
+    };
+
+    const rawMotions = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "list", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const rawCompanies = JSON.parse(
+      execFileSync("node", [cliPath, "companies", "list", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const rawProfiles = JSON.parse(
+      execFileSync("node", [cliPath, "profiles", "list", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const afterHours = buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, [], {
+      now: "2026-05-29T23:30:00.000Z",
+      rawCues: []
+    });
+    const afterHoursSync = afterHours.items.find((item) => item.source?.type === "inbound_sync");
+    assert.equal(afterHoursSync.state, "waiting_until");
+    assert.equal(afterHoursSync.dueAt, "2026-05-30T13:00:00.000Z");
+    assert.match(afterHoursSync.recommendedAction, /working hours|open window/i);
+
+    const cueDriven = buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, [], {
+      now: "2026-05-30T15:00:00.000Z",
+      rawCues: [
+        {
+          id: "cue-1",
+          dedupeKey: `${gmailAccountId}:gmail-inbox-threads:unread_message_badge`,
+          userId: user.id,
+          accountId: gmailAccountId,
+          capability: "gmail",
+          platform: "gmail",
+          surfaceKey: "gmail-inbox-threads",
+          kind: "unread_message_badge",
+          source: "action_glance",
+          status: "open",
+          observedAt: "2026-05-30T14:55:00.000Z",
+          recordedAt: "2026-05-30T14:55:10.000Z",
+          resolvedAt: null,
+          summary: "Saw unread Gmail activity while performing another action.",
+          motionId: motion.id,
+          companyId: company.id,
+          prospectId: null,
+          notes: null
+        }
+      ]
+    });
+    const cueSync = cueDriven.items.find((item) => item.source?.type === "inbound_sync");
+    assert.equal(cueSync.state, "due_now");
+    assert.match(cueSync.whyItMatters, /cue|saw|hint/i);
+    assert.match(cueSync.recommendedAction, /quick inbound sync/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("motions can carry a sticky execution user that motion targeting and execution planning inherit by default", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-user-assignment-"));
   const chrome = setupReadyChromeProfile(tempDir, {
@@ -3191,6 +3533,30 @@ test("inbound sync run writes back one governed pass and refreshes inbox, daily,
       )
     );
     const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+    const cue = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "cues",
+          "add",
+          user.id,
+          "--account",
+          linkedinAccountId,
+          "--surface",
+          "linkedin-received-invitations",
+          "--kind",
+          "invite_badge",
+          "--observed-at",
+          "2026-05-30T13:55:00.000Z",
+          "--summary",
+          "Saw a LinkedIn invite badge while doing unrelated work.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
 
     const inputPath = path.join(tempDir, "inbound-sync.json");
     fs.writeFileSync(
@@ -3265,6 +3631,7 @@ test("inbound sync run writes back one governed pass and refreshes inbox, daily,
     assert.equal(runResult.counts.observationCount, 1);
     assert.equal(runResult.counts.createdObservationCount, 1);
     assert.equal(runResult.counts.updatedObservationCount, 0);
+    assert.equal(runResult.counts.resolvedCueCount, 1);
     assert.equal(runResult.accounts[0].surfaces[1].surfaceKey, "linkedin-received-invitations");
     assert.equal(runResult.accounts[0].surfaces[1].itemCount, 1);
     assert.equal(runResult.refreshed.inbox.itemCount, 1);
@@ -3293,6 +3660,17 @@ test("inbound sync run writes back one governed pass and refreshes inbox, daily,
     assert.equal(observations.counts.observationCount, 1);
     assert.equal(observations.observations[0].summary, "Alicia Buyer sent us a new inbound connection request.");
     assert.equal(observations.observations[0].kind, "connection_request_received");
+
+    const resolvedCue = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "cues", "list", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(resolvedCue.counts.openCount, 0);
+    assert.equal(resolvedCue.counts.resolvedCount, 1);
+    assert.equal(resolvedCue.cues[0].id, cue.cue.id);
+    assert.equal(resolvedCue.cues[0].status, "resolved");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -13627,6 +14005,83 @@ test("report motion renders one unified view across setup, readiness, company pr
   }
 });
 
+test("report workspace renders a native workspace projection in json and html forms", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-workspace-report-"));
+  const outputPath = path.join(tempDir, "workspace.html");
+
+  try {
+    const user = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "add", "--label", "william-main", "--owner", "william", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when GTM operators need one read-only workspace projection.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there recent evidence this company widened product or GTM scope?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const reportJson = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "report", "workspace", "--user", user.id, "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(reportJson.user.id, user.id);
+    assert.equal(reportJson.motionSummaries.length, 1);
+    assert.equal(reportJson.motionSummaries[0].id, motion.id);
+    assert.match(reportJson.regenerateCommand, /exo report workspace --user/);
+
+    const reportOutput = execFileSync(
+      "node",
+      [cliPath, "report", "workspace", "--user", user.id, "--out", outputPath],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    assert.match(reportOutput, /Workspace report written to/);
+    assert.ok(fs.existsSync(outputPath));
+
+    const html = fs.readFileSync(outputPath, "utf8");
+    assert.match(html, /Exo Motion Workspace Projection/);
+    assert.match(html, /quiet, stale, unchecked, or actively worth opening/i);
+    assert.match(html, new RegExp(motion.name));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("motion remove deletes the motion and unlinks linked companies", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-remove-"));
 
@@ -14109,6 +14564,7 @@ test("canonical action catalog and motion action briefs expose executable Audien
     assert.ok(actionBrief.action.executionHints.affordances.length > 0);
     assert.ok(actionBrief.action.executionHints.fallbacks.some((hint) => /direct invite flow/i.test(hint)));
     assert.ok(actionBrief.execution.steps.some((step) => /native chrome|browser harness/i.test(step)));
+    assert.ok(actionBrief.execution.steps.some((step) => /inbound cue|ambient cue|might want to check/i.test(step)));
     assert.ok(actionBrief.execution.contextualHints.some((hint) => /blocked Follow attempt|Follow attempts/i.test(hint)));
     assert.ok(actionBrief.execution.writeback.command.includes("exo companies touches add"));
     assert.ok(actionBrief.execution.knowledgeRefs.some((ref) => /action-catalog\.md$/i.test(ref.path)));
@@ -14365,6 +14821,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
     encoding: "utf8"
   });
   assert.match(usersHelp, /exo users add --label william-main --owner william/);
+  assert.match(usersHelp, /exo users working-hours set <user-id> --timezone America\/New_York/);
   assert.match(usersHelp, /exo users harness add <user-id> --runtime codex --connector chrome --status available/);
   assert.match(usersHelp, /exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json/);
   assert.match(usersHelp, /exo users accounts add <user-id> --capability linkedin/);
@@ -14409,12 +14866,14 @@ test("CLI help explains agent-safe usage and profile gating", () => {
     encoding: "utf8"
   });
   assert.match(reportHelp, /exo report motion <motion-id>/);
+  assert.match(reportHelp, /exo report workspace --user <user-id> --out \.\/motion-workspace\.html/);
 
   const inboundHelp = execFileSync("node", [cliPath, "inbound", "--help"], {
     cwd: repoRoot,
     encoding: "utf8"
   });
   assert.match(inboundHelp, /exo inbound surfaces/);
+  assert.match(inboundHelp, /exo inbound cues add <user-id> --capability gmail/);
   assert.match(inboundHelp, /exo inbound sync show <user-id>/);
   assert.match(inboundHelp, /exo inbound sync plan <user-id> --mode quick/);
   assert.match(inboundHelp, /exo inbound sync linkedin <user-id> --account <account-id> --input/);
@@ -14478,11 +14937,15 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected unified motion report surface to be listed in current capabilities"
   );
   assert.ok(
+    about.currentCapabilities.some((item) => item.command === "exo report workspace"),
+    "expected workspace report surface to be listed in current capabilities"
+  );
+  assert.ok(
     about.currentCapabilities.some((item) => item.command === "exo actions list/show"),
     "expected canonical action catalog surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/sync show/plan/live/linkedin/linkedin-live/gmail/gmail-live/run/set/record/observations list/show/add"),
+    about.currentCapabilities.some((item) => item.command === "exo inbound surfaces/surface/cues add/list/resolve/sync show/plan/live/linkedin/linkedin-live/gmail/gmail-live/run/set/record/observations list/show/add"),
     "expected inbound read/write surface to be listed in current capabilities"
   );
   assert.ok(
@@ -14502,7 +14965,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected profile capability command surface to be listed in current capabilities"
   );
   assert.ok(
-    about.currentCapabilities.some((item) => item.command === "exo users add/list/show/harness add/probe/accounts add/resolve"),
+    about.currentCapabilities.some((item) => item.command === "exo users add/list/show/working-hours show/set/harness add/probe/accounts add/resolve"),
     "expected execution-user surface to be listed in current capabilities"
   );
   assert.ok(
@@ -14528,6 +14991,10 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo inbound sync plan <user-id> --mode quick --json"),
     "expected bootstrap sequence to include the inbound sync plan"
+  );
+  assert.ok(
+    about.agentUsage.bootstrapSequence.includes("exo inbound cues list <user-id> --json"),
+    "expected bootstrap sequence to include ambient cue inspection"
   );
   assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo inbound observations list <user-id> --json"),
@@ -14564,6 +15031,10 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   assert.ok(
     about.currentLimitations.some((item) => /Limited live inbound retrieval now exists for Gmail and LinkedIn quick-mode surfaces/i.test(item)),
     "expected limitations to mention the Gmail and LinkedIn live retrieval seams"
+  );
+  assert.ok(
+    about.currentLimitations.some((item) => /Ambient inbound cues and working-hours-aware sync pressure now exist/i.test(item)),
+    "expected limitations to mention the cue-and-working-hours seam"
   );
   assert.ok(
     about.currentLimitations.some((item) => /Limited runtime auto-discovery now exists for Codex harness connectors .* Claude/i.test(item)),

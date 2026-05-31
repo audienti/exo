@@ -37,6 +37,8 @@ export const companySchema = z.object({
   domain: z.string().trim().min(1).nullable(),
   websiteUrl: z.string().url().nullable(),
   linkedinCompanyUrl: z.string().url().nullable(),
+  logoSourceUrl: z.string().url().nullable().default(null),
+  logoUrl: z.string().url().nullable().default(null),
   notes: z.string().nullable(),
   tags: stringArray,
   motionIds: stringArray,

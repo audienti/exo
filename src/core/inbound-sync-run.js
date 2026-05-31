@@ -194,12 +194,15 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
  *   rawMotions: unknown[],
  *   rawCompanies: unknown[],
  *   rawProfiles: unknown[],
- *   rawObservations: unknown[]
+ *   rawObservations: unknown[],
+ *   rawCues?: unknown[]
  * }} input
  */
 export function buildInboundSyncRefreshSummary(input) {
   const inbox = buildInboxView(input.rawUser, input.rawObservations, input.rawMotions, input.rawCompanies);
-  const daily = buildDailyView(input.rawUser, input.rawMotions, input.rawCompanies, input.rawProfiles, input.rawObservations);
+  const daily = buildDailyView(input.rawUser, input.rawMotions, input.rawCompanies, input.rawProfiles, input.rawObservations, {
+    rawCues: input.rawCues ?? []
+  });
   const rawMotion = resolvePreferredNextMotion(input.rawMotions);
   const next = buildNextView({
     rawUser: input.rawUser,
@@ -208,7 +211,8 @@ export function buildInboundSyncRefreshSummary(input) {
     rawCompanies: input.rawCompanies,
     rawProfiles: input.rawProfiles,
     rawUsers: input.rawUsers,
-    rawObservations: input.rawObservations
+    rawObservations: input.rawObservations,
+    rawCues: input.rawCues ?? []
   });
 
   return {

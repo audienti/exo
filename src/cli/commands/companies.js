@@ -107,6 +107,7 @@ Rules:
     .option("--domain <domain>", "Company domain")
     .option("--website-url <url>", "Company website URL")
     .option("--linkedin-company-url <url>", "LinkedIn company URL")
+    .option("--logo-source-url <url>", "Source image URL for the company logo")
     .option("--tag <tag>", "Company tag", collect, [])
     .option("--motion <motion-id>", "Linked motion id", collect, [])
     .option("--notes <notes>", "Freeform notes")
@@ -145,6 +146,7 @@ Notes:
         domain: options.domain ?? null,
         websiteUrl: options.websiteUrl ?? null,
         linkedinCompanyUrl: options.linkedinCompanyUrl ?? null,
+        logoSourceUrl: options.logoSourceUrl ?? null,
         notes: options.notes ?? null,
         tags: normalizeStringList(options.tag),
         motionIds: normalizeStringList(options.motion)
@@ -429,6 +431,7 @@ Examples:
     .option("--domain <domain>", "Company domain")
     .option("--website-url <url>", "Company website URL")
     .option("--linkedin-company-url <url>", "LinkedIn company URL")
+    .option("--logo-source-url <url>", "Source image URL for the company logo")
     .option("--tag <tag>", "Replace company tags with the provided set", collect, [])
     .option("--motion <motion-id>", "Replace linked motion ids with the provided set", collect, [])
     .option("--notes <notes>", "Freeform notes")
@@ -466,6 +469,9 @@ Rules:
       }
       if (options.linkedinCompanyUrl !== undefined) {
         patch.linkedinCompanyUrl = options.linkedinCompanyUrl;
+      }
+      if (options.logoSourceUrl !== undefined) {
+        patch.logoSourceUrl = options.logoSourceUrl;
       }
       if (options.notes !== undefined) {
         patch.notes = options.notes;
@@ -752,6 +758,7 @@ Use this when the agent needs the chosen people of record before writing or brow
     .requiredOption("--why-relevant <text>", "Short reason this person matters for the motion")
     .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
     .option("--linkedin-profile-url <url>", "LinkedIn profile URL")
+    .option("--avatar-source-url <url>", "Source image URL for the prospect avatar")
     .option("--email <email>", "Direct email when known")
     .option("--buying-committee-role <role>", "Buying committee role")
     .option("--decision-authority <authority>", "Decision authority: buys, blocks, sponsors, influences, observes, unknown")
@@ -893,6 +900,7 @@ Rules:
     .option("--title <title>", "Prospect title")
     .option("--why-relevant <text>", "Short reason this person matters for the motion")
     .option("--linkedin-profile-url <url>", "LinkedIn profile URL")
+    .option("--avatar-source-url <url>", "Source image URL for the prospect avatar")
     .option("--email <email>", "Direct email when known")
     .option("--buying-committee-role <role>", "Buying committee role")
     .option("--decision-authority <authority>", "Decision authority: buys, blocks, sponsors, influences, observes, unknown")
@@ -2096,6 +2104,7 @@ function buildProspectInputFromOptions(options) {
     name: options.name,
     title: options.title,
     linkedinProfileUrl: options.linkedinProfileUrl,
+    avatarSourceUrl: options.avatarSourceUrl,
     email: options.email,
     buyingCommitteeRole: normalizeBuyingCommitteeRole(options.buyingCommitteeRole),
     decisionAuthority: normalizeDecisionAuthority(options.decisionAuthority),

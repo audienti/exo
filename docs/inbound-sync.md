@@ -13,6 +13,8 @@ The first slice does three things:
 
 The next management layer is `exo inbound review`, which combines that sync state with the concrete observations so the operator can see what actually needs a decision.
 
+There is now a middle layer too: ambient cues. When an agent is already doing other governed work and notices an unread badge, invite badge, or thread movement, it can record that as smoke without pretending it already checked the canonical truth surface.
+
 It still does **not** do broad live retrieval by itself.
 Right now the built-in live producers are Gmail through supported runtime-backed Gmail harness connections and LinkedIn quick-mode surfaces through a trusted Chrome profile plus a supported runtime-backed Chrome harness.
 
@@ -69,6 +71,8 @@ exo inbound sync show <user-id> --capability linkedin --json
 exo users harness probe <user-id> --runtime codex --connector gmail --json
 exo users harness probe <user-id> --runtime codex --connector chrome --json
 exo inbound sync plan <user-id> --mode quick --json
+exo inbound cues add <user-id> --capability gmail --surface gmail-inbox-threads --kind unread_message_badge --observed-at 2026-05-30T14:20:00.000Z --summary "Saw something worth checking" --json
+exo inbound cues list <user-id> --json
 exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
 exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --apply --refresh --json
 exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
@@ -89,6 +93,34 @@ Modes:
 - `quick`: enabled authoritative surfaces only
 - `normal`: enabled authoritative surfaces first, then enabled supplementary surfaces
 - `full`: everything in `normal`, plus disabled optional surfaces that may be worth widening into during a reconciliation pass
+
+## Ambient cues and working hours
+
+Ambient cues are not observations. They are the governed way to say "I saw something you might want to check."
+
+Use them when:
+
+- the agent is already on LinkedIn or Gmail for another action
+- the agent sees unread movement, an invite badge, or notification-dot style smoke
+- the runtime should not yet claim that a real message, accept, or thread update exists
+
+Example:
+
+```bash
+exo inbound cues add <user-id> --account <account-id> --surface linkedin-messaging-inbox --kind unread_message_badge --observed-at 2026-05-30T14:20:00.000Z --summary "Saw unread LinkedIn activity while sending another touch." --json
+```
+
+Rules:
+
+- cues create sync pressure; they do not create truth
+- cues are resolved automatically when a governed sync successfully checks that surface
+- `exo daily` and `exo next` now consider both cues and working-hours windows when deciding whether sync is due now or should wait for the next open window
+- working hours live on the execution user, not on the browser profile:
+
+```bash
+exo users working-hours show <user-id> --json
+exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 09:00 --end 17:00 --json
+```
 
 Write back one inspected sync pass:
 

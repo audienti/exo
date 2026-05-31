@@ -176,6 +176,8 @@ function buildCompanyTargetingState(company, motion, profiles, users, capability
     queueStatus: account?.queueState?.status ?? "discovered",
     websiteUrl: company.websiteUrl,
     linkedinCompanyUrl: company.linkedinCompanyUrl,
+    logoSourceUrl: company.logoSourceUrl,
+    logoUrl: company.logoUrl,
     signalMatchCount: account?.signalMatches.length ?? 0,
     prospectCount: prospects.length,
     readyThroughLineCount,

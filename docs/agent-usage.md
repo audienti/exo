@@ -103,6 +103,14 @@ Do not default to copying the SQLite file directly unless the task is explicitly
 9. `exo profiles auth <profile-id> --runtime <runtime> --json`
 10. Refuse browser-backed work if the result is not trustworthy
 
+When the agent is already doing browser-backed work on Gmail or LinkedIn, do one cheap ambient glance for unread or invite movement before leaving the surface. If you see smoke, record a cue instead of inventing truth:
+
+```bash
+exo inbound cues add <user-id> --account <account-id> --surface linkedin-messaging-inbox --kind unread_message_badge --observed-at <iso-datetime> --summary "Saw something worth checking while doing another action." --json
+```
+
+Use that when the runtime saw a badge or hint but did not actually inspect the canonical inbox or invitation surface yet.
+
 ### Browser harness preference
 
 Exo governs browser identity. It does not choose the control harness for the session.
@@ -152,6 +160,24 @@ exo inbound sync live <user-id> --apply --refresh --json
 ```
 
 That command composes the enabled live-supported accounts for `quick` mode and applies one governed writeback instead of splitting the pass into separate commands.
+
+### Working-hours-aware sync pressure
+
+Inbound sync pressure is no longer just a freshness timer. It is also gated by the execution user's working-hours policy.
+
+Inspect or set it with:
+
+```bash
+exo users working-hours show <user-id> --json
+exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 09:00 --end 17:00 --json
+```
+
+Planner behavior:
+
+- fresh ambient cue during an open window: sync is due now
+- fresh ambient cue outside the window: queue sync for the next open window
+- cues are suspicion, not truth
+- a governed sync resolves matching open cues automatically
 
 If no native browser-control surface is available in the current session, say that explicitly before choosing any fallback path.
 

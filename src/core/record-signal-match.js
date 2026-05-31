@@ -57,6 +57,8 @@ export function recordMotionSignalMatch(rawMotion, rawCompany, input) {
     domain: company.domain,
     websiteUrl: company.websiteUrl,
     linkedinCompanyUrl: company.linkedinCompanyUrl,
+    companyLogoSourceUrl: company.logoSourceUrl,
+    companyLogoUrl: company.logoUrl,
     lastResearchAt: now,
     signalMatches
   });

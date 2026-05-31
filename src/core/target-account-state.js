@@ -58,6 +58,8 @@ export function buildTargetAccount(company) {
     domain: company.domain,
     websiteUrl: company.websiteUrl,
     linkedinCompanyUrl: company.linkedinCompanyUrl,
+    companyLogoSourceUrl: company.logoSourceUrl,
+    companyLogoUrl: company.logoUrl,
     signalMatches: [],
     prospects: [],
     queueState: {},

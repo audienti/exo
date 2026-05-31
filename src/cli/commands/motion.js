@@ -305,6 +305,7 @@ Examples:
     .option("--domain <domain>", "Company domain when creating or reusing by identity")
     .option("--website-url <url>", "Company website URL when creating a new canonical company")
     .option("--linkedin-company-url <url>", "LinkedIn company URL when creating a new canonical company")
+    .option("--logo-source-url <url>", "Source image URL for the company logo when creating a new canonical company")
     .option("--tag <tag>", "Company tag when creating a new canonical company", collect, [])
     .option("--company-notes <notes>", "Canonical company notes when creating a new canonical company")
     .option("--queue-status <status>", "Initial company queue state for company-only seeding: discovered or queued_for_research")
@@ -313,6 +314,7 @@ Examples:
     .option("--person-title <title>", "Target person title for person-first seeding")
     .option("--why-relevant <text>", "Short reason this person matters for the motion")
     .option("--linkedin-profile-url <url>", "LinkedIn profile URL for the target person")
+    .option("--avatar-source-url <url>", "Source image URL for the target person's avatar")
     .option("--email <email>", "Direct email for the target person when known")
     .option("--buying-committee-role <role>", "Buying committee role for the target person")
     .option("--decision-authority <authority>", "Decision authority: buys, blocks, sponsors, influences, observes, unknown")
@@ -412,6 +414,7 @@ Rules:
             title: personTitle,
             whyRelevant,
             linkedinProfileUrl: normalizeNullableCliString(options.linkedinProfileUrl),
+            avatarSourceUrl: normalizeNullableCliString(options.avatarSourceUrl),
             email: normalizeNullableCliString(options.email),
             buyingCommitteeRole: options.buyingCommitteeRole,
             decisionAuthority: options.decisionAuthority,
@@ -527,6 +530,7 @@ Rules:
     .option("--domain <domain>", "Company domain when creating or reusing by identity")
     .option("--website-url <url>", "Company website URL when creating a new canonical company")
     .option("--linkedin-company-url <url>", "LinkedIn company URL when creating a new canonical company")
+    .option("--logo-source-url <url>", "Source image URL for the company logo when creating a new canonical company")
     .option("--tag <tag>", "Company tag when creating a new canonical company", collect, [])
     .option("--notes <notes>", "Canonical company notes when creating a new canonical company")
     .option("--queue-status <status>", "Initial queue state: discovered or queued_for_research")
@@ -585,6 +589,7 @@ Examples:
           domain: options.domain ?? null,
           websiteUrl: options.websiteUrl ?? null,
           linkedinCompanyUrl: options.linkedinCompanyUrl ?? null,
+          logoSourceUrl: options.logoSourceUrl ?? null,
           tags: normalizeStringList(options.tag),
           notes: options.notes ?? null
         }));
@@ -1924,6 +1929,7 @@ function buildMotionSeedCompanySelector(options) {
     domain: normalizeNullableCliString(options.domain),
     websiteUrl: normalizeNullableCliString(options.websiteUrl),
     linkedinCompanyUrl: normalizeNullableCliString(options.linkedinCompanyUrl),
+    logoSourceUrl: normalizeNullableCliString(options.logoSourceUrl),
     tags: normalizeStringList(options.tag),
     notes: normalizeNullableCliString(options.companyNotes)
   };
@@ -1937,6 +1943,7 @@ function buildMotionSeedCompanySelector(options) {
  *   domain?: string | null | undefined,
  *   websiteUrl?: string | null | undefined,
  *   linkedinCompanyUrl?: string | null | undefined,
+ *   logoSourceUrl?: string | null | undefined,
  *   tags?: string[] | null | undefined,
  *   notes?: string | null | undefined
  * }} input
@@ -1987,6 +1994,7 @@ function resolveMotionSeedCompany(motionId, input) {
     domain: input.domain ?? null,
     websiteUrl: input.websiteUrl ?? null,
     linkedinCompanyUrl: input.linkedinCompanyUrl ?? null,
+    logoSourceUrl: input.logoSourceUrl ?? null,
     notes: input.notes ?? null,
     tags: input.tags ?? [],
     motionIds: [motionId]

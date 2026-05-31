@@ -2,6 +2,7 @@
 // @ts-check
 
 import { addUser } from "../../core/add-user.js";
+import { buildUserWorkingHoursView, setUserWorkingHours } from "../../core/working-hours.js";
 import { probeUserHarnessConnections } from "../../core/probe-user-harness-connections.js";
 import { resolveUserConnection } from "../../core/resolve-user-connection.js";
 import { upsertUserConnectedAccount, upsertUserHarnessConnection } from "../../core/upsert-user-harness-connection.js";
@@ -15,7 +16,7 @@ import {
   listUsers,
   updateUser
 } from "../../db/database.js";
-import { renderUserHarnessProbe, renderUserList, renderUserSummary } from "../../artifacts/render-user.js";
+import { renderUserHarnessProbe, renderUserList, renderUserSummary, renderUserWorkingHours } from "../../artifacts/render-user.js";
 import { browserProfileCapabilitySchema } from "../../schema/browser-profile.js";
 import { userHarnessConnectionStatusSchema, userSchema } from "../../schema/user.js";
 
@@ -31,6 +32,7 @@ export function registerUsers(program) {
       `
 Examples:
   exo users add --label william-main --owner william
+  exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 09:00 --end 17:00
   exo users harness add <user-id> --runtime codex --connector chrome --status available
   exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json
   exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred
@@ -41,6 +43,7 @@ Rules:
   - A user is the human or business identity.
   - Accounts are capability-specific connections owned by that user.
   - Accounts can resolve through a browser profile or a harness connection.
+  - Working hours describe when Exo should treat sync pressure as due now versus queued for the next open window.
 `
     );
 
@@ -107,6 +110,72 @@ Rules:
       }
 
       console.log(renderUserSummary(user));
+    });
+
+  const workingHours = users
+    .command("working-hours")
+    .description("Inspect or update the user's working-hours policy for planner scheduling.");
+
+  workingHours
+    .command("show")
+    .description("Show the current working-hours policy and whether the window is open right now.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const raw = findUserById(userId);
+      if (!raw) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const result = buildUserWorkingHoursView(raw);
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderUserWorkingHours(result));
+    });
+
+  workingHours
+    .command("set")
+    .description("Set or relax the user's working-hours policy.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--mode <mode>", "always | scheduled")
+    .option("--timezone <timezone>", "IANA timezone such as America/New_York")
+    .option("--weekday <weekday>", "Allowed weekday: sun, mon, tue, wed, thu, fri, sat", collect, [])
+    .option("--start <time>", "Local start time in HH:MM")
+    .option("--end <time>", "Local end time in HH:MM")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const raw = findUserById(userId);
+      if (!raw) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const updated = setUserWorkingHours(raw, {
+          mode: options.mode ?? null,
+          timezone: options.timezone ?? null,
+          weekdays: options.weekday.length ? options.weekday : null,
+          startLocalTime: options.start ?? null,
+          endLocalTime: options.end ?? null
+        });
+        updateUser(updated);
+
+        if (options.json) {
+          console.log(JSON.stringify(updated, null, 2));
+          return;
+        }
+
+        console.log(renderUserSummary(updated));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
     });
 
   const harness = users
@@ -320,4 +389,12 @@ Rules:
         `Use ${result.resolved.harnessConnection.runtime}:${result.resolved.harnessConnection.connector} for ${result.capability} on ${result.user.label}.`
       );
     });
+}
+
+/**
+ * @param {string[]} value
+ * @param {string} previous
+ */
+function collect(value, previous) {
+  return previous ? [previous, value].flat() : [value];
 }

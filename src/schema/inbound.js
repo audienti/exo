@@ -23,6 +23,15 @@ export const inboundSyncRunStatusSchema = z.enum(["never", "success", "warning",
 export const inboundSyncPlanModeSchema = z.enum(["quick", "normal", "full"]);
 
 export const inboundSyncWriteStatusSchema = z.enum(["success", "warning", "failed"]);
+export const inboundCueKindSchema = z.enum([
+  "unread_message_badge",
+  "invite_badge",
+  "notification_dot",
+  "attention_hint",
+  "thread_change_hint"
+]);
+export const inboundCueSourceSchema = z.enum(["action_glance", "manual_hint", "runtime_capture"]);
+export const inboundCueStatusSchema = z.enum(["open", "resolved", "dismissed"]);
 
 export const inboundObservationKindSchema = z.enum([
   "connection_request_pending",
@@ -82,6 +91,27 @@ export const inboundObservationSchema = z.object({
   actorProfileUrl: z.string().url().nullable().default(null),
   threadUrl: z.string().url().nullable().default(null),
   sourceUrl: z.string().url().nullable().default(null),
+  summary: z.string().trim().min(1).max(280),
+  motionId: z.string().min(1).nullable().default(null),
+  companyId: z.string().min(1).nullable().default(null),
+  prospectId: z.string().min(1).nullable().default(null),
+  notes: z.string().trim().min(1).nullable().default(null)
+});
+
+export const inboundCueSchema = z.object({
+  id: z.string().min(1),
+  dedupeKey: z.string().min(1),
+  userId: z.string().min(1),
+  accountId: z.string().min(1),
+  capability: z.string().trim().min(1),
+  platform: z.string().trim().min(1),
+  surfaceKey: inboundSurfaceKeySchema,
+  kind: inboundCueKindSchema,
+  source: inboundCueSourceSchema.default("manual_hint"),
+  status: inboundCueStatusSchema.default("open"),
+  observedAt: z.string().datetime(),
+  recordedAt: z.string().datetime(),
+  resolvedAt: z.string().datetime().nullable().default(null),
   summary: z.string().trim().min(1).max(280),
   motionId: z.string().min(1).nullable().default(null),
   companyId: z.string().min(1).nullable().default(null),

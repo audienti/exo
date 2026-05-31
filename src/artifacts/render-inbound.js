@@ -378,6 +378,48 @@ export function renderInboundSyncRun(result) {
 
 /**
  * @param {{
+ *   counts: {
+ *     cueCount: number,
+ *     openCount: number,
+ *     resolvedCount: number,
+ *     dismissedCount: number
+ *   },
+ *   cues: Array<{
+ *     id: string,
+ *     capability: string,
+ *     surfaceKey: string,
+ *     kind: string,
+ *     source: string,
+ *     status: string,
+ *     observedAt: string,
+ *     resolvedAt: string | null,
+ *     summary: string
+ *   }>
+ * }} result
+ */
+export function renderInboundCueList(result) {
+  const lines = [
+    "Inbound Cues",
+    `Total: ${result.counts.cueCount}`,
+    `Open: ${result.counts.openCount}  Resolved: ${result.counts.resolvedCount}  Dismissed: ${result.counts.dismissedCount}`
+  ];
+
+  if (!result.cues.length) {
+    lines.push("No inbound cues.");
+    return lines.join("\n");
+  }
+
+  for (const cue of result.cues) {
+    lines.push(`- ${cue.id}  ${cue.capability}:${cue.surfaceKey}  [${cue.kind} / ${cue.source} / ${cue.status}]`);
+    lines.push(`  Observed: ${cue.observedAt}  Resolved: ${cue.resolvedAt ?? "open"}`);
+    lines.push(`  ${cue.summary}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * @param {{
  *   user: { label: string, owner: string | null },
  *   counts: { observationCount: number, accountCount: number, surfaceCount: number },
  *   observations: Array<{

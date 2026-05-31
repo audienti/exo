@@ -410,6 +410,7 @@ function buildExecutionSteps(actionView, action) {
   if (action.platform === "linkedin" || action.platform === "email") {
     const capability = action.platform === "linkedin" ? "linkedin" : "gmail";
     steps.push(`Pull the canonical execution plan with exo companies execution show ${actionView.company.id} --capability ${capability} --json before you touch the live surface.`);
+    steps.push("While doing the live action, take one cheap ambient glance for unread badges, invite indicators, or thread movement. If you see smoke, record an inbound cue in Exo instead of pretending that hint is canonical truth.");
   }
 
   if (action.platform === "linkedin") {
