@@ -4,6 +4,7 @@
 import { renderInbox } from "../../artifacts/render-inbox.js";
 import { buildInboxView } from "../../core/build-inbox-view.js";
 import { findUserById, listCompanies, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
+import { summarizeExecutionUsers } from "../../lib/execution-users.js";
 
 /**
  * @param {import("commander").Command} program
@@ -74,14 +75,17 @@ function resolveInboxUser(explicitUserId) {
   }
 
   const users = listUsers();
-  if (users.length === 1) {
-    return users[0];
+  const { totalUserCount, eligibleUserCount, eligibleUsers } = summarizeExecutionUsers(users);
+  if (eligibleUserCount === 1) {
+    return eligibleUsers[0];
   }
 
-  if (!users.length) {
+  if (!totalUserCount) {
     console.error("No execution users exist yet. Add a user first or pass --user explicitly.");
+  } else if (!eligibleUserCount) {
+    console.error("No execution-capable users exist yet. Add at least one connected account or pass --user explicitly.");
   } else {
-    console.error("More than one execution user exists. Pass --user to choose the inbox owner.");
+    console.error("More than one execution-capable user exists. Pass --user to choose the inbox owner.");
   }
   process.exitCode = 1;
   return null;

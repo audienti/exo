@@ -10647,6 +10647,180 @@ test("next prefers a due-now daily item over the broader motion path", () => {
   }
 });
 
+test("bare planner surfaces auto-select the sole execution-capable user and ignore helper users with no accounts", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-default-execution-user-"));
+
+  try {
+    const helperUser = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "hours-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "william-main", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "omalab-main",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "observations",
+        "add",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--surface",
+        "linkedin-received-invitations",
+        "--kind",
+        "connection_request_received",
+        "--observed-at",
+        "2026-05-28T13:00:00.000Z",
+        "--actor-name",
+        "Alicia Buyer",
+        "--summary",
+        "Alicia Buyer sent us a new inbound connection request.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(daily.user.id, user.id);
+    assert.equal(daily.items[0].guidance.key, "review_inbound_item");
+
+    const inbox = JSON.parse(
+      execFileSync("node", [cliPath, "inbox", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(inbox.user.id, user.id);
+    assert.equal(inbox.counts.itemCount, 1);
+
+    const report = JSON.parse(
+      execFileSync("node", [cliPath, "report", "workspace", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(report.user.id, user.id);
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(next.source, "daily");
+    assert.equal(next.guidance.key, "review_inbound_item");
+    assert.match(next.nextMove, /accept or decline/i);
+
+    assert.equal(helperUser.accounts.length, 0);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("daily still requires --user when more than one execution-capable user exists", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-multi-execution-user-"));
+
+  try {
+    const firstUser = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "first-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const secondUser = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "second-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    for (const userId of [firstUser.id, secondUser.id]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          userId,
+          "--capability",
+          "gmail",
+          "--handle",
+          `${userId}@example.com`,
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--preferred",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      );
+    }
+
+    let error = null;
+    try {
+      execFileSync("node", [cliPath, "daily", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      });
+    } catch (thrown) {
+      error = thrown;
+    }
+
+    assert.ok(error);
+    assert.match(String(error.stderr), /More than one execution-capable user exists/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("next falls back to the focus motion path when no due daily item exists", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-next-motion-"));
 

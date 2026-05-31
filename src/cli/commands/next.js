@@ -13,6 +13,7 @@ import {
   listMotions,
   listUsers
 } from "../../db/database.js";
+import { summarizeExecutionUsers } from "../../lib/execution-users.js";
 import { isExecutionEligibleMotionStatus } from "../../lib/motion-status.js";
 
 /**
@@ -112,7 +113,8 @@ function resolveNextUser(explicitUserId, rawUsers) {
     return user;
   }
 
-  return rawUsers.length === 1 ? rawUsers[0] : null;
+  const { eligibleUsers } = summarizeExecutionUsers(rawUsers);
+  return eligibleUsers.length === 1 ? eligibleUsers[0] : null;
 }
 
 /**

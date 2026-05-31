@@ -4,6 +4,7 @@
 import { renderDaily } from "../../artifacts/render-daily.js";
 import { buildDailyView } from "../../core/build-daily-view.js";
 import { findUserById, listBrowserProfiles, listCompanies, listInboundCues, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
+import { summarizeExecutionUsers } from "../../lib/execution-users.js";
 
 /**
  * @param {import("commander").Command} program
@@ -78,14 +79,17 @@ function resolveDailyUser(explicitUserId) {
   }
 
   const users = listUsers();
-  if (users.length === 1) {
-    return users[0];
+  const { totalUserCount, eligibleUserCount, eligibleUsers } = summarizeExecutionUsers(users);
+  if (eligibleUserCount === 1) {
+    return eligibleUsers[0];
   }
 
-  if (!users.length) {
+  if (!totalUserCount) {
     console.error("No execution users exist yet. Add a user first or pass --user explicitly.");
+  } else if (!eligibleUserCount) {
+    console.error("No execution-capable users exist yet. Add at least one connected account or pass --user explicitly.");
   } else {
-    console.error("More than one execution user exists. Pass --user to choose the daily agenda owner.");
+    console.error("More than one execution-capable user exists. Pass --user to choose the daily agenda owner.");
   }
   process.exitCode = 1;
   return null;

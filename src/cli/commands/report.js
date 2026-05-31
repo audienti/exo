@@ -18,6 +18,7 @@ import {
   listMotions,
   listUsers,
 } from "../../db/database.js";
+import { summarizeExecutionUsers } from "../../lib/execution-users.js";
 import { buildWorkspaceModel } from "../../../prototype/build-motion-workspace.mjs";
 
 /**
@@ -175,14 +176,17 @@ function resolveReportUser(explicitUserId, surface) {
   }
 
   const users = listUsers();
-  if (users.length === 1) {
-    return users[0];
+  const { totalUserCount, eligibleUserCount, eligibleUsers } = summarizeExecutionUsers(users);
+  if (eligibleUserCount === 1) {
+    return eligibleUsers[0];
   }
 
-  if (!users.length) {
+  if (!totalUserCount) {
     console.error("No execution users exist yet. Add a user first or pass --user explicitly.");
+  } else if (!eligibleUserCount) {
+    console.error("No execution-capable users exist yet. Add at least one connected account or pass --user explicitly.");
   } else {
-    console.error(`More than one execution user exists. Pass --user to choose the report ${surface} owner.`);
+    console.error(`More than one execution-capable user exists. Pass --user to choose the report ${surface} owner.`);
   }
   process.exitCode = 1;
   return null;
