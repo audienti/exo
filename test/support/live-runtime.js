@@ -27,13 +27,18 @@ export const offerUrl = `data:text/html,${encodeURIComponent(offerHtml)}`;
  * @param {NodeJS.ProcessEnv} [extraEnv]
  */
 export function runCliText(tempDir, args, extraEnv = {}) {
+  const mergedEnv = {
+    ...process.env,
+    ...extraEnv
+  };
+  if (!Object.prototype.hasOwnProperty.call(extraEnv, "CODEX_SHELL")) {
+    delete mergedEnv.CODEX_SHELL;
+  }
+
   return execFileSync("node", [cliPath, ...args], {
     cwd: tempDir,
     encoding: "utf8",
-    env: buildNodeTestEnv({
-      ...process.env,
-      ...extraEnv
-    })
+    env: buildNodeTestEnv(mergedEnv)
   });
 }
 

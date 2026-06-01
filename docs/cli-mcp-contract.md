@@ -186,7 +186,7 @@ Each command or tool should return:
 Examples:
 
 - `motion add` returns an offer-driven motion object with premise, audience hypotheses, motion-specific signals, ICP profile, geolocation filters, company-type and company-shape filters, suppression policy, grouped accounts, target people, segment variants, and recommended action logic
-- `companies show` returns the canonical company object and its motion links
+- `companies show` returns the canonical company object plus a cross-motion rollup of linked motions, people, signals, and recent touch history
 - `inbox` returns a ranked list of accounts needing attention
 - `brief` returns an account brief artifact
 - `propose` returns a next-action proposal with prediction

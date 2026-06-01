@@ -2,9 +2,10 @@
 
 /**
  * @param {import("../schema/company.js").companySchema._type} company
+ * @param {ReturnType<import("../core/build-company-rollup.js").buildCompanyRollup> | null} [rollup]
  * @returns {string}
  */
-export function renderCompanySummary(company) {
+export function renderCompanySummary(company, rollup = null) {
   const lines = [
     `Company: ${company.id}`,
     `Name: ${company.name}`,
@@ -23,6 +24,77 @@ export function renderCompanySummary(company) {
     `Updated: ${company.updatedAt}`,
     company.notes ? `Notes: ${company.notes}` : null
   ].filter(Boolean);
+
+  if (!rollup) {
+    return lines.join("\n");
+  }
+
+  lines.push(
+    "",
+    "Rollup Summary",
+    `  Motions: ${rollup.summary.motionCount}`,
+    `  Prospect Records: ${rollup.summary.prospectRecordCount}`,
+    `  People: ${rollup.summary.personCount}`,
+    `  Signals: ${rollup.summary.signalCount} (company: ${rollup.summary.companySignalCount}, person: ${rollup.summary.personSignalCount})`,
+    `  Touches: ${rollup.summary.touchCount}`,
+    `  Most Recent Touch: ${rollup.summary.mostRecentTouchAt ?? "none"}`
+  );
+
+  lines.push("", "Linked Motions");
+  if (!rollup.motions.length) {
+    lines.push("  none");
+  } else {
+    for (const motion of rollup.motions) {
+      lines.push(`  - ${motion.id}  ${motion.status}  ${motion.offerSourceUrl}`);
+      lines.push(`    Premise: ${motion.premise ?? "none"}`);
+      lines.push(
+        `    Account State: ${motion.accountPresent ? "present" : "missing"} | signals:${motion.signalMatchCount} prospects:${motion.prospectCount} touches:${motion.touchCount} last-touch:${motion.lastTouchAt ?? "none"}`
+      );
+    }
+  }
+
+  lines.push("", "People");
+  if (!rollup.people.length) {
+    lines.push("  none");
+  } else {
+    for (const person of rollup.people) {
+      lines.push(
+        `  - ${person.displayName} [${person.identityConfidence}] motions:${person.motionIds.length} touches:${person.touchCount} last-touch:${person.lastTouchAt ?? "none"}`
+      );
+      lines.push(`    Titles: ${joinOrNone(person.titles)}`);
+      lines.push(`    Email: ${joinOrNone(person.emails)}`);
+      lines.push(`    LinkedIn: ${joinOrNone(person.linkedinProfiles)}`);
+      lines.push(`    Cadence: ${joinOrNone(person.currentCadenceSteps)}`);
+      lines.push(
+        `    Motion Records: ${person.prospectRecords.length ? person.prospectRecords.map((record) => `${record.motionName} (${record.title})`).join(" | ") : "none"}`
+      );
+    }
+  }
+
+  lines.push("", "Recent Signals");
+  if (!rollup.signals.length) {
+    lines.push("  none");
+  } else {
+    for (const signal of rollup.signals.slice(0, 10)) {
+      const subject = signal.subject.type === "person"
+        ? `${signal.subject.personName ?? "unknown person"}${signal.subject.personTitle ? ` (${signal.subject.personTitle})` : ""}`
+        : company.name;
+      lines.push(
+        `  - ${(signal.observedAt ?? signal.recordedAt)}  [${signal.motionName}] ${signal.signalName} [${signal.confidence}] on ${subject}: ${signal.summary}`
+      );
+    }
+  }
+
+  lines.push("", "Recent Activity");
+  if (!rollup.activity.length) {
+    lines.push("  none");
+  } else {
+    for (const touch of rollup.activity.slice(0, 10)) {
+      lines.push(
+        `  - ${touch.occurredAt}  [${touch.motionName}] ${touch.prospectName}  ${touch.surface}  ${touch.direction}  ${touch.outcome}: ${touch.summary}`
+      );
+    }
+  }
 
   return lines.join("\n");
 }

@@ -1,5 +1,7 @@
 // @ts-check
 
+import { buildOperatorPromptFromDailyItem } from "../lib/operator-prompts.js";
+
 /**
  * @param {{
  *   user: { label: string, owner: string | null },
@@ -46,66 +48,28 @@
  * }} result
  */
 export function renderDaily(result) {
-  const lines = [
-    `Daily: ${result.user.label}${result.user.owner ? ` (${result.user.owner})` : ""}`,
-    `Generated At: ${result.generatedAt}`,
-    `Items: ${result.counts.itemCount}`,
-    `Reply Priority: ${result.counts.replyPriorityCount}`,
-    `Action Priority: ${result.counts.actionPriorityCount}`,
-    `Wait Priority: ${result.counts.waitPriorityCount}`,
-    `Due Now: ${result.counts.dueNowCount}`,
-    `Waiting: ${result.counts.waitingCount}`,
-    `Overridden By Inbound: ${result.counts.overriddenByInboundCount}`,
-    `Advanced By Inbound: ${result.counts.advancedByInboundCount}`
-  ];
+  if (!result.items.length) {
+    return "No due moves right now.";
+  }
+
+  const topItem = result.items[0];
+  const prompt = buildOperatorPromptFromDailyItem(topItem) ?? topItem.recommendedAction;
+  const lines = [prompt];
+
+  const remainingDueNow = Math.max(result.counts.dueNowCount - 1, 0);
+  if (remainingDueNow || result.counts.waitingCount) {
+    lines.push(`After that: ${remainingDueNow} more due now, ${result.counts.waitingCount} waiting.`);
+  }
 
   const linkedinCapacity = result.capacity?.linkedin ?? null;
-  if (linkedinCapacity) {
-    lines.push(`LinkedIn Capacity: ${linkedinCapacity.status}`);
-    lines.push(`LinkedIn Handle: ${linkedinCapacity.account.handle}`);
-    if (linkedinCapacity.account.profileLabel) {
-      lines.push(`LinkedIn Profile: ${linkedinCapacity.account.profileLabel}`);
-    }
-    lines.push(`LinkedIn Capacity Reason: ${linkedinCapacity.reason}`);
-
-    if (linkedinCapacity.status === "configured") {
-      lines.push(`LinkedIn Daily Target: ${linkedinCapacity.quota.dailyInvitationsTarget ?? 0}`);
-      lines.push(`LinkedIn Weekly Quota: ${linkedinCapacity.quota.weeklyInvitations ?? 0}`);
-      lines.push(`LinkedIn Sent Today: ${linkedinCapacity.execution.sentToday}`);
-      lines.push(`LinkedIn Pending: ${linkedinCapacity.execution.pendingInvitations}`);
-      lines.push(`LinkedIn Ready Now: ${linkedinCapacity.execution.readyConnectionRequests}`);
-      lines.push(`LinkedIn Remaining Today: ${linkedinCapacity.execution.remainingInvitationsToday ?? 0}`);
-      lines.push(`LinkedIn Inventory Shortfall: ${linkedinCapacity.execution.inventoryShortfall ?? 0}`);
-    }
-  }
-
-  if (!result.items.length) {
-    lines.push("No daily agenda items.");
-    return lines.join("\n");
-  }
-
-  for (const item of result.items) {
-    lines.push("");
-    lines.push(`- ${item.prospect.name} (${item.prospect.title}) at ${item.company.name}`);
-    lines.push(`  Motion: ${item.motion.name}`);
-    lines.push(`  State: ${item.state}`);
-    lines.push(`  Priority: ${item.priority}`);
-    lines.push(`  Cadence Effect: ${item.cadenceEffect}`);
-    lines.push(`  Due At: ${item.dueAt}`);
-    lines.push(`  Source: ${item.source.type}:${item.source.kind}`);
-    lines.push(`  Why It Matters: ${item.whyItMatters}`);
-    lines.push(`  Next: ${item.recommendedAction}`);
-    if (item.guidance?.taskPrompt) {
-      lines.push(`  Agent Prompt: ${item.guidance.taskPrompt}`);
-    }
-    if (item.guidance?.docPath) {
-      lines.push(`  Guidance Doc: ${item.guidance.docPath}`);
-    }
-    if (item.waitingBranch) {
-      lines.push(`  Waiting Branch: ${item.waitingBranch.kind}`);
-      lines.push(`  Waiting Why: ${item.waitingBranch.why}`);
-      lines.push(`  Waiting Next: ${item.waitingBranch.nextMove}`);
-    }
+  if (
+    linkedinCapacity?.status === "configured"
+    && typeof linkedinCapacity.execution.remainingInvitationsToday === "number"
+    && typeof linkedinCapacity.execution.readyConnectionRequests === "number"
+  ) {
+    lines.push(
+      `LinkedIn today: ${linkedinCapacity.execution.readyConnectionRequests} ready now, ${linkedinCapacity.execution.remainingInvitationsToday} remaining to hit target.`
+    );
   }
 
   return lines.join("\n");

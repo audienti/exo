@@ -149,49 +149,16 @@ function resolveNextMotion(explicitMotionId, rawMotions, description) {
  * @param {ReturnType<typeof buildNextView>} result
  */
 function renderNext(result) {
+  if (result.operatorPrompt) {
+    return result.operatorPrompt;
+  }
+
   const lines = [
-    result.headline,
-    `Next: ${result.nextMove}`
+    result.nextMove
   ];
 
   if (result.why) {
     lines.push(`Why: ${result.why}`);
-  }
-
-  if (result.context.motion?.name) {
-    lines.push(`Motion: ${result.context.motion.name}`);
-  }
-
-  if (result.context.company?.name) {
-    lines.push(`Company: ${result.context.company.name}`);
-  }
-
-  if (result.context.prospect?.name) {
-    lines.push(`Prospect: ${result.context.prospect.name}`);
-  }
-
-  if (result.status.kind) {
-    lines.push(`State: ${result.status.kind}`);
-  }
-
-  if (result.status.priority) {
-    lines.push(`Priority: ${result.status.priority}`);
-  }
-
-  if (result.status.effect) {
-    lines.push(`Effect: ${result.status.effect}`);
-  }
-
-  if (result.status.dueAt) {
-    lines.push(`Due At: ${result.status.dueAt}`);
-  }
-
-  if (result.guidance?.taskPrompt) {
-    lines.push(`Agent Prompt: ${result.guidance.taskPrompt}`);
-  }
-
-  if (result.guidance?.docPath) {
-    lines.push(`Guidance Doc: ${result.guidance.docPath}`);
   }
 
   return lines.join("\n");

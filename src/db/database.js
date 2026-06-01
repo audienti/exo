@@ -604,6 +604,15 @@ export function findInboundObservationByDedupeKey(dedupeKey) {
 }
 
 /**
+ * @param {string} id
+ */
+export function deleteInboundObservationById(id) {
+  getDatabase()
+    .prepare(`DELETE FROM inbound_observations WHERE id = ?`)
+    .run(id);
+}
+
+/**
  * @param {{
  *   userId?: string | null,
  *   accountId?: string | null,

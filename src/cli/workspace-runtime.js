@@ -9,6 +9,7 @@ import { assignCompanyUser } from "../core/assign-company-user.js";
 import { claimMotionProspectPacket } from "../core/claim-motion-prospect-packet.js";
 import { claimMotionTargetAccountPacket } from "../core/claim-target-account-packet.js";
 import { mergeInboundObservation, recordInboundObservation } from "../core/inbound-observations.js";
+import { refreshMotion } from "../core/refresh-motion.js";
 import {
   findCompanyById,
   findInboundObservationByDedupeKey,
@@ -89,6 +90,8 @@ export function runWorkspaceAction(rawAction) {
       return runClaimMotionProspectPacketAction(action);
     case "record_inbound_observation":
       return runRecordInboundObservationAction(action);
+    case "refresh_motion":
+      return runRefreshMotionAction(action);
     default:
       throw new Error(`Unsupported workspace action: ${String(action.kind)}`);
   }
@@ -149,7 +152,7 @@ export async function startWorkspaceServer(input) {
 
       if (request.method === "POST" && requestUrl.pathname === "/api/action") {
         const body = await readJsonBody(request);
-        const result = runWorkspaceAction(body);
+        const result = await runWorkspaceAction(body);
         respondJson(response, 200, {
           ok: true,
           ...result,
@@ -291,6 +294,27 @@ function runClaimMotionProspectPacketAction(action) {
 
   return {
     message: `Claimed the prospect packet on ${storedMotion.name}.`,
+  };
+}
+
+/**
+ * @param {{ motionId?: string }} action
+ */
+async function runRefreshMotionAction(action) {
+  if (!action.motionId) {
+    throw new Error("refresh_motion requires motionId.");
+  }
+
+  const rawMotion = findMotionById(action.motionId);
+  if (!rawMotion) {
+    throw new Error(`Motion not found: ${action.motionId}`);
+  }
+
+  const refreshed = await refreshMotion(rawMotion);
+  const storedMotion = updateMotion(refreshed);
+
+  return {
+    message: `Refreshed ${storedMotion.name}.`,
   };
 }
 

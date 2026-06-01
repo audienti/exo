@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --disable-warning=ExperimentalWarning
 // @ts-check
 
 import { Command } from "commander";
@@ -80,15 +80,15 @@ Common patterns:
   exo companies profile assign <company-id> --profile <profile-id> --reason "Use one identity consistently"
   exo profiles discover --json
   exo profiles add --browser chrome --label work-linkedin --profile-directory "Profile 2" --capability linkedin --capability sales-navigator
-  exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20
+  exo profiles claim <profile-id> --label workspace-main --workspace workspace --account linkedin:operator-linkedin --max-connection-requests 40 --max-inmail-messages 20
   exo profiles list
   exo profiles capabilities --json
   exo profiles resolve --capability linkedin --json
   exo profiles test <profile-id>
   exo profiles auth <profile-id> --runtime codex --json
-  exo users add --label william-main --owner william
-  exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred
-  exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred
+  exo users add --label operator-main --owner operator
+  exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --profile <profile-id> --preferred
+  exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --preferred
   exo users resolve <user-id> --capability gmail --json
   exo config export --out ./exo-config.json
   exo config import ./exo-config.json

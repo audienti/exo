@@ -7,6 +7,7 @@ import { describeExo } from "./what-is-this.js";
 import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
 import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
+import { buildOperatorPromptFromDailyItem, buildOperatorPromptFromExecutionAction } from "../lib/operator-prompts.js";
 
 /**
  * @param {{
@@ -40,10 +41,12 @@ export function buildNextView(input) {
     const topDailyItem = daily.items[0] ?? null;
 
     if (topDailyItem && topDailyItem.state === "due_now") {
+      const operatorPrompt = buildOperatorPromptFromDailyItem(topDailyItem);
       return {
         source: "daily",
         headline: `Next move for ${daily.user.label}`,
         nextMove: topDailyItem.recommendedAction,
+        operatorPrompt,
         why: topDailyItem.whyItMatters,
         status: {
           kind: topDailyItem.state,
@@ -98,6 +101,7 @@ export function buildNextView(input) {
         source: "motion",
         headline: `Next move for ${report.motion.name}`,
         nextMove: selectedAction.nextMove,
+        operatorPrompt: buildOperatorPromptFromExecutionAction(selectedAction),
         why: selectedAction.why,
         status: {
           kind: report.targeting.overallStage,
@@ -147,6 +151,7 @@ export function buildNextView(input) {
       source: "motion",
       headline: `Next move for ${report.motion.name}`,
       nextMove: selectMotionNextMove(report),
+      operatorPrompt: null,
       why: summarizeMotionWhy(report),
       status: {
         kind: report.targeting.overallStage,
@@ -180,6 +185,7 @@ export function buildNextView(input) {
     source: "operator-call",
     headline: description.operatorInterface.currentCall.headline,
     nextMove: description.operatorInterface.currentCall.nextMove,
+    operatorPrompt: description.operatorInterface.currentCall.operatorPrompt ?? null,
     why: description.agentUsage.recommendedPath.reason,
     status: {
       kind: description.agentUsage.recommendedPath.mode,

@@ -29,6 +29,7 @@ import {
   findInboundCueById,
   findInboundObservationByDedupeKey,
   findInboundObservationById,
+  deleteInboundObservationById,
   findCompanyById,
   findMotionById,
   listBrowserProfiles,
@@ -99,7 +100,7 @@ Rules:
   - Notification dots and unread badges are ambient cues, not canonical truth. Record them as cues or trigger a sync; do not treat them as observations by themselves.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
   - Sync policy and observation storage exist now. Gmail has a first live retrieval path through supported runtime adapters, including runtime:gmail harness connections and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn's authoritative quick surfaces now support either a bounded quick pass or a full reconciliation pass through a trusted Chrome profile plus a supported runtime:chrome harness, but broader LinkedIn retrieval still does not.
-  - In Codex desktop shell mode without an explicit EXO_CODEX_CLI override, the live commands now return an agent-side capture contract instead of shelling out to codex exec. The agent should use native browser or Gmail tools, then land the capture through exo inbound sync gmail/linkedin or exo inbound sync run.
+  - In Codex desktop shell mode, the live commands now return an agent-side capture contract instead of shelling out to codex exec. The agent should use native browser or Gmail tools, then land the capture through exo inbound sync gmail/linkedin or exo inbound sync run.
   - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
   - Use inbound sync live when Exo itself should run one governed quick or full inbound pass across every enabled Gmail and LinkedIn account that already has live retrieval support, or when another agent needs the structured Codex handoff contract for native capture plus governed writeback.
   - Use inbound sync linkedin when another agent already inspected LinkedIn surfaces and needs Exo to build or apply the governed writeback payload.
@@ -1073,6 +1074,7 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
   let createdObservationCount = 0;
   let updatedObservationCount = 0;
   let resolvedCueCount = 0;
+  let clearedSupersededObservationCount = 0;
   const existingObservations = listInboundObservations({ userId });
   const storedObservations = prepared.observations.map((observation) => {
     const existing = findInboundObservationByDedupeKey(observation.dedupeKey)
@@ -1085,6 +1087,25 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
     } else {
       createdObservationCount += 1;
     }
+
+    const supersededKinds = listSupersededObservationKinds(merged.kind);
+    if (supersededKinds.length) {
+      const conflictingObservations = listInboundObservations({
+        userId,
+        accountId: merged.accountId,
+        surfaceKey: merged.surfaceKey
+      }).filter((candidate) =>
+        candidate.id !== merged.id
+        && supersededKinds.includes(candidate.kind)
+        && inboundObservationsShareIdentity(candidate, merged)
+      );
+
+      for (const conflicting of conflictingObservations) {
+        deleteInboundObservationById(conflicting.id);
+        clearedSupersededObservationCount += 1;
+      }
+    }
+
     return merged;
   });
   for (const account of prepared.accounts) {
@@ -1123,6 +1144,7 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
       ...prepared.counts,
       createdObservationCount,
       updatedObservationCount,
+      clearedSupersededObservationCount,
       resolvedCueCount,
       enrichedProspectCount
     },
@@ -1150,6 +1172,24 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
   }
 
   return result;
+}
+
+/**
+ * @param {string} kind
+ */
+function listSupersededObservationKinds(kind) {
+  switch (kind) {
+    case "connection_request_pending":
+      return ["connection_request_no_longer_pending"];
+    case "connection_request_no_longer_pending":
+      return ["connection_request_pending"];
+    case "connection_request_received":
+      return ["connection_request_received_no_longer_pending"];
+    case "connection_request_received_no_longer_pending":
+      return ["connection_request_received"];
+    default:
+      return [];
+  }
 }
 
 /**

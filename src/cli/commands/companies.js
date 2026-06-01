@@ -13,6 +13,7 @@ import { addCompany } from "../../core/add-company.js";
 import { assignCompanyProfile } from "../../core/assign-company-profile.js";
 import { assignCompanyUser } from "../../core/assign-company-user.js";
 import { buildCompanyExecutionView } from "../../core/build-company-execution-view.js";
+import { buildCompanyRollup } from "../../core/build-company-rollup.js";
 import { buildLiveLinkedinProfileEnrichmentView } from "../../core/build-live-linkedin-profile-enrichment.js";
 import { buildCompanyResearchBrief } from "../../core/build-company-research-brief.js";
 import { claimMotionProspectPacket } from "../../core/claim-motion-prospect-packet.js";
@@ -27,6 +28,7 @@ import { setMotionProspectCadence } from "../../core/set-prospect-cadence.js";
 import { setMotionProspectOpeningPlan } from "../../core/set-prospect-opening-plan.js";
 import { setMotionProspectThroughLine } from "../../core/set-prospect-through-line.js";
 import { updateCompanyRecord } from "../../core/update-company.js";
+import { rehydrateMotion } from "../../core/rehydrate-motion.js";
 import {
   findBrowserProfileById,
   findCompanyById,
@@ -403,7 +405,7 @@ Use this before live browser-backed work when you need one canonical answer to:
 
   companies
     .command("show")
-    .description("Show one canonical company record.")
+    .description("Show one canonical company record with cross-motion rollup context.")
     .argument("<company-id>", "Company identifier")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
@@ -412,6 +414,8 @@ Use this before live browser-backed work when you need one canonical answer to:
 Examples:
   exo companies show <company-id>
   exo companies show <company-id> --json
+
+This view rolls up linked motions, people, signals, and recent touch history while keeping the canonical company object at the top level.
 `
     )
     .action((companyId, options) => {
@@ -423,13 +427,18 @@ Examples:
       }
 
       const company = companySchema.parse(raw);
+      const motions = loadCompanyLinkedMotions(company);
+      const rollup = buildCompanyRollup(company, motions);
 
       if (options.json) {
-        console.log(JSON.stringify(company, null, 2));
+        console.log(JSON.stringify({
+          ...company,
+          rollup
+        }, null, 2));
         return;
       }
 
-      console.log(renderCompanySummary(company));
+      console.log(renderCompanySummary(company, rollup));
     });
 
   companies
@@ -3022,6 +3031,17 @@ function loadCompanyMotionContext(companyId, selectedMotionId) {
     rawMotion,
     account
   };
+}
+
+/**
+ * @param {import("../../schema/company.js").companySchema._type} company
+ * @returns {Array<import("../../schema/motion.js").motionSchema._type>}
+ */
+function loadCompanyLinkedMotions(company) {
+  return company.motionIds
+    .map((motionId) => findMotionById(motionId))
+    .filter(Boolean)
+    .map((rawMotion) => rehydrateMotion(rawMotion).motion);
 }
 
 /**

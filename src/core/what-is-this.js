@@ -165,7 +165,7 @@ export function describeExo() {
       },
       {
         command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/claim/complete/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign/execution show",
-        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, pin either a sticky engagement profile or a cross-capability execution user when outreach starts, and inspect the resolved execution plan with optional motion-level fallback."
+        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, inspect one cross-motion company rollup, pin either a sticky engagement profile or a cross-capability execution user when outreach starts, and inspect the resolved execution plan with optional motion-level fallback."
       },
       {
         command: "exo motion intake/start/add/seed/discover/target/packets/packet-brief/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/profile show/assign/user show/assign/remove",
@@ -184,7 +184,7 @@ export function describeExo() {
       "Browser-backed work should fail closed if no profile is attached or trusted.",
       "A ready profile means the local browser context looks structurally usable.",
       "Profile checks do not yet prove live LinkedIn, Sales Navigator, Gmail, or HubSpot auth.",
-      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through supported runtime adapters, including runtime:gmail harness-backed accounts and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn's authoritative quick surfaces can now be retrieved through a trusted Chrome profile plus a supported runtime:chrome harness in either bounded quick mode or full reconciliation mode, but broader inbound retrieval still needs dedicated producers. In Codex desktop shell mode without an explicit EXO_CODEX_CLI override, Exo now returns an agent-side live-capture contract instead of shelling out to codex exec.",
+      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through supported runtime adapters, including runtime:gmail harness-backed accounts and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn's authoritative quick surfaces can now be retrieved through a trusted Chrome profile plus a supported runtime:chrome harness in either bounded quick mode or full reconciliation mode, but broader inbound retrieval still needs dedicated producers. In Codex desktop shell mode, Exo now returns an agent-side live-capture contract instead of shelling out to codex exec.",
       "Configured weekly quotas on the claimed profile identity should govern outreach pacing. InMail credits are still a separate live observation, not a static config knob.",
       "Exo resolves browser identity. The agent runtime should choose the browser-control harness.",
       "In Codex, prefer the Chrome skill or native Chrome connector before Playwriter for Chrome-profile work."
@@ -218,9 +218,12 @@ export function describeExo() {
           "Translate Exo state into an operator judgment and next move. Treat Exo as the system of record, not as a passive status feed. Do not speak like you are reading source code or field paths.",
         rules: [
           "Lead with the conclusion.",
+          "Keep the operator-facing reply as short as the decision allows.",
           "State the governed next move in plain English.",
+          "When Exo exposes a direct operator question, ask that question before offering process detail.",
           "Mention ids or commands only when they are operationally necessary.",
-          "Do not narrate JSON field names unless the operator explicitly asks for raw structure."
+          "Do not narrate JSON field names unless the operator explicitly asks for raw structure.",
+          "Do not describe shell bootstrapping, state-path setup, sync modes, or writeback mechanics unless the operator explicitly asks or the workflow is blocked."
         ]
       },
       operatorGuidance: {
@@ -266,13 +269,13 @@ export function describeExo() {
             when: "Use this before any LinkedIn, Sales Navigator, Gmail, or HubSpot work that depends on a real browser identity.",
             commands: [
               "exo profiles discover --json",
-              "exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json",
-              "exo users add --label william-main --owner william --json",
+              "exo profiles claim <profile-id> --label workspace-main --workspace workspace --account linkedin:operator-linkedin --max-connection-requests 40 --max-inmail-messages 20 --json",
+              "exo users add --label operator-main --owner operator --json",
               "exo users harness probe <user-id> --runtime codex --json",
               "exo users harness probe <user-id> --runtime claude --json",
-              "exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred --json",
-              "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred --json",
-              "exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime claude --connector gmail --preferred --json",
+              "exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --profile <profile-id> --preferred --json",
+              "exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --preferred --json",
+              "exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime claude --connector gmail --preferred --json",
               "exo users harness add <user-id> --runtime codex --connector chrome --status unknown --json",
               "exo users harness add <user-id> --runtime claude --connector chrome --status unknown --json",
               "exo profiles auth <profile-id> --runtime codex --json",
@@ -456,7 +459,7 @@ function buildGettingStarted(stateSummary) {
       commands: [
         "exo profiles discover --json",
         "exo profiles add --browser chrome --label work-linkedin --profile-directory \"Profile 2\" --capability linkedin --capability sales-navigator --json",
-        "exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --json",
+        "exo profiles claim <profile-id> --label workspace-main --workspace workspace --account linkedin:operator-linkedin --json",
         "exo profiles capabilities --json",
         "exo profiles resolve --capability linkedin --json",
         "exo profiles test <profile-id> --json"
@@ -607,7 +610,9 @@ function buildOperatorInterface(recommendedPath) {
       "Exo is the GTM operator interface and system of record for agents. The agent should translate Exo state into a normal operating conversation, persist durable findings back into Exo, and not expose Exo primitives unless they are necessary.",
     conversationRules: [
       "Lead with the decision or judgment.",
+      "Keep the operator-facing reply tight and skip runtime narration unless asked.",
       "State the next move in plain English.",
+      "If the next move is a simple operator decision, ask it directly as a question.",
       "Use Exo ids or commands only when the operator needs to act on them.",
       "Do not narrate JSON field names or internal property paths in normal conversation."
     ],
@@ -628,6 +633,14 @@ function buildOperatorInterface(recommendedPath) {
           : recommendedPath.mode === "create-motion"
             ? "Define a new motion with premise, audience hypothesis, and first signal."
             : "Use the recommended path as the next governed move.",
+      operatorPrompt:
+        recommendedPath.mode === "continue-motion"
+          ? `Keep working ${recommendedPath.focusMotionName ?? "the current motion"}. What do you want to do next?`
+          : recommendedPath.mode === "activate-motion"
+            ? `Restart or resume ${recommendedPath.focusMotionName ?? "the motion"} first.`
+          : recommendedPath.mode === "create-motion"
+            ? "No motion exists yet. Do you want to create one now?"
+            : "What do you want to do next?",
       blockers: recommendedPath.blockers
     }
   };

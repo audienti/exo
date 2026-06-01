@@ -42,6 +42,12 @@ It now also carries doc-backed planner guidance:
 - an agent-facing task prompt
 - structured principles, do/avoid rules, and writeback expectations in JSON mode
 
+When the strongest next move is a direct operator decision, `exo next --json` also exposes an `operatorPrompt` field.
+That field is the short operator-facing question the agent should ask instead of narrating bootstrapping or planner internals.
+Example:
+
+> Jordan Cipolla sent you an inbound LinkedIn connection request. Accept or decline?
+
 ## Not implemented yet
 
 `exo next` still does not:

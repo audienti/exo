@@ -1342,6 +1342,200 @@ test("full sent-invitation reconciliation still matches the same person when the
   }
 });
 
+test("a fresh full pending reappearance clears an older sent-invite no-longer-pending artifact for the same person", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sent-reappeared-pending-"));
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/feed/"]
+  });
+
+  try {
+    const profile = JSON.parse(runCli(tempDir, [
+      "profiles",
+      "add",
+      "--browser",
+      "chrome",
+      "--label",
+      "reappeared-pending-main",
+      "--user-data-dir",
+      chrome.userDataDir,
+      "--profile-directory",
+      chrome.profileDirectory,
+      "--browser-command",
+      chrome.browserCommand,
+      "--capability",
+      "linkedin",
+      "--json"
+    ]));
+
+    const user = JSON.parse(runCli(tempDir, ["users", "add", "--label", "reappeared-pending-user", "--owner", "William", "--json"]));
+    const withLinkedin = JSON.parse(runCli(tempDir, [
+      "users",
+      "accounts",
+      "add",
+      user.id,
+      "--capability",
+      "linkedin",
+      "--handle",
+      "reappeared-pending-user",
+      "--profile",
+      profile.id,
+      "--preferred",
+      "--json"
+    ]));
+    const linkedinAccount = withLinkedin.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+
+    const firstSyncPath = path.join(tempDir, "sent-reappeared-first.json");
+    fs.writeFileSync(firstSyncPath, JSON.stringify({
+      mode: "full",
+      accounts: [
+        {
+          accountId: linkedinAccount.id,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-sent-invitations",
+              status: "success",
+              observedAt: "2026-05-31T15:00:00.000Z",
+              itemCount: 1,
+              visibleTotalCount: 1,
+              captureCompleteness: "complete",
+              requestedMode: "full",
+              actualMode: "full",
+              reconcileRequired: false,
+              reconcileReason: null,
+              error: null,
+              observations: [
+                {
+                  kind: "connection_request_pending",
+                  externalId: "legacy-parm-row-id",
+                  observedAt: "2026-05-31T15:00:00.000Z",
+                  actorName: "Parm Uppal",
+                  actorProfileUrl: "https://www.linkedin.com/in/parmuppal/",
+                  summary: "Parm Uppal is still pending."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+
+    runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", firstSyncPath, "--json"]);
+
+    const secondSyncPath = path.join(tempDir, "sent-reappeared-second-empty.json");
+    fs.writeFileSync(secondSyncPath, JSON.stringify({
+      mode: "full",
+      accounts: [
+        {
+          accountId: linkedinAccount.id,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-sent-invitations",
+              status: "success",
+              observedAt: "2026-05-31T16:00:00.000Z",
+              itemCount: 0,
+              visibleTotalCount: 0,
+              captureCompleteness: "complete",
+              requestedMode: "full",
+              actualMode: "full",
+              reconcileRequired: false,
+              reconcileReason: null,
+              error: null,
+              observations: []
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+
+    runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", secondSyncPath, "--json"]);
+
+    runCli(tempDir, [
+      "inbound",
+      "observations",
+      "add",
+      user.id,
+      "--account",
+      linkedinAccount.id,
+      "--surface",
+      "linkedin-sent-invitations",
+      "--kind",
+      "connection_request_pending",
+      "--external-id",
+      "sent:https://www.linkedin.com/in/parmuppal/",
+      "--observed-at",
+      "2026-06-01T11:10:44.319Z",
+      "--actor-name",
+      "Parm Uppal",
+      "--actor-profile-url",
+      "https://www.linkedin.com/in/parmuppal/",
+      "--summary",
+      "Parm Uppal is still pending from a bounded visible-slice pass.",
+      "--json"
+    ]);
+
+    const thirdSyncPath = path.join(tempDir, "sent-reappeared-third.json");
+    fs.writeFileSync(thirdSyncPath, JSON.stringify({
+      mode: "full",
+      accounts: [
+        {
+          accountId: linkedinAccount.id,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-sent-invitations",
+              status: "success",
+              observedAt: "2026-06-01T11:16:57.497Z",
+              itemCount: 1,
+              visibleTotalCount: 1,
+              captureCompleteness: "complete",
+              requestedMode: "full",
+              actualMode: "full",
+              reconcileRequired: false,
+              reconcileReason: null,
+              error: null,
+              observations: [
+                {
+                  kind: "connection_request_pending",
+                  externalId: "sent:https://www.linkedin.com/in/parmuppal/",
+                  observedAt: "2026-06-01T11:16:57.497Z",
+                  actorName: "Parm Uppal",
+                  actorProfileUrl: "https://www.linkedin.com/in/parmuppal/",
+                  summary: "Parm Uppal is still pending in the live sent list."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+
+    const thirdResult = JSON.parse(runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", thirdSyncPath, "--json"]));
+    assert.equal(thirdResult.counts.clearedSupersededObservationCount, 1);
+
+    const observationList = JSON.parse(runCli(tempDir, [
+      "inbound",
+      "observations",
+      "list",
+      user.id,
+      "--account",
+      linkedinAccount.id,
+      "--surface",
+      "linkedin-sent-invitations",
+      "--json"
+    ]));
+
+    assert.equal(observationList.counts.observationCount, 1);
+    assert.equal(observationList.observations[0].kind, "connection_request_pending");
+    assert.equal(observationList.observations[0].externalId, "sent:https://www.linkedin.com/in/parmuppal/");
+
+    const review = JSON.parse(runCli(tempDir, ["inbound", "review", user.id, "--json"]));
+    assert.equal(review.reviewItems.some((item) => item.kind === "connection_request_no_longer_pending"), false);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound sync run enriches a matched prospect with the latest LinkedIn profile and proxied avatar", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-prospect-enrichment-"));
   const chrome = setupReadyChromeProfile(tempDir, {

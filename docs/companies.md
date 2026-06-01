@@ -59,6 +59,15 @@ It stores:
 
 This is intentionally lighter than the eventual account brief or motion-account model.
 
+What `exo companies show` now does:
+
+- returns the canonical company object
+- rolls up the linked motion set for that company
+- groups duplicated prospect records into one company-level people view when identity is strong enough
+- shows recent signals and touches across linked motions
+
+That rollup is a view, not a second storage layer. The underlying signal, prospect, plan, cadence, and touch records still live on the motion-owned target account.
+
 ## Important distinction
 
 Today:
@@ -71,6 +80,8 @@ Today the richer motion-specific layer now exists in a first real form on the mo
 - per-motion signal matches
 - chosen stakeholders
 - first outreach plan
+
+The company view now reads across those motion-owned branches so the operator can see one company-level history, but the writes still land on the motion-owned target account.
 
 Automatic target ranking and full target-map generation are still ahead.
 

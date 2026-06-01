@@ -249,6 +249,7 @@ test("inbound sync linkedin-live records governed failure when the selected runt
 test("inbound sync live auto-discovers codex chrome for browser-backed accounts and returns an agent handoff contract in Codex shell", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-live-codex-handoff-cassette-"));
   const codexHome = path.join(tempDir, ".codex");
+  const fakeCodexPath = path.join(tempDir, "ignored-codex-shell-binary");
   const chrome = setupReadyChromeProfile(tempDir, {
     cookieHosts: [".linkedin.com", ".google.com"],
     historyUrls: ["https://www.linkedin.com/feed/", "https://mail.google.com/mail/u/0/#inbox"]
@@ -283,14 +284,20 @@ test("inbound sync live auto-discovers codex chrome for browser-backed accounts 
 
     const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--json"], {
       CODEX_HOME: codexHome,
-      CODEX_SHELL: "1"
+      CODEX_SHELL: "1",
+      EXO_CODEX_CLI: fakeCodexPath
     });
 
     assert.equal(result.transportStatus, "agent_capture_required");
     assert.equal(result.canApply, false);
     assert.equal(result.payload, null);
+    assert.equal(result.landingPlan.contractVersion, "exo-live-landing-plan-v2");
+    assert.equal(result.landingPlan.coldStartReady, true);
+    assert.equal(result.landingPlan.noRepoRediscoveryRequired, true);
     assert.equal(result.landingPlan.accountCount, 2);
     assert.match(result.landingPlan.applyCommand, new RegExp(`exo inbound sync run ${user.id}`));
+    assert.ok(result.landingPlan.verificationCommands.some((command) => new RegExp(`exo inbound sync show ${user.id} --json`).test(command)));
+    assert.ok(result.landingPlan.verificationCommands.some((command) => new RegExp(`exo next --user ${user.id} --json`).test(command)));
 
     const linkedin = result.accounts.find((account) => account.account.capability === "linkedin");
     const gmail = result.accounts.find((account) => account.account.capability === "gmail");
@@ -299,15 +306,46 @@ test("inbound sync live auto-discovers codex chrome for browser-backed accounts 
     assert.equal(linkedin.transport.kind, "agent_handoff");
     assert.equal(linkedin.transport.runtime, "codex");
     assert.equal(linkedin.transport.connector, "chrome");
+    assert.equal(linkedin.transport.captureRequest.executionMode, "native_tools_only");
+    assert.equal(linkedin.transport.captureRequest.captureTransportMode, "browser_native_only");
+    assert.equal(linkedin.transport.captureRequest.shellFallbackAllowed, false);
+    assert.equal(linkedin.transport.captureRequest.exoCliWritebackRequired, true);
+    assert.equal(linkedin.transport.captureRequest.noRepoRediscoveryRequired, true);
+    assert.equal(linkedin.transport.captureRequest.profileSelection.expectedProfile.profileDirectory, chrome.profileDirectory);
+    assert.equal(linkedin.transport.captureRequest.profileSelection.expectedHandle, "codex-handoff-user");
     assert.match(linkedin.transport.captureRequest.prompt, /native Chrome\/browser-control surface/i);
+    assert.match(linkedin.transport.captureRequest.prompt, /captureGuide/i);
+    assert.match(linkedin.transport.captureRequest.prompt, /captureScaffold/i);
+    assert.match(linkedin.transport.captureRequest.prompt, /outputGuide\.surfaceStateRules/i);
+    assert.match(linkedin.transport.captureRequest.prompt, /Use captureGuide\.writebackRules and verificationCommands/i);
+    assert.match(linkedin.transport.captureRequest.prompt, /start from captureScaffold/i);
+    assert.ok(linkedin.transport.captureRequest.captureGuide.captureRules.some((line) => /Do not shell out through codex exec, EXO_CODEX_CLI/i.test(line)));
+    assert.match(linkedin.transport.captureRequest.captureGuide.rediscoveryPolicy, /Do not reopen repo source files, CLI help, or prior chat history/i);
+    assert.equal(linkedin.transport.captureRequest.captureScaffold.version, "exo-linkedin-quick-capture-v1");
+    assert.equal(linkedin.transport.captureRequest.outputGuide.modePolicy.requestedMode, "quick");
     assert.match(linkedin.transport.captureRequest.buildPayloadCommand, /exo inbound sync linkedin .* --input - --json/i);
+    assert.match(linkedin.transport.captureRequest.applyCommand, /exo inbound sync run .* --input <combined-inbound-sync\.json> --refresh --json/i);
+    assert.ok(linkedin.transport.captureRequest.verificationCommands.some((command) => /linkedin-sent-invitations/.test(command)));
 
     assert.equal(gmail.probe.detectedStatus, "available");
     assert.equal(gmail.transport.kind, "agent_handoff");
     assert.equal(gmail.transport.runtime, "codex");
     assert.equal(gmail.transport.connector, "chrome");
+    assert.equal(gmail.transport.captureRequest.executionMode, "native_tools_only");
+    assert.equal(gmail.transport.captureRequest.captureTransportMode, "browser_native_only");
+    assert.equal(gmail.transport.captureRequest.shellFallbackAllowed, false);
+    assert.equal(gmail.transport.captureRequest.exoCliWritebackRequired, true);
+    assert.equal(gmail.transport.captureRequest.noRepoRediscoveryRequired, true);
+    assert.equal(gmail.transport.captureRequest.profileSelection.expectedProfile.profileDirectory, chrome.profileDirectory);
+    assert.equal(gmail.transport.captureRequest.profileSelection.expectedHandle, "codex-handoff-user@example.com");
     assert.match(gmail.transport.captureRequest.prompt, /inspect one live Gmail inbox/i);
+    assert.match(gmail.transport.captureRequest.prompt, /captureGuide/i);
+    assert.match(gmail.transport.captureRequest.prompt, /Use captureGuide\.writebackRules and verificationCommands/i);
+    assert.ok(gmail.transport.captureRequest.captureGuide.captureRules.some((line) => /Do not shell out through codex exec, EXO_CODEX_CLI/i.test(line)));
+    assert.match(gmail.transport.captureRequest.captureGuide.rediscoveryPolicy, /Do not reopen repo source files, CLI help, or prior chat history/i);
     assert.match(gmail.transport.captureRequest.buildPayloadCommand, /exo inbound sync gmail .* --input - --json/i);
+    assert.match(gmail.transport.captureRequest.applyCommand, /exo inbound sync run .* --input <combined-inbound-sync\.json> --refresh --json/i);
+    assert.ok(gmail.transport.captureRequest.verificationCommands.some((command) => new RegExp(`exo inbox --user ${user.id} --json`).test(command)));
 
     let applyError = null;
     try {
@@ -366,7 +404,8 @@ test("inbound sync live supports full-mode Codex handoff for LinkedIn reconcilia
 
     const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--capability", "linkedin", "--mode", "full", "--json"], {
       CODEX_HOME: codexHome,
-      CODEX_SHELL: "1"
+      CODEX_SHELL: "1",
+      EXO_CODEX_CLI: path.join(tempDir, "ignored-codex-shell-binary")
     });
 
     assert.equal(result.mode, "full");
@@ -375,6 +414,8 @@ test("inbound sync live supports full-mode Codex handoff for LinkedIn reconcilia
     assert.equal(result.accounts.length, 1);
     assert.equal(result.accounts[0].account.capability, "linkedin");
     assert.equal(result.accounts[0].transport.kind, "agent_handoff");
+    assert.equal(result.accounts[0].transport.captureRequest.executionMode, "native_tools_only");
+    assert.equal(result.accounts[0].transport.captureRequest.profileSelection.expectedProfile.profileDirectory, chrome.profileDirectory);
     assert.match(result.accounts[0].transport.captureRequest.prompt, /requested mode is full/i);
     assert.match(result.accounts[0].transport.captureRequest.prompt, /fully reconcile|full reconciliation|reconcile/i);
   } finally {

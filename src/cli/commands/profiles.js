@@ -52,7 +52,7 @@ Status meanings:
 Typical flow:
   exo profiles discover --json
   exo profiles add --browser chrome --label work-linkedin --profile-directory "Profile 2" --capability linkedin --capability sales-navigator
-  exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20
+  exo profiles claim <profile-id> --label workspace-main --workspace workspace --account linkedin:operator-linkedin --max-connection-requests 40 --max-inmail-messages 20
   exo profiles list
   exo profiles capabilities --json
   exo profiles resolve --capability linkedin --json
@@ -136,11 +136,11 @@ Rules:
     .command("claim")
     .description("Claim a registered browser profile as a named business identity.")
     .argument("<profile-id>", "Browser profile identifier")
-    .option("--label <label>", "Human-friendly stable label such as audienti-main or knitit-main")
-    .option("--owner <owner>", "Owner such as william")
-    .option("--workspace <workspace>", "Workspace or surface such as audienti, knitit, para")
+    .option("--label <label>", "Human-friendly stable label such as workspace-main or client-main")
+    .option("--owner <owner>", "Owner such as operator")
+    .option("--workspace <workspace>", "Workspace or surface such as workspace, client, or personal")
     .option("--scope <scope>", "unknown | work | personal | shared")
-    .option("--account <mapping>", "Capability mapping like linkedin:wflanagan@audienti.com", collect, [])
+    .option("--account <mapping>", "Capability mapping like linkedin:operator-linkedin", collect, [])
     .option("--max-profile-visits <count>", "Weekly quota for profile visits, or 'unlimited'")
     .option("--max-connection-requests <count>", "Weekly quota for connection requests/invitations, or 'unlimited'")
     .option("--max-messages <count>", "Weekly quota for LinkedIn messages, or 'unlimited'")
@@ -150,9 +150,9 @@ Rules:
       "after",
       `
 Examples:
-  exo profiles claim <profile-id> --label audienti-main --owner william --workspace audienti --scope work --account linkedin:wflanagan@audienti.com --account gmail:wflanagan@audienti.com
-  exo profiles claim <profile-id> --label knitit-main --workspace knitit --account hubspot:knitit
-  exo profiles claim <profile-id> --label audienti-main --max-connection-requests 40 --max-inmail-messages 20
+  exo profiles claim <profile-id> --label workspace-main --owner operator --workspace workspace --scope work --account linkedin:operator-linkedin --account gmail:operator@example.com
+  exo profiles claim <profile-id> --label client-main --workspace client --account hubspot:client-main
+  exo profiles claim <profile-id> --label workspace-main --max-connection-requests 40 --max-inmail-messages 20
 
 This is the step that turns a browser context into a stable execution identity.
 It is also the edit path for account-level weekly quotas.

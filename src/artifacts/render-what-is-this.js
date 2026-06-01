@@ -9,93 +9,32 @@ export function renderWhatIsThis(description) {
     `${description.name} ${description.version}`,
     description.identity.oneLiner,
     "",
-    "Purpose",
-    `  ${description.identity.purpose}`,
+    `Current call: ${description.operatorInterface.currentCall.headline}`,
+    `Next move: ${description.operatorInterface.currentCall.nextMove}`,
     "",
-    "Agent Start Here"
+    "Default agent contract:",
+    "  - ask one direct operator question at a time when Exo already knows the decision",
+    "  - hide shell setup, state-path setup, and sync mechanics unless the workflow is blocked",
+    "  - write durable outcomes back into Exo instead of leaving them in chat"
   ];
 
-  for (const item of description.identity.interactionModel) {
-    lines.push(`  - ${item}`);
-  }
-
-  lines.push("", "Operator Interface");
-  lines.push(`  ${description.operatorInterface.principle}`);
-  lines.push(`  Current Call: ${description.operatorInterface.currentCall.headline}`);
-  lines.push(`  Next Move: ${description.operatorInterface.currentCall.nextMove}`);
   if (description.operatorInterface.currentCall.blockers.length) {
-    lines.push("  Blockers:");
+    lines.push("", "Current blockers:");
     for (const blocker of description.operatorInterface.currentCall.blockers) {
-      lines.push(`    - ${blocker}`);
-    }
-  }
-  lines.push("  Conversation Rules:");
-  for (const rule of description.operatorInterface.conversationRules) {
-    lines.push(`    - ${rule}`);
-  }
-
-  lines.push("", "Guide The Agent");
-  lines.push(`  Principle: ${description.agentUsage.operatorGuidance.principle}`);
-  lines.push(`  First Question: ${description.agentUsage.operatorGuidance.firstQuestion}`);
-
-  lines.push("", "Current State");
-  lines.push(`  Motions: ${description.stateSummary.motions.count}`);
-  for (const motion of description.stateSummary.motions.preview) {
-    lines.push(
-      `    ${motion.name}  ${motion.id}  ${motion.status}  premise:${motion.premiseStatus}  ${motion.sourceUrl}`
-    );
-  }
-  lines.push(
-    `  Browser Profiles: ${description.stateSummary.browserProfiles.count} (${description.stateSummary.browserProfiles.readyCount} ready)`
-  );
-  for (const profile of description.stateSummary.browserProfiles.preview) {
-    lines.push(
-      `    ${profile.id}  ${profile.label}  ${profile.status}  [${profile.capabilities.join(", ")}]`
-    );
-  }
-  lines.push(`  Companies: ${description.stateSummary.companies.count}`);
-  for (const company of description.stateSummary.companies.preview) {
-    lines.push(`    ${company.id}  ${company.name}  ${company.domain ?? "no-domain"}`);
-  }
-
-  lines.push("", "Recommended Next Actions");
-  for (const step of description.gettingStarted) {
-    lines.push(`  - ${step.title}: ${step.reason}`);
-    for (const command of step.commands) {
-      lines.push(`    ${command}`);
+      lines.push(`  - ${blocker}`);
     }
   }
 
-  lines.push("", "Current Commands");
-  for (const capability of description.currentCapabilities) {
-    lines.push(`  - ${capability.command}: ${capability.purpose}`);
+  lines.push("", "Current state:");
+  lines.push(`  - motions: ${description.stateSummary.motions.count}`);
+  if (description.stateSummary.motions.focusMotionName) {
+    lines.push(`  - focus motion: ${description.stateSummary.motions.focusMotionName}`);
   }
-
-  lines.push("", "Operating Rules");
-  for (const rule of description.operatingRules) {
-    lines.push(`  - ${rule}`);
-  }
-
-  lines.push("", "Browser Profile Rules");
-  for (const rule of description.browserProfileRules) {
-    lines.push(`  - ${rule}`);
-  }
-
-  lines.push("", "Concurrency");
-  lines.push(`  ${description.concurrency.model}`);
-  for (const requirement of description.concurrency.requirements) {
-    lines.push(`  - ${requirement}`);
-  }
-
-  lines.push("", "Current Limitations");
-  for (const limitation of description.currentLimitations) {
-    lines.push(`  - ${limitation}`);
-  }
-
-  lines.push("", "Docs");
-  for (const doc of description.docs) {
-    lines.push(`  - ${doc.label}: ${doc.path}`);
-  }
+  lines.push(`  - ready browser profiles: ${description.stateSummary.browserProfiles.readyCount}`);
+  lines.push(`  - companies: ${description.stateSummary.companies.count}`);
+  lines.push(`  - execution users: ${description.stateSummary.users.count}`);
+  lines.push("", "Use `exo next` for the next governed operator decision.");
+  lines.push("Use `exo what-is-this --json` when an agent needs the full contract.");
 
   return lines.join("\n");
 }

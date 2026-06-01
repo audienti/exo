@@ -31,12 +31,12 @@ export function registerUsers(program) {
       "after",
       `
 Examples:
-  exo users add --label william-main --owner william
+  exo users add --label operator-main --owner operator
   exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 09:00 --end 17:00
   exo users harness add <user-id> --runtime codex --connector chrome --status available
   exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json
-  exo users accounts add <user-id> --capability linkedin --handle wflanagan@audienti.com --profile <profile-id> --preferred
-  exo users accounts add <user-id> --capability gmail --handle william@audienti.com --runtime codex --connector gmail --preferred
+  exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --profile <profile-id> --preferred
+  exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --preferred
   exo users resolve <user-id> --capability gmail --json
 
 Rules:
@@ -50,8 +50,8 @@ Rules:
   users
     .command("add")
     .description("Create a new execution user.")
-    .requiredOption("--label <label>", "Stable user label such as william-main")
-    .option("--owner <owner>", "Owner such as william")
+    .requiredOption("--label <label>", "Stable user label such as operator-main")
+    .option("--owner <owner>", "Owner such as operator")
     .option("--notes <notes>", "Freeform notes")
     .option("--json", "Emit machine-readable JSON")
     .action((options) => {
@@ -260,7 +260,7 @@ Rules:
     .description("Register or update one connected account for a user.")
     .argument("<user-id>", "Execution user identifier")
     .requiredOption("--capability <capability>", "generic-web | linkedin | sales-navigator | gmail | hubspot")
-    .requiredOption("--handle <handle>", "Human-facing handle such as william@audienti.com")
+    .requiredOption("--handle <handle>", "Human-facing handle such as operator@example.com or operator-linkedin")
     .option("--label <label>", "Optional human-friendly account label")
     .option("--profile <profile-id>", "Resolve this account through a registered browser profile")
     .option("--runtime <runtime>", "Resolve this account through a harness connector runtime such as codex")

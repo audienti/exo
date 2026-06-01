@@ -233,8 +233,27 @@ test("companies prospects enrich-linkedin-profile-live returns a governed Codex 
 
     assert.equal(result.transport.kind, "agent_handoff");
     assert.match(result.transport.captureRequest.prompt, /inspect the real linkedin profile page/i);
+    assert.match(result.transport.captureRequest.prompt, /captureGuide/i);
+    assert.match(result.transport.captureRequest.prompt, /surfaceHints, profileSelection, and captureGuide/i);
+    assert.match(result.transport.captureRequest.prompt, /Use captureGuide\.writebackRules and verificationCommands/i);
+    assert.equal(result.transport.captureRequest.executionMode, "native_tools_only");
+    assert.equal(result.transport.captureRequest.captureTransportMode, "browser_native_only");
+    assert.equal(result.transport.captureRequest.shellFallbackAllowed, false);
+    assert.equal(result.transport.captureRequest.exoCliWritebackRequired, true);
+    assert.equal(result.transport.captureRequest.coldStartReady, true);
+    assert.equal(result.transport.captureRequest.noRepoRediscoveryRequired, true);
+    assert.ok(result.transport.captureRequest.captureGuide.captureRules.some((line) => /Do not shell out through codex exec, EXO_CODEX_CLI/i.test(line)));
+    assert.match(result.transport.captureRequest.captureGuide.rediscoveryPolicy, /Do not reopen repo source files, CLI help, or prior chat history/i);
     assert.match(result.transport.captureRequest.buildPayloadCommand, /exo companies prospects enrich-linkedin-profile .* --input - --json/i);
+    assert.equal(result.transport.captureRequest.buildPayloadInputMode, "normalized_capture_json_stdin");
+    assert.equal(result.transport.captureRequest.rawNetworkBodiesRequired, false);
+    assert.equal(result.transport.captureRequest.applyCommand, null);
+    assert.equal(result.transport.captureRequest.applyInputMode, null);
+    assert.equal(result.transport.captureRequest.applyStdinContract, null);
+    assert.ok(result.transport.captureRequest.verificationCommands.some((command) => new RegExp(`exo companies prospects show ${company.id} --motion ${motion.id} --prospect ${prospectId} --json`).test(command)));
     assert.equal(result.transport.captureRequest.surfaceHints.profilePage.surface, "linkedin-profile-page");
+    assert.equal(result.transport.captureRequest.profileSelection.expectedProfile.profileDirectory, chrome.profileDirectory);
+    assert.equal(result.transport.captureRequest.profileSelection.expectedHandle, "william-main");
     assert.ok(result.transport.captureRequest.surfaceHints.profilePage.entryHints.startUrls.includes("https://www.linkedin.com/in/minh-le-risk/"));
     assert.ok(result.transport.captureRequest.surfaceHints.profilePage.extractionHints.identityFields.includes("public_identifier"));
     assert.ok(result.transport.captureRequest.surfaceHints.profilePage.extractionHints.recentPostFields.includes("post_url"));

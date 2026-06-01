@@ -1,5 +1,7 @@
 // @ts-check
 
+import { buildOperatorPromptFromInboxItem } from "../lib/operator-prompts.js";
+
 /**
  * @param {{
  *   user: { label: string, owner: string | null },
@@ -37,44 +39,23 @@
  * }} result
  */
 export function renderInbox(result) {
-  const lines = [
-    `Inbox: ${result.user.label}`,
-    `Owner: ${result.user.owner ?? "unknown"}`,
-    `Items: ${result.counts.itemCount}`,
-    `High Priority: ${result.counts.highPriorityCount}`,
-    `Medium Priority: ${result.counts.mediumPriorityCount}`,
-    `Low Priority: ${result.counts.lowPriorityCount}`,
-    `Enabled Surfaces: ${result.surfaces.enabledSurfaceCount}`,
-    `Actionable Surfaces: ${result.surfaces.actionableSurfaceCount}`,
-    `Quiet Checked Surfaces: ${result.surfaces.quietSurfaceCount}`,
-    `Unchecked Surfaces: ${result.surfaces.uncheckedSurfaceCount}`
-  ];
-
-  if (result.surfaces.accounts.length) {
-    lines.push("");
-    lines.push("Surface State:");
-
-    for (const account of result.surfaces.accounts) {
-      lines.push(`  ${account.capability}:${account.handle}`);
-      for (const surface of account.surfaces) {
-        lines.push(`    [${surface.lastRunStatus}] ${surface.label}  items:${surface.lastItemCount ?? 0}`);
-        lines.push(`      ${surface.summary}`);
-        lines.push(`      Action: ${surface.recommendedAction}`);
-      }
+  if (!result.items.length) {
+    if (result.surfaces.uncheckedSurfaceCount) {
+      return `Inbox is quiet, but ${result.surfaces.uncheckedSurfaceCount} surface${result.surfaces.uncheckedSurfaceCount === 1 ? "" : "s"} still need checking.`;
     }
+    return "Inbox is quiet right now.";
   }
 
-  for (const item of result.items) {
-    lines.push("");
-    lines.push(`  ${item.observedAt}  [${item.priority}]  ${item.kind}  status:${item.status}`);
-    lines.push(`    ${item.summary}`);
-    lines.push(`    Why: ${item.whyItMatters}`);
-    lines.push(`    Next: ${item.recommendedAction}`);
-    if (item.motion || item.company || item.prospect) {
-      lines.push(
-        `    Context: motion=${item.motion?.name ?? "-"}  company=${item.company?.name ?? "-"}  prospect=${item.prospect ? `${item.prospect.name} (${item.prospect.title})` : "-"}`
-      );
-    }
+  const topItem = result.items[0];
+  const prompt = buildOperatorPromptFromInboxItem(topItem) ?? topItem.recommendedAction;
+  const lines = [prompt];
+
+  lines.push(
+    `Also live: ${result.counts.highPriorityCount} high, ${result.counts.mediumPriorityCount} medium, ${result.counts.lowPriorityCount} low.`
+  );
+
+  if (result.surfaces.uncheckedSurfaceCount) {
+    lines.push(`Unchecked surfaces: ${result.surfaces.uncheckedSurfaceCount}.`);
   }
 
   return lines.join("\n");

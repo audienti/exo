@@ -4897,6 +4897,24 @@ test("daily and next surface inbound review decisions before idle outbound work"
     assert.equal(next.status.effect, "inbound_review_needed");
     assert.equal(next.guidance.key, "review_inbound_item");
     assert.match(next.nextMove, /accept or decline/i);
+    assert.equal(
+      next.operatorPrompt,
+      "Alicia Buyer sent you an inbound LinkedIn connection request. Accept or decline?"
+    );
+
+    const plainDaily = execFileSync("node", [cliPath, "daily", "--user", user.id], {
+      cwd: tempDir,
+      encoding: "utf8"
+    });
+    assert.match(plainDaily, /^Alicia Buyer sent you an inbound LinkedIn connection request\. Accept or decline\?/);
+    assert.doesNotMatch(plainDaily, /Generated At:|Agent Prompt:|Cadence Effect:/);
+
+    const plainInbox = execFileSync("node", [cliPath, "inbox", "--user", user.id], {
+      cwd: tempDir,
+      encoding: "utf8"
+    });
+    assert.match(plainInbox, /^Alicia Buyer sent you an inbound LinkedIn connection request\. Accept or decline\?/);
+    assert.doesNotMatch(plainInbox, /Surface State:|Context:|Enabled Surfaces:/);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -5239,7 +5257,7 @@ test("daily reconciles cadence with inbound observations into due, waiting, and 
         "--next-action",
         "Send the planned connection request",
         "--next-action-due-at",
-        "2026-06-01T12:00:00.000Z",
+        "2026-06-02T12:00:00.000Z",
         "--json"
       ],
       { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
@@ -9078,6 +9096,10 @@ test("bare planner surfaces auto-select the sole execution-capable user and igno
     assert.equal(next.source, "daily");
     assert.equal(next.guidance.key, "review_inbound_item");
     assert.match(next.nextMove, /accept or decline/i);
+    assert.equal(
+      next.operatorPrompt,
+      "Alicia Buyer sent you an inbound LinkedIn connection request. Accept or decline?"
+    );
 
     assert.equal(helperUser.accounts.length, 0);
   } finally {
@@ -10420,6 +10442,305 @@ test("companies add/list/find/show/motions persists canonical company records", 
     assert.equal(motionsOutput.company.id, company.id);
     assert.equal(motionsOutput.motions.length, 1);
     assert.equal(motionsOutput.motions[0].id, motion.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("companies show rolls up linked motions, people, signals, and touch history across motions", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-company-rollup-"));
+  const offerUrlOne = `data:text/html,${encodeURIComponent("<html><head><title>Rollup Offer One</title></head><body>one</body></html>")}`;
+  const offerUrlTwo = `data:text/html,${encodeURIComponent("<html><head><title>Rollup Offer Two</title></head><body>two</body></html>")}`;
+
+  try {
+    const motionOne = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrlOne,
+          "--premise",
+          "This offer matters when enterprise revenue teams need sharper signal-led outbound.",
+          "--audience",
+          "Revenue leadership",
+          "--signal",
+          "company::Is there recent evidence that this company widened its go-to-market surface?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const motionTwo = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrlTwo,
+          "--premise",
+          "This offer matters when GTM operators need one cleaner executive narrative across channels.",
+          "--audience",
+          "GTM operators",
+          "--signal",
+          "company::Is there recent evidence that this company changed how it goes to market?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Cribl",
+          "--domain",
+          "cribl.io",
+          "--motion",
+          motionOne.id,
+          "--motion",
+          motionTwo.id,
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "signal-matches",
+        "add",
+        company.id,
+        "--motion",
+        motionOne.id,
+        "--signal",
+        motionOne.signals[0].id,
+        "--summary",
+        "Expanded executive product story into a broader GTM platform narrative.",
+        "--observed-at",
+        "2026-05-10T09:00:00.000Z",
+        "--confidence",
+        "high",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "signal-matches",
+        "add",
+        company.id,
+        "--motion",
+        motionTwo.id,
+        "--signal",
+        motionTwo.signals[0].id,
+        "--summary",
+        "Introduced a cleaner operator-facing pitch around execution consistency.",
+        "--observed-at",
+        "2026-05-20T09:00:00.000Z",
+        "--confidence",
+        "moderate",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    const motionOneProspects = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motionOne.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "VP Sales Development",
+          "--why-relevant",
+          "Owns outbound quality and team-level execution pressure.",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/alicia-buyer/",
+          "--email",
+          "alicia@cribl.io",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const motionOneProspectId = motionOneProspects.prospects[0].id;
+
+    const motionTwoProspects = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motionTwo.id,
+          "--name",
+          "Alicia Buyer",
+          "--title",
+          "Chief Revenue Officer",
+          "--why-relevant",
+          "Owns the cross-channel executive narrative and pipeline consistency problem.",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/alicia-buyer/",
+          "--email",
+          "alicia@cribl.io",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const motionTwoProspectId = motionTwoProspects.prospects[0].id;
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "touches",
+        "add",
+        company.id,
+        "--motion",
+        motionOne.id,
+        "--prospect",
+        motionOneProspectId,
+        "--surface",
+        "connection_request",
+        "--direction",
+        "outbound",
+        "--outcome",
+        "sent",
+        "--occurred-at",
+        "2026-05-26T17:00:00.000Z",
+        "--summary",
+        "Sent first connection request.",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "touches",
+        "add",
+        company.id,
+        "--motion",
+        motionTwo.id,
+        "--prospect",
+        motionTwoProspectId,
+        "--surface",
+        "inbound_reply",
+        "--direction",
+        "inbound",
+        "--outcome",
+        "replied",
+        "--occurred-at",
+        "2026-05-30T12:00:00.000Z",
+        "--summary",
+        "Received direct reply after the second motion warmup.",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    const showOutput = JSON.parse(
+      execFileSync("node", [cliPath, "companies", "show", company.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(showOutput.name, "Cribl");
+    assert.equal(showOutput.rollup.summary.motionCount, 2);
+    assert.equal(showOutput.rollup.summary.prospectRecordCount, 2);
+    assert.equal(showOutput.rollup.summary.personCount, 1);
+    assert.equal(showOutput.rollup.summary.signalCount, 2);
+    assert.equal(showOutput.rollup.summary.companySignalCount, 2);
+    assert.equal(showOutput.rollup.summary.personSignalCount, 0);
+    assert.equal(showOutput.rollup.summary.touchCount, 2);
+    assert.equal(showOutput.rollup.summary.mostRecentTouchAt, "2026-05-30T12:00:00.000Z");
+    assert.equal(showOutput.rollup.motions.length, 2);
+    assert.equal(showOutput.rollup.activity.length, 2);
+    assert.equal(showOutput.rollup.activity[0].summary, "Received direct reply after the second motion warmup.");
+    assert.equal(showOutput.rollup.people.length, 1);
+    assert.equal(showOutput.rollup.people[0].displayName, "Alicia Buyer");
+    assert.equal(showOutput.rollup.people[0].touchCount, 2);
+    assert.deepEqual(showOutput.rollup.people[0].titles, ["Chief Revenue Officer", "VP Sales Development"]);
+    assert.deepEqual(showOutput.rollup.people[0].emails, ["alicia@cribl.io"]);
+    assert.equal(showOutput.rollup.people[0].prospectRecords.length, 2);
+    assert.deepEqual(
+      showOutput.rollup.people[0].motionIds.sort(),
+      [motionOne.id, motionTwo.id].sort()
+    );
+
+    const textOutput = execFileSync("node", [cliPath, "companies", "show", company.id], {
+      cwd: tempDir,
+      encoding: "utf8"
+    });
+
+    assert.match(textOutput, /Rollup Summary/);
+    assert.match(textOutput, /Linked Motions/);
+    assert.match(textOutput, /People/);
+    assert.match(textOutput, /Recent Signals/);
+    assert.match(textOutput, /Recent Activity/);
+    assert.match(textOutput, /Alicia Buyer/);
+    assert.match(textOutput, /Received direct reply after the second motion warmup\./);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -12735,11 +13056,8 @@ test("report workspace serve exposes an interactive surface and runs state-only 
     try {
       const baseUrl = await waitForServerUrl(serverProcess.stdout);
       const html = await fetch(baseUrl).then((response) => response.text());
-      assert.match(html, /data-workspace-refresh/);
-      assert.match(html, /workspace-action-button|Refresh/);
-      assert.match(html, /Mark accepted/);
-      assert.match(html, /Mark declined/);
-      assert.match(html, /Profile/);
+      assert.match(html, /workspace-action-button/);
+      assert.match(html, /data-nav-route="operator"|Operator/);
 
       const actionResponse = await fetch(`${baseUrl}api/action`, {
         method: "POST",
@@ -13494,7 +13812,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
     encoding: "utf8"
   });
   assert.match(profileRootHelp, /exo profiles discover --json/);
-  assert.match(profileRootHelp, /exo profiles claim <profile-id> --label audienti-main/);
+  assert.match(profileRootHelp, /exo profiles claim <profile-id> --label workspace-main/);
   assert.match(profileRootHelp, /exo profiles capabilities --json/);
   assert.match(profileRootHelp, /exo profiles resolve --capability linkedin --json/);
   assert.match(profileRootHelp, /exo profiles auth <profile-id> --runtime codex --json/);
@@ -13543,7 +13861,7 @@ test("CLI help explains agent-safe usage and profile gating", () => {
     cwd: repoRoot,
     encoding: "utf8"
   });
-  assert.match(usersHelp, /exo users add --label william-main --owner william/);
+  assert.match(usersHelp, /exo users add --label operator-main --owner operator/);
   assert.match(usersHelp, /exo users working-hours set <user-id> --timezone America\/New_York/);
   assert.match(usersHelp, /exo users harness add <user-id> --runtime codex --connector chrome --status available/);
   assert.match(usersHelp, /exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json/);
@@ -13629,6 +13947,14 @@ test("CLI help explains agent-safe usage and profile gating", () => {
 });
 
 test("what-is-this returns machine-readable orientation for agents", () => {
+  const plainOutput = execFileSync("node", [cliPath, "what-is-this"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+  assert.match(plainOutput, /Current call:/);
+  assert.match(plainOutput, /Use `exo next` for the next governed operator decision\./);
+  assert.doesNotMatch(plainOutput, /Agent Start Here|Guide The Agent|Current Commands|Operating Rules/);
+
   const output = execFileSync("node", [cliPath, "what-is-this", "--json"], {
     cwd: repoRoot,
     encoding: "utf8"
@@ -13790,6 +14116,19 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     about.operatorInterface.currentCall.nextMove,
     /motion|browser|company/i,
     "expected operator interface to provide a next move"
+  );
+  assert.ok(
+    about.agentUsage.responseStyle.rules.some((item) => /direct operator question/i.test(item)),
+    "expected response style to tell the agent to ask the direct operator question when available"
+  );
+  assert.ok(
+    about.agentUsage.responseStyle.rules.some((item) => /shell bootstrapping|state-path setup|sync modes/i.test(item)),
+    "expected response style to suppress runtime plumbing by default"
+  );
+  assert.ok(
+    typeof about.operatorInterface.currentCall.operatorPrompt === "string"
+      && about.operatorInterface.currentCall.operatorPrompt.length > 0,
+    "expected operator interface to expose a direct operator prompt"
   );
   assert.ok(
     about.docs.some((item) => item.path === "docs/inbound-sync.md"),

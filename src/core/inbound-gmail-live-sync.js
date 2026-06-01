@@ -9,6 +9,7 @@ import { gmailInboundSyncCaptureSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { buildGmailInboundSyncPayload, resolveGmailAccount } from "./inbound-gmail-sync.js";
 import {
+  buildChromeProfileSelection,
   buildCodexAgentHandoffTransport,
   buildDirectLiveTransport,
   shouldUseCodexAgentHandoff
@@ -209,6 +210,7 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
               browser: liveSource.profile.browser,
               profileDirectory: liveSource.profile.profileDirectory,
               profilePath: liveSource.profile.profilePath,
+              detectedProfileName: liveSource.profile.detectedProfileName,
               identityAccounts: liveSource.profile.identity.accounts
             }
           : null,
@@ -220,7 +222,20 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
           source: liveSource.source,
           prompt,
           outputSchema: gmailCaptureOutputSchema,
-          buildPayloadCommand: `exo inbound sync gmail ${user.id} --account ${account.id} --input - --json`
+          buildPayloadCommand: `exo inbound sync gmail ${user.id} --account ${account.id} --input - --json`,
+          applyCommand: `exo inbound sync run ${user.id} --input <combined-inbound-sync.json> --refresh --json`,
+          verificationCommands: [
+            `exo inbound sync show ${user.id} --json`,
+            `exo inbox --user ${user.id} --json`,
+            `exo next --user ${user.id} --json`
+          ],
+          profileSelection: liveSource.profile
+            ? buildChromeProfileSelection({
+                capability: "gmail",
+                expectedHandle: account.handle,
+                profile: liveSource.profile
+              })
+            : null
         }),
         capture: null,
         payload: null
@@ -271,6 +286,7 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
           browser: liveSource.profile.browser,
           profileDirectory: liveSource.profile.profileDirectory,
           profilePath: liveSource.profile.profilePath,
+          detectedProfileName: liveSource.profile.detectedProfileName,
           identityAccounts: liveSource.profile.identity.accounts
         }
       : null,
@@ -539,8 +555,12 @@ function buildGmailLiveCapturePrompt(input) {
         "Use the native Chrome/browser-control surface available in this runtime to inspect one live Gmail inbox for Exo.",
         `The intended mailbox handle is ${input.handle}.`,
         `The resolved Chrome profile is label ${input.profile?.label ?? "unknown"}, directory ${input.profile?.profileDirectory ?? "unknown"}, path ${input.profile?.profilePath ?? "unknown"}.`,
+        `The stored Chrome profile display-name metadata is ${input.profile?.detectedProfileName ?? "unknown"}. Treat Chrome display-name drift as non-authoritative.`,
         `Recorded profile identity accounts: ${profileIdentityAccounts}.`,
-        "Before inspecting the inbox, verify that the active signed-in Gmail identity matches the intended profile context. If you cannot verify the correct signed-in identity or cannot control the correct Chrome profile, return failed with a concrete error.",
+        "Use the structured profileSelection and captureGuide attached to this capture request as the binding, writeback, and verification contract.",
+        "Do not fail on Chrome profile display-name mismatch alone. Only fail when the resolved profile directory/path or the signed-in mailbox do not match the intended Exo context.",
+        "Before inspecting the inbox, verify that the active signed-in Gmail identity matches the intended profile context. If the connector is attached to another Chrome session or a different signed-in mailbox, return failed with a concrete profile_selection_mismatch error.",
+        "Native-tools only applies to the live browser capture transport. Use captureGuide.writebackRules and verificationCommands for the governed Exo landing path after capture.",
         "Do not use shell commands, local files, or web search.",
         `Inspect up to ${input.limit} inbox threads, newest first.`
       ]

@@ -5,11 +5,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { buildLinkedinQuickSurfaceHints } from "../lib/live-surface-hints.js";
+import { buildLinkedinQuickCaptureScaffold } from "../lib/linkedin-quick-capture-scaffold.js";
 import { browserProfileSchema } from "../schema/browser-profile.js";
 import { linkedinInboundSyncCaptureSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { buildLinkedinInboundSyncPayload, resolveLinkedinAccount } from "./inbound-linkedin-sync.js";
 import {
+  buildChromeProfileSelection,
   buildCodexAgentHandoffTransport,
   buildDirectLiveTransport,
   shouldUseCodexAgentHandoff
@@ -314,6 +316,8 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
       codexCli: options.codexCli ?? null
     })) {
       const surfaceHints = buildLinkedinQuickSurfaceHints({ limit });
+      const outputGuide = buildLinkedinCaptureOutputGuide({ mode, limit });
+      const captureScaffold = buildLinkedinQuickCaptureScaffold({ limit });
 
       return {
         user: {
@@ -334,6 +338,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
           browser: profile.browser,
           profileDirectory: profile.profileDirectory,
           profilePath: profile.profilePath,
+          detectedProfileName: profile.detectedProfileName,
           identityAccounts: profile.identity.accounts
         },
         probe,
@@ -347,8 +352,21 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
             mentionStructuredHints: true
           }),
           outputSchema: linkedinLiveCaptureOutputSchema,
+          outputGuide,
+          captureScaffold,
           buildPayloadCommand: `exo inbound sync linkedin ${user.id} --account ${account.id} --input - --json`,
-          surfaceHints
+          applyCommand: `exo inbound sync run ${user.id} --input <combined-inbound-sync.json> --refresh --json`,
+          verificationCommands: [
+            `exo inbound sync show ${user.id} --json`,
+            `exo inbound observations list ${user.id} --capability linkedin --surface linkedin-sent-invitations --json`,
+            `exo next --user ${user.id} --json`
+          ],
+          surfaceHints,
+          profileSelection: buildChromeProfileSelection({
+            capability: "linkedin",
+            expectedHandle: account.handle,
+            profile
+          })
         }),
         capture: null,
         payload: null
@@ -395,6 +413,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
       browser: profile.browser,
       profileDirectory: profile.profileDirectory,
       profilePath: profile.profilePath,
+      detectedProfileName: profile.detectedProfileName,
       identityAccounts: profile.identity.accounts
     },
     probe,
@@ -595,31 +614,72 @@ function buildLinkedinLiveCapturePrompt(handle, profile, limit, options = {}) {
     "Use the native Chrome/browser-control surface available in this runtime to inspect one live LinkedIn account for Exo.",
     `The intended LinkedIn handle is ${handle}.`,
     `The resolved Chrome profile is label ${profile.label}, directory ${profile.profileDirectory}, path ${profile.profilePath}.`,
+    `The stored Chrome profile display-name metadata is ${profile.detectedProfileName ?? "unknown"}. Treat Chrome display-name drift as non-authoritative.`,
     `Recorded profile identity accounts: ${identityAccounts}.`,
     options.mentionStructuredHints
       ? "Use the structured surfaceHints attached to this capture request as the canonical retrieval playbook, especially for the messaging inbox, sent invitations, and profile views when pagination or partial-capture behavior appears."
       : null,
-    "Before inspecting any LinkedIn surface, verify that the active signed-in LinkedIn identity matches the intended profile context. If you cannot verify the correct signed-in identity or cannot control the correct Chrome profile, return failed for every surface with a concrete error.",
+    "Use the structured profileSelection, captureGuide, and captureScaffold attached to this capture request as the binding, extraction, writeback, and verification contract.",
+    "Do not fail on Chrome profile display-name mismatch alone. Only fail when the resolved profile directory/path or the signed-in LinkedIn identity do not match the intended Exo context.",
+    "Before inspecting any LinkedIn surface, verify that the active signed-in LinkedIn identity matches the intended profile context. If the connector is attached to another Chrome session or a different signed-in identity, return failed for every surface with a concrete profile_selection_mismatch error.",
+    "Native-tools only applies to the live browser capture transport. Use captureGuide.writebackRules and verificationCommands for the governed Exo landing path after capture.",
+    "If browser-side JavaScript is needed, start from captureScaffold. Do not invent a larger ad hoc DOM extractor unless captureScaffold provably fails on the current surface.",
+    "Do not look for an Exo website, Exo app route, admin surface, browser-history breadcrumb, or sync UI. Inspect LinkedIn directly and return normalized capture JSON only.",
+    "Inspect LinkedIn directly, return the requested JSON, and stop. There is no browser-side Exo control surface to discover for this task.",
+    "Do not infer exo next, inbox, daily, or review from browser inspection alone. Those are Exo outputs after governed writeback, not browser judgments.",
     "Do not use shell commands, local files, or web search.",
     requestedMode === "full"
-      ? "Fully reconcile each authoritative quick LinkedIn surface. Do not stop at the visible top slice when the surfaceHints say pagination or load-more is required."
-      : `Inspect up to ${limit} items per LinkedIn surface unless the attached surfaceHints tell you that reconcile escalation is required to land authoritative state.`,
-    "Inspect these five quick surfaces only: sent invitations, received invitations, messaging inbox, profile views, and following list.",
-    "Return only JSON that matches the provided schema.",
-    requestedMode === "full"
-      ? "Requested mode is full. Fully exhaust each authoritative quick surface enough that disappearance or silence is trustworthy, and set requestedMode and actualMode to full."
-      : "Requested mode is quick. If a surfaceHint says reconcile is required because the visible total exceeds the itemized rows, you may continue paginating that one surface and set actualMode to full while keeping requestedMode quick.",
-    "For each surface: set status to success when the surface was checked, warning when it was only partially checked or itemized, and failed when it could not be checked.",
-    "Set checkedAt to when you finished that surface. Set itemCount to the number of rows or concrete items you actually itemized. Set visibleTotalCount to the full count visibly shown by LinkedIn for that surface when the UI exposes one; otherwise use itemCount when the surface is fully exhausted or null when no trustworthy total is visible. Use 0 or null fields consistently on failed surfaces.",
-    "Set exhaustionStatus to complete only when the relevant live surface was exhausted enough that disappearance or silence is trustworthy. Set exhaustionStatus to incomplete when you reached the right surface but stopped before terminal exhaustion, including visible-slice-only captures, wrong scroll container attempts, or bounded passes that stopped early. Set exhaustionStatus to blocked only when the surface could not be checked because of a structural failure such as identity mismatch, authwall, or a page that never rendered the required surface.",
-    "Set captureCompleteness to complete when exhaustionStatus is complete. Use partial_visible_slice when you only itemized the visible slice or otherwise stopped before a full reconciliation. Use failed only when the surface could not be checked.",
-    "Set requestedMode and actualMode for every surface. Set reconcileRequired true whenever the visible total is larger than the itemized rows and exhaustionStatus is not complete, or whenever the surfaceHints told you the operator still needs a full reconciliation. Set reconcileReason to a short snake_case explanation such as visible_total_exceeds_itemized_rows or bounded_capture_stopped_early.",
-    "Set paginationAttempted true when you actually used the known scroll or load-more path for that surface. Set terminalSignalSeen true only when the surfaceHints completion rule was genuinely reached, such as no new payloads after the final bounded passes. Set stalledPassCount to how many terminal no-new-results passes you observed before stopping.",
-    "Do not mark a surface failed just because you stopped early. Early stop is incomplete reconciliation, not transport failure.",
-    "Use clear operator-ready summaries under 280 characters.",
-    "Use actorProfileUrl whenever visible. Use actorLinkedinPublicId whenever the live surface exposes a stable vanity/public identifier. Use actorLinkedinMemberId whenever the live surface exposes the internal member id or equivalent stable LinkedIn profile id. Use actorAvatarSourceUrl whenever LinkedIn exposes a concrete avatar image URL for the person. Do not invent motionId, companyId, or prospectId. Set them to null unless you truly know them from the LinkedIn surface itself.",
-    "Ignore noisy suggestions, ads, or unrelated feed items. Only include items that materially change operator action."
+      ? "Requested mode is full. Use outputGuide.modePolicy and outputGuide.surfaceStateRules to fully reconcile each authoritative quick LinkedIn surface."
+      : `Requested mode is quick. Inspect up to ${limit} items per LinkedIn surface unless outputGuide.modePolicy or the attached surfaceHints require reconcile escalation.`,
+    "Inspect only the five quick surfaces listed in outputGuide.surfaces.",
+    "Return only JSON that matches outputSchema and obeys outputGuide.surfaceStateRules.",
+    "Use outputGuide.actorIdentityRules for actor fields and outputGuide.ignoreRules for suppression."
   ].filter(Boolean).join("\n");
+}
+
+/**
+ * @param {{ mode: string, limit: number }} input
+ */
+function buildLinkedinCaptureOutputGuide(input) {
+  const requestedMode = normalizeNullableString(input.mode)?.toLowerCase() === "full" ? "full" : "quick";
+
+  return {
+    surfaces: [
+      "sent_invitations",
+      "received_invitations",
+      "messaging_inbox",
+      "profile_views",
+      "following_list"
+    ],
+    modePolicy: {
+      requestedMode,
+      quickMode: `Inspect up to ${input.limit} items per surface unless surfaceHints require reconcile escalation.`,
+      fullMode: "Fully exhaust each authoritative quick surface enough that disappearance or silence is trustworthy."
+    },
+    surfaceStateRules: {
+      status: "Set status to success when the surface was checked, warning when it was only partially checked or itemized, and failed when it could not be checked.",
+      checkedAt: "Set checkedAt to when you finished that surface.",
+      itemCount: "Set itemCount to the number of rows or concrete items you actually itemized. Use 0 on failed surfaces.",
+      visibleTotalCount: "Set visibleTotalCount to the full count visibly shown by LinkedIn for that surface when the UI exposes one; otherwise use itemCount when the surface is fully exhausted or null when no trustworthy total is visible.",
+      exhaustionStatus: "Set exhaustionStatus to complete only when the live surface was exhausted enough that disappearance or silence is trustworthy. Use incomplete for visible-slice-only or early-stop captures. Use blocked only for structural failures such as identity mismatch, authwall, or a page that never rendered the required surface.",
+      captureCompleteness: "Set captureCompleteness to complete when exhaustionStatus is complete, partial_visible_slice when you stopped before full reconciliation, and failed only when the surface could not be checked.",
+      reconcileFields: "Set requestedMode and actualMode for every surface. Set reconcileRequired true whenever the visible total is larger than the itemized rows and exhaustionStatus is not complete, or whenever surfaceHints say the operator still needs a full reconciliation. Use a short snake_case reconcileReason such as visible_total_exceeds_itemized_rows or bounded_capture_stopped_early.",
+      paginationFields: "Set paginationAttempted true when you actually used the known scroll or load-more path. Set terminalSignalSeen true only when the surfaceHints completion rule was genuinely reached. Set stalledPassCount to how many terminal no-new-results passes you observed before stopping.",
+      summaries: "Use clear operator-ready summaries under 280 characters.",
+      earlyStopPolicy: "Do not mark a surface failed just because you stopped early. Early stop is incomplete reconciliation, not transport failure."
+    },
+    actorIdentityRules: [
+      "Use actorProfileUrl whenever visible.",
+      "Use actorLinkedinPublicId whenever the live surface exposes a stable vanity or public identifier.",
+      "Use actorLinkedinMemberId whenever the live surface exposes the internal member id or equivalent stable LinkedIn profile id.",
+      "Use actorAvatarSourceUrl whenever LinkedIn exposes a concrete avatar image URL for the person.",
+      "Do not invent motionId, companyId, or prospectId. Set them to null unless you truly know them from the LinkedIn surface itself."
+    ],
+    ignoreRules: [
+      "Ignore noisy suggestions, ads, or unrelated feed items.",
+      "Only include items that materially change operator action."
+    ]
+  };
 }
 
 /**
