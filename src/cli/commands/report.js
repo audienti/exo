@@ -4,22 +4,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { renderMotionReport } from "../../artifacts/render-motion.js";
-import { buildDailyView } from "../../core/build-daily-view.js";
-import { buildInboxView } from "../../core/build-inbox-view.js";
-import { buildInboundReviewView } from "../../core/build-inbound-review-view.js";
 import { buildMotionReport } from "../../core/build-motion-report.js";
 import {
   findMotionById,
   findUserById,
   listBrowserProfiles,
   listCompanies,
-  listInboundCues,
-  listInboundObservations,
   listMotions,
   listUsers,
 } from "../../db/database.js";
 import { summarizeExecutionUsers } from "../../lib/execution-users.js";
-import { buildWorkspaceModel } from "../../../prototype/build-motion-workspace.mjs";
+import { buildWorkspaceProjection, startWorkspaceServer } from "../workspace-runtime.js";
 
 /**
  * @param {import("commander").Command} program
@@ -83,6 +78,7 @@ Examples:
     .option("--user <user-id>", "Execution user identifier")
     .option("--capability <capability>", "Browser capability used when deriving motion engagement readiness. Defaults to linkedin.")
     .option("--out <path>", "Write HTML output to this path instead of stdout")
+    .option("--serve [port]", "Serve an interactive workspace projection on localhost instead of writing a static file")
     .option("--json", "Emit the derived workspace projection as machine-readable JSON")
     .addHelpText(
       "after",
@@ -90,16 +86,24 @@ Examples:
 Examples:
   exo report workspace --user <user-id> --out ./motion-workspace.html
   exo report workspace --user <user-id> --json
+  exo report workspace --user <user-id> --serve 4312
 
 Rules:
   - This is a composite operator projection over inbound review, inbox, daily, motion list, and motion reports.
   - Prep lanes and engagement lanes are derived views, not a new canonical stage model.
   - HTML output is read-only and does not open the browser.
+  - Interactive serve mode can run state-only workspace actions, but live browser actions still need the outer agent/runtime.
 `
     )
-    .action((options) => {
+    .action(async (options) => {
       if (options.json && options.out) {
         console.error("Use either --json or --out for report workspace, not both together.");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (options.serve && (options.json || options.out)) {
+        console.error("Use --serve by itself for an interactive workspace surface.");
         process.exitCode = 1;
         return;
       }
@@ -109,37 +113,26 @@ Rules:
         return;
       }
 
-      const motions = listMotions();
-      const companies = listCompanies();
-      const browserProfiles = listBrowserProfiles();
-      const users = listUsers();
-      const observations = listInboundObservations({
-        userId: user.id,
-      });
-      const cues = listInboundCues({
-        userId: user.id,
-        status: "open",
-      });
+      if (options.serve) {
+        try {
+          const port = normalizeServePort(options.serve);
+          const server = await startWorkspaceServer({
+            userId: user.id,
+            capability: options.capability,
+            port,
+          });
+          console.log(`Workspace server listening at ${server.url}`);
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
+          process.exitCode = 1;
+        }
+        return;
+      }
 
-      const inboundReview = buildInboundReviewView(user, observations, motions, companies);
-      const inbox = buildInboxView(user, observations, motions, companies);
-      const daily = buildDailyView(user, motions, companies, browserProfiles, observations, {
-        rawCues: cues,
-      });
-      const reports = motions.map((motion) =>
-        buildMotionReport(motion, companies, browserProfiles, users, {
-          capability: options.capability,
-        }),
-      );
-      const regenerateCommand = `exo report workspace --user ${user.id} --out ${
-        options.out ?? "./motion-workspace.html"
-      }`;
-      const result = buildWorkspaceModel({
-        user,
-        inboundReview,
-        inbox,
-        daily,
-        reports,
+      const regenerateCommand = `exo report workspace --user ${user.id} --out ${options.out ?? "./motion-workspace.html"}`;
+      const result = buildWorkspaceProjection({
+        userId: user.id,
+        capability: options.capability,
         regenerateCommand,
       });
 
@@ -190,4 +183,20 @@ function resolveReportUser(explicitUserId, surface) {
   }
   process.exitCode = 1;
   return null;
+}
+
+/**
+ * @param {boolean | string | undefined} rawValue
+ */
+function normalizeServePort(rawValue) {
+  if (rawValue === true || rawValue == null) {
+    return 4312;
+  }
+
+  const numeric = Number(rawValue);
+  if (!Number.isInteger(numeric) || numeric < 1 || numeric > 65535) {
+    throw new Error(`Invalid --serve port: ${String(rawValue)}`);
+  }
+
+  return numeric;
 }

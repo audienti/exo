@@ -17,6 +17,7 @@ const OUTPUT_PATH = path.join(REPO_ROOT, "prototype/motion-workspace.html");
 const STALE_HOURS = 24;
 const MAX_BUFFER = 64 * 1024 * 1024;
 const DEFAULT_REGENERATE_COMMAND = `exo report workspace --user ${USER_ID} --out ./prototype/motion-workspace.html`;
+const DEFAULT_WORKSPACE_ACTION_WORKER = "codex-workspace";
 
 async function runJson(args) {
   const { stdout } = await execFileAsync("node", [CLI_PATH, ...args], {
@@ -749,6 +750,494 @@ function buildGapNotes(truthAccounts, prospects) {
   return notes;
 }
 
+function artifactStatusSeverity(status) {
+  if (status === "ready" || status === "live") {
+    return "good";
+  }
+
+  if (status === "partial" || status === "in-progress") {
+    return "warning";
+  }
+
+  return "danger";
+}
+
+function summarizeArtifactStatus(hasAny, isComplete) {
+  if (isComplete) {
+    return "ready";
+  }
+
+  if (hasAny) {
+    return "partial";
+  }
+
+  return "missing";
+}
+
+function pickFocusMotion(motionSummaries) {
+  return motionSummaries
+    .slice()
+    .sort((left, right) => {
+      if (left.status === "active" && right.status !== "active") {
+        return -1;
+      }
+
+      if (left.status !== "active" && right.status === "active") {
+        return 1;
+      }
+
+      if (left.dueNowCount !== right.dueNowCount) {
+        return right.dueNowCount - left.dueNowCount;
+      }
+
+      if (left.readyToSendCount !== right.readyToSendCount) {
+        return right.readyToSendCount - left.readyToSendCount;
+      }
+
+      const leftUpdated = parseDate(left.updatedAt)?.getTime() ?? 0;
+      const rightUpdated = parseDate(right.updatedAt)?.getTime() ?? 0;
+      return rightUpdated - leftUpdated;
+    })[0] ?? null;
+}
+
+function buildOperatorSummary({ user, daily, motionSummaries, truthAccounts, reviewItems, now }) {
+  const dueNowItems = toArray(daily.items).filter((item) => item.state === "due_now");
+  const waitingItems = toArray(daily.items).filter((item) => item.state === "waiting_until");
+  const focusMotion = pickFocusMotion(motionSummaries);
+  const allSurfaces = truthAccounts.flatMap((account) => account.surfaces);
+  const actionableSurfaceCount = allSurfaces.filter((surface) => surface.meta.actionable).length;
+  const staleSurfaceCount = allSurfaces.filter((surface) => surface.meta.stale && !surface.meta.unchecked).length;
+  const uncheckedSurfaceCount = allSurfaces.filter((surface) => surface.meta.unchecked).length;
+  const topDueItem = dueNowItems[0] ?? null;
+  const topWaitingItem = waitingItems[0] ?? null;
+
+  let headline = `Operator call for ${user.label}`;
+  let nextMove = "No governed move is exposed right now.";
+  let why = "The planner does not currently expose due work, so the operator should inspect the focus motion and truth surfaces.";
+
+  if (topDueItem) {
+    headline = `Next move for ${user.label}`;
+    nextMove = topDueItem.recommendedAction ?? nextMove;
+    why = topDueItem.whyItMatters ?? why;
+  } else if (focusMotion) {
+    headline = `Focus ${focusMotion.name}`;
+    nextMove = focusMotion.nextActions[0] ?? "Continue the focus motion using its highest-priority governed next action.";
+    why = focusMotion.readyToEngage
+      ? "This motion already has usable execution inventory, so the next move should come from its ready branches."
+      : `This motion is still in ${focusMotion.overallStage}, so the next move should clear its top blocker instead of forcing execution.`;
+  } else if (topWaitingItem) {
+    headline = `Held work for ${user.label}`;
+    nextMove = topWaitingItem.recommendedAction ?? nextMove;
+    why = topWaitingItem.whyItMatters ?? why;
+  }
+
+  const checklist = dueNowItems.slice(0, 4).map((item) => {
+    const capacityItem = String(item.prospect?.id ?? "") === "outbound-capacity:linkedin";
+    const subjectParts = [
+      item.motion?.name && !String(item.motion.id ?? "").startsWith("outbound-capacity:") ? item.motion.name : null,
+      item.company?.name && !String(item.company.id ?? "").startsWith("outbound-capacity:") ? item.company.name : null,
+      item.prospect?.name && !String(item.prospect.id ?? "").startsWith("outbound-capacity:") ? item.prospect.name : null,
+    ].filter(Boolean);
+
+    return {
+      subject: capacityItem
+        ? "LinkedIn capacity deficit"
+        : subjectParts.join(" / ") || item.prospect?.name || item.company?.name || item.motion?.name || "General",
+      action: item.recommendedAction ?? item.cadence?.nextAction ?? "No governed action exposed.",
+      dueAt: item.dueAt ?? null,
+    };
+  });
+
+  return {
+    headline,
+    nextMove,
+    why,
+    generatedAt: now.toISOString(),
+    focusMotion,
+    checklist,
+    counts: {
+      dueNow: dueNowItems.length,
+      waiting: waitingItems.length,
+      review: reviewItems.length,
+      actionableSurfaces: actionableSurfaceCount,
+      staleSurfaces: staleSurfaceCount,
+      uncheckedSurfaces: uncheckedSurfaceCount,
+    },
+  };
+}
+
+function buildArtifactSummaries(reports, motionSummaries) {
+  const summaryIndex = new Map(motionSummaries.map((motion) => [motion.id, motion]));
+
+  return reports
+    .map((report) => {
+      const motionSummary = summaryIndex.get(report.motion.id) ?? null;
+      const prospects = toArray(report.prospects?.prospects);
+      const audienceCount = toArray(report.motion.setup?.audienceHypotheses).length;
+      const signalCount = toArray(report.motion.setup?.signals).length;
+      const throughLineReadyCount = prospects.filter((prospect) => prospect.throughLineStatus === "ready").length;
+      const openingPlanReadyCount = prospects.filter((prospect) => prospect.openingPlanStatus === "ready").length;
+      const cadenceReadyCount = prospects.filter((prospect) => prospect.cadenceStatus === "ready").length;
+      const messageTestReadyCount = report.prospects?.counts?.messageTestReadyCount ?? 0;
+      const companyCount = motionSummary?.companyCount ?? report.targeting?.companyLoop?.companyCount ?? 0;
+      const prospectCount = motionSummary?.prospectCount ?? report.prospects?.counts?.prospectCount ?? 0;
+
+      return {
+        motionId: report.motion.id,
+        motionName: report.motion.name,
+        motionStatus: report.motion.status,
+        overallStage: motionSummary?.overallStage ?? report.targeting?.overallStage ?? "unknown",
+        frame: {
+          status: summarizeArtifactStatus(
+            report.motion.premise?.status === "defined" || audienceCount > 0 || signalCount > 0,
+            report.motion.premise?.status === "defined" && audienceCount > 0 && signalCount > 0,
+          ),
+          premiseStatus: report.motion.premise?.status ?? "unknown",
+          audienceCount,
+          signalCount,
+        },
+        targetMap: {
+          status: summarizeArtifactStatus(companyCount > 0 || prospectCount > 0, companyCount > 0 && prospectCount > 0),
+          companyCount,
+          prospectCount,
+        },
+        branchLogic: {
+          status: summarizeArtifactStatus(
+            throughLineReadyCount > 0 || openingPlanReadyCount > 0 || cadenceReadyCount > 0,
+            prospectCount > 0
+              && throughLineReadyCount === prospectCount
+              && openingPlanReadyCount === prospectCount
+              && cadenceReadyCount === prospectCount,
+          ),
+          throughLineReadyCount,
+          openingPlanReadyCount,
+          cadenceReadyCount,
+          messageTestReadyCount,
+        },
+        execution: {
+          status: summarizeArtifactStatus(
+            (motionSummary?.readyToSendCount ?? 0) > 0
+              || (motionSummary?.waitingCount ?? 0) > 0
+              || (motionSummary?.dueNowCount ?? 0) > 0,
+            (motionSummary?.readyToSendCount ?? 0) > 0,
+          ),
+          readyToSendCount: motionSummary?.readyToSendCount ?? 0,
+          dueNowCount: motionSummary?.dueNowCount ?? 0,
+          waitingCount: motionSummary?.waitingCount ?? 0,
+          reviewCount: motionSummary?.reviewCount ?? 0,
+        },
+      };
+    })
+    .sort((left, right) => {
+      if (left.motionStatus === "active" && right.motionStatus !== "active") {
+        return -1;
+      }
+
+      if (left.motionStatus !== "active" && right.motionStatus === "active") {
+        return 1;
+      }
+
+      return left.motionName.localeCompare(right.motionName);
+    });
+}
+
+function reviewPriorityRank(value) {
+  if (value === "high") {
+    return 0;
+  }
+
+  if (value === "medium") {
+    return 1;
+  }
+
+  return 2;
+}
+
+function isInboundReviewDailyItem(item) {
+  return item?.source?.type === "inbound_review" || String(item?.motion?.id ?? "").startsWith("inbound-review:");
+}
+
+function isDecisionReviewItem(item) {
+  if (["needs_reply", "needs_decision"].includes(item?.state)) {
+    return true;
+  }
+
+  return toArray(item?.decisionOptions).some((option) => !["wait", "hold", "note-signal"].includes(option));
+}
+
+function plannerSubject(item) {
+  const capacityItem = String(item?.prospect?.id ?? "") === "outbound-capacity:linkedin";
+
+  if (capacityItem) {
+    return "LinkedIn capacity";
+  }
+
+  return [item?.company?.name, item?.prospect?.name].filter(Boolean).join(" / ") || item?.motion?.name || "General";
+}
+
+function reviewSubject(item) {
+  return item?.prospect?.name || item?.actorName || item?.company?.name || "Unknown";
+}
+
+function buildPacketAction(channel, kind, item, workerLabel) {
+  const packetSubject = item.prospectName ?? item.companyName ?? "Unknown";
+
+  if (kind === "prospect_research" && item.prospectId) {
+    return {
+      kind: "claim_motion_prospect_packet",
+      label: `Claim ${packetSubject}`,
+      confirm: `Claim the ${kind.replaceAll("_", " ")} packet for ${packetSubject}?`,
+      companyId: item.companyId,
+      motionId: item.motionId,
+      prospectId: item.prospectId,
+      workerLabel,
+      notes: `Claimed from the Exo workspace for ${channel} ${kind}.`,
+    };
+  }
+
+  return {
+    kind: "claim_target_account_packet",
+    label: `Claim ${packetSubject}`,
+    confirm: `Claim the ${kind.replaceAll("_", " ")} packet for ${packetSubject}?`,
+    companyId: item.companyId,
+    motionId: item.motionId,
+    workerLabel,
+    notes: `Claimed from the Exo workspace for ${channel} ${kind}.`,
+  };
+}
+
+function buildWorkspaceStateActions({ user, reports, daily, workerLabel = DEFAULT_WORKSPACE_ACTION_WORKER }) {
+  const firstBlockedCompanyName = Object.values(daily.capacity ?? {})
+    .map((entry) => entry?.plannerItem?.context?.firstAssignmentBlockedCompanyName ?? null)
+    .find(Boolean) ?? null;
+
+  const blockedReadyCompanies = reports
+    .flatMap((report) => toArray(report.targeting?.companyLoop?.items))
+    .filter((company) =>
+      company.queueStatus === "ready"
+      && company.executionIdentity?.status === "unassigned-global-ready"
+      && Number(company.readyCadenceCount ?? 0) > 0,
+    )
+    .map((company) => ({
+      kind: "assign_company_user",
+      label: `Pin ${company.companyName}`,
+      confirm: `Pin ${company.companyName} to ${user.label}?`,
+      companyId: company.companyId,
+      companyName: company.companyName,
+      userId: user.id,
+      userLabel: user.label,
+      browserCapability: "linkedin",
+      reason: "Make ready outbound branches executable",
+    }))
+    .sort((left, right) => {
+      if (left.companyName === firstBlockedCompanyName) {
+        return -1;
+      }
+
+      if (right.companyName === firstBlockedCompanyName) {
+        return 1;
+      }
+
+      return right.companyName.localeCompare(left.companyName);
+    });
+
+  const packetActionsByKey = new Map();
+
+  Object.entries(daily.capacity ?? {}).forEach(([channel, entry]) => {
+    const claimableItemsByKind = entry?.execution?.packets?.claimableItemsByKind ?? {};
+
+    Object.entries(claimableItemsByKind).forEach(([kind, items]) => {
+      const actions = toArray(items)
+        .slice(0, 3)
+        .map((item) => buildPacketAction(channel, kind, item, workerLabel));
+
+      packetActionsByKey.set(`${channel}::${kind}`, actions);
+    });
+  });
+
+  return {
+    blockedReadyCompanies,
+    packetActionsByKey,
+  };
+}
+
+function buildDecisionLinks(item) {
+  const links = [];
+
+  if (item.actorProfileUrl) {
+    links.push({
+      label: "Profile",
+      href: item.actorProfileUrl,
+    });
+  }
+
+  if (item.sourceUrl && item.sourceUrl !== item.actorProfileUrl) {
+    links.push({
+      label: "Invites",
+      href: item.sourceUrl,
+    });
+  }
+
+  return links;
+}
+
+function buildDecisionActions(item) {
+  if (item.kind !== "connection_request_received" || item.state !== "needs_decision") {
+    return [];
+  }
+
+  const subject = item.actorName ?? item.prospect?.name ?? item.company?.name ?? "this inbound invite";
+
+  return [
+    {
+      kind: "record_inbound_observation",
+      label: "Mark accepted",
+      confirm: `Record ${subject} as accepted in Exo? This updates governed state only; it does not click LinkedIn for you.`,
+      observationId: item.id,
+      nextKind: "connection_request_accepted",
+    },
+    {
+      kind: "record_inbound_observation",
+      label: "Mark declined",
+      confirm: `Record ${subject} as declined in Exo? This updates governed state only; it does not click LinkedIn for you.`,
+      observationId: item.id,
+      nextKind: "connection_request_declined",
+    },
+  ];
+}
+
+function buildDecisionQueue(reviewItems) {
+  const sorted = toArray(reviewItems).slice().sort((left, right) => {
+    const priorityDelta = reviewPriorityRank(left.priority) - reviewPriorityRank(right.priority);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+
+    const leftObserved = parseDate(left.observedAt)?.getTime() ?? 0;
+    const rightObserved = parseDate(right.observedAt)?.getTime() ?? 0;
+    return rightObserved - leftObserved;
+  });
+
+  const decisions = sorted.filter(isDecisionReviewItem);
+  const signals = sorted.filter((item) => !isDecisionReviewItem(item));
+
+  return {
+    itemCount: decisions.length,
+    replyCount: decisions.filter((item) => item.state === "needs_reply").length,
+    decisionCount: decisions.filter((item) => item.state === "needs_decision").length,
+    parkedSignalCount: signals.length,
+    items: decisions.map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      subject: reviewSubject(item),
+      summary: item.summary ?? "No summary recorded.",
+      why: item.whyItMatters ?? null,
+      priority: item.priority ?? "low",
+      state: item.state ?? "unknown",
+      options: toArray(item.decisionOptions),
+      surfaceKey: item.surfaceKey ?? null,
+      observedAt: item.observedAt ?? null,
+      recommendedAction: item.recommendedAction ?? null,
+      actorTitle: item.actorTitle ?? null,
+      actorCompanyName: item.actorCompanyName ?? null,
+      actorProfileUrl: item.actorProfileUrl ?? null,
+      sourceUrl: item.sourceUrl ?? null,
+      companyName: item.company?.name ?? null,
+      motionName: item.motion?.name ?? null,
+      links: buildDecisionLinks(item),
+      actions: buildDecisionActions(item),
+    })),
+    signals: signals.map((item) => ({
+      id: item.id,
+      subject: reviewSubject(item),
+      summary: item.summary ?? "No summary recorded.",
+      priority: item.priority ?? "low",
+      state: item.state ?? "unknown",
+      surfaceKey: item.surfaceKey ?? null,
+      observedAt: item.observedAt ?? null,
+      recommendedAction: item.recommendedAction ?? null,
+    })),
+  };
+}
+
+function buildAgentQueue(daily, stateActions = { blockedReadyCompanies: [], packetActionsByKey: new Map() }) {
+  const actionableItems = toArray(daily.items).filter((item) => !isInboundReviewDailyItem(item));
+  const dueNowItems = actionableItems.filter((item) => item.state === "due_now");
+  const waitingItems = actionableItems.filter((item) => item.state === "waiting_until");
+  const capacityEntries = Object.entries(daily.capacity ?? {});
+
+  const blockers = capacityEntries.flatMap(([channel, entry]) => {
+    const execution = entry?.execution ?? {};
+    const blockedReadyCount = Number(execution.assignmentBlockedReadyConnectionRequests ?? 0);
+    const blockedCompanyCount = Number(execution.assignmentBlockedCompanyCount ?? 0);
+
+    if (blockedReadyCount <= 0 && blockedCompanyCount <= 0) {
+      return [];
+    }
+
+    return [
+      {
+        channel,
+        accountHandle: entry?.account?.handle ?? null,
+        blockedReadyCount,
+        blockedCompanyCount,
+        firstCompanyName: entry?.plannerItem?.context?.firstAssignmentBlockedCompanyName ?? null,
+        firstProspectName: entry?.plannerItem?.context?.firstAssignmentBlockedProspectName ?? null,
+        stateActions: stateActions.blockedReadyCompanies,
+      },
+    ];
+  });
+
+  const packets = capacityEntries.flatMap(([channel, entry]) => {
+    const claimableItemsByKind = entry?.execution?.packets?.claimableItemsByKind ?? {};
+
+    return Object.entries(claimableItemsByKind).flatMap(([kind, items]) => {
+      const previewItems = toArray(items);
+      if (previewItems.length === 0) {
+        return [];
+      }
+
+      return [
+        {
+          channel,
+          kind,
+          count: previewItems.length,
+          preview: previewItems
+            .slice(0, 3)
+            .map((item) => item.prospectName ?? item.companyName)
+            .filter(Boolean),
+          firstPacketId: previewItems[0].packetId ?? null,
+          firstMotionName: previewItems[0].motionName ?? null,
+          stateActions: stateActions.packetActionsByKey.get(`${channel}::${kind}`) ?? [],
+        },
+      ];
+    });
+  });
+
+  const mapPlannerItem = (item) => ({
+    id: plannerKey(item),
+    subject: plannerSubject(item),
+    action: item.recommendedAction ?? item.cadence?.nextAction ?? "No governed action exposed.",
+    why: item.whyItMatters ?? null,
+    motionName: item.motion?.name ?? null,
+    dueAt: item.dueAt ?? null,
+    sourceType: item.source?.type ?? null,
+    state: item.state ?? "unknown",
+  });
+
+  return {
+    itemCount: dueNowItems.length,
+    waitingCount: waitingItems.length,
+    blockedReadyCount: blockers.reduce((total, item) => total + item.blockedReadyCount, 0),
+    blockedCompanyCount: blockers.reduce((total, item) => total + item.blockedCompanyCount, 0),
+    packetCount: packets.reduce((total, item) => total + item.count, 0),
+    items: dueNowItems.map(mapPlannerItem),
+    waitingItems: waitingItems.map(mapPlannerItem),
+    blockers,
+    packets,
+  };
+}
+
 function renderChips(chips) {
   return chips
     .map(
@@ -756,6 +1245,258 @@ function renderChips(chips) {
         `<span class="chip chip-${escapeHtml(chip.tone)}">${escapeHtml(titleizeStatus(chip.label))}</span>`,
     )
     .join("");
+}
+
+function renderOperatorChecklist(items, now) {
+  if (!items.length) {
+    return `<div class="empty-state">Nothing is due now. Use the focus motion and truth strip to decide whether the next move is waiting, cleanup, or fresh targeting work.</div>`;
+  }
+
+  return `
+    <ul class="operator-list">
+      ${items
+        .map(
+          (item) => `
+            <li class="operator-item">
+              <div>
+                <strong>${escapeHtml(item.subject)}</strong>
+                <p>${escapeHtml(item.action)}</p>
+              </div>
+              <span>${escapeHtml(formatRelative(item.dueAt, now))}</span>
+            </li>
+          `,
+        )
+        .join("")}
+    </ul>
+  `;
+}
+
+function renderArtifactInventory(artifactSummaries) {
+  return artifactSummaries
+    .map((artifact) => {
+      const rows = [
+        {
+          label: "Motion frame",
+          status: artifact.frame.status,
+          detail: `${titleizeStatus(artifact.frame.premiseStatus)} premise · ${artifact.frame.audienceCount} audience${artifact.frame.audienceCount === 1 ? "" : "s"} · ${artifact.frame.signalCount} signal${artifact.frame.signalCount === 1 ? "" : "s"}`,
+        },
+        {
+          label: "Target map",
+          status: artifact.targetMap.status,
+          detail: `${artifact.targetMap.companyCount} compan${artifact.targetMap.companyCount === 1 ? "y" : "ies"} · ${artifact.targetMap.prospectCount} prospect${artifact.targetMap.prospectCount === 1 ? "" : "s"}`,
+        },
+        {
+          label: "Branch logic",
+          status: artifact.branchLogic.status,
+          detail: `${artifact.branchLogic.throughLineReadyCount}/${artifact.targetMap.prospectCount || 0} through-lines · ${artifact.branchLogic.openingPlanReadyCount}/${artifact.targetMap.prospectCount || 0} opening plans · ${artifact.branchLogic.cadenceReadyCount}/${artifact.targetMap.prospectCount || 0} cadence`,
+        },
+        {
+          label: "Execution inventory",
+          status: artifact.execution.status,
+          detail: `${artifact.execution.readyToSendCount} ready · ${artifact.execution.dueNowCount} due now · ${artifact.execution.waitingCount} waiting · ${artifact.execution.reviewCount} review`,
+        },
+      ];
+
+      return `
+        <article class="artifact-card">
+          <div class="artifact-card-head">
+            <div>
+              <div class="mini-eyebrow">${escapeHtml(titleizeStatus(artifact.motionStatus))}</div>
+              <h3>${escapeHtml(artifact.motionName)}</h3>
+            </div>
+            <span class="chip chip-quiet">${escapeHtml(titleizeStatus(artifact.overallStage))}</span>
+          </div>
+          <div class="artifact-stack">
+            ${rows
+              .map(
+                (row) => `
+                  <div class="artifact-row">
+                    <div>
+                      <span>${escapeHtml(row.label)}</span>
+                      <strong>${escapeHtml(row.detail)}</strong>
+                    </div>
+                    <span class="chip chip-${artifactStatusSeverity(row.status)}">${escapeHtml(titleizeStatus(row.status))}</span>
+                  </div>
+                `,
+              )
+              .join("")}
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function renderDecisionQueue(decisionQueue, now, interactive) {
+  if (decisionQueue.items.length === 0) {
+    return `<div class="empty-state">No operator decisions are exposed right now.</div>`;
+  }
+
+  return `
+    <div class="work-stack">
+      ${decisionQueue.items
+        .slice(0, 6)
+        .map((item) => {
+          const optionsLabel = item.options.length > 0
+            ? item.options.map((option) => titleizeStatus(option)).join(" / ")
+            : "Review";
+          const actorContext = [
+            item.actorTitle,
+            item.actorCompanyName
+              && !String(item.actorTitle ?? "").toLowerCase().includes(String(item.actorCompanyName).toLowerCase())
+              ? item.actorCompanyName
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          const meta = [
+            item.surfaceKey ? titleizeStatus(item.surfaceKey) : null,
+            formatRelative(item.observedAt, now),
+            item.companyName,
+          ].filter(Boolean);
+          const controlMarkup = [
+            renderWorkspaceActionLinksMarkup(toArray(item.links)),
+            renderWorkspaceActionButtonMarkup(toArray(item.actions), interactive),
+          ].join("");
+
+          return `
+            <article class="work-card work-card-danger">
+              <div class="work-card-head">
+                <div>
+                  <div class="mini-eyebrow">${escapeHtml(titleizeStatus(item.state))}</div>
+                  <h3>${escapeHtml(item.subject)}</h3>
+                </div>
+                <span class="chip chip-${item.priority === "high" ? "danger" : item.priority === "medium" ? "warning" : "quiet"}">${escapeHtml(
+                  optionsLabel,
+                )}</span>
+              </div>
+              ${actorContext ? `<p class="work-card-subline">${escapeHtml(actorContext)}</p>` : ""}
+              <p class="work-card-copy">${escapeHtml(item.summary)}</p>
+              <div class="work-card-meta">${meta.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</div>
+              ${controlMarkup ? `<div class="workspace-action-row">${controlMarkup}</div>` : ""}
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderAgentQueueItems(items, now, emptyMessage) {
+  if (items.length === 0) {
+    return `<div class="empty-state">${escapeHtml(emptyMessage)}</div>`;
+  }
+
+  return `
+    <div class="work-stack">
+      ${items
+        .slice(0, 6)
+        .map((item) => {
+          const meta = [
+            item.motionName,
+            item.sourceType ? titleizeStatus(item.sourceType.replaceAll("_", " ")) : null,
+            formatRelative(item.dueAt, now),
+          ].filter(Boolean);
+
+          return `
+            <article class="work-card">
+              <div class="work-card-head">
+                <div>
+                  <div class="mini-eyebrow">${escapeHtml(titleizeStatus(item.state))}</div>
+                  <h3>${escapeHtml(item.subject)}</h3>
+                </div>
+                <span class="chip chip-${item.state === "due_now" ? "accent" : "quiet"}">${escapeHtml(
+                  formatRelative(item.dueAt, now),
+                )}</span>
+              </div>
+              <p class="work-card-copy">${escapeHtml(item.action)}</p>
+              <div class="work-card-meta">${meta.map((part) => `<span>${escapeHtml(part)}</span>`).join("")}</div>
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderWorkspaceActionLinksMarkup(links) {
+  return toArray(links)
+    .map((link) => `
+      <a
+        class="action-button action-button-quiet action-link-button"
+        href="${escapeHtml(link.href)}"
+        target="_blank"
+        rel="noreferrer"
+      >${escapeHtml(link.label)}</a>
+    `)
+    .join("");
+}
+
+function renderWorkspaceActionButtonMarkup(actions, interactive) {
+  if (!interactive?.enabled || !actions.length) {
+    return "";
+  }
+
+  return actions
+    .map((action) => `
+      <button
+        class="action-button workspace-action-button"
+        type="button"
+        data-action="${escapeHtml(JSON.stringify(action))}"
+      >${escapeHtml(action.label)}</button>
+    `)
+    .join("");
+}
+
+function renderWorkspaceActionButtons(actions, interactive) {
+  const buttons = renderWorkspaceActionButtonMarkup(actions, interactive);
+  if (!buttons) {
+    return "";
+  }
+
+  return `
+    <div class="workspace-action-row">
+      ${buttons}
+    </div>
+  `;
+}
+
+function renderBacklogQueue(agentQueue, interactive) {
+  const cards = [];
+
+  agentQueue.blockers.forEach((item) => {
+    cards.push(`
+      <article class="mini-card">
+        <div class="mini-card-head">
+          <span class="mini-eyebrow">${escapeHtml(titleizeStatus(item.channel))}</span>
+          <strong>${escapeHtml(`${item.blockedReadyCount} blocked-ready`)}</strong>
+        </div>
+        <p>${escapeHtml(
+          `${item.blockedCompanyCount} compan${item.blockedCompanyCount === 1 ? "y" : "ies"} need assignment${item.firstCompanyName ? `. Start with ${item.firstCompanyName}.` : "."}`,
+        )}</p>
+        ${renderWorkspaceActionButtons(toArray(item.stateActions), interactive)}
+      </article>
+    `);
+  });
+
+  agentQueue.packets.forEach((item) => {
+    cards.push(`
+      <article class="mini-card">
+        <div class="mini-card-head">
+          <span class="mini-eyebrow">${escapeHtml(titleizeStatus(item.channel))}</span>
+          <strong>${escapeHtml(`${item.count} ${titleizeStatus(item.kind)}`)}</strong>
+        </div>
+        <p>${escapeHtml(item.preview.join(" / ") || item.firstMotionName || "Claimable packet backlog exposed.")}</p>
+        ${renderWorkspaceActionButtons(toArray(item.stateActions), interactive)}
+      </article>
+    `);
+  });
+
+  if (cards.length === 0) {
+    return `<div class="empty-state">No blocked-ready work or background packet backlog is exposed right now.</div>`;
+  }
+
+  return `<div class="mini-stack">${cards.join("")}</div>`;
 }
 
 function renderTruthAccounts(truthAccounts, now) {
@@ -907,10 +1648,10 @@ function renderLaneSection(title, subtitle, lanes, renderCard) {
     <section class="lane-section">
       <div class="subsection-head">
         <div>
-          <div class="mini-eyebrow">Derived from current Exo state</div>
+          <div class="mini-eyebrow">Current Exo state</div>
           <h3>${escapeHtml(title)}</h3>
         </div>
-        <p>${escapeHtml(subtitle)}</p>
+        ${subtitle ? `<p>${escapeHtml(subtitle)}</p>` : ""}
       </div>
       <div class="lane-grid">
         ${lanes
@@ -1176,6 +1917,11 @@ function sortEngagementCards(items, now) {
 function renderPage({
   truthAccounts,
   motionSummaries,
+  operatorSummary,
+  decisionQueue,
+  agentQueue,
+  interactive,
+  artifactSummaries,
   companyPrep,
   prospectPrep,
   engagementProspects,
@@ -1190,6 +1936,9 @@ function renderPage({
   const staleSurfaceCount = allSurfaces.filter((surface) => surface.meta.stale && !surface.meta.unchecked).length;
   const uncheckedSurfaceCount = allSurfaces.filter((surface) => surface.meta.unchecked).length;
   const actionableSurfaceCount = allSurfaces.filter((surface) => surface.meta.actionable).length;
+  const readyBranchCount = motionSummaries.reduce((total, motion) => total + (motion.readyToSendCount ?? 0), 0);
+  const waitingBranchCount = motionSummaries.reduce((total, motion) => total + (motion.waitingCount ?? 0), 0);
+  const focusMotion = operatorSummary.focusMotion;
 
   const companyLanes = groupIntoLanes(companyPrep, [
     { key: "needs-company-identity", label: "Needs company identity", description: "Website or LinkedIn company identity is still missing." },
@@ -1230,28 +1979,6 @@ function renderPage({
       now,
     ),
   }));
-
-  const dueNowItems = toArray(daily.items)
-    .filter((item) => item.state === "due_now")
-    .sort((left, right) => {
-      const leftDue = parseDate(left.dueAt)?.getTime() ?? 0;
-      const rightDue = parseDate(right.dueAt)?.getTime() ?? 0;
-      return leftDue - rightDue;
-    });
-
-  const waitingItems = toArray(daily.items)
-    .filter((item) => item.state === "waiting_until")
-    .sort((left, right) => {
-      const leftDue = parseDate(left.dueAt)?.getTime() ?? Number.MAX_SAFE_INTEGER;
-      const rightDue = parseDate(right.dueAt)?.getTime() ?? Number.MAX_SAFE_INTEGER;
-      return leftDue - rightDue;
-    });
-
-  const reviewItems = toArray(inboundReview.reviewItems).slice().sort((left, right) => {
-    const leftObserved = parseDate(left.observedAt)?.getTime() ?? 0;
-    const rightObserved = parseDate(right.observedAt)?.getTime() ?? 0;
-    return rightObserved - leftObserved;
-  });
 
   const linkedInCapacity = daily.capacity?.linkedin ?? null;
   const deficit = linkedInCapacity?.execution?.inventoryShortfall ?? null;
@@ -1329,6 +2056,238 @@ function renderPage({
       gap: 18px;
     }
 
+    .workspace-topbar {
+      padding: 22px 24px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(180deg, rgba(18, 22, 28, 0.98), rgba(12, 15, 21, 0.98));
+      box-shadow: var(--shadow);
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+    }
+
+    .workspace-topbar h1 {
+      margin-top: 10px;
+      font-size: clamp(1.8rem, 3vw, 2.6rem);
+      line-height: 1;
+      letter-spacing: -0.05em;
+    }
+
+    .topbar-main {
+      display: grid;
+      gap: 12px;
+    }
+
+    .topbar-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .focus-chip {
+      padding: 12px 14px;
+      min-width: 160px;
+      border-radius: 16px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .focus-chip strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 0.98rem;
+    }
+
+    .topbar-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 8px;
+    }
+
+    .control-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .secondary-stack {
+      display: grid;
+      gap: 18px;
+    }
+
+    .queue-panel {
+      display: grid;
+      gap: 16px;
+    }
+
+    .queue-panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .queue-panel-head h2,
+    .queue-panel-head h3 {
+      margin-top: 8px;
+      letter-spacing: -0.04em;
+    }
+
+    .queue-panel-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    .work-stack,
+    .mini-stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .queue-panel .work-stack {
+      max-height: 680px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .work-card,
+    .mini-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(18, 21, 28, 0.98), rgba(13, 16, 21, 0.98));
+    }
+
+    .work-card {
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .mini-card {
+      padding: 14px 16px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .work-card-danger {
+      border-color: rgba(239, 139, 139, 0.22);
+      background: linear-gradient(180deg, rgba(41, 23, 30, 0.96), rgba(13, 16, 21, 0.98));
+    }
+
+    .work-card-head,
+    .mini-card-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+    }
+
+    .work-card-head h3 {
+      margin-top: 8px;
+      font-size: 1rem;
+      letter-spacing: -0.03em;
+    }
+
+    .work-card-copy,
+    .mini-card p {
+      color: var(--text);
+      line-height: 1.55;
+    }
+
+    .work-card-subline {
+      margin-top: -4px;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+
+    .mini-card p {
+      color: var(--muted);
+    }
+
+    .work-card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 0.8rem;
+      font-family: "IBM Plex Mono", monospace;
+    }
+
+    .work-card-meta span::after {
+      content: "•";
+      margin-left: 10px;
+      color: rgba(255, 255, 255, 0.18);
+    }
+
+    .work-card-meta span:last-child::after {
+      content: "";
+      margin: 0;
+    }
+
+    .workspace-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .action-button {
+      appearance: none;
+      border: 1px solid rgba(52, 107, 255, 0.28);
+      background: rgba(52, 107, 255, 0.12);
+      color: var(--text);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font: inherit;
+      font-size: 0.84rem;
+      cursor: pointer;
+      transition: 140ms ease;
+    }
+
+    .action-link-button {
+      display: inline-flex;
+      align-items: center;
+      text-decoration: none;
+    }
+
+    .action-button:hover {
+      background: rgba(52, 107, 255, 0.18);
+      border-color: rgba(52, 107, 255, 0.42);
+    }
+
+    .action-button:disabled {
+      cursor: wait;
+      opacity: 0.6;
+    }
+
+    .action-button-quiet {
+      border-color: rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .workspace-status {
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(52, 107, 255, 0.22);
+      background: rgba(52, 107, 255, 0.08);
+      color: var(--text);
+      font-size: 0.9rem;
+    }
+
+    .workspace-status.is-error {
+      border-color: rgba(239, 139, 139, 0.24);
+      background: rgba(239, 139, 139, 0.12);
+    }
+
     .hero,
     .section,
     .rail-panel,
@@ -1362,6 +2321,11 @@ function renderPage({
       margin-top: 14px;
     }
 
+    .hero-main {
+      display: grid;
+      gap: 18px;
+    }
+
     .hero-metrics {
       display: grid;
       gap: 12px;
@@ -1392,7 +2356,9 @@ function renderPage({
     .note-card strong,
     .surface-field strong,
     .kv-grid strong,
-    .lane-head strong {
+    .lane-head strong,
+    .artifact-row strong,
+    .operator-call strong {
       display: block;
       margin-top: 6px;
       font-size: 1rem;
@@ -1432,10 +2398,90 @@ function renderPage({
       padding: 24px;
     }
 
+    .operator-call {
+      padding: 18px;
+      border-radius: 18px;
+      border: 1px solid rgba(52, 107, 255, 0.24);
+      background:
+        linear-gradient(180deg, rgba(52, 107, 255, 0.12), rgba(52, 107, 255, 0.03)),
+        rgba(11, 15, 22, 0.9);
+      display: grid;
+      gap: 14px;
+    }
+
+    .operator-call-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    .operator-call h2,
+    .artifact-card h3 {
+      margin-top: 8px;
+      letter-spacing: -0.04em;
+    }
+
+    .operator-next-move {
+      font-size: 1.05rem;
+      line-height: 1.6;
+      color: var(--text);
+    }
+
+    .operator-why,
+    .operator-focus p,
+    .artifact-row > div span,
+    .artifact-card p {
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .operator-focus {
+      display: grid;
+      gap: 8px;
+      padding-top: 2px;
+    }
+
+    .operator-focus strong {
+      font-size: 1rem;
+    }
+
+    .operator-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 10px;
+    }
+
+    .operator-item {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .operator-item p {
+      margin-top: 6px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .operator-item span {
+      color: var(--cold);
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.76rem;
+      white-space: nowrap;
+    }
+
     .section-head,
     .subsection-head,
     .account-truth-head,
     .motion-card-head,
+    .artifact-card-head,
     .surface-card-head,
     .prep-card-head,
     .engagement-card-head,
@@ -1488,7 +2534,8 @@ function renderPage({
 
     .truth-stack,
     .motion-grid,
-    .gap-grid {
+    .gap-grid,
+    .artifact-grid {
       display: grid;
       gap: 16px;
       margin-top: 18px;
@@ -1509,7 +2556,8 @@ function renderPage({
     }
 
     .surface-grid,
-    .motion-grid {
+    .motion-grid,
+    .artifact-grid {
       grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     }
 
@@ -1521,6 +2569,7 @@ function renderPage({
 
     .surface-card,
     .motion-card,
+    .artifact-card,
     .prep-card,
     .engagement-card,
     .rail-card,
@@ -1533,6 +2582,7 @@ function renderPage({
 
     .surface-card,
     .motion-card,
+    .artifact-card,
     .prep-card,
     .engagement-card,
     .rail-card,
@@ -1796,6 +2846,22 @@ function renderPage({
       margin-top: 18px;
     }
 
+    .artifact-stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .artifact-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      padding: 12px 14px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.02);
+    }
+
     .motion-actions {
       margin-top: 14px;
     }
@@ -1902,8 +2968,13 @@ function renderPage({
 
     @media (max-width: 1200px) {
       .content-grid,
-      .hero {
+      .hero,
+      .control-grid {
         grid-template-columns: 1fr;
+      }
+
+      .workspace-topbar {
+        flex-direction: column;
       }
 
       .right-rail {
@@ -1927,54 +2998,158 @@ function renderPage({
 
       .section,
       .hero,
+      .workspace-topbar,
       .gap-section,
       .rail-panel {
         padding: 18px;
+      }
+
+      .topbar-meta,
+      .queue-panel-head,
+      .operator-item,
+      .artifact-row {
+        flex-direction: column;
       }
     }
   </style>
 </head>
 <body>
   <div class="page-shell">
-    <header class="hero">
-      <div>
+    <header class="workspace-topbar">
+      <div class="topbar-main">
         <div class="eyebrow">Workspace</div>
-        <h1>See what is ready, blocked, waiting, and due.</h1>
-        <p class="hero-copy">Track truth coverage, motion pressure, prep gaps, and live prospect branches in one place so you can work the next best move fast.</p>
+        <h1>Exo workspace</h1>
       </div>
-      <div class="hero-metrics">
-        <div class="metric-card">
+      <div class="topbar-meta">
+        <div class="focus-chip">
           <span>Generated</span>
           <strong>${escapeHtml(formatTimestamp(now.toISOString()))}</strong>
         </div>
-        <div class="metric-card">
-          <span>Workload</span>
-          <strong>${escapeHtml(
-            `${daily.counts?.dueNowCount ?? 0} due now · ${daily.counts?.waitingCount ?? 0} waiting`,
-          )}</strong>
+        ${
+          focusMotion
+            ? `
+              <div class="focus-chip">
+                <span>Focus</span>
+                <strong>${escapeHtml(focusMotion.name)}</strong>
+              </div>
+            `
+            : ""
+        }
+        <div class="focus-chip">
+          <span>Ready</span>
+          <strong>${escapeHtml(`${readyBranchCount} branch${readyBranchCount === 1 ? "" : "es"}`)}</strong>
         </div>
-        <div class="metric-card">
-          <span>Truth coverage</span>
-          <strong>${escapeHtml(
-            `${staleSurfaceCount} stale · ${uncheckedSurfaceCount} unchecked · ${actionableSurfaceCount} actionable`,
-          )}</strong>
-        </div>
-        <div class="metric-card">
+        <div class="focus-chip">
           <span>LinkedIn deficit</span>
-          <strong>${escapeHtml(
-            deficit == null ? "No deficit surfaced" : `${deficit} branches short today`,
-          )}</strong>
+          <strong>${escapeHtml(deficit == null ? "None" : String(deficit))}</strong>
         </div>
       </div>
     </header>
+    ${
+      interactive?.enabled
+        ? `
+          <div class="topbar-controls">
+            <button class="action-button action-button-quiet" type="button" data-workspace-refresh>Refresh</button>
+          </div>
+          <div id="workspace-status" class="workspace-status" hidden></div>
+        `
+        : ""
+    }
+
+    <section class="control-grid">
+      <section class="section queue-panel">
+        <div class="queue-panel-head">
+          <div>
+            <div class="section-eyebrow">Operator inbox</div>
+            <h2>Need decision</h2>
+          </div>
+          <div class="queue-panel-stats">
+            <span class="chip chip-danger">${escapeHtml(`${decisionQueue.itemCount} open`)}</span>
+            <span class="chip chip-warning">${escapeHtml(`${decisionQueue.replyCount} replies`)}</span>
+            <span class="chip chip-quiet">${escapeHtml(`${decisionQueue.decisionCount} yes/no`)}</span>
+          </div>
+        </div>
+        ${renderDecisionQueue(decisionQueue, now, interactive)}
+      </section>
+
+      <div class="secondary-stack">
+        <section class="section queue-panel">
+          <div class="queue-panel-head">
+            <div>
+              <div class="section-eyebrow">Agent</div>
+              <h3>Agent queue</h3>
+            </div>
+            <div class="queue-panel-stats">
+              <span class="chip chip-accent">${escapeHtml(`${agentQueue.itemCount} due`)}</span>
+              <span class="chip chip-quiet">${escapeHtml(`${agentQueue.waitingCount} waiting`)}</span>
+            </div>
+          </div>
+          ${renderAgentQueueItems(
+            agentQueue.items,
+            now,
+            "No background execution queue is exposed right now.",
+          )}
+        </section>
+
+        <section class="section queue-panel">
+          <div class="queue-panel-head">
+            <div>
+              <div class="section-eyebrow">Blocked / backlog</div>
+              <h3>Blocked and claimable</h3>
+            </div>
+            <div class="queue-panel-stats">
+              <span class="chip chip-warning">${escapeHtml(`${agentQueue.blockedReadyCount} blocked-ready`)}</span>
+              <span class="chip chip-quiet">${escapeHtml(`${agentQueue.packetCount} packets`)}</span>
+            </div>
+          </div>
+          ${renderBacklogQueue(agentQueue, interactive)}
+        </section>
+      </div>
+    </section>
+
+    <div class="summary-strip">
+      <div class="summary-chip">
+        <span>Need decision</span>
+        <strong>${decisionQueue.itemCount}</strong>
+      </div>
+      <div class="summary-chip">
+        <span>Watch signals</span>
+        <strong>${decisionQueue.parkedSignalCount}</strong>
+      </div>
+      <div class="summary-chip">
+        <span>Agent queue</span>
+        <strong>${agentQueue.itemCount}</strong>
+      </div>
+      <div class="summary-chip">
+        <span>Blocked-ready</span>
+        <strong>${agentQueue.blockedReadyCount}</strong>
+      </div>
+      <div class="summary-chip">
+        <span>Waiting</span>
+        <strong>${waitingBranchCount}</strong>
+      </div>
+      <div class="summary-chip">
+        <span>Unchecked surfaces</span>
+        <strong>${uncheckedSurfaceCount}</strong>
+      </div>
+    </div>
 
     <section class="section">
       <div class="section-head">
         <div>
-          <div class="section-eyebrow">Truth strip</div>
-          <h2>What needs review, what is fresh, and what is missing</h2>
+          <div class="section-eyebrow">Motions</div>
+          <h2>Motion state</h2>
         </div>
-        <p>See which connected surfaces are quiet, stale, unchecked, or actively worth opening because work is sitting there.</p>
+      </div>
+      <div class="artifact-grid">${renderArtifactInventory(artifactSummaries)}</div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <div class="section-eyebrow">Truth</div>
+          <h2>Truth surfaces</h2>
+        </div>
       </div>
       <div class="summary-strip">
         <div class="summary-chip">
@@ -2002,10 +3177,9 @@ function renderPage({
         <section class="section">
           <div class="section-head">
             <div>
-              <div class="section-eyebrow">Motion overview</div>
-              <h2>Where each motion is moving or stuck</h2>
+              <div class="section-eyebrow">Overview</div>
+              <h2>Motions</h2>
             </div>
-            <p>See volume, ready branches, due work, sending coverage, and the next actions that matter most inside each motion.</p>
           </div>
           <div class="motion-grid">${renderMotionCards(motionSummaries)}</div>
         </section>
@@ -2013,20 +3187,19 @@ function renderPage({
         <section class="section">
           <div class="section-head">
             <div>
-              <div class="section-eyebrow">Prep pipeline</div>
-              <h2>Prep gaps before outreach starts</h2>
+              <div class="section-eyebrow">Prep</div>
+              <h2>Prep lanes</h2>
             </div>
-            <p>Company prep and prospect prep stay separate so you can see why something is not launch-ready before it ever becomes an engagement problem.</p>
           </div>
           ${renderLaneSection(
             "Company prep lanes",
-            "See which accounts still need identity, research, prospect selection, or branch buildout.",
+            "",
             companyLanes,
             renderCompanyPrepCard,
           )}
           ${renderLaneSection(
             "Prospect prep lanes",
-            "See which people still need a through-line, first move, cadence, or fallback coverage.",
+            "",
             prospectPrepLanes,
             renderProspectPrepCard,
           )}
@@ -2035,10 +3208,9 @@ function renderPage({
         <section class="section">
           <div class="section-head">
             <div>
-              <div class="section-eyebrow">Engagement pipeline</div>
-              <h2>Live prospect branches</h2>
+              <div class="section-eyebrow">Branches</div>
+              <h2>Live branches</h2>
             </div>
-            <p>Grouped by what you would actually do next: send, wait, unblock, handle a reply, or stop working that branch for now.</p>
           </div>
           <div class="lane-grid">
             ${engagementLanes
@@ -2070,9 +3242,8 @@ function renderPage({
           <div class="section-head">
             <div>
               <div class="section-eyebrow">Model gaps</div>
-              <h2>What this workspace still cannot show cleanly</h2>
+              <h2>Model gaps</h2>
             </div>
-            <p>These are the main places where the workspace still has to infer structure because the underlying fields are not explicit yet.</p>
           </div>
           <div class="gap-grid">${renderGapNotes(gapNotes)}</div>
         </section>
@@ -2080,38 +3251,74 @@ function renderPage({
 
       <aside class="right-rail">
         <section class="rail-panel">
-          <div class="section-eyebrow">Due now</div>
-          <h3>Immediate planner pressure</h3>
-          <div class="rail-stack">
-            ${renderRailItems(
-              dueNowItems,
-              "Nothing is due now on the daily surface.",
-              renderDailyRailItem,
-            )}
-          </div>
-        </section>
-
-        <section class="rail-panel">
           <div class="section-eyebrow">Waiting</div>
-          <h3>Held branches</h3>
+          <h3>Waiting</h3>
           <div class="rail-stack">
-            ${renderRailItems(
-              waitingItems,
+            ${renderAgentQueueItems(
+              agentQueue.waitingItems,
+              now,
               "Nothing is explicitly waiting right now.",
-              renderDailyRailItem,
             )}
           </div>
         </section>
 
         <section class="rail-panel">
-          <div class="section-eyebrow">Review items</div>
-          <h3>Inbound review surface</h3>
+          <div class="section-eyebrow">Signals</div>
+          <h3>Watch signals</h3>
           <div class="rail-stack">
             ${renderRailItems(
-              reviewItems,
-              "No review items are exposed right now.",
-              renderReviewRailItem,
+              decisionQueue.signals.slice(0, 8),
+              "No parked signals are exposed right now.",
+              (item) =>
+                renderReviewRailItem({
+                  company: item.companyName ? { name: item.companyName } : null,
+                  prospect: null,
+                  actorName: item.subject,
+                  priority: item.priority,
+                  summary: item.summary,
+                  surfaceKey: item.surfaceKey ?? "unknown",
+                  observedAt: item.observedAt,
+                  recommendedAction: item.recommendedAction ?? "Hold for now.",
+                }),
             )}
+          </div>
+        </section>
+
+        <section class="rail-panel">
+          <div class="section-eyebrow">State</div>
+          <h3>Workspace state</h3>
+          <div class="rail-stack">
+            <article class="rail-card">
+              <div class="rail-card-head">
+                <h4>Truth coverage</h4>
+                <span class="chip chip-${uncheckedSurfaceCount > 0 ? "danger" : "quiet"}">${escapeHtml(
+                  `${uncheckedSurfaceCount} unchecked`,
+                )}</span>
+              </div>
+              <p>${escapeHtml(`${actionableSurfaceCount} actionable · ${staleSurfaceCount} stale · ${truthAccounts.length} accounts`)}</p>
+            </article>
+            <article class="rail-card">
+              <div class="rail-card-head">
+                <h4>Inbox</h4>
+                <span class="chip chip-${decisionQueue.itemCount > 0 ? "danger" : "quiet"}">${escapeHtml(
+                  `${decisionQueue.itemCount} decisions`,
+                )}</span>
+              </div>
+              <p>${escapeHtml(
+                `${decisionQueue.replyCount} replies · ${decisionQueue.decisionCount} yes/no items · ${decisionQueue.parkedSignalCount} watch signals`,
+              )}</p>
+            </article>
+            <article class="rail-card">
+              <div class="rail-card-head">
+                <h4>Execution</h4>
+                <span class="chip chip-${agentQueue.itemCount > 0 ? "accent" : "quiet"}">${escapeHtml(
+                  `${agentQueue.itemCount} due`,
+                )}</span>
+              </div>
+              <p>${escapeHtml(
+                `${readyBranchCount} ready · ${agentQueue.blockedReadyCount} blocked-ready · ${agentQueue.packetCount} packets`,
+              )}</p>
+            </article>
           </div>
           <div class="regen">
             <div class="mini-eyebrow">Regenerate</div>
@@ -2121,6 +3328,60 @@ function renderPage({
       </aside>
     </div>
   </div>
+  ${
+    interactive?.enabled
+      ? `
+        <script>
+          (() => {
+            const actionEndpoint = ${JSON.stringify(interactive.actionEndpoint ?? "/api/action")};
+            const statusEl = document.getElementById("workspace-status");
+            const setStatus = (message, isError = false) => {
+              if (!statusEl) return;
+              statusEl.hidden = !message;
+              statusEl.textContent = message || "";
+              statusEl.classList.toggle("is-error", Boolean(isError));
+            };
+
+            document.querySelectorAll("[data-workspace-refresh]").forEach((button) => {
+              button.addEventListener("click", () => window.location.reload());
+            });
+
+            document.querySelectorAll(".workspace-action-button").forEach((button) => {
+              button.addEventListener("click", async () => {
+                const payload = JSON.parse(button.dataset.action || "{}");
+                const confirmMessage = payload.confirm || "Run this Exo action?";
+                if (confirmMessage && !window.confirm(confirmMessage)) {
+                  return;
+                }
+
+                button.disabled = true;
+                setStatus("Running " + (payload.label || "workspace action") + "...");
+
+                try {
+                  const response = await fetch(actionEndpoint, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify(payload),
+                  });
+                  const result = await response.json();
+
+                  if (!response.ok || result.ok === false) {
+                    throw new Error(result.error || result.message || "Workspace action failed.");
+                  }
+
+                  setStatus(result.message || "Workspace action complete.");
+                  window.setTimeout(() => window.location.reload(), 250);
+                } catch (error) {
+                  setStatus(error instanceof Error ? error.message : String(error), true);
+                  button.disabled = false;
+                }
+              });
+            });
+          })();
+        </script>
+      `
+      : ""
+  }
 </body>
 </html>`;
 }
@@ -2132,7 +3393,8 @@ function renderPage({
  *   inbox: any,
  *   daily: any,
  *   reports: any[],
- *   regenerateCommand?: string
+ *   regenerateCommand?: string,
+ *   interactive?: { enabled?: boolean, actionEndpoint?: string, workerLabel?: string } | null
  * }} input
  */
 export function buildWorkspaceModel(input) {
@@ -2143,6 +3405,7 @@ export function buildWorkspaceModel(input) {
     daily,
     reports,
     regenerateCommand = DEFAULT_REGENERATE_COMMAND,
+    interactive = null,
   } = input;
 
   const now = parseDate(daily.generatedAt) ?? new Date();
@@ -2157,6 +3420,14 @@ export function buildWorkspaceModel(input) {
   const companyPrep = flattenCompanyPrep(reports);
   const prospects = flattenProspects(reports, dailyIndex, reviewIndex);
   const gapNotes = buildGapNotes(truthAccounts, prospects);
+  const stateActions = buildWorkspaceStateActions({
+    user,
+    reports,
+    daily,
+    workerLabel: interactive?.workerLabel ?? DEFAULT_WORKSPACE_ACTION_WORKER,
+  });
+  const decisionQueue = buildDecisionQueue(inboundReview.reviewItems);
+  const agentQueue = buildAgentQueue(daily, stateActions);
 
   const companyLanes = groupIntoLanes(companyPrep, [
     { key: "needs-company-identity", label: "Needs company identity", description: "Website or LinkedIn company identity is still missing." },
@@ -2198,31 +3469,31 @@ export function buildWorkspaceModel(input) {
     ),
   }));
 
-  const dueNowItems = toArray(daily.items)
-    .filter((item) => item.state === "due_now")
-    .sort((left, right) => {
-      const leftDue = parseDate(left.dueAt)?.getTime() ?? 0;
-      const rightDue = parseDate(right.dueAt)?.getTime() ?? 0;
-      return leftDue - rightDue;
-    });
-
-  const waitingItems = toArray(daily.items)
-    .filter((item) => item.state === "waiting_until")
-    .sort((left, right) => {
-      const leftDue = parseDate(left.dueAt)?.getTime() ?? Number.MAX_SAFE_INTEGER;
-      const rightDue = parseDate(right.dueAt)?.getTime() ?? Number.MAX_SAFE_INTEGER;
-      return leftDue - rightDue;
-    });
-
+  const dueNowItems = toArray(daily.items).filter((item) => item.state === "due_now");
+  const waitingItems = toArray(daily.items).filter((item) => item.state === "waiting_until");
   const reviewItems = toArray(inboundReview.reviewItems).slice().sort((left, right) => {
     const leftObserved = parseDate(left.observedAt)?.getTime() ?? 0;
     const rightObserved = parseDate(right.observedAt)?.getTime() ?? 0;
     return rightObserved - leftObserved;
   });
+  const operatorSummary = buildOperatorSummary({
+    user,
+    daily,
+    motionSummaries,
+    truthAccounts,
+    reviewItems,
+    now,
+  });
+  const artifactSummaries = buildArtifactSummaries(reports, motionSummaries);
 
   const html = renderPage({
     truthAccounts,
     motionSummaries,
+    operatorSummary,
+    decisionQueue,
+    agentQueue,
+    interactive,
+    artifactSummaries,
     companyPrep,
     prospectPrep: prospects,
     engagementProspects: prospects,
@@ -2246,6 +3517,11 @@ export function buildWorkspaceModel(input) {
       regenerateCommand,
       truthAccounts,
       motionSummaries,
+      operatorSummary,
+      decisionQueue,
+      agentQueue,
+      interactive: interactive ? { enabled: Boolean(interactive.enabled), actionEndpoint: interactive.actionEndpoint ?? null } : null,
+      artifactSummaries,
       companyLanes,
       prospectPrepLanes,
       engagementLanes,

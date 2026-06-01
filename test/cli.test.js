@@ -2,10 +2,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile, execFileSync } from "node:child_process";
+import net from "node:net";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { buildDailyView } from "../src/core/build-daily-view.js";
 
@@ -180,6 +182,60 @@ function setupReadyChromeProfile(tempDir, options = {}) {
     profileName,
     browserCommand
   };
+}
+
+async function findAvailablePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => reject(new Error("Failed to resolve a free port.")));
+        return;
+      }
+
+      const port = address.port;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve(port);
+      });
+    });
+  });
+}
+
+async function waitForServerUrl(stream) {
+  return await new Promise((resolve, reject) => {
+    let buffer = "";
+
+    const onData = (chunk) => {
+      buffer += chunk.toString("utf8");
+      const match = buffer.match(/Workspace server listening at (http:\/\/[^\s]+)/);
+      if (match) {
+        cleanup();
+        resolve(match[1]);
+      }
+    };
+
+    const onClose = () => {
+      cleanup();
+      reject(new Error(`Workspace server exited before becoming ready.\n${buffer}`));
+    };
+
+    const cleanup = () => {
+      stream.off("data", onData);
+      stream.off("close", onClose);
+      stream.off("end", onClose);
+    };
+
+    stream.on("data", onData);
+    stream.on("close", onClose);
+    stream.on("end", onClose);
+  });
 }
 
 test("motion add seeds a motion, motion refresh updates it, and motion list sees it in the same workspace", async () => {
@@ -2415,6 +2471,69 @@ test("users harness probe inspects Codex plugin and MCP availability and can wri
   }
 });
 
+test("users harness probe can materialize a filtered runtime probe when no harness row is stored yet", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-harness-probe-discover-"));
+  const codexHome = path.join(tempDir, ".codex");
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      '[plugins."chrome@openai-bundled"]',
+      "enabled = true",
+      ""
+    ].join("\n")
+  );
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "probe-discover-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome
+    };
+
+    const probe = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "harness", "probe", user.id, "--runtime", "codex", "--connector", "chrome", "--writeback", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(probe.counts.connectionCount, 1);
+    assert.equal(probe.counts.availableCount, 1);
+    assert.equal(probe.counts.updatedCount, 1);
+    assert.equal(probe.probes[0].runtime, "codex");
+    assert.equal(probe.probes[0].connector, "chrome");
+    assert.equal(probe.probes[0].detectedStatus, "available");
+    assert.match(probe.probes[0].reason, /chrome@openai-bundled/);
+
+    const shown = JSON.parse(
+      execFileSync("node", [cliPath, "users", "show", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(shown.harnessConnections.length, 1);
+    assert.equal(shown.harnessConnections[0].runtime, "codex");
+    assert.equal(shown.harnessConnections[0].connector, "chrome");
+    assert.equal(shown.harnessConnections[0].status, "available");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("users working-hours can be configured and shown", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-working-hours-"));
 
@@ -2845,21 +2964,71 @@ test("motions can carry a sticky execution user that motion targeting and execut
       "node",
       [
         cliPath,
-        "users",
-        "accounts",
-        "add",
-        user.id,
-        "--capability",
-        "linkedin",
-        "--handle",
-        "motion-owner",
-        "--profile",
+        "profiles",
+        "claim",
         profile.id,
-        "--preferred",
+        "--max-connection-requests",
+        "0",
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
     );
+
+    const userWithAccount = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "motion-owner",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+    const syncedAt = new Date().toISOString();
+
+    for (const surfaceKey of [
+      "linkedin-sent-invitations",
+      "linkedin-received-invitations",
+      "linkedin-messaging-inbox",
+      "linkedin-profile-views",
+      "linkedin-following-list"
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "record",
+          user.id,
+          "--account",
+          linkedinAccount.id,
+          "--surface",
+          surfaceKey,
+          "--status",
+          "success",
+          "--observed-at",
+          syncedAt,
+          "--item-count",
+          "0",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      );
+    }
 
     const signalMatchesResult = JSON.parse(
       execFileSync(
@@ -3094,6 +3263,27 @@ test("motions can carry a sticky execution user that motion targeting and execut
     assert.equal(execution.motion.id, motion.id);
     assert.equal(execution.resolvedProfile.id, profile.id);
     assert.equal(execution.resolvedAccount.handle, "motion-owner");
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(daily.items[0].prospect.name, "Parm Uppal");
+    assert.equal(daily.items[0].source.type, "cadence");
+    assert.equal(daily.items[0].guidance.key, "execute_first_touch");
+    assert.equal(daily.items[0].recommendedAction, "Send the first touch");
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.ok(["daily", "motion"].includes(next.source));
+    assert.equal(next.context.prospect.name, "Parm Uppal");
+    assert.equal(next.guidance.key, "execute_first_touch");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3671,2719 +3861,6 @@ test("inbound sync run writes back one governed pass and refreshes inbox, daily,
     assert.equal(resolvedCue.counts.resolvedCount, 1);
     assert.equal(resolvedCue.cues[0].id, cue.cue.id);
     assert.equal(resolvedCue.cues[0].status, "resolved");
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync gmail turns one Gmail capture into governed writeback and can apply it", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-"));
-
-  try {
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when outbound operators need governed inbox truth.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active revenue complexity that makes a reply operationally important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--email",
-          "alicia@buyer.example",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the operational workflow pain that makes the inbound email relevant.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    const withGmail = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "gmail",
-          "--handle",
-          "gmail-user@example.com",
-          "--runtime",
-          "codex",
-          "--connector",
-          "gmail",
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
-
-    const capturePath = path.join(tempDir, "gmail-capture.json");
-    fs.writeFileSync(
-      capturePath,
-      JSON.stringify(
-        {
-          mode: "quick",
-          status: "success",
-          checkedAt: "2026-05-30T14:05:00.000Z",
-          threads: [
-            {
-              threadId: "thread-789",
-              kind: "email_reply_received",
-              observedAt: "2026-05-30T14:02:00.000Z",
-              fromName: "Alicia Buyer",
-              fromEmail: "alicia@buyer.example",
-              subject: "Re: Risk workflow question",
-              summary: "Alicia replied by email asking for a short overview of the workflow."
-            }
-          ]
-        },
-        null,
-        2
-      )
-    );
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "inbound", "sync", "gmail", user.id, "--account", gmailAccountId, "--input", capturePath, "--apply", "--refresh", "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    assert.equal(result.capture.status, "success");
-    assert.equal(result.capture.threadCount, 1);
-    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
-    assert.equal(result.applied.counts.observationCount, 1);
-    assert.equal(result.applied.counts.createdObservationCount, 1);
-    assert.equal(result.applied.counts.successSurfaceCount, 1);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
-    assert.equal(result.applied.refreshed.inbox.topItem.summary, "Alicia replied by email asking for a short overview of the workflow.");
-
-    const syncView = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    const gmailSurface = syncView.accounts
-      .find((account) => account.accountId === gmailAccountId)
-      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
-    assert.equal(gmailSurface.lastRunStatus, "success");
-    assert.equal(gmailSurface.lastItemCount, 1);
-    assert.equal(gmailSurface.lastObservedAt, "2026-05-30T14:05:00.000Z");
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].kind, "email_reply_received");
-    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync gmail-live inspects Gmail through Codex and can apply the governed writeback", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-"));
-  const codexHome = path.join(tempDir, ".codex");
-  const fakeCodexPath = path.join(tempDir, "fake-codex");
-
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(
-    path.join(codexHome, "config.toml"),
-    [
-      '[plugins."gmail@openai-curated"]',
-      "enabled = true",
-      ""
-    ].join("\n")
-  );
-  writeFakeCodexCaptureScript(fakeCodexPath, {
-    mode: "quick",
-    status: "success",
-    checkedAt: "2026-05-30T15:10:00.000Z",
-    itemCount: 1,
-    error: null,
-    threads: [
-      {
-        threadId: "thread-live-1",
-        kind: "email_reply_received",
-        observedAt: "2026-05-30T15:05:00.000Z",
-        summary: "Alicia replied by email asking for a short workflow walkthrough.",
-        subject: "Re: Risk workflow question",
-        fromName: "Alicia Buyer",
-        fromEmail: "alicia@buyer.example",
-        actorTitle: null,
-        actorCompanyName: null,
-        threadUrl: null,
-        sourceUrl: null,
-        motionId: null,
-        companyId: null,
-        prospectId: null,
-        notes: null
-      }
-    ]
-  });
-
-  try {
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when outbound operators need governed inbox truth.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active revenue complexity that makes a reply operationally important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--email",
-          "alicia@buyer.example",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the operational workflow pain that makes the inbound email relevant.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    const withGmail = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "gmail",
-          "--handle",
-          "gmail-live-user@example.com",
-          "--runtime",
-          "codex",
-          "--connector",
-          "gmail",
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
-
-    const env = {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "inbound",
-          "sync",
-          "gmail-live",
-          user.id,
-          "--account",
-          gmailAccountId,
-          "--limit",
-          "10",
-          "--since",
-          "2026-05-30T00:00:00.000Z",
-          "--apply",
-          "--refresh",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.probe.detectedStatus, "available");
-    assert.match(result.probe.reason, /gmail@openai-curated/);
-    assert.equal(result.capture.status, "success");
-    assert.equal(result.capture.threadCount, 1);
-    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
-    assert.equal(result.applied.counts.createdObservationCount, 1);
-    assert.equal(result.applied.counts.successSurfaceCount, 1);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync gmail-live inspects Gmail through Codex with a profile-backed Gmail account and runtime chrome harness", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-profile-codex-"));
-  const codexHome = path.join(tempDir, ".codex");
-  const fakeCodexPath = path.join(tempDir, "fake-codex");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    cookieHosts: [".google.com", "mail.google.com"],
-    historyUrls: ["https://mail.google.com/mail/u/0/#inbox"]
-  });
-
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(
-    path.join(codexHome, "config.toml"),
-    [
-      '[plugins."chrome@openai-bundled"]',
-      "enabled = true",
-      ""
-    ].join("\n")
-  );
-  writeFakeCodexCaptureScript(fakeCodexPath, {
-    mode: "quick",
-    status: "success",
-    checkedAt: "2026-05-30T15:20:00.000Z",
-    itemCount: 1,
-    error: null,
-    threads: [
-      {
-        threadId: "thread-live-profile-1",
-        kind: "email_reply_received",
-        observedAt: "2026-05-30T15:15:00.000Z",
-        summary: "Alicia replied by email asking for a short workflow walkthrough.",
-        subject: "Re: Risk workflow question",
-        fromName: "Alicia Buyer",
-        fromEmail: "alicia@buyer.example",
-        actorTitle: null,
-        actorCompanyName: null,
-        threadUrl: null,
-        sourceUrl: null,
-        motionId: null,
-        companyId: null,
-        prospectId: null,
-        notes: null
-      }
-    ]
-  });
-
-  try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "gmail-live-profile",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "gmail",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when outbound operators need governed inbox truth.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active revenue complexity that makes a reply operationally important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--email",
-          "alicia@buyer.example",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the operational workflow pain that makes the inbound email relevant.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-profile-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "harness",
-        "add",
-        user.id,
-        "--runtime",
-        "codex",
-        "--connector",
-        "chrome",
-        "--status",
-        "unknown",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-
-    const withGmail = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "gmail",
-          "--handle",
-          "gmail-live-profile-user@example.com",
-          "--profile",
-          profile.id,
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
-
-    const env = {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "inbound",
-          "sync",
-          "gmail-live",
-          user.id,
-          "--account",
-          gmailAccountId,
-          "--runtime",
-          "codex",
-          "--limit",
-          "10",
-          "--since",
-          "2026-05-30T00:00:00.000Z",
-          "--apply",
-          "--refresh",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.probe.detectedStatus, "available");
-    assert.match(result.probe.reason, /chrome@openai-bundled/);
-    assert.equal(result.capture.status, "success");
-    assert.equal(result.capture.threadCount, 1);
-    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
-    assert.equal(result.applied.counts.createdObservationCount, 1);
-    assert.equal(result.applied.counts.successSurfaceCount, 1);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync gmail-live inspects Gmail through Claude and can apply the governed writeback", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-claude-"));
-  const fakeClaudePath = path.join(tempDir, "fake-claude");
-
-  writeFakeClaudeScript(fakeClaudePath, {
-    plugins: ["gmail"],
-    mcpLines: ["plugin:gmail:gmail: connected - ✓ Connected"],
-    structuredOutput: {
-      mode: "quick",
-      status: "success",
-      checkedAt: "2026-05-30T16:10:00.000Z",
-      itemCount: 1,
-      error: null,
-      threads: [
-        {
-          threadId: "thread-live-claude-1",
-          kind: "email_reply_received",
-          observedAt: "2026-05-30T16:05:00.000Z",
-          summary: "Alicia replied by email asking for a short workflow walkthrough.",
-          subject: "Re: Risk workflow question",
-          fromName: "Alicia Buyer",
-          fromEmail: "alicia@buyer.example",
-          actorTitle: null,
-          actorCompanyName: null,
-          threadUrl: null,
-          sourceUrl: null,
-          motionId: null,
-          companyId: null,
-          prospectId: null,
-          notes: null
-        }
-      ]
-    }
-  });
-
-  try {
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when outbound operators need governed inbox truth.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active revenue complexity that makes a reply operationally important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--email",
-          "alicia@buyer.example",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the operational workflow pain that makes the inbound email relevant.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-claude-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    const withGmail = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "gmail",
-          "--handle",
-          "gmail-live-claude-user@example.com",
-          "--runtime",
-          "claude",
-          "--connector",
-          "gmail",
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
-
-    const env = {
-      ...process.env,
-      EXO_CLAUDE_CLI: fakeClaudePath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "inbound",
-          "sync",
-          "gmail-live",
-          user.id,
-          "--account",
-          gmailAccountId,
-          "--limit",
-          "10",
-          "--since",
-          "2026-05-30T00:00:00.000Z",
-          "--apply",
-          "--refresh",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.probe.detectedStatus, "available");
-    assert.match(result.probe.reason, /Claude plugin gmail/i);
-    assert.equal(result.capture.status, "success");
-    assert.equal(result.capture.threadCount, 1);
-    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
-    assert.equal(result.applied.counts.createdObservationCount, 1);
-    assert.equal(result.applied.counts.successSurfaceCount, 1);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync gmail-live inspects Gmail through Claude with a profile-backed Gmail account and runtime chrome harness", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-profile-claude-"));
-  const fakeClaudePath = path.join(tempDir, "fake-claude");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    cookieHosts: [".google.com", "mail.google.com"],
-    historyUrls: ["https://mail.google.com/mail/u/0/#inbox"]
-  });
-
-  writeFakeClaudeScript(fakeClaudePath, {
-    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
-    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
-    structuredOutput: {
-      mode: "quick",
-      status: "success",
-      checkedAt: "2026-05-30T16:20:00.000Z",
-      itemCount: 1,
-      error: null,
-      threads: [
-        {
-          threadId: "thread-live-profile-claude-1",
-          kind: "email_reply_received",
-          observedAt: "2026-05-30T16:15:00.000Z",
-          summary: "Alicia replied by email asking for a short workflow walkthrough.",
-          subject: "Re: Risk workflow question",
-          fromName: "Alicia Buyer",
-          fromEmail: "alicia@buyer.example",
-          actorTitle: null,
-          actorCompanyName: null,
-          threadUrl: null,
-          sourceUrl: null,
-          motionId: null,
-          companyId: null,
-          prospectId: null,
-          notes: null
-        }
-      ]
-    }
-  });
-
-  try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "gmail-live-profile-claude",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "gmail",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when outbound operators need governed inbox truth.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active revenue complexity that makes a reply operationally important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--email",
-          "alicia@buyer.example",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the operational workflow pain that makes the inbound email relevant.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-profile-claude-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "harness",
-        "add",
-        user.id,
-        "--runtime",
-        "claude",
-        "--connector",
-        "chrome",
-        "--status",
-        "unknown",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-
-    const withGmail = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "gmail",
-          "--handle",
-          "gmail-live-profile-claude-user@example.com",
-          "--profile",
-          profile.id,
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
-
-    const env = {
-      ...process.env,
-      EXO_CLAUDE_CLI: fakeClaudePath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "inbound",
-          "sync",
-          "gmail-live",
-          user.id,
-          "--account",
-          gmailAccountId,
-          "--runtime",
-          "claude",
-          "--limit",
-          "10",
-          "--since",
-          "2026-05-30T00:00:00.000Z",
-          "--apply",
-          "--refresh",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.probe.detectedStatus, "available");
-    assert.match(result.probe.reason, /Claude (plugin|MCP server)/i);
-    assert.equal(result.capture.status, "success");
-    assert.equal(result.capture.threadCount, 1);
-    assert.equal(result.payload.accounts[0].surfaces[0].surfaceKey, "gmail-inbox-threads");
-    assert.equal(result.applied.counts.createdObservationCount, 1);
-    assert.equal(result.applied.counts.successSurfaceCount, 1);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].actorHandle, "alicia@buyer.example");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync gmail-live records governed failure when the Codex Gmail connector is unavailable", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-fail-"));
-  const codexHome = path.join(tempDir, ".codex");
-  const fakeCodexPath = path.join(tempDir, "fake-codex");
-
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(
-    path.join(codexHome, "config.toml"),
-    [
-      '[plugins."gmail@openai-curated"]',
-      "enabled = false",
-      ""
-    ].join("\n")
-  );
-  writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
-
-  try {
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-fail-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    const withGmail = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "gmail",
-          "--handle",
-          "gmail-live-fail-user@example.com",
-          "--runtime",
-          "codex",
-          "--connector",
-          "gmail",
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
-
-    const env = {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "inbound",
-          "sync",
-          "gmail-live",
-          user.id,
-          "--account",
-          gmailAccountId,
-          "--apply",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.probe.detectedStatus, "unavailable");
-    assert.equal(result.capture.status, "failed");
-    assert.equal(result.capture.threadCount, 0);
-    assert.match(result.capture.error, /not available/i);
-    assert.equal(result.applied.counts.failedSurfaceCount, 1);
-    assert.equal(result.applied.counts.observationCount, 0);
-
-    const syncView = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    const gmailSurface = syncView.accounts
-      .find((account) => account.accountId === gmailAccountId)
-      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
-    assert.equal(gmailSurface.lastRunStatus, "failed");
-    assert.match(gmailSurface.lastError, /not available/i);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync gmail-live records governed failure when the selected runtime chrome harness is unavailable for a profile-backed Gmail account", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-profile-fail-"));
-  const codexHome = path.join(tempDir, ".codex");
-  const fakeCodexPath = path.join(tempDir, "fake-codex");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    cookieHosts: [".google.com", "mail.google.com"],
-    historyUrls: ["https://mail.google.com/mail/u/0/#inbox"]
-  });
-
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(
-    path.join(codexHome, "config.toml"),
-    [
-      '[plugins."chrome@openai-bundled"]',
-      "enabled = false",
-      ""
-    ].join("\n")
-  );
-  writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
-
-  try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "gmail-live-profile-fail",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "gmail",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "gmail-live-profile-fail-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "harness",
-        "add",
-        user.id,
-        "--runtime",
-        "codex",
-        "--connector",
-        "chrome",
-        "--status",
-        "unknown",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-
-    const withGmail = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "gmail",
-          "--handle",
-          "gmail-live-profile-fail-user@example.com",
-          "--profile",
-          profile.id,
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
-
-    const env = {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "inbound",
-          "sync",
-          "gmail-live",
-          user.id,
-          "--account",
-          gmailAccountId,
-          "--runtime",
-          "codex",
-          "--apply",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.probe.detectedStatus, "unavailable");
-    assert.equal(result.capture.status, "failed");
-    assert.equal(result.capture.threadCount, 0);
-    assert.match(result.capture.error, /not available/i);
-    assert.equal(result.applied.counts.failedSurfaceCount, 1);
-    assert.equal(result.applied.counts.observationCount, 0);
-
-    const syncView = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    const gmailSurface = syncView.accounts
-      .find((account) => account.accountId === gmailAccountId)
-      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
-    assert.equal(gmailSurface.lastRunStatus, "failed");
-    assert.match(gmailSurface.lastError, /not available/i);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync linkedin turns one LinkedIn quick capture into governed writeback and can apply it", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-"));
-
-  try {
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when inbound LinkedIn truth has to land on the right branch automatically.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active GTM pressure that makes inbound connection requests important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--linkedin-profile-url",
-          "https://www.linkedin.com/in/alicia-buyer/",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the workflow pain that makes the inbound connection request worth routing immediately.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "linkedin-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    const withLinkedin = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "linkedin",
-          "--handle",
-          "linkedin-user",
-          "--runtime",
-          "codex",
-          "--connector",
-          "chrome",
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
-
-    const capturePath = path.join(tempDir, "linkedin-capture.json");
-    fs.writeFileSync(
-      capturePath,
-      JSON.stringify(
-        {
-          mode: "quick",
-          sentInvitations: {
-            status: "success",
-            checkedAt: "2026-05-30T14:10:00.000Z",
-            items: []
-          },
-          receivedInvitations: {
-            status: "success",
-            checkedAt: "2026-05-30T14:12:00.000Z",
-            items: [
-              {
-                invitationId: "invite-123",
-                kind: "connection_request_received",
-                observedAt: "2026-05-30T14:11:00.000Z",
-                actorName: "Alicia Buyer",
-                actorProfileUrl: "https://www.linkedin.com/in/alicia-buyer/",
-                summary: "Alicia Buyer sent us a new inbound connection request."
-              }
-            ]
-          },
-          messagingInbox: {
-            status: "success",
-            checkedAt: "2026-05-30T14:14:00.000Z",
-            items: []
-          },
-          profileViews: {
-            status: "success",
-            checkedAt: "2026-05-30T14:15:00.000Z",
-            items: []
-          },
-          followingList: {
-            status: "success",
-            checkedAt: "2026-05-30T14:16:00.000Z",
-            items: []
-          }
-        },
-        null,
-        2
-      )
-    );
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "inbound", "sync", "linkedin", user.id, "--account", linkedinAccountId, "--input", capturePath, "--apply", "--refresh", "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    assert.equal(result.capture.mode, "quick");
-    assert.equal(result.capture.sectionCount, 5);
-    assert.equal(result.capture.sections[1].surfaceKey, "linkedin-received-invitations");
-    assert.equal(result.capture.sections[1].observationCount, 1);
-    assert.equal(result.payload.accounts[0].surfaces[1].surfaceKey, "linkedin-received-invitations");
-    assert.equal(result.applied.counts.checkedSurfaceCount, 5);
-    assert.equal(result.applied.counts.observationCount, 1);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
-    assert.match(result.applied.refreshed.daily.topItem.recommendedAction, /accept or decline/i);
-
-    const syncView = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    const linkedinSurface = syncView.accounts
-      .find((account) => account.accountId === linkedinAccountId)
-      .surfaces.find((surface) => surface.key === "linkedin-received-invitations");
-    assert.equal(linkedinSurface.lastRunStatus, "success");
-    assert.equal(linkedinSurface.lastItemCount, 1);
-    assert.equal(linkedinSurface.lastObservedAt, "2026-05-30T14:12:00.000Z");
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].kind, "connection_request_received");
-    assert.equal(observations.observations[0].summary, "Alicia Buyer sent us a new inbound connection request.");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync linkedin-live inspects LinkedIn through Codex and can apply the governed writeback", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-"));
-  const codexHome = path.join(tempDir, ".codex");
-  const fakeCodexPath = path.join(tempDir, "fake-codex");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/"]
-  });
-
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(
-    path.join(codexHome, "config.toml"),
-    [
-      '[plugins."chrome@openai-bundled"]',
-      "enabled = true",
-      ""
-    ].join("\n")
-  );
-  writeFakeCodexCaptureScript(fakeCodexPath, {
-    mode: "quick",
-    sentInvitations: {
-      status: "success",
-      checkedAt: "2026-05-30T17:10:00.000Z",
-      itemCount: 0,
-      error: null,
-      items: []
-    },
-    receivedInvitations: {
-      status: "success",
-      checkedAt: "2026-05-30T17:12:00.000Z",
-      itemCount: 1,
-      error: null,
-      items: [
-        {
-          invitationId: "invite-live-123",
-          kind: "connection_request_received",
-          observedAt: "2026-05-30T17:11:00.000Z",
-          summary: "Alicia Buyer sent a new inbound LinkedIn connection request.",
-          actorName: "Alicia Buyer",
-          actorTitle: null,
-          actorCompanyName: null,
-          actorHandle: null,
-          actorProfileUrl: "https://www.linkedin.com/in/alicia-buyer/",
-          sourceUrl: null,
-          motionId: null,
-          companyId: null,
-          prospectId: null,
-          notes: null
-        }
-      ]
-    },
-    messagingInbox: {
-      status: "success",
-      checkedAt: "2026-05-30T17:14:00.000Z",
-      itemCount: 0,
-      error: null,
-      items: []
-    },
-    profileViews: {
-      status: "success",
-      checkedAt: "2026-05-30T17:15:00.000Z",
-      itemCount: 0,
-      error: null,
-      items: []
-    },
-    followingList: {
-      status: "success",
-      checkedAt: "2026-05-30T17:16:00.000Z",
-      itemCount: 0,
-      error: null,
-      items: []
-    }
-  });
-
-  try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "linkedin-live-profile",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "linkedin",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when inbound LinkedIn truth has to land on the right branch automatically.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active GTM pressure that makes inbound connection requests important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--linkedin-profile-url",
-          "https://www.linkedin.com/in/alicia-buyer/",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the workflow pain that makes the inbound connection request worth routing immediately.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "linkedin-live-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "harness",
-        "add",
-        user.id,
-        "--runtime",
-        "codex",
-        "--connector",
-        "chrome",
-        "--status",
-        "unknown",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-
-    const withLinkedin = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "linkedin",
-          "--handle",
-          "linkedin-live-user",
-          "--profile",
-          profile.id,
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
-
-    const env = {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "inbound",
-          "sync",
-          "linkedin-live",
-          user.id,
-          "--account",
-          linkedinAccountId,
-          "--runtime",
-          "codex",
-          "--limit",
-          "10",
-          "--apply",
-          "--refresh",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.probe.detectedStatus, "available");
-    assert.match(result.probe.reason, /chrome@openai-bundled/);
-    assert.equal(result.capture.mode, "quick");
-    assert.equal(result.capture.sectionCount, 5);
-    assert.equal(result.capture.sections[1].surfaceKey, "linkedin-received-invitations");
-    assert.equal(result.capture.sections[1].observationCount, 1);
-    assert.equal(result.applied.counts.checkedSurfaceCount, 5);
-    assert.equal(result.applied.counts.observationCount, 1);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].kind, "connection_request_received");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync linkedin-live inspects LinkedIn through Claude and can apply the governed writeback", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-claude-"));
-  const fakeClaudePath = path.join(tempDir, "fake-claude");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/"]
-  });
-
-  writeFakeClaudeScript(fakeClaudePath, {
-    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
-    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
-    structuredOutput: {
-      mode: "quick",
-      sentInvitations: {
-        status: "success",
-        checkedAt: "2026-05-30T18:10:00.000Z",
-        itemCount: 0,
-        error: null,
-        items: []
-      },
-      receivedInvitations: {
-        status: "success",
-        checkedAt: "2026-05-30T18:12:00.000Z",
-        itemCount: 1,
-        error: null,
-        items: [
-          {
-            invitationId: "invite-live-claude-123",
-            kind: "connection_request_received",
-            observedAt: "2026-05-30T18:11:00.000Z",
-            summary: "Alicia Buyer sent a new inbound LinkedIn connection request.",
-            actorName: "Alicia Buyer",
-            actorTitle: null,
-            actorCompanyName: null,
-            actorHandle: null,
-            actorProfileUrl: "https://www.linkedin.com/in/alicia-buyer/",
-            sourceUrl: null,
-            motionId: null,
-            companyId: null,
-            prospectId: null,
-            notes: null
-          }
-        ]
-      },
-      messagingInbox: {
-        status: "success",
-        checkedAt: "2026-05-30T18:14:00.000Z",
-        itemCount: 0,
-        error: null,
-        items: []
-      },
-      profileViews: {
-        status: "success",
-        checkedAt: "2026-05-30T18:15:00.000Z",
-        itemCount: 0,
-        error: null,
-        items: []
-      },
-      followingList: {
-        status: "success",
-        checkedAt: "2026-05-30T18:16:00.000Z",
-        itemCount: 0,
-        error: null,
-        items: []
-      }
-    }
-  });
-
-  try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "linkedin-live-claude-profile",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "linkedin",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when inbound LinkedIn truth has to land on the right branch automatically.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active GTM pressure that makes inbound connection requests important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--linkedin-profile-url",
-          "https://www.linkedin.com/in/alicia-buyer/",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the workflow pain that makes the inbound connection request worth routing immediately.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "linkedin-live-claude-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "harness",
-        "add",
-        user.id,
-        "--runtime",
-        "claude",
-        "--connector",
-        "chrome",
-        "--status",
-        "unknown",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-
-    const withLinkedin = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "linkedin",
-          "--handle",
-          "linkedin-live-claude-user",
-          "--profile",
-          profile.id,
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
-
-    const env = {
-      ...process.env,
-      EXO_CLAUDE_CLI: fakeClaudePath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "inbound",
-          "sync",
-          "linkedin-live",
-          user.id,
-          "--account",
-          linkedinAccountId,
-          "--runtime",
-          "claude",
-          "--limit",
-          "10",
-          "--apply",
-          "--refresh",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.probe.detectedStatus, "available");
-    assert.match(result.probe.reason, /Claude (plugin|MCP server)/i);
-    assert.equal(result.capture.mode, "quick");
-    assert.equal(result.capture.sectionCount, 5);
-    assert.equal(result.capture.sections[1].surfaceKey, "linkedin-received-invitations");
-    assert.equal(result.capture.sections[1].observationCount, 1);
-    assert.equal(result.applied.counts.checkedSurfaceCount, 5);
-    assert.equal(result.applied.counts.observationCount, 1);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 1);
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].kind, "connection_request_received");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync linkedin-live records governed failure when the selected runtime chrome harness is unavailable", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-fail-"));
-  const codexHome = path.join(tempDir, ".codex");
-  const fakeCodexPath = path.join(tempDir, "fake-codex");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/"]
-  });
-
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(
-    path.join(codexHome, "config.toml"),
-    [
-      '[plugins."chrome@openai-bundled"]',
-      "enabled = false",
-      ""
-    ].join("\n")
-  );
-  writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
-
-  try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "linkedin-live-fail-profile",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "linkedin",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "linkedin-live-fail-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "harness",
-        "add",
-        user.id,
-        "--runtime",
-        "codex",
-        "--connector",
-        "chrome",
-        "--status",
-        "unknown",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-
-    const withLinkedin = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "linkedin",
-          "--handle",
-          "linkedin-live-fail-user",
-          "--profile",
-          profile.id,
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
-
-    const env = {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "inbound",
-          "sync",
-          "linkedin-live",
-          user.id,
-          "--account",
-          linkedinAccountId,
-          "--runtime",
-          "codex",
-          "--apply",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.probe.detectedStatus, "unavailable");
-    assert.equal(result.capture.mode, "quick");
-    assert.equal(result.capture.sectionCount, 5);
-    assert.equal(result.capture.sections.every((section) => section.status === "failed"), true);
-    assert.equal(result.applied.counts.failedSurfaceCount, 5);
-    assert.equal(result.applied.counts.observationCount, 0);
-
-    const syncView = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    const linkedinSurface = syncView.accounts
-      .find((account) => account.accountId === linkedinAccountId)
-      .surfaces.find((surface) => surface.key === "linkedin-received-invitations");
-    assert.equal(linkedinSurface.lastRunStatus, "failed");
-    assert.match(linkedinSurface.lastError, /not available/i);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync live orchestrates one mixed-runtime quick pass and applies one governed writeback", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-live-"));
-  const codexHome = path.join(tempDir, ".codex");
-  const fakeCodexPath = path.join(tempDir, "fake-codex");
-  const fakeClaudePath = path.join(tempDir, "fake-claude");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/"]
-  });
-
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(
-    path.join(codexHome, "config.toml"),
-    [
-      '[plugins."gmail@openai-curated"]',
-      "enabled = true",
-      ""
-    ].join("\n")
-  );
-  writeFakeCodexCaptureScript(fakeCodexPath, {
-    mode: "quick",
-    status: "success",
-    checkedAt: "2026-05-30T19:10:00.000Z",
-    itemCount: 1,
-    error: null,
-    threads: [
-      {
-        threadId: "thread-live-combined-1",
-        kind: "email_reply_received",
-        observedAt: "2026-05-30T19:05:00.000Z",
-        summary: "Alicia replied by email asking for a short workflow walkthrough.",
-        subject: "Re: Risk workflow question",
-        fromName: "Alicia Buyer",
-        fromEmail: "alicia@buyer.example",
-        actorTitle: null,
-        actorCompanyName: null,
-        threadUrl: null,
-        sourceUrl: null,
-        motionId: null,
-        companyId: null,
-        prospectId: null,
-        notes: null
-      }
-    ]
-  });
-  writeFakeClaudeScript(fakeClaudePath, {
-    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
-    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
-    structuredOutput: {
-      mode: "quick",
-      sentInvitations: {
-        status: "success",
-        checkedAt: "2026-05-30T19:12:00.000Z",
-        itemCount: 0,
-        error: null,
-        items: []
-      },
-      receivedInvitations: {
-        status: "success",
-        checkedAt: "2026-05-30T19:13:00.000Z",
-        itemCount: 1,
-        error: null,
-        items: [
-          {
-            invitationId: "invite-live-combined-123",
-            kind: "connection_request_received",
-            observedAt: "2026-05-30T19:11:00.000Z",
-            summary: "Alicia Buyer sent a new inbound LinkedIn connection request.",
-            actorName: "Alicia Buyer",
-            actorTitle: null,
-            actorCompanyName: null,
-            actorHandle: null,
-            actorProfileUrl: "https://www.linkedin.com/in/alicia-buyer/",
-            sourceUrl: null,
-            motionId: null,
-            companyId: null,
-            prospectId: null,
-            notes: null
-          }
-        ]
-      },
-      messagingInbox: {
-        status: "success",
-        checkedAt: "2026-05-30T19:14:00.000Z",
-        itemCount: 0,
-        error: null,
-        items: []
-      },
-      profileViews: {
-        status: "success",
-        checkedAt: "2026-05-30T19:15:00.000Z",
-        itemCount: 0,
-        error: null,
-        items: []
-      },
-      followingList: {
-        status: "success",
-        checkedAt: "2026-05-30T19:16:00.000Z",
-        itemCount: 0,
-        error: null,
-        items: []
-      }
-    }
-  });
-
-  try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "combined-live-profile",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "linkedin",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when inbound truth has to land from both Gmail and LinkedIn in one governed pass.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active workflow pressure that makes inbound replies or invites important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--email",
-          "alicia@buyer.example",
-          "--linkedin-profile-url",
-          "https://www.linkedin.com/in/alicia-buyer/",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the workflow pain that makes both the email reply and LinkedIn invite operationally relevant.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "combined-live-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "harness",
-        "add",
-        user.id,
-        "--runtime",
-        "codex",
-        "--connector",
-        "gmail",
-        "--status",
-        "unknown",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "harness",
-        "add",
-        user.id,
-        "--runtime",
-        "claude",
-        "--connector",
-        "chrome",
-        "--status",
-        "unknown",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-
-    const withLinkedin = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "linkedin",
-          "--handle",
-          "combined-live-user",
-          "--profile",
-          profile.id,
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
-
-    const withGmail = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "gmail",
-          "--handle",
-          "combined-live-user@buyer.example",
-          "--runtime",
-          "codex",
-          "--connector",
-          "gmail",
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
-
-    const env = {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath,
-      EXO_CLAUDE_CLI: fakeClaudePath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "inbound", "sync", "live", user.id, "--apply", "--refresh", "--json"],
-        {
-          cwd: tempDir,
-          encoding: "utf8",
-          env
-        }
-      )
-    );
-
-    assert.equal(result.mode, "quick");
-    assert.equal(result.accounts.length, 2);
-    assert.equal(result.payload.accounts.length, 2);
-    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).probe.runtime, "claude");
-    assert.equal(result.accounts.find((account) => account.account.id === gmailAccountId).probe.runtime, "codex");
-    assert.equal(result.applied.counts.checkedSurfaceCount, 6);
-    assert.equal(result.applied.counts.successSurfaceCount, 6);
-    assert.equal(result.applied.counts.observationCount, 2);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 2);
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 2);
-    assert.equal(observations.observations.some((observation) => observation.kind === "email_reply_received"), true);
-    assert.equal(observations.observations.some((observation) => observation.kind === "connection_request_received"), true);
-    assert.equal(observations.observations.every((observation) => observation.motionId === motion.id), true);
-    assert.equal(observations.observations.every((observation) => observation.companyId === company.id), true);
-    assert.equal(observations.observations.some((observation) => observation.prospectId === prospect.id), true);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
-});
-
-test("inbound sync live preserves mixed-account partial failure when Gmail fails and LinkedIn succeeds", () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-live-partial-fail-"));
-  const codexHome = path.join(tempDir, ".codex");
-  const fakeCodexPath = path.join(tempDir, "fake-codex");
-  const fakeClaudePath = path.join(tempDir, "fake-claude");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/"]
-  });
-
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(
-    path.join(codexHome, "config.toml"),
-    [
-      '[plugins."gmail@openai-curated"]',
-      "enabled = false",
-      ""
-    ].join("\n")
-  );
-  writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
-  writeFakeClaudeScript(fakeClaudePath, {
-    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
-    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
-    structuredOutput: {
-      mode: "quick",
-      sentInvitations: { status: "success", checkedAt: "2026-05-30T19:12:00.000Z", itemCount: 0, error: null, items: [] },
-      receivedInvitations: {
-        status: "success",
-        checkedAt: "2026-05-30T19:13:00.000Z",
-        itemCount: 1,
-        error: null,
-        items: [
-          {
-            invitationId: "invite-live-partial-123",
-            kind: "connection_request_received",
-            observedAt: "2026-05-30T19:11:00.000Z",
-            summary: "Alicia Buyer sent a new inbound LinkedIn connection request.",
-            actorName: "Alicia Buyer",
-            actorTitle: null,
-            actorCompanyName: null,
-            actorHandle: null,
-            actorProfileUrl: "https://www.linkedin.com/in/alicia-buyer/",
-            sourceUrl: null,
-            motionId: null,
-            companyId: null,
-            prospectId: null,
-            notes: null
-          }
-        ]
-      },
-      messagingInbox: { status: "success", checkedAt: "2026-05-30T19:14:00.000Z", itemCount: 0, error: null, items: [] },
-      profileViews: { status: "success", checkedAt: "2026-05-30T19:15:00.000Z", itemCount: 0, error: null, items: [] },
-      followingList: { status: "success", checkedAt: "2026-05-30T19:16:00.000Z", itemCount: 0, error: null, items: [] }
-    }
-  });
-
-  try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "combined-live-partial-profile",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "linkedin",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const motion = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "motion",
-          "add",
-          "--url",
-          offerUrl,
-          "--premise",
-          "This offer matters when inbound truth has to survive partial connector failure.",
-          "--audience",
-          "Revenue leaders",
-          "--signal",
-          "company::Is there active workflow pressure that makes inbound replies or invites important?",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const company = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "companies", "add", "--name", "BuyerCo", "--domain", "buyer.example", "--motion", motion.id, "--json"],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
-    const prospectResult = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "companies",
-          "prospects",
-          "add",
-          company.id,
-          "--motion",
-          motion.id,
-          "--name",
-          "Alicia Buyer",
-          "--title",
-          "VP Revenue Operations",
-          "--email",
-          "alicia@buyer.example",
-          "--linkedin-profile-url",
-          "https://www.linkedin.com/in/alicia-buyer/",
-          "--buying-committee-role",
-          "primary_business_owner",
-          "--decision-authority",
-          "influences",
-          "--why-relevant",
-          "Owns the workflow pain that makes inbound routing operationally relevant.",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const prospect = prospectResult.prospects[0];
-
-    const user = JSON.parse(
-      execFileSync("node", [cliPath, "users", "add", "--label", "combined-live-partial-user", "--owner", "william", "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    execFileSync(
-      "node",
-      [cliPath, "users", "harness", "add", user.id, "--runtime", "codex", "--connector", "gmail", "--status", "unknown", "--json"],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-    execFileSync(
-      "node",
-      [cliPath, "users", "harness", "add", user.id, "--runtime", "claude", "--connector", "chrome", "--status", "unknown", "--json"],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-
-    const withLinkedin = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "linkedin",
-          "--handle",
-          "combined-live-partial-user",
-          "--profile",
-          profile.id,
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
-
-    const withGmail = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "users",
-          "accounts",
-          "add",
-          user.id,
-          "--capability",
-          "gmail",
-          "--handle",
-          "combined-live-partial-user@buyer.example",
-          "--runtime",
-          "codex",
-          "--connector",
-          "gmail",
-          "--preferred",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-    const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
-
-    const env = {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath,
-      EXO_CLAUDE_CLI: fakeClaudePath
-    };
-
-    const result = JSON.parse(
-      execFileSync(
-        "node",
-        [cliPath, "inbound", "sync", "live", user.id, "--apply", "--refresh", "--json"],
-        { cwd: tempDir, encoding: "utf8", env }
-      )
-    );
-
-    assert.equal(result.accounts.length, 2);
-    assert.equal(result.accounts.find((account) => account.account.id === gmailAccountId).probe.detectedStatus, "unavailable");
-    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).probe.detectedStatus, "available");
-    assert.equal(result.applied.counts.checkedSurfaceCount, 6);
-    assert.equal(result.applied.counts.successSurfaceCount, 5);
-    assert.equal(result.applied.counts.failedSurfaceCount, 1);
-    assert.equal(result.applied.counts.observationCount, 1);
-
-    const syncView = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "sync", "show", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    const gmailSurface = syncView.accounts
-      .find((account) => account.accountId === gmailAccountId)
-      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
-    const linkedinSurface = syncView.accounts
-      .find((account) => account.accountId === linkedinAccountId)
-      .surfaces.find((surface) => surface.key === "linkedin-received-invitations");
-    assert.equal(gmailSurface.lastRunStatus, "failed");
-    assert.match(gmailSurface.lastError, /not available/i);
-    assert.equal(linkedinSurface.lastRunStatus, "success");
-    assert.equal(linkedinSurface.lastItemCount, 1);
-
-    const observations = JSON.parse(
-      execFileSync("node", [cliPath, "inbound", "observations", "list", user.id, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].kind, "connection_request_received");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -7138,6 +4615,122 @@ test("inbound review shows decision-ready items, stale sent invites, and itemiza
     const commentReplyGap = review.itemizationGaps.find((gap) => gap.surfaceKey === "linkedin-comment-replies");
     assert.ok(commentReplyGap);
     assert.equal(commentReplyGap.itemCount, 2);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound review preserves partial itemization gaps when a live surface count exceeds written-back observations", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-review-partial-gap-"));
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/feed/"]
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "linkedin-profile",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "william-main", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const withLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "william@linkedin",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    const syncRunPath = path.join(tempDir, "partial-gap-sync.json");
+    fs.writeFileSync(syncRunPath, JSON.stringify({
+      mode: "quick",
+      accounts: [
+        {
+          accountId: linkedinAccountId,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-sent-invitations",
+              status: "success",
+              observedAt: "2026-05-31T13:00:00.000Z",
+              itemCount: 3,
+              observations: [
+                {
+                  kind: "connection_request_pending",
+                  externalId: "invite-jordan-cipolla",
+                  observedAt: "2026-05-31T13:00:00.000Z",
+                  actorName: "Jordan Cipolla",
+                  summary: "Jordan Cipolla's connection request is still pending."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+
+    execFileSync(
+      "node",
+      [cliPath, "inbound", "sync", "run", user.id, "--input", syncRunPath, "--json"],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const review = JSON.parse(
+      execFileSync("node", [cliPath, "inbound", "review", user.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(review.counts.itemizationGapCount, 1);
+    const sentInvitationGap = review.itemizationGaps.find((gap) => gap.surfaceKey === "linkedin-sent-invitations");
+    assert.ok(sentInvitationGap);
+    assert.equal(sentInvitationGap.itemCount, 3);
+    assert.equal(sentInvitationGap.observationCount, 1);
+    assert.equal(sentInvitationGap.missingObservationCount, 2);
+    assert.match(sentInvitationGap.summary, /only 1 individual observation/i);
+    assert.match(sentInvitationGap.recommendedAction, /remaining 2 concrete items/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -8263,6 +5856,9 @@ test("daily does not duplicate the same ready branch as both a support action an
     const brianItems = daily.items.filter((item) => item.prospect.name === "Brian Ready");
     assert.equal(brianItems.length, 1);
     assert.equal(brianItems[0].source.type, "parallel_support_action");
+    assert.equal(brianItems[0].cadence.currentStep, "connection-request");
+    assert.equal(brianItems[0].cadence.lastTouchOutcome, null);
+    assert.equal(brianItems[0].cadence.nextAction, "Send the first connection request now.");
     assert.match(brianItems[0].recommendedAction, /send the first connection request/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -9015,6 +6611,735 @@ test("daily and next surface connection-request quota gaps and invitation defici
     assert.equal(afterQuotaNext.guidance.key, "seed_motion_targets");
     assert.equal(afterQuotaNext.context.source.kind, "seed_motion_targets");
     assert.match(afterQuotaNext.nextMove, /seed more known companies or people directly into the active motion/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("daily and next require execution assignment before seeding more targets when ready branches are unassigned", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-assignment-blocker-"));
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com", "mail.google.com"],
+    historyUrls: ["https://www.linkedin.com/feed/", "https://mail.google.com/mail/u/0/#inbox"]
+  });
+
+  try {
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "assignment-blocker-profile",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "linkedin",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "profiles",
+        "claim",
+        profile.id,
+        "--max-connection-requests",
+        "125",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Assignment User", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    const userWithAccount = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "assignment-user",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+    const syncedAt = new Date().toISOString();
+
+    for (const surfaceKey of [
+      "linkedin-sent-invitations",
+      "linkedin-received-invitations",
+      "linkedin-messaging-inbox",
+      "linkedin-profile-views",
+      "linkedin-following-list"
+    ]) {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "sync",
+          "record",
+          user.id,
+          "--account",
+          linkedinAccount.id,
+          "--surface",
+          surfaceKey,
+          "--status",
+          "success",
+          "--observed-at",
+          syncedAt,
+          "--item-count",
+          "0",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      );
+    }
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/daily-assignment-blocker",
+          "--premise",
+          "This offer matters when ready outbound branches are blocked only by missing execution assignment.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is the company visibly widening product or GTM scope?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Ready But Unassigned",
+          "--domain",
+          "ready-unassigned.example",
+          "--website-url",
+          "https://ready-unassigned.example",
+          "--linkedin-company-url",
+          "https://www.linkedin.com/company/ready-unassigned",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const signalMatchResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "signal-matches",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--signal",
+          motion.signals[0].id,
+          "--summary",
+          "The company just broadened its GTM story and needs cleaner executive outbound.",
+          "--confidence",
+          "high",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const signalMatchId = signalMatchResult.signalMatches[0].id;
+
+    const prospect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Terry Ready",
+          "--title",
+          "Chief Revenue Officer",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--signal-match",
+          signalMatchId,
+          "--why-relevant",
+          "Best owner for the already-ready executive branch.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    ).prospects[0];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--signal-match",
+        signalMatchId,
+        "--specific-to-them",
+        "Terry owns the branch that is already ready to send.",
+        "--shared-problem",
+        "The branch exists, but execution ownership is missing.",
+        "--why-now",
+        "The planner should clear execution blockers before inventing more inventory.",
+        "--legitimate-wedge",
+        "Treat assignment as the blocker, not targeting.",
+        "--compression-line",
+        "A ready branch is useless until it is pinned to a real execution identity.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--signal-match",
+        signalMatchId,
+        "--why-now",
+        "The branch is structurally ready now.",
+        "--angle",
+        "Clear execution ownership before seeding more targets.",
+        "--reply-path",
+        "Treat this as a real ready branch, not a planning gap.",
+        "--primary-channel",
+        "connection-request",
+        "--fallback-channel",
+        "email",
+        "--fallback-trigger",
+        "Use email only if LinkedIn stays blocked after assignment.",
+        "--first-move",
+        "Send the first connection request now.",
+        "--first-message-goal",
+        "Turn ready state into actual governed execution.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--current-step",
+        "connection-request",
+        "--next-action",
+        "Send the first connection request now.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.equal(daily.capacity.linkedin.execution.readyConnectionRequests, 0);
+    assert.equal(daily.capacity.linkedin.execution.assignmentBlockedReadyConnectionRequests, 1);
+    assert.equal(daily.capacity.linkedin.execution.assignmentBlockedCompanyCount, 1);
+    assert.equal(daily.capacity.linkedin.execution.queue.readyToSendCount, 0);
+    assert.equal(daily.items[0].cadenceEffect, "capacity_deficit");
+    assert.equal(daily.items[0].source.kind, "assign_ready_execution");
+    assert.equal(daily.items[0].guidance.key, "assign_ready_execution");
+    assert.match(daily.items[0].recommendedAction, /pin ready but unassigned to assignment user/i);
+    assert.match(daily.items[0].whyItMatters, /blocked only by missing execution assignment/i);
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.ok(["daily", "motion"].includes(next.source));
+    assert.equal(next.status.effect, "capacity_deficit");
+    assert.equal(next.guidance.key, "assign_ready_execution");
+    assert.equal(next.context.source.kind, "assign_ready_execution");
+    assert.match(next.nextMove, /pin ready but unassigned to assignment user/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("daily uses live sent-invitation counts and partial itemization gaps before generic outbound-capacity pressure", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-live-sent-backlog-"));
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com", "mail.google.com"],
+    historyUrls: ["https://www.linkedin.com/feed/", "https://mail.google.com/mail/u/0/#inbox"]
+  });
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/daily-live-sent-backlog",
+          "--premise",
+          "This offer matters when the operator needs outbound capacity to respect the live sent-invitation backlog.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is the company visibly scaling pipeline generation or GTM surface area?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Backlog Systems",
+          "--domain",
+          "backlog.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const profile = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "profiles",
+          "add",
+          "--browser",
+          "chrome",
+          "--label",
+          "backlog-main",
+          "--user-data-dir",
+          chrome.userDataDir,
+          "--profile-directory",
+          chrome.profileDirectory,
+          "--browser-command",
+          chrome.browserCommand,
+          "--capability",
+          "linkedin",
+          "--capability",
+          "gmail",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir }, encoding: "utf8" }
+      )
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "backlog-user", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    const userWithLinkedin = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "backlog-user",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const linkedinAccount = userWithLinkedin.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+
+    const userWithGmail = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "gmail",
+          "--handle",
+          "backlog-user",
+          "--profile",
+          profile.id,
+          "--preferred",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const gmailAccount = userWithGmail.accounts.find((account) => account.capability === "gmail");
+    assert.ok(gmailAccount);
+
+    const syncedAt = "2026-05-31T13:00:00.000Z";
+    for (const [accountId, surfaceKeys] of [
+      [
+        linkedinAccount.id,
+        [
+          "linkedin-sent-invitations",
+          "linkedin-received-invitations",
+          "linkedin-messaging-inbox",
+          "linkedin-profile-views",
+          "linkedin-following-list"
+        ]
+      ],
+      [
+        gmailAccount.id,
+        ["gmail-inbox-threads"]
+      ]
+    ]) {
+      for (const surfaceKey of surfaceKeys) {
+        execFileSync(
+          "node",
+          [
+            cliPath,
+            "inbound",
+            "sync",
+            "record",
+            user.id,
+            "--account",
+            accountId,
+            "--surface",
+            surfaceKey,
+            "--status",
+            "success",
+            "--observed-at",
+            syncedAt,
+            "--item-count",
+            surfaceKey === "linkedin-sent-invitations" ? "12" : "0",
+            "--json"
+          ],
+          { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        );
+      }
+    }
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "user",
+        "assign",
+        company.id,
+        "--user",
+        user.id,
+        "--reason",
+        "Keep planner work routed through one execution user",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const prospect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Quinn Waiting",
+          "--title",
+          "Chief Revenue Officer",
+          "--email",
+          "quinn.waiting@backlog.example",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--why-relevant",
+          "Owns the current primary outbound branch",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    ).prospects[0];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "through-line",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--specific-to-them",
+        "Quinn owns the branch.",
+        "--shared-problem",
+        "Pipeline creation needs consistent executive access.",
+        "--why-now",
+        "The account has a messy sent-invitation backlog.",
+        "--legitimate-wedge",
+        "A pacing-aware outbound system is missing.",
+        "--compression-line",
+        "Live account truth should outrank clean-room planner assumptions.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "opening-plan",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--why-now",
+        "The current motion is inventory-thin.",
+        "--angle",
+        "Connect outbound pacing to motion throughput.",
+        "--reply-path",
+        "Quinn should see why weak inventory ruins daily capacity.",
+        "--primary-channel",
+        "connection-request",
+        "--fallback-channel",
+        "email",
+        "--fallback-trigger",
+        "Use email only if LinkedIn is blocked or the branch later needs escalation.",
+        "--first-move",
+        "Send a short connection request.",
+        "--first-message-goal",
+        "Validate whether Quinn owns outbound pacing.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "cadence",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--current-step",
+        "connection-request",
+        "--last-touch-channel",
+        "connection-request",
+        "--last-touch-outcome",
+        "pending",
+        "--last-touch-at",
+        "2026-05-28T11:46:51.000Z",
+        "--next-action",
+        "Wait for acceptance before escalating.",
+        "--next-action-due-at",
+        "2026-05-30T11:46:51.000Z",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const syncRunPath = path.join(tempDir, "live-sent-backlog-sync.json");
+    fs.writeFileSync(syncRunPath, JSON.stringify({
+      mode: "quick",
+      accounts: [
+        {
+          accountId: linkedinAccount.id,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-sent-invitations",
+              status: "success",
+              observedAt: syncedAt,
+              itemCount: 12,
+              observations: [
+                {
+                  kind: "connection_request_pending",
+                  externalId: "invite-quinn-waiting",
+                  observedAt: syncedAt,
+                  actorName: "Quinn Waiting",
+                  summary: "Quinn Waiting's connection request is still pending.",
+                  motionId: motion.id,
+                  companyId: company.id,
+                  prospectId: prospect.id
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+
+    execFileSync(
+      "node",
+      [cliPath, "inbound", "sync", "run", user.id, "--input", syncRunPath, "--json"],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "profiles",
+        "claim",
+        profile.id,
+        "--max-connection-requests",
+        "125",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.equal(daily.capacity.linkedin.execution.trackedPendingInvitations, 1);
+    assert.equal(daily.capacity.linkedin.execution.observedPendingInvitations, 12);
+    assert.equal(daily.capacity.linkedin.execution.pendingInvitations, 12);
+    assert.equal(daily.capacity.linkedin.execution.pendingInvitationObservationCount, 1);
+    assert.equal(daily.capacity.linkedin.execution.pendingInvitationItemizationGapCount, 11);
+    assert.equal(daily.items[0].source.type, "inbound_itemization_gap");
+    assert.equal(daily.items[0].source.kind, "linkedin-sent-invitations");
+    assert.equal(daily.items[0].cadenceEffect, "inbound_itemization_needed");
+    assert.equal(daily.items[0].guidance.key, "itemize_inbound_surface");
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+
+    assert.ok(["daily", "motion"].includes(next.source));
+    assert.equal(next.status.effect, "inbound_itemization_needed");
+    assert.equal(next.guidance.key, "itemize_inbound_surface");
+    assert.equal(next.context.source.kind, "linkedin-sent-invitations");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -14233,6 +12558,12 @@ test("report workspace renders a native workspace projection in json and html fo
     assert.equal(reportJson.user.id, user.id);
     assert.equal(reportJson.motionSummaries.length, 1);
     assert.equal(reportJson.motionSummaries[0].id, motion.id);
+    assert.ok(reportJson.operatorSummary);
+    assert.match(reportJson.operatorSummary.headline, /Operator call|Focus|Next move/);
+    assert.ok(reportJson.decisionQueue);
+    assert.ok(reportJson.agentQueue);
+    assert.equal(reportJson.artifactSummaries.length, 1);
+    assert.equal(reportJson.artifactSummaries[0].motionId, motion.id);
     assert.match(reportJson.regenerateCommand, /exo report workspace --user/);
 
     const reportOutput = execFileSync(
@@ -14249,8 +12580,226 @@ test("report workspace renders a native workspace projection in json and html fo
 
     const html = fs.readFileSync(outputPath, "utf8");
     assert.match(html, /Exo Motion Workspace Projection/);
-    assert.match(html, /quiet, stale, unchecked, or actively worth opening/i);
+    assert.match(html, /Need decision/);
+    assert.match(html, /Agent queue/);
+    assert.match(html, /Motion state/);
+    assert.match(html, /Truth surfaces/);
     assert.match(html, new RegExp(motion.name));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("report workspace serve exposes an interactive surface and runs state-only workspace actions", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-workspace-serve-"));
+  const port = await findAvailablePort();
+  const receivedInviteObservedAt = "2026-05-31T16:50:13.000Z";
+
+  try {
+    const user = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "add", "--label", "workspace-user", "--owner", "william", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const userWithLinkedinAccount = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "workspace-user@example.com",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const linkedinAccount = userWithLinkedinAccount.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount, "expected a connected LinkedIn account for the interactive workspace test");
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when operators need interactive workspace controls.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there recent evidence this company widened product scope?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Workspace Target",
+          "--domain",
+          "workspace-target.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const inboundObservationResult = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "inbound",
+          "observations",
+          "add",
+          user.id,
+          "--account",
+          linkedinAccount.id,
+          "--surface",
+          "linkedin-received-invitations",
+          "--kind",
+          "connection_request_received",
+          "--observed-at",
+          receivedInviteObservedAt,
+          "--summary",
+          "Alicia Buyer is still waiting in Received Invitations and needs a yes-or-no decision.",
+          "--external-id",
+          "received:https://www.linkedin.com/in/alicia-buyer/",
+          "--actor-name",
+          "Alicia Buyer",
+          "--actor-title",
+          "Chief Growth Officer",
+          "--actor-company",
+          "ExampleCo",
+          "--actor-profile-url",
+          "https://www.linkedin.com/in/alicia-buyer/",
+          "--source-url",
+          "https://www.linkedin.com/mynetwork/invitation-manager/received/",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const inboundObservation = inboundObservationResult.observation;
+
+    const serverProcess = spawn(
+      "node",
+      [cliPath, "report", "workspace", "--user", user.id, "--serve", String(port)],
+      {
+        cwd: tempDir,
+        stdio: ["ignore", "pipe", "pipe"]
+      }
+    );
+
+    try {
+      const baseUrl = await waitForServerUrl(serverProcess.stdout);
+      const html = await fetch(baseUrl).then((response) => response.text());
+      assert.match(html, /data-workspace-refresh/);
+      assert.match(html, /workspace-action-button|Refresh/);
+      assert.match(html, /Mark accepted/);
+      assert.match(html, /Mark declined/);
+      assert.match(html, /Profile/);
+
+      const actionResponse = await fetch(`${baseUrl}api/action`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          kind: "assign_company_user",
+          companyId: company.id,
+          userId: user.id,
+          reason: "Workspace serve test"
+        })
+      });
+
+      assert.equal(actionResponse.status, 200);
+      const actionResult = await actionResponse.json();
+      assert.equal(actionResult.ok, true);
+      assert.match(actionResult.message, /Pinned Workspace Target/);
+
+      const updatedCompany = JSON.parse(
+        execFileSync("node", [cliPath, "companies", "show", company.id, "--json"], {
+          cwd: tempDir,
+          encoding: "utf8"
+        })
+      );
+
+      assert.equal(updatedCompany.engagementUserAssignment?.userId, user.id);
+      assert.equal(updatedCompany.engagementUserAssignment?.reason, "Workspace serve test");
+
+      const inboundActionResponse = await fetch(`${baseUrl}api/action`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          kind: "record_inbound_observation",
+          observationId: inboundObservation.id,
+          nextKind: "connection_request_accepted"
+        })
+      });
+
+      assert.equal(inboundActionResponse.status, 200);
+      const inboundActionResult = await inboundActionResponse.json();
+      assert.equal(inboundActionResult.ok, true);
+      assert.match(inboundActionResult.message, /Recorded Alicia Buyer as accepted in Exo/);
+
+      const updatedInboundObservation = JSON.parse(
+        execFileSync("node", [cliPath, "inbound", "observations", "show", inboundObservation.id, "--json"], {
+          cwd: tempDir,
+          encoding: "utf8"
+        })
+      );
+
+      assert.equal(updatedInboundObservation.observation.kind, "connection_request_accepted");
+      assert.equal(updatedInboundObservation.observation.actorName, "Alicia Buyer");
+      assert.equal(updatedInboundObservation.observation.externalId, "received:https://www.linkedin.com/in/alicia-buyer/");
+    } finally {
+      serverProcess.kill("SIGTERM");
+      await once(serverProcess, "exit");
+    }
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -15203,7 +13752,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected limitations to mention the narrower live browser auth probe seam"
   );
   assert.ok(
-    about.currentLimitations.some((item) => /Limited live inbound retrieval now exists for Gmail and LinkedIn quick-mode surfaces/i.test(item)),
+    about.currentLimitations.some((item) => /Limited live inbound retrieval now exists for Gmail and .*LinkedIn.*authoritative quick surfaces/i.test(item)),
     "expected limitations to mention the Gmail and LinkedIn live retrieval seams"
   );
   assert.ok(

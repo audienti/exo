@@ -217,10 +217,12 @@ export function recordUserInboundSyncRun(rawUser, input) {
 
   const status = inboundSyncRunStatusSchema.parse(input.status);
   const currentStates = materializeSurfaceStates(account);
-  const nextObservationCount = input.observationCount ?? 0;
+  const nextObservationCount = input.observationCount ?? null;
   const nextVisibleTotalCount = input.visibleTotalCount ?? null;
   const nextItemizationGapCount = input.itemizationGapCount
-    ?? Math.max((nextVisibleTotalCount ?? input.itemCount ?? 0) - nextObservationCount, 0);
+    ?? (nextObservationCount == null
+      ? null
+      : Math.max((nextVisibleTotalCount ?? input.itemCount ?? 0) - nextObservationCount, 0));
 
   const nextAccounts = user.accounts.map((candidate) => {
     if (candidate.id !== input.accountId) {
