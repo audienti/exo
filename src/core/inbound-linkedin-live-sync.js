@@ -4,11 +4,18 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { buildLinkedinQuickSurfaceHints } from "../lib/live-surface-hints.js";
 import { browserProfileSchema } from "../schema/browser-profile.js";
 import { linkedinInboundSyncCaptureSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { buildLinkedinInboundSyncPayload, resolveLinkedinAccount } from "./inbound-linkedin-sync.js";
+import {
+  buildCodexAgentHandoffTransport,
+  buildDirectLiveTransport,
+  shouldUseCodexAgentHandoff
+} from "./live-agent-handoff.js";
 import { probeUserHarnessConnections } from "./probe-user-harness-connections.js";
+import { resolveRuntimeHarnessConnection } from "./runtime-harness-resolution.js";
 
 const DEFAULT_LINKEDIN_ITEM_LIMIT = 20;
 
@@ -18,6 +25,9 @@ const linkedinActorFieldsSchema = {
   actorCompanyName: { type: ["string", "null"] },
   actorHandle: { type: ["string", "null"] },
   actorProfileUrl: { type: ["string", "null"], format: "uri" },
+  actorLinkedinPublicId: { type: ["string", "null"] },
+  actorLinkedinMemberId: { type: ["string", "null"] },
+  actorAvatarSourceUrl: { type: ["string", "null"], format: "uri" },
   sourceUrl: { type: ["string", "null"], format: "uri" },
   motionId: { type: ["string", "null"] },
   companyId: { type: ["string", "null"] },
@@ -28,7 +38,19 @@ const linkedinActorFieldsSchema = {
 const linkedinSurfaceSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["status", "checkedAt", "itemCount", "error", "items"],
+  required: [
+    "status",
+    "checkedAt",
+    "itemCount",
+    "visibleTotalCount",
+    "captureCompleteness",
+    "requestedMode",
+    "actualMode",
+    "reconcileRequired",
+    "reconcileReason",
+    "error",
+    "items"
+  ],
   properties: {
     status: {
       type: "string",
@@ -42,6 +64,28 @@ const linkedinSurfaceSchema = {
       type: ["integer", "null"],
       minimum: 0
     },
+    visibleTotalCount: {
+      type: ["integer", "null"],
+      minimum: 0
+    },
+    captureCompleteness: {
+      type: ["string", "null"],
+      enum: ["complete", "partial_visible_slice", "failed", null]
+    },
+    requestedMode: {
+      type: ["string", "null"],
+      enum: ["quick", "normal", "full", null]
+    },
+    actualMode: {
+      type: ["string", "null"],
+      enum: ["quick", "normal", "full", null]
+    },
+    reconcileRequired: {
+      type: ["boolean", "null"]
+    },
+    reconcileReason: {
+      type: ["string", "null"]
+    },
     error: {
       type: ["string", "null"]
     },
@@ -51,7 +95,7 @@ const linkedinSurfaceSchema = {
   }
 };
 
-const linkedinQuickCaptureOutputSchema = {
+const linkedinLiveCaptureOutputSchema = {
   type: "object",
   additionalProperties: false,
   required: [
@@ -65,7 +109,7 @@ const linkedinQuickCaptureOutputSchema = {
   properties: {
     mode: {
       type: "string",
-      enum: ["quick"]
+      enum: ["quick", "full"]
     },
     sentInvitations: {
       ...linkedinSurfaceSchema,
@@ -196,6 +240,7 @@ const linkedinQuickCaptureOutputSchema = {
  * @param {unknown[]} rawProfiles
  * @param {{
  *   accountId?: string | null,
+ *   mode?: import("../schema/inbound.js").inboundSyncPlanModeSchema._type | null,
  *   runtime?: string | null,
  *   connector?: string | null,
  *   limit?: number | null,
@@ -208,55 +253,99 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
   const user = userSchema.parse(rawUser);
   const profiles = rawProfiles.map((profile) => browserProfileSchema.parse(profile));
   const account = resolveLinkedinAccount(user, normalizeNullableString(options.accountId));
+  const mode = options.mode ?? "quick";
   const profile = resolveLinkedinBrowserProfile(user, profiles, account);
-  const harnessConnection = resolveLinkedinRuntimeHarnessConnection(user, {
+  const resolvedHarness = resolveLinkedinRuntimeHarnessConnection(user, {
     runtime: options.runtime ?? null,
-    connector: options.connector ?? null
-  });
-  const limit = normalizePositiveInteger(options.limit, DEFAULT_LINKEDIN_ITEM_LIMIT, "limit");
-
-  const probeResult = probeUserHarnessConnections(user, {
-    runtime: harnessConnection.runtime,
-    connector: harnessConnection.connector,
+    connector: options.connector ?? null,
     codexHome: options.codexHome ?? null,
     claudeCli: options.claudeCli ?? null
   });
-  const probe = probeResult.probes.find((candidate) => candidate.connectionId === harnessConnection.id) ?? {
-    connectionId: harnessConnection.id,
-    runtime: harnessConnection.runtime,
-    connector: harnessConnection.connector,
-    label: harnessConnection.label,
-    storedStatus: harnessConnection.status,
-    detectedStatus: "unknown",
-    willWriteback: false,
-    supported: true,
-    source: {
-      kind: "runtime-probe",
-      path: null
-    },
-    reason: `No probe result was produced for ${harnessConnection.runtime}:${harnessConnection.connector}.`,
-    evidence: []
+  const harnessConnection = resolvedHarness.harnessConnection;
+  const limit = normalizePositiveInteger(options.limit, DEFAULT_LINKEDIN_ITEM_LIMIT, "limit");
+
+  const probe = resolvedHarness.probe ?? buildStoredHarnessProbe(user, harnessConnection, {
+    codexHome: options.codexHome ?? null,
+    claudeCli: options.claudeCli ?? null
+  });
+
+  const runtime = harnessConnection.runtime.trim().toLowerCase();
+  const connector = harnessConnection.connector.trim().toLowerCase();
+  const transportBase = {
+    runtime,
+    connector,
+    source: resolvedHarness.source
   };
 
   /** @type {unknown} */
   let rawCapture;
+  let transport = buildDirectLiveTransport(transportBase);
   if (probe.detectedStatus !== "available") {
-    rawCapture = buildFailedLinkedinQuickCapture(
+    rawCapture = buildFailedLinkedinCapture(
+      mode,
       `${harnessConnection.runtime}:${harnessConnection.connector} is not available for LinkedIn live sync: ${probe.reason}`
     );
   } else {
+    const prompt = buildLinkedinLiveCapturePrompt(account.handle, profile, limit, { mode });
+    if (shouldUseCodexAgentHandoff({
+      runtime,
+      codexCli: options.codexCli ?? null
+    })) {
+      const surfaceHints = buildLinkedinQuickSurfaceHints({ limit });
+
+      return {
+        user: {
+          id: user.id,
+          label: user.label,
+          owner: user.owner
+        },
+        account: {
+          id: account.id,
+          handle: account.handle,
+          capability: account.capability,
+          sourceType: account.sourceType,
+          browserProfileId: account.browserProfileId
+        },
+        profile: {
+          id: profile.id,
+          label: profile.label,
+          browser: profile.browser,
+          profileDirectory: profile.profileDirectory,
+          profilePath: profile.profilePath,
+          identityAccounts: profile.identity.accounts
+        },
+        probe,
+        transport: buildCodexAgentHandoffTransport({
+          capability: "linkedin",
+          runtime,
+          connector,
+          source: resolvedHarness.source,
+          prompt: buildLinkedinLiveCapturePrompt(account.handle, profile, limit, {
+            mode,
+            mentionStructuredHints: true
+          }),
+          outputSchema: linkedinLiveCaptureOutputSchema,
+          buildPayloadCommand: `exo inbound sync linkedin ${user.id} --account ${account.id} --input - --json`,
+          surfaceHints
+        }),
+        capture: null,
+        payload: null
+      };
+    }
+
     try {
       rawCapture = await captureLinkedinQuickSurfaces({
-        runtime: harnessConnection.runtime.trim().toLowerCase(),
+        runtime,
         handle: account.handle,
         profile,
         limit,
         codexCli: options.codexCli ?? normalizeNullableString(process.env.EXO_CODEX_CLI) ?? "codex",
         codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
-        claudeCli: options.claudeCli ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI) ?? "claude"
+        claudeCli: options.claudeCli ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI) ?? "claude",
+        prompt
       });
     } catch (error) {
-      rawCapture = buildFailedLinkedinQuickCapture(error instanceof Error ? error.message : String(error));
+      rawCapture = buildFailedLinkedinCapture(mode, error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -287,6 +376,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
       identityAccounts: profile.identity.accounts
     },
     probe,
+    transport,
     capture: built.capture,
     payload: built.payload
   };
@@ -330,24 +420,14 @@ function resolveLinkedinRuntimeHarnessConnection(user, input) {
     throw new Error(`LinkedIn live sync currently supports runtime:chrome harness connections only. Received connector ${connectorFilter}.`);
   }
 
-  const supported = user.harnessConnections.filter((connection) =>
-    ["codex", "claude"].includes(connection.runtime.trim().toLowerCase())
-    && connection.connector.trim().toLowerCase() === connectorFilter
-    && (!runtimeFilter || connection.runtime.trim().toLowerCase() === runtimeFilter)
-  );
-
-  if (!supported.length) {
-    throw new Error(
-      `No supported runtime:chrome harness connection exists for LinkedIn live sync on ${user.label}. Add codex:chrome or claude:chrome first.`
-    );
-  }
-
-  if (supported.length > 1 && !runtimeFilter) {
-    const choices = supported.map((connection) => `${connection.runtime}:${connection.connector}`).join(", ");
-    throw new Error(`Multiple supported LinkedIn browser harnesses exist for ${user.label} (${choices}). Pass --runtime explicitly.`);
-  }
-
-  return supported[0];
+  return resolveRuntimeHarnessConnection(user, {
+    runtime: runtimeFilter,
+    connector: connectorFilter,
+    codexHome: input.codexHome ?? null,
+    claudeCli: input.claudeCli ?? null,
+    multipleMessage: (choices) =>
+      `Multiple supported LinkedIn browser harnesses exist for ${user.label} (${choices.join(", ")}). Pass --runtime explicitly.`
+  });
 }
 
 /**
@@ -379,17 +459,17 @@ async function captureLinkedinQuickSurfaces(input) {
  *   profile: import("../schema/browser-profile.js").browserProfileSchema._type,
  *   limit: number,
  *   codexCli: string,
- *   codexHome: string | null
+ *   codexHome: string | null,
+ *   prompt: string
  * }} input
  */
 async function captureLinkedinQuickSurfacesThroughCodex(input) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-linkedin-live-"));
   const schemaPath = path.join(tempDir, "linkedin-capture.schema.json");
   const outputPath = path.join(tempDir, "linkedin-capture.json");
-  fs.writeFileSync(schemaPath, JSON.stringify(linkedinQuickCaptureOutputSchema, null, 2));
+  fs.writeFileSync(schemaPath, JSON.stringify(linkedinLiveCaptureOutputSchema, null, 2));
 
   try {
-    const prompt = buildLinkedinLiveCapturePrompt(input.handle, input.profile, input.limit);
     const args = [
       "exec",
       "--skip-git-repo-check",
@@ -403,7 +483,7 @@ async function captureLinkedinQuickSurfacesThroughCodex(input) {
       schemaPath,
       "-o",
       outputPath,
-      prompt
+      input.prompt
     ];
     const env = {
       ...process.env
@@ -439,8 +519,7 @@ async function captureLinkedinQuickSurfacesThroughCodex(input) {
  */
 async function captureLinkedinQuickSurfacesThroughClaude(input) {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-linkedin-live-claude-"));
-  const prompt = buildLinkedinLiveCapturePrompt(input.handle, input.profile, input.limit);
-  const schema = JSON.stringify(linkedinQuickCaptureOutputSchema);
+  const schema = JSON.stringify(linkedinLiveCaptureOutputSchema);
   const args = [
     "-p",
     "--output-format",
@@ -450,7 +529,7 @@ async function captureLinkedinQuickSurfacesThroughClaude(input) {
     "--permission-mode",
     "dontAsk",
     "--no-session-persistence",
-    prompt
+    input.prompt
   ];
 
   try {
@@ -482,8 +561,10 @@ async function captureLinkedinQuickSurfacesThroughClaude(input) {
  * @param {string} handle
  * @param {import("../schema/browser-profile.js").browserProfileSchema._type} profile
  * @param {number} limit
+ * @param {{ mentionStructuredHints?: boolean, mode?: string | null }} [options]
  */
-function buildLinkedinLiveCapturePrompt(handle, profile, limit) {
+function buildLinkedinLiveCapturePrompt(handle, profile, limit, options = {}) {
+  const requestedMode = normalizeNullableString(options.mode)?.toLowerCase() === "full" ? "full" : "quick";
   const identityAccounts = profile.identity.accounts.length
     ? profile.identity.accounts.map((account) => `${account.capability}:${account.handle}`).join(", ")
     : "none recorded in Exo";
@@ -493,32 +574,71 @@ function buildLinkedinLiveCapturePrompt(handle, profile, limit) {
     `The intended LinkedIn handle is ${handle}.`,
     `The resolved Chrome profile is label ${profile.label}, directory ${profile.profileDirectory}, path ${profile.profilePath}.`,
     `Recorded profile identity accounts: ${identityAccounts}.`,
+    options.mentionStructuredHints
+      ? "Use the structured surfaceHints attached to this capture request as the canonical retrieval playbook, especially for the messaging inbox, sent invitations, and profile views when pagination or partial-capture behavior appears."
+      : null,
     "Before inspecting any LinkedIn surface, verify that the active signed-in LinkedIn identity matches the intended profile context. If you cannot verify the correct signed-in identity or cannot control the correct Chrome profile, return failed for every surface with a concrete error.",
     "Do not use shell commands, local files, or web search.",
-    `Inspect up to ${limit} items per LinkedIn surface.`,
+    requestedMode === "full"
+      ? "Fully reconcile each authoritative quick LinkedIn surface. Do not stop at the visible top slice when the surfaceHints say pagination or load-more is required."
+      : `Inspect up to ${limit} items per LinkedIn surface unless the attached surfaceHints tell you that reconcile escalation is required to land authoritative state.`,
     "Inspect these five quick surfaces only: sent invitations, received invitations, messaging inbox, profile views, and following list.",
     "Return only JSON that matches the provided schema.",
-    "Use mode quick.",
+    requestedMode === "full"
+      ? "Requested mode is full. Fully exhaust each authoritative quick surface enough that disappearance or silence is trustworthy, and set requestedMode and actualMode to full."
+      : "Requested mode is quick. If a surfaceHint says reconcile is required because the visible total exceeds the itemized rows, you may continue paginating that one surface and set actualMode to full while keeping requestedMode quick.",
     "For each surface: set status to success when the surface was checked, warning when it was only partially checked or itemized, and failed when it could not be checked.",
-    "Set checkedAt to when you finished that surface. Set itemCount to the number of visible relevant items you observed for that surface. Use 0 on failed surfaces.",
+    "Set checkedAt to when you finished that surface. Set itemCount to the number of rows or concrete items you actually itemized. Set visibleTotalCount to the full count visibly shown by LinkedIn for that surface when the UI exposes one; otherwise use itemCount when the surface is fully exhausted or null when no trustworthy total is visible. Use 0 or null fields consistently on failed surfaces.",
+    "Set captureCompleteness to complete only when the relevant live surface was exhausted enough that disappearance or silence is trustworthy. Use partial_visible_slice when you only itemized the visible slice or otherwise stopped before a full reconciliation. Use failed only when the surface could not be checked.",
+    "Set requestedMode and actualMode for every surface. Set reconcileRequired true whenever the visible total is larger than the itemized rows or the surfaceHints told you the operator still needs a full reconciliation. Set reconcileReason to a short snake_case explanation such as visible_total_exceeds_itemized_rows or bounded_capture_stopped_early.",
     "Use clear operator-ready summaries under 280 characters.",
-    "Use actorProfileUrl whenever visible. Do not invent motionId, companyId, or prospectId. Set them to null unless you truly know them from the LinkedIn surface itself.",
+    "Use actorProfileUrl whenever visible. Use actorLinkedinPublicId whenever the live surface exposes a stable vanity/public identifier. Use actorLinkedinMemberId whenever the live surface exposes the internal member id or equivalent stable LinkedIn profile id. Use actorAvatarSourceUrl whenever LinkedIn exposes a concrete avatar image URL for the person. Do not invent motionId, companyId, or prospectId. Set them to null unless you truly know them from the LinkedIn surface itself.",
     "Ignore noisy suggestions, ads, or unrelated feed items. Only include items that materially change operator action."
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 /**
  * @param {string} error
  */
-function buildFailedLinkedinQuickCapture(error) {
+function buildFailedLinkedinCapture(mode, error) {
   const checkedAt = new Date().toISOString();
   return {
-    mode: "quick",
-    sentInvitations: buildFailedSurface(error, checkedAt),
-    receivedInvitations: buildFailedSurface(error, checkedAt),
-    messagingInbox: buildFailedSurface(error, checkedAt),
-    profileViews: buildFailedSurface(error, checkedAt),
-    followingList: buildFailedSurface(error, checkedAt)
+    mode,
+    sentInvitations: buildFailedSurface(error, checkedAt, mode),
+    receivedInvitations: buildFailedSurface(error, checkedAt, mode),
+    messagingInbox: buildFailedSurface(error, checkedAt, mode),
+    profileViews: buildFailedSurface(error, checkedAt, mode),
+    followingList: buildFailedSurface(error, checkedAt, mode)
+  };
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type} user
+ * @param {import("../schema/user.js").userHarnessConnectionSchema._type} harnessConnection
+ * @param {{ codexHome?: string | null, claudeCli?: string | null }} options
+ */
+function buildStoredHarnessProbe(user, harnessConnection, options) {
+  const probeResult = probeUserHarnessConnections(user, {
+    runtime: harnessConnection.runtime,
+    connector: harnessConnection.connector,
+    codexHome: options.codexHome ?? null,
+    claudeCli: options.claudeCli ?? null
+  });
+  return probeResult.probes.find((candidate) => candidate.connectionId === harnessConnection.id) ?? {
+    connectionId: harnessConnection.id,
+    runtime: harnessConnection.runtime,
+    connector: harnessConnection.connector,
+    label: harnessConnection.label,
+    storedStatus: harnessConnection.status,
+    detectedStatus: "unknown",
+    willWriteback: false,
+    supported: true,
+    source: {
+      kind: "runtime-probe",
+      path: null
+    },
+    reason: `No probe result was produced for ${harnessConnection.runtime}:${harnessConnection.connector}.`,
+    evidence: []
   };
 }
 
@@ -526,11 +646,17 @@ function buildFailedLinkedinQuickCapture(error) {
  * @param {string} error
  * @param {string} checkedAt
  */
-function buildFailedSurface(error, checkedAt) {
+function buildFailedSurface(error, checkedAt, mode) {
   return {
     status: "failed",
     checkedAt,
     itemCount: 0,
+    visibleTotalCount: null,
+    captureCompleteness: "failed",
+    requestedMode: mode,
+    actualMode: mode,
+    reconcileRequired: false,
+    reconcileReason: null,
     error,
     items: []
   };

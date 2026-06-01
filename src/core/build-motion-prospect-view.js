@@ -123,6 +123,7 @@ function buildProspectView(account, prospect) {
     roleTruth: prospect.roleTruth,
     triggerWindow: prospect.triggerWindow,
     identityTells: prospect.identityTells,
+    linkedinProfileSnapshot: prospect.linkedinProfileSnapshot,
     liveSignal: prospect.liveSignal,
     contactPoints: prospect.contactPoints,
     contactEnrichmentState: prospect.contactEnrichmentState,

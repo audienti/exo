@@ -2,6 +2,8 @@
 
 const EMAIL_KIND = "email";
 const LINKEDIN_KIND = "linkedin_profile";
+const LINKEDIN_PUBLIC_ID_KIND = "linkedin_public_id";
+const LINKEDIN_MEMBER_ID_KIND = "linkedin_member_id";
 
 /**
  * @param {{
@@ -23,11 +25,46 @@ export function normalizeContactValue(kind, value) {
     return normalized;
   }
 
-  if (kind === EMAIL_KIND || kind.endsWith("_profile") || kind === "website") {
+  if (
+    kind === EMAIL_KIND
+    || kind.endsWith("_profile")
+    || kind === "website"
+    || kind === LINKEDIN_PUBLIC_ID_KIND
+    || kind === LINKEDIN_MEMBER_ID_KIND
+  ) {
     return normalized.toLowerCase();
   }
 
   return normalized;
+}
+
+/**
+ * @param {string | null | undefined} value
+ */
+export function extractLinkedinPublicId(value) {
+  const normalized = value?.toString().trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const match = normalized.match(/linkedin\.com\/in\/([^/?#]+)/i);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  return normalizeContactValue(LINKEDIN_PUBLIC_ID_KIND, match[1]);
+}
+
+/**
+ * @param {string | null | undefined} value
+ */
+export function buildLinkedinProfileUrlFromPublicId(value) {
+  const normalized = normalizeContactValue(LINKEDIN_PUBLIC_ID_KIND, value ?? "");
+  if (!normalized) {
+    return null;
+  }
+
+  return `https://www.linkedin.com/in/${normalized}/`;
 }
 
 /**

@@ -21,6 +21,7 @@ export const inboundRetrievalModeSchema = z.enum(["browser-capture", "connector"
 export const inboundSyncRunStatusSchema = z.enum(["never", "success", "warning", "failed"]);
 
 export const inboundSyncPlanModeSchema = z.enum(["quick", "normal", "full"]);
+export const inboundCaptureCompletenessSchema = z.enum(["complete", "partial_visible_slice", "failed"]);
 
 export const inboundSyncWriteStatusSchema = z.enum(["success", "warning", "failed"]);
 export const inboundCueKindSchema = z.enum([
@@ -35,9 +36,11 @@ export const inboundCueStatusSchema = z.enum(["open", "resolved", "dismissed"]);
 
 export const inboundObservationKindSchema = z.enum([
   "connection_request_pending",
+  "connection_request_no_longer_pending",
   "connection_request_accepted",
   "connection_request_withdrawn",
   "connection_request_received",
+  "connection_request_received_no_longer_pending",
   "connection_request_declined",
   "message_received",
   "thread_updated",
@@ -48,6 +51,7 @@ export const inboundObservationKindSchema = z.enum([
   "follower_removed",
   "follower_confirmed",
   "follow_state_changed",
+  "follow_state_removed",
   "follow_state_confirmed",
   "public_reply_received",
   "comment_thread_updated",
@@ -64,6 +68,14 @@ export const inboundSurfaceStateSchema = z.object({
   lastObservedAt: z.string().datetime().nullable().default(null),
   lastRunStatus: inboundSyncRunStatusSchema.default("never"),
   lastItemCount: z.coerce.number().int().min(0).nullable().default(null),
+  lastVisibleTotalCount: z.coerce.number().int().min(0).nullable().default(null),
+  lastCaptureCompleteness: inboundCaptureCompletenessSchema.nullable().default(null),
+  lastRequestedMode: inboundSyncPlanModeSchema.nullable().default(null),
+  lastActualMode: inboundSyncPlanModeSchema.nullable().default(null),
+  lastReconcileRequired: z.boolean().nullable().default(null),
+  lastReconcileReason: z.string().trim().min(1).nullable().default(null),
+  lastObservationCount: z.coerce.number().int().min(0).nullable().default(null),
+  lastItemizationGapCount: z.coerce.number().int().min(0).nullable().default(null),
   lastError: z.string().nullable().default(null)
 });
 
@@ -89,6 +101,10 @@ export const inboundObservationSchema = z.object({
   actorCompanyName: z.string().trim().min(1).nullable().default(null),
   actorHandle: z.string().trim().min(1).nullable().default(null),
   actorProfileUrl: z.string().url().nullable().default(null),
+  actorLinkedinPublicId: z.string().trim().min(1).nullable().default(null),
+  actorLinkedinMemberId: z.string().trim().min(1).nullable().default(null),
+  actorAvatarSourceUrl: z.string().url().nullable().default(null),
+  actorAvatarUrl: z.string().url().nullable().default(null),
   threadUrl: z.string().url().nullable().default(null),
   sourceUrl: z.string().url().nullable().default(null),
   summary: z.string().trim().min(1).max(280),
@@ -129,6 +145,9 @@ export const inboundSyncRunObservationInputSchema = z.object({
   actorCompanyName: z.string().trim().min(1).nullable().default(null),
   actorHandle: z.string().trim().min(1).nullable().default(null),
   actorProfileUrl: z.string().url().nullable().default(null),
+  actorLinkedinPublicId: z.string().trim().min(1).nullable().default(null),
+  actorLinkedinMemberId: z.string().trim().min(1).nullable().default(null),
+  actorAvatarSourceUrl: z.string().url().nullable().default(null),
   threadUrl: z.string().url().nullable().default(null),
   sourceUrl: z.string().url().nullable().default(null),
   motionId: z.string().min(1).nullable().default(null),
@@ -142,6 +161,12 @@ export const inboundSyncRunSurfaceInputSchema = z.object({
   status: inboundSyncWriteStatusSchema,
   observedAt: z.string().datetime().nullable().default(null),
   itemCount: z.coerce.number().int().min(0).nullable().default(null),
+  visibleTotalCount: z.coerce.number().int().min(0).nullable().default(null),
+  captureCompleteness: inboundCaptureCompletenessSchema.nullable().default(null),
+  requestedMode: inboundSyncPlanModeSchema.nullable().default(null),
+  actualMode: inboundSyncPlanModeSchema.nullable().default(null),
+  reconcileRequired: z.boolean().nullable().default(null),
+  reconcileReason: z.string().trim().min(1).nullable().default(null),
   error: z.string().trim().min(1).nullable().default(null),
   observations: z.array(inboundSyncRunObservationInputSchema).default([])
 });
@@ -189,6 +214,9 @@ const linkedinCaptureActorFields = {
   actorCompanyName: z.string().trim().min(1).nullable().default(null),
   actorHandle: z.string().trim().min(1).nullable().default(null),
   actorProfileUrl: z.string().url().nullable().default(null),
+  actorLinkedinPublicId: z.string().trim().min(1).nullable().default(null),
+  actorLinkedinMemberId: z.string().trim().min(1).nullable().default(null),
+  actorAvatarSourceUrl: z.string().url().nullable().default(null),
   sourceUrl: z.string().url().nullable().default(null),
   motionId: z.string().min(1).nullable().default(null),
   companyId: z.string().min(1).nullable().default(null),
@@ -241,6 +269,12 @@ export const linkedinSurfaceCaptureSchema = z.object({
   status: inboundSyncWriteStatusSchema.default("success"),
   checkedAt: z.string().datetime().nullable().default(null),
   itemCount: z.coerce.number().int().min(0).nullable().default(null),
+  visibleTotalCount: z.coerce.number().int().min(0).nullable().default(null),
+  captureCompleteness: inboundCaptureCompletenessSchema.nullable().default(null),
+  requestedMode: inboundSyncPlanModeSchema.nullable().default(null),
+  actualMode: inboundSyncPlanModeSchema.nullable().default(null),
+  reconcileRequired: z.boolean().nullable().default(null),
+  reconcileReason: z.string().trim().min(1).nullable().default(null),
   error: z.string().trim().min(1).nullable().default(null)
 });
 

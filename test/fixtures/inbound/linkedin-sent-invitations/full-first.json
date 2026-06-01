@@ -1,0 +1,32 @@
+{
+  "mode": "quick",
+  "accounts": [
+    {
+      "accountId": "__ACCOUNT_ID__",
+      "surfaces": [
+        {
+          "surfaceKey": "linkedin-sent-invitations",
+          "status": "success",
+          "observedAt": "2026-05-31T15:00:00.000Z",
+          "itemCount": 1,
+          "visibleTotalCount": 1,
+          "captureCompleteness": "complete",
+          "requestedMode": "quick",
+          "actualMode": "full",
+          "reconcileRequired": false,
+          "reconcileReason": null,
+          "observations": [
+            {
+              "kind": "connection_request_pending",
+              "externalId": "invite-1",
+              "observedAt": "2026-05-31T15:00:00.000Z",
+              "actorName": "Jordan Cipolla",
+              "actorProfileUrl": "https://www.linkedin.com/in/jordan-cipolla/",
+              "summary": "Jordan Cipolla's connection request is still pending."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -5,6 +5,12 @@ import { browserProfileCapabilitySchema } from "../schema/browser-profile.js";
 import { inboundObservationKindSchema, inboundObservationSchema, inboundSurfaceKeySchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { findInboundSurfaceDefinition } from "../lib/inbound-surface-catalog.js";
+import { normalizeImageProxyFields } from "../lib/image-proxy.js";
+import {
+  buildLinkedinProfileUrlFromPublicId,
+  extractLinkedinPublicId,
+  normalizeContactValue
+} from "../lib/prospect-contacts.js";
 import { resolveInboundObservationLinks } from "./resolve-inbound-observation-links.js";
 
 /**
@@ -21,6 +27,9 @@ import { resolveInboundObservationLinks } from "./resolve-inbound-observation-li
  *   actorCompanyName?: string | null,
  *   actorHandle?: string | null,
  *   actorProfileUrl?: string | null,
+ *   actorLinkedinPublicId?: string | null,
+ *   actorLinkedinMemberId?: string | null,
+ *   actorAvatarSourceUrl?: string | null,
  *   threadUrl?: string | null,
  *   sourceUrl?: string | null,
  *   motionId?: string | null,
@@ -57,10 +66,13 @@ export function recordInboundObservation(rawUser, input, options = {}) {
     companyId: input.companyId,
     prospectId: input.prospectId,
     actorHandle: input.actorHandle,
-    actorProfileUrl: input.actorProfileUrl
+    actorProfileUrl: input.actorProfileUrl,
+    actorLinkedinPublicId: input.actorLinkedinPublicId,
+    actorLinkedinMemberId: input.actorLinkedinMemberId
   });
   const now = new Date().toISOString();
   const normalizedExternalId = normalizeNullableString(input.externalId);
+  const avatar = normalizeImageProxyFields(input.actorAvatarSourceUrl);
   const dedupeKey = normalizedExternalId
     ? `${account.id}:${surfaceKey}:${normalizedExternalId}`
     : crypto.randomUUID();
@@ -83,6 +95,10 @@ export function recordInboundObservation(rawUser, input, options = {}) {
     actorCompanyName: normalizeNullableString(input.actorCompanyName),
     actorHandle: normalizeNullableString(input.actorHandle),
     actorProfileUrl: normalizeNullableString(input.actorProfileUrl),
+    actorLinkedinPublicId: normalizeNullableString(input.actorLinkedinPublicId) ?? extractLinkedinPublicId(input.actorProfileUrl),
+    actorLinkedinMemberId: normalizeNullableString(input.actorLinkedinMemberId),
+    actorAvatarSourceUrl: avatar.sourceUrl,
+    actorAvatarUrl: avatar.proxyUrl,
     threadUrl: normalizeNullableString(input.threadUrl),
     sourceUrl: normalizeNullableString(input.sourceUrl),
     summary: input.summary.trim(),
@@ -133,7 +149,7 @@ export function mergeInboundObservation(rawExisting, nextObservation) {
   }
 
   const existing = inboundObservationSchema.parse(rawExisting);
-  if (existing.dedupeKey !== nextObservation.dedupeKey) {
+  if (existing.dedupeKey !== nextObservation.dedupeKey && !inboundObservationsShareIdentity(existing, nextObservation)) {
     return nextObservation;
   }
 
@@ -141,11 +157,16 @@ export function mergeInboundObservation(rawExisting, nextObservation) {
     ...existing,
     ...nextObservation,
     id: existing.id,
+    dedupeKey: existing.dedupeKey,
     actorName: nextObservation.actorName ?? existing.actorName,
     actorTitle: nextObservation.actorTitle ?? existing.actorTitle,
     actorCompanyName: nextObservation.actorCompanyName ?? existing.actorCompanyName,
     actorHandle: nextObservation.actorHandle ?? existing.actorHandle,
     actorProfileUrl: nextObservation.actorProfileUrl ?? existing.actorProfileUrl,
+    actorLinkedinPublicId: nextObservation.actorLinkedinPublicId ?? existing.actorLinkedinPublicId,
+    actorLinkedinMemberId: nextObservation.actorLinkedinMemberId ?? existing.actorLinkedinMemberId,
+    actorAvatarSourceUrl: nextObservation.actorAvatarSourceUrl ?? existing.actorAvatarSourceUrl,
+    actorAvatarUrl: nextObservation.actorAvatarUrl ?? existing.actorAvatarUrl,
     threadUrl: nextObservation.threadUrl ?? existing.threadUrl,
     sourceUrl: nextObservation.sourceUrl ?? existing.sourceUrl,
     motionId: nextObservation.motionId ?? existing.motionId,
@@ -153,6 +174,78 @@ export function mergeInboundObservation(rawExisting, nextObservation) {
     prospectId: nextObservation.prospectId ?? existing.prospectId,
     notes: nextObservation.notes ?? existing.notes
   });
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ */
+export function buildInboundObservationIdentityKeys(observation) {
+  const keys = new Set();
+  if (observation.externalId) {
+    keys.add(`external:${observation.externalId}`);
+  }
+
+  if (isLinkedinIdentitySurface(observation.surfaceKey) && observation.actorProfileUrl) {
+    keys.add(`linkedin_profile:${normalizeContactValue("linkedin_profile", observation.actorProfileUrl)}`);
+  }
+
+  if (isLinkedinIdentitySurface(observation.surfaceKey)) {
+    const derivedPublicId = observation.actorLinkedinPublicId ?? extractLinkedinPublicId(observation.actorProfileUrl);
+    if (derivedPublicId) {
+      const normalizedPublicId = normalizeContactValue("linkedin_public_id", derivedPublicId);
+      keys.add(`linkedin_public_id:${normalizedPublicId}`);
+      const derivedProfileUrl = buildLinkedinProfileUrlFromPublicId(derivedPublicId);
+      if (derivedProfileUrl) {
+        keys.add(`linkedin_profile:${normalizeContactValue("linkedin_profile", derivedProfileUrl)}`);
+      }
+    }
+
+    if (observation.actorLinkedinMemberId) {
+      keys.add(`linkedin_member_id:${normalizeContactValue("linkedin_member_id", observation.actorLinkedinMemberId)}`);
+    }
+  }
+
+  if (observation.actorHandle) {
+    const normalizedHandle = normalizeNullableString(observation.actorHandle)?.toLowerCase() ?? null;
+    if (normalizedHandle) {
+      keys.add(`actor_handle:${normalizedHandle}`);
+      if (normalizedHandle.includes("@")) {
+        keys.add(`email:${normalizeContactValue("email", normalizedHandle)}`);
+      }
+    }
+  }
+
+  return keys;
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} left
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} right
+ */
+export function inboundObservationsShareIdentity(left, right) {
+  if (left.accountId !== right.accountId || left.surfaceKey !== right.surfaceKey) {
+    return false;
+  }
+
+  const rightKeys = buildInboundObservationIdentityKeys(right);
+  for (const key of buildInboundObservationIdentityKeys(left)) {
+    if (rightKeys.has(key)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundSurfaceKeySchema._type} surfaceKey
+ */
+function isLinkedinIdentitySurface(surfaceKey) {
+  return surfaceKey === "linkedin-sent-invitations"
+    || surfaceKey === "linkedin-received-invitations"
+    || surfaceKey === "linkedin-followers-list"
+    || surfaceKey === "linkedin-following-list"
+    || surfaceKey === "linkedin-profile-views";
 }
 
 /**

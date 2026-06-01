@@ -186,6 +186,14 @@ export function setUserInboundSyncPolicy(rawUser, input) {
  *   status: "never" | "success" | "warning" | "failed",
  *   observedAt?: string | null,
  *   itemCount?: number | null,
+ *   visibleTotalCount?: number | null,
+ *   captureCompleteness?: import("../schema/inbound.js").inboundCaptureCompletenessSchema._type | null,
+ *   requestedMode?: import("../schema/inbound.js").inboundSyncPlanModeSchema._type | null,
+ *   actualMode?: import("../schema/inbound.js").inboundSyncPlanModeSchema._type | null,
+ *   reconcileRequired?: boolean | null,
+ *   reconcileReason?: string | null,
+ *   observationCount?: number | null,
+ *   itemizationGapCount?: number | null,
  *   error?: string | null
  * }} input
  */
@@ -209,6 +217,10 @@ export function recordUserInboundSyncRun(rawUser, input) {
 
   const status = inboundSyncRunStatusSchema.parse(input.status);
   const currentStates = materializeSurfaceStates(account);
+  const nextObservationCount = input.observationCount ?? 0;
+  const nextVisibleTotalCount = input.visibleTotalCount ?? null;
+  const nextItemizationGapCount = input.itemizationGapCount
+    ?? Math.max((nextVisibleTotalCount ?? input.itemCount ?? 0) - nextObservationCount, 0);
 
   const nextAccounts = user.accounts.map((candidate) => {
     if (candidate.id !== input.accountId) {
@@ -227,6 +239,14 @@ export function recordUserInboundSyncRun(rawUser, input) {
         lastObservedAt: input.observedAt ?? surface.lastObservedAt,
         lastRunStatus: status,
         lastItemCount: input.itemCount ?? surface.lastItemCount,
+        lastVisibleTotalCount: nextVisibleTotalCount,
+        lastCaptureCompleteness: input.captureCompleteness ?? null,
+        lastRequestedMode: input.requestedMode ?? null,
+        lastActualMode: input.actualMode ?? null,
+        lastReconcileRequired: input.reconcileRequired ?? null,
+        lastReconcileReason: normalizeNullableString(input.reconcileReason),
+        lastObservationCount: nextObservationCount,
+        lastItemizationGapCount: nextItemizationGapCount,
         lastError: status === "failed"
           ? normalizeNullableString(input.error) ?? surface.lastError
           : status === "warning"
@@ -243,6 +263,14 @@ export function recordUserInboundSyncRun(rawUser, input) {
         lastObservedAt: input.observedAt ?? null,
         lastRunStatus: status,
         lastItemCount: input.itemCount ?? null,
+        lastVisibleTotalCount: nextVisibleTotalCount,
+        lastCaptureCompleteness: input.captureCompleteness ?? null,
+        lastRequestedMode: input.requestedMode ?? null,
+        lastActualMode: input.actualMode ?? null,
+        lastReconcileRequired: input.reconcileRequired ?? null,
+        lastReconcileReason: normalizeNullableString(input.reconcileReason),
+        lastObservationCount: nextObservationCount,
+        lastItemizationGapCount: nextItemizationGapCount,
         lastError: status === "failed" || status === "warning" ? normalizeNullableString(input.error) : null
       }));
     }
@@ -333,6 +361,14 @@ function buildAccountInboundView(account) {
       lastSyncedAt: state.lastSyncedAt,
       lastObservedAt: state.lastObservedAt,
       lastItemCount: state.lastItemCount,
+      lastVisibleTotalCount: state.lastVisibleTotalCount,
+      lastCaptureCompleteness: state.lastCaptureCompleteness,
+      lastRequestedMode: state.lastRequestedMode,
+      lastActualMode: state.lastActualMode,
+      lastReconcileRequired: state.lastReconcileRequired,
+      lastReconcileReason: state.lastReconcileReason,
+      lastObservationCount: state.lastObservationCount,
+      lastItemizationGapCount: state.lastItemizationGapCount,
       lastError: state.lastError
     };
   }).filter(Boolean);
@@ -422,6 +458,8 @@ function buildSurfaceSyncPlan(userId, account, surface, input) {
     lastSyncedAt: surface.lastSyncedAt,
     lastObservedAt: surface.lastObservedAt,
     lastItemCount: surface.lastItemCount,
+    lastObservationCount: surface.lastObservationCount,
+    lastItemizationGapCount: surface.lastItemizationGapCount,
     lastError: surface.lastError,
     whyThisPass: describeSurfacePassReason(surface, modePolicy, freshnessState),
     observationKinds: surface.observationKinds,
@@ -475,6 +513,14 @@ function materializeSurfaceStates(account) {
       lastObservedAt: configuredStates.get(definition.key)?.lastObservedAt ?? null,
       lastRunStatus: configuredStates.get(definition.key)?.lastRunStatus ?? "never",
       lastItemCount: configuredStates.get(definition.key)?.lastItemCount ?? null,
+      lastVisibleTotalCount: configuredStates.get(definition.key)?.lastVisibleTotalCount ?? null,
+      lastCaptureCompleteness: configuredStates.get(definition.key)?.lastCaptureCompleteness ?? null,
+      lastRequestedMode: configuredStates.get(definition.key)?.lastRequestedMode ?? null,
+      lastActualMode: configuredStates.get(definition.key)?.lastActualMode ?? null,
+      lastReconcileRequired: configuredStates.get(definition.key)?.lastReconcileRequired ?? null,
+      lastReconcileReason: configuredStates.get(definition.key)?.lastReconcileReason ?? null,
+      lastObservationCount: configuredStates.get(definition.key)?.lastObservationCount ?? null,
+      lastItemizationGapCount: configuredStates.get(definition.key)?.lastItemizationGapCount ?? null,
       lastError: configuredStates.get(definition.key)?.lastError ?? null
     })
   );

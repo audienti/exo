@@ -1,0 +1,16 @@
+{
+  "mode": "quick",
+  "status": "success",
+  "checkedAt": "2026-05-30T14:05:00.000Z",
+  "threads": [
+    {
+      "threadId": "thread-789",
+      "kind": "email_reply_received",
+      "observedAt": "2026-05-30T14:02:00.000Z",
+      "fromName": "Alicia Buyer",
+      "fromEmail": "alicia@buyer.example",
+      "subject": "Re: Risk workflow question",
+      "summary": "Alicia replied by email asking for a short overview of the workflow."
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "mode": "quick",
+  "accounts": [
+    {
+      "accountId": "__ACCOUNT_ID__",
+      "surfaces": [
+        {
+          "surfaceKey": "linkedin-following-list",
+          "status": "success",
+          "observedAt": "2026-05-31T15:00:00.000Z",
+          "itemCount": 1,
+          "visibleTotalCount": 1,
+          "captureCompleteness": "complete",
+          "requestedMode": "quick",
+          "actualMode": "full",
+          "reconcileRequired": false,
+          "reconcileReason": null,
+          "observations": [
+            {
+              "kind": "follow_state_confirmed",
+              "externalId": "following-1",
+              "observedAt": "2026-05-31T15:00:00.000Z",
+              "actorName": "Harper Followed",
+              "actorProfileUrl": "https://www.linkedin.com/in/harper-followed/",
+              "summary": "Harper Followed is currently on the live following list."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

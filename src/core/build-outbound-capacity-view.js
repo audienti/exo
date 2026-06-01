@@ -2,12 +2,19 @@
 
 import { browserProfileSchema } from "../schema/browser-profile.js";
 import { companySchema } from "../schema/company.js";
+import { inboundObservationSchema } from "../schema/inbound.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
-import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
+import { isPlannerEligibleMotionStatus } from "../lib/motion-status.js";
 import { buildMotionQueueSummary, isReadyConnectionRequestProspect } from "../lib/motion-queue.js";
 import { buildMotionPacketSummary } from "../lib/motion-packets.js";
 import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
+import { buildUserInboundSyncView } from "./user-inbound-sync.js";
+import {
+  buildMotionCompanyScopeKey,
+  buildUserAssignedExecutionScopeIndex,
+  classifyUserExecutionScope
+} from "./user-execution-scope.js";
 
 const BUSINESS_DAYS_PER_WEEK = 5;
 
@@ -20,56 +27,96 @@ const BUSINESS_DAYS_PER_WEEK = 5;
  *   now?: string | null | undefined,
  *   motionId?: string | null | undefined,
  *   companyId?: string | null | undefined,
- *   prospectId?: string | null | undefined
+ *   prospectId?: string | null | undefined,
+ *   rawObservations?: unknown[] | undefined
  * }} [options]
  */
 export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, rawProfiles, options = {}) {
   const user = userSchema.parse(rawUser);
   const motions = rawMotions
     .map((item) => motionSchema.parse(item))
-    .filter((motion) => isExecutionEligibleMotionStatus(motion.status));
+    .filter((motion) => isPlannerEligibleMotionStatus(motion.status));
   const companies = rawCompanies.map((item) => companySchema.parse(item));
+  const companyById = new Map(companies.map((company) => [company.id, company]));
   const profiles = rawProfiles.map((item) => browserProfileSchema.parse(item));
+  const observations = (options.rawObservations ?? []).map((item) => inboundObservationSchema.parse(item));
   const now = new Date(options.now ?? new Date().toISOString());
   const linkedinAccount = user.accounts.find((account) => account.capability === "linkedin" && account.preferred)
     ?? user.accounts.find((account) => account.capability === "linkedin")
     ?? null;
+  const {
+    assignedExecutionScopeKeys,
+    assignedMotionIds
+  } = buildUserAssignedExecutionScopeIndex(user, motions, companies, {
+    motionId: options.motionId ?? null,
+    companyId: options.companyId ?? null
+  });
 
   if (!linkedinAccount) {
     return null;
   }
 
-  const assignedCompanyIds = new Set(
-    companies
-      .filter((company) => company.engagementUserAssignment?.userId === user.id)
-      .map((company) => company.id)
-  );
-  const operatorVisibleCompanies = companies.filter((company) =>
-    assignedCompanyIds.has(company.id) || !company.engagementUserAssignment
-  );
+  const linkedinSyncAccount = buildUserInboundSyncView(user, { capability: "linkedin" }).accounts
+    .find((account) => account.accountId === linkedinAccount.id) ?? null;
+  const sentInvitationsSurface = linkedinSyncAccount?.surfaces.find((surface) => surface.key === "linkedin-sent-invitations") ?? null;
+
   const scopedAccounts = motions.flatMap((motion) =>
     motion.targetMap.accounts
-      .filter((account) => assignedCompanyIds.has(account.companyId))
       .filter((account) => !options.motionId || motion.id === options.motionId)
       .filter((account) => !options.companyId || account.companyId === options.companyId)
-      .map((account) => ({ motion, account }))
+      .map((account) => {
+        const company = companyById.get(account.companyId);
+        if (!company) {
+          return null;
+        }
+
+        return {
+          motion,
+          account,
+          company,
+          executionScope: classifyUserExecutionScope(user, motion, company)
+        };
+      })
+      .filter(Boolean)
   );
+  const executableScopedAccounts = scopedAccounts.filter(({ executionScope }) => executionScope.assignedToUser);
+
   const queueSummaries = motions
-    .filter((motion) => !options.motionId || motion.id === options.motionId)
-    .map((motion) => buildMotionQueueSummary(motion, operatorVisibleCompanies, {
-      companyId: options.companyId ?? null
-    }));
+    .filter((motion) => assignedMotionIds.has(motion.id))
+    .map((motion) => buildMotionQueueSummary(
+      motion,
+      companies.filter((company) =>
+        company.motionIds.includes(motion.id)
+        && (!options.companyId || company.id === options.companyId)
+      ),
+      {
+        companyId: options.companyId ?? null
+      }
+    ));
   const packetSummaries = motions
-    .filter((motion) => !options.motionId || motion.id === options.motionId)
-    .map((motion) => buildMotionPacketSummary(motion, operatorVisibleCompanies, {
-      companyId: options.companyId ?? null
-    }));
-  const scopedProspects = scopedAccounts.flatMap(({ motion, account }) =>
+    .filter((motion) => assignedMotionIds.has(motion.id))
+    .map((motion) => buildMotionPacketSummary(
+      motion,
+      companies.filter((company) =>
+        company.motionIds.includes(motion.id)
+        && (!options.companyId || company.id === options.companyId)
+      ),
+      {
+        companyId: options.companyId ?? null
+      }
+    ));
+  const scopedProspects = scopedAccounts.flatMap(({ motion, account, company, executionScope }) =>
     account.prospects
       .filter((prospect) => !options.prospectId || prospect.id === options.prospectId)
-      .map((prospect) => ({ motion, account, prospect }))
+      .map((prospect) => ({ motion, account, company, prospect, executionScope }))
   );
-  const sentToday = scopedProspects.reduce((count, item) => (
+  const executableScopedProspects = scopedProspects.filter(({ motion, account }) =>
+    assignedExecutionScopeKeys.has(buildMotionCompanyScopeKey(motion.id, account.companyId))
+  );
+  const assignmentBlockedReadyProspects = scopedProspects.filter(({ executionScope, prospect }) =>
+    executionScope.blockedByMissingAssignment && isReadyConnectionRequestProspect(prospect)
+  );
+  const sentToday = executableScopedProspects.reduce((count, item) => (
     count
     + item.prospect.touches.filter((touch) =>
       touch.surface === "connection_request"
@@ -78,11 +125,40 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       && isSameLocalDate(touch.occurredAt, now)
     ).length
   ), 0);
-  const pendingInvitations = scopedProspects.filter(({ prospect }) => isPendingInvitationFromPriorWork(prospect, now)).length;
-  const readyConnectionRequests = scopedProspects.filter(({ prospect }) => isReadyConnectionRequestProspect(prospect)).length;
-  const consideredMotionCount = new Set(scopedAccounts.map(({ motion }) => motion.id)).size;
-  const consideredCompanyCount = new Set(scopedAccounts.map(({ account }) => account.companyId)).size;
-  const consideredProspectCount = scopedProspects.length;
+  const trackedPendingInvitations = executableScopedProspects.filter(({ prospect }) => isPendingInvitationFromPriorWork(prospect, now)).length;
+  const itemizedPendingInvitations = sentInvitationsSurface
+    && (sentInvitationsSurface.lastRunStatus === "success" || sentInvitationsSurface.lastRunStatus === "warning")
+    ? sentInvitationsSurface.lastItemCount ?? null
+    : null;
+  const visiblePendingInvitationCount = sentInvitationsSurface
+    && (sentInvitationsSurface.lastRunStatus === "success" || sentInvitationsSurface.lastRunStatus === "warning")
+    ? sentInvitationsSurface.lastVisibleTotalCount ?? null
+    : null;
+  const observedPendingInvitations = visiblePendingInvitationCount ?? itemizedPendingInvitations;
+  const pendingInvitationObservationCount = sentInvitationsSurface?.lastObservationCount
+    ?? (observedPendingInvitations === null
+      ? null
+      : observations.filter((observation) =>
+        observation.accountId === linkedinAccount.id
+        && observation.surfaceKey === "linkedin-sent-invitations"
+      ).length);
+  const pendingInvitationCaptureCompleteness = sentInvitationsSurface?.lastCaptureCompleteness ?? null;
+  const pendingInvitationRequestedMode = sentInvitationsSurface?.lastRequestedMode ?? null;
+  const pendingInvitationActualMode = sentInvitationsSurface?.lastActualMode ?? null;
+  const pendingInvitationReconcileRequired = sentInvitationsSurface?.lastReconcileRequired ?? null;
+  const pendingInvitationReconcileReason = sentInvitationsSurface?.lastReconcileReason ?? null;
+  const pendingInvitationItemizationGapCount = sentInvitationsSurface?.lastItemizationGapCount
+    ?? (observedPendingInvitations === null || pendingInvitationObservationCount === null
+      ? null
+      : Math.max(observedPendingInvitations - pendingInvitationObservationCount, 0));
+  const pendingInvitations = Math.max(trackedPendingInvitations, observedPendingInvitations ?? 0);
+  const pendingInvitationReconciliationBlocked = (pendingInvitationItemizationGapCount ?? 0) > 0;
+  const readyConnectionRequests = executableScopedProspects.filter(({ prospect }) => isReadyConnectionRequestProspect(prospect)).length;
+  const assignmentBlockedReadyConnectionRequests = assignmentBlockedReadyProspects.length;
+  const assignmentBlockedCompanyCount = new Set(assignmentBlockedReadyProspects.map(({ account }) => account.companyId)).size;
+  const consideredMotionCount = new Set(executableScopedAccounts.map(({ motion }) => motion.id)).size;
+  const consideredCompanyCount = new Set(executableScopedAccounts.map(({ account }) => account.companyId)).size;
+  const consideredProspectCount = executableScopedProspects.length;
   const queue = queueSummaries.reduce((summary, item) => {
     summary.companyCount += item.companyCount;
     summary.prospectCount += item.prospectCount;
@@ -131,9 +207,23 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     claimedItemsByKind: {}
   });
   const execution = {
-    sentToday,
-    pendingInvitations,
-    readyConnectionRequests,
+      sentToday,
+      trackedPendingInvitations,
+      itemizedPendingInvitations,
+      observedPendingInvitations,
+      pendingInvitationVisibleTotalCount: visiblePendingInvitationCount,
+      pendingInvitationCaptureCompleteness,
+      pendingInvitationRequestedMode,
+      pendingInvitationActualMode,
+      pendingInvitationReconcileRequired,
+      pendingInvitationReconcileReason,
+      pendingInvitationObservationCount,
+      pendingInvitationItemizationGapCount,
+      pendingInvitationReconciliationBlocked,
+      pendingInvitations,
+      readyConnectionRequests,
+    assignmentBlockedReadyConnectionRequests,
+    assignmentBlockedCompanyCount,
     consideredMotionCount,
     consideredCompanyCount,
     consideredProspectCount,
@@ -223,12 +313,20 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
   const dailyInvitationsTarget = Math.ceil(weeklyInvitations / BUSINESS_DAYS_PER_WEEK);
   const remainingInvitationsToday = Math.max(dailyInvitationsTarget - sentToday, 0);
   const inventoryShortfall = Math.max(remainingInvitationsToday - readyConnectionRequests, 0);
+  const firstAssignmentBlockedReadyProspect = assignmentBlockedReadyProspects[0] ?? null;
   const configuredResult = {
     channel: "linkedin",
-    status: "configured",
-    reason: remainingInvitationsToday > 0
-      ? `${remainingInvitationsToday} invitation${remainingInvitationsToday === 1 ? "" : "s"} remain against today's target.`
-      : "Today's invitation target is already satisfied from stored touch state.",
+    status: pendingInvitationReconciliationBlocked ? "reconciliation_needed" : "configured",
+    reason: pendingInvitationReconciliationBlocked
+      ? buildPendingInvitationReconciliationReason({
+          observedPendingInvitations,
+          itemizedPendingInvitations,
+          pendingInvitationObservationCount,
+          pendingInvitationCaptureCompleteness
+        })
+      : remainingInvitationsToday > 0
+        ? `${remainingInvitationsToday} invitation${remainingInvitationsToday === 1 ? "" : "s"} remain against today's target.`
+        : "Today's invitation target is already satisfied from stored touch state.",
     account: {
       id: linkedinAccount.id,
       handle: linkedinAccount.handle,
@@ -248,12 +346,21 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     plannerItem: null
   };
 
+  if (pendingInvitationReconciliationBlocked) {
+    return configuredResult;
+  }
+
   if (remainingInvitationsToday === 0) {
     return configuredResult;
   }
 
-  const backlogAction = inventoryShortfall > 0
-    ? buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, inventoryShortfall)
+  const backlogAction = assignmentBlockedReadyConnectionRequests > 0
+    ? buildAssignmentBlockedAction({
+        user,
+        blockedReadyProspects: assignmentBlockedReadyProspects
+      })
+    : inventoryShortfall > 0
+      ? buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, inventoryShortfall)
     : null;
   const deficitAction = readyConnectionRequests >= remainingInvitationsToday
     ? {
@@ -268,7 +375,17 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
           followOnAction: backlogAction
         })
       : backlogAction;
-  const whyItMatters = `LinkedIn target is ${dailyInvitationsTarget} invitation${dailyInvitationsTarget === 1 ? "" : "s"} today. ${sentToday} ${sentToday === 1 ? "has" : "have"} been sent today, ${pendingInvitations} ${pendingInvitations === 1 ? "is" : "are"} still pending from prior work, ${readyConnectionRequests} more branch${readyConnectionRequests === 1 ? "" : "es"} ${readyConnectionRequests === 1 ? "is" : "are"} ready right now, and ${remainingInvitationsToday} invitation${remainingInvitationsToday === 1 ? "" : "s"} still need to be filled today.`;
+  const assignmentBlockedSummary = assignmentBlockedReadyConnectionRequests > 0
+    ? `, ${assignmentBlockedReadyConnectionRequests} ready branch${assignmentBlockedReadyConnectionRequests === 1 ? "" : "es"} ${assignmentBlockedReadyConnectionRequests === 1 ? "is" : "are"} blocked only by missing execution assignment`
+    : "";
+  const whyItMatters = `LinkedIn target is ${dailyInvitationsTarget} invitation${dailyInvitationsTarget === 1 ? "" : "s"} today. ${sentToday} ${sentToday === 1 ? "has" : "have"} been sent today, ${describePendingInvitationTruth({
+    pendingInvitations,
+    trackedPendingInvitations,
+    itemizedPendingInvitations,
+    observedPendingInvitations,
+    pendingInvitationObservationCount,
+    pendingInvitationItemizationGapCount
+  })}, ${readyConnectionRequests} more branch${readyConnectionRequests === 1 ? "" : "es"} ${readyConnectionRequests === 1 ? "is" : "are"} executable right now${assignmentBlockedSummary}, and ${remainingInvitationsToday} invitation${remainingInvitationsToday === 1 ? "" : "s"} still need to be filled today.`;
 
   return {
     ...configuredResult,
@@ -287,8 +404,21 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
         accountHandle: linkedinAccount.handle,
         dailyInvitationTarget: String(dailyInvitationsTarget),
         sentTodayCount: String(sentToday),
+        trackedPendingInvitationCount: String(trackedPendingInvitations),
+        itemizedPendingInvitationCount: itemizedPendingInvitations === null ? "" : String(itemizedPendingInvitations),
+        observedPendingInvitationCount: observedPendingInvitations === null ? "" : String(observedPendingInvitations),
+        pendingInvitationVisibleTotalCount: visiblePendingInvitationCount === null ? "" : String(visiblePendingInvitationCount),
+        pendingInvitationCaptureCompleteness: pendingInvitationCaptureCompleteness ?? "",
+        pendingInvitationRequestedMode: pendingInvitationRequestedMode ?? "",
+        pendingInvitationActualMode: pendingInvitationActualMode ?? "",
+        pendingInvitationReconcileRequired: pendingInvitationReconcileRequired === null ? "" : String(pendingInvitationReconcileRequired),
+        pendingInvitationReconcileReason: pendingInvitationReconcileReason ?? "",
+        pendingInvitationObservationCount: pendingInvitationObservationCount === null ? "" : String(pendingInvitationObservationCount),
+        pendingInvitationItemizationGapCount: pendingInvitationItemizationGapCount === null ? "" : String(pendingInvitationItemizationGapCount),
         pendingInvitationCount: String(pendingInvitations),
         readyConnectionRequestCount: String(readyConnectionRequests),
+        assignmentBlockedReadyConnectionRequestCount: String(assignmentBlockedReadyConnectionRequests),
+        assignmentBlockedCompanyCount: String(assignmentBlockedCompanyCount),
         remainingInvitationCount: String(remainingInvitationsToday),
         inventoryShortfallCount: String(inventoryShortfall),
         discoveredCompanyCount: String(queue.companyStatusCounts.discovered ?? 0),
@@ -311,7 +441,13 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
         firstClaimableProspectResearchPacketId: packets.claimableItemsByKind.prospect_research?.[0]?.packetId ?? "",
         firstClaimableProspectResearchPacketMotionId: packets.claimableItemsByKind.prospect_research?.[0]?.motionId ?? "",
         firstClaimableProspectResearchCompanyName: packets.claimableItemsByKind.prospect_research?.[0]?.companyName ?? "",
-        firstClaimableProspectResearchProspectName: packets.claimableItemsByKind.prospect_research?.[0]?.prospectName ?? ""
+        firstClaimableProspectResearchProspectName: packets.claimableItemsByKind.prospect_research?.[0]?.prospectName ?? "",
+        userId: user.id,
+        firstAssignmentBlockedMotionId: firstAssignmentBlockedReadyProspect?.motion.id ?? "",
+        firstAssignmentBlockedCompanyId: firstAssignmentBlockedReadyProspect?.company.id ?? "",
+        firstAssignmentBlockedCompanyName: firstAssignmentBlockedReadyProspect?.company.name ?? "",
+        firstAssignmentBlockedProspectId: firstAssignmentBlockedReadyProspect?.prospect.id ?? "",
+        firstAssignmentBlockedProspectName: firstAssignmentBlockedReadyProspect?.prospect.name ?? ""
       }
     }
   };
@@ -344,6 +480,23 @@ function combineReadySendWithFollowOnAction({ readyConnectionRequests, inventory
     guidanceKey: followOnAction.guidanceKey,
     recommendedAction: `${sendPrefix}, then ${lowercaseSentenceStart(followOnAction.recommendedAction)}`
   };
+}
+
+/**
+ * @param {{
+ *   observedPendingInvitations: number | null,
+ *   itemizedPendingInvitations: number | null,
+ *   pendingInvitationObservationCount: number | null,
+ *   pendingInvitationCaptureCompleteness: string | null
+ * }} input
+ */
+function buildPendingInvitationReconciliationReason(input) {
+  const visibleCount = input.observedPendingInvitations ?? 0;
+  const itemizedCount = input.itemizedPendingInvitations ?? input.pendingInvitationObservationCount ?? 0;
+  const completeness = input.pendingInvitationCaptureCompleteness === "partial_visible_slice"
+    ? "only a visible slice was itemized"
+    : "the live backlog was not fully itemized";
+  return `LinkedIn sent invitations still need reconciliation: ${visibleCount} pending invite${visibleCount === 1 ? "" : "s"} are visible, ${itemizedCount} ${itemizedCount === 1 ? "row was" : "rows were"} itemized, and ${completeness}. Exo should not push new connection-request pressure until the full backlog is trustworthy.`;
 }
 
 /**
@@ -386,6 +539,34 @@ function isPendingInvitationFromPriorWork(prospect, now) {
   const referenceAt = latestOutboundInviteTouch?.occurredAt ?? prospect.cadenceState.lastTouchAt ?? null;
 
   return referenceAt ? !isSameLocalDate(referenceAt, now) : true;
+}
+
+/**
+ * @param {{
+ *   pendingInvitations: number,
+ *   trackedPendingInvitations: number,
+ *   itemizedPendingInvitations?: number | null,
+ *   observedPendingInvitations: number | null,
+ *   pendingInvitationObservationCount: number | null,
+ *   pendingInvitationItemizationGapCount: number | null
+ * }} input
+ */
+function describePendingInvitationTruth(input) {
+  if (input.observedPendingInvitations === null) {
+    return `${input.pendingInvitations} ${input.pendingInvitations === 1 ? "is" : "are"} still pending from prior work`;
+  }
+
+  if ((input.pendingInvitationItemizationGapCount ?? 0) > 0) {
+    const observationCount = input.pendingInvitationObservationCount ?? 0;
+    const itemizedCount = input.itemizedPendingInvitations ?? observationCount;
+    return `${input.observedPendingInvitations} ${input.observedPendingInvitations === 1 ? "is" : "are"} visible on the live sent-invitations surface, but only ${itemizedCount} ${itemizedCount === 1 ? "row has" : "rows have"} been itemized and ${observationCount} individual observation${observationCount === 1 ? "" : "s"} ${observationCount === 1 ? "has" : "have"} been written back so far`;
+  }
+
+  if (input.observedPendingInvitations !== input.trackedPendingInvitations) {
+    return `${input.observedPendingInvitations} ${input.observedPendingInvitations === 1 ? "is" : "are"} visible on the live sent-invitations surface, while ${input.trackedPendingInvitations} ${input.trackedPendingInvitations === 1 ? "is" : "are"} mapped to governed branches`;
+  }
+
+  return `${input.pendingInvitations} ${input.pendingInvitations === 1 ? "is" : "are"} still pending from prior work`;
 }
 
 /**
@@ -489,6 +670,41 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
     kind: "fill_connection_request_deficit",
     guidanceKey: "fill_connection_request_deficit",
     recommendedAction: `Build ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today so outbound does not miss the invitation target.`
+  };
+}
+
+/**
+ * @param {{
+ *   user: import("../schema/user.js").userSchema._type,
+ *   blockedReadyProspects: Array<{
+ *     motion: import("../schema/motion.js").motionSchema._type,
+ *     company: import("../schema/company.js").companySchema._type,
+ *     prospect: {
+ *       id: string,
+ *       name: string
+ *     }
+ *   }>
+ * }} input
+ */
+function buildAssignmentBlockedAction({ user, blockedReadyProspects }) {
+  const blockedCompanyIds = [...new Set(blockedReadyProspects.map(({ company }) => company.id))];
+  const blockedCompanyNames = blockedCompanyIds
+    .map((companyId) => blockedReadyProspects.find(({ company }) => company.id === companyId)?.company.name ?? null)
+    .filter(Boolean);
+
+  if (blockedCompanyIds.length === 1) {
+    return {
+      kind: "assign_ready_execution",
+      guidanceKey: "assign_ready_execution",
+      recommendedAction: `Pin ${blockedCompanyNames[0]} to ${user.label} so ${blockedReadyProspects.length} ready LinkedIn connection-request branch${blockedReadyProspects.length === 1 ? "" : "es"} become executable today.`
+    };
+  }
+
+  const previewNames = blockedCompanyNames.slice(0, 2).join(" and ");
+  return {
+    kind: "assign_ready_execution",
+    guidanceKey: "assign_ready_execution",
+    recommendedAction: `Pin ${blockedCompanyIds.length} ready companies to ${user.label} so ${blockedReadyProspects.length} already-prepared LinkedIn connection-request branch${blockedReadyProspects.length === 1 ? "" : "es"} become executable today. Start with ${previewNames}.`
   };
 }
 

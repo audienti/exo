@@ -1,0 +1,26 @@
+{
+  "mode": "quick",
+  "status": "success",
+  "checkedAt": "2026-05-30T15:20:00.000Z",
+  "itemCount": 1,
+  "error": null,
+  "threads": [
+    {
+      "threadId": "thread-live-profile-1",
+      "kind": "email_reply_received",
+      "observedAt": "2026-05-30T15:15:00.000Z",
+      "summary": "Alicia replied by email asking for a short workflow walkthrough.",
+      "subject": "Re: Risk workflow question",
+      "fromName": "Alicia Buyer",
+      "fromEmail": "alicia@buyer.example",
+      "actorTitle": null,
+      "actorCompanyName": null,
+      "threadUrl": null,
+      "sourceUrl": null,
+      "motionId": null,
+      "companyId": null,
+      "prospectId": null,
+      "notes": null
+    }
+  ]
+}

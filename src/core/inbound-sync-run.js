@@ -2,18 +2,22 @@
 
 import { buildDailyView } from "./build-daily-view.js";
 import { buildInboxView } from "./build-inbox-view.js";
-import { mergeInboundObservation, recordInboundObservation } from "./inbound-observations.js";
+import {
+  buildInboundObservationIdentityKeys,
+  mergeInboundObservation,
+  recordInboundObservation
+} from "./inbound-observations.js";
 import { buildNextView } from "./build-next-view.js";
 import { buildUserInboundSyncPlan, recordUserInboundSyncRun } from "./user-inbound-sync.js";
 import { describeExo } from "./what-is-this.js";
 import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
-import { inboundSyncRunPayloadSchema } from "../schema/inbound.js";
+import { inboundObservationSchema, inboundSyncRunPayloadSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 
 /**
  * @param {unknown} rawUser
  * @param {unknown} rawPayload
- * @param {{ rawMotions?: unknown[] | undefined }} [options]
+ * @param {{ rawMotions?: unknown[] | undefined, rawExistingObservations?: unknown[] | undefined }} [options]
  */
 export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
   const user = userSchema.parse(rawUser);
@@ -21,6 +25,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
   const processedAt = new Date().toISOString();
   const seenAccountIds = new Set();
   const observationDraftsByDedupeKey = new Map();
+  const existingObservations = (options.rawExistingObservations ?? []).map((item) => inboundObservationSchema.parse(item));
   let updatedUser = user;
 
   const accounts = payload.accounts.map((accountInput) => {
@@ -79,6 +84,9 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
           actorCompanyName: observationInput.actorCompanyName,
           actorHandle: observationInput.actorHandle,
           actorProfileUrl: observationInput.actorProfileUrl,
+          actorLinkedinPublicId: observationInput.actorLinkedinPublicId,
+          actorLinkedinMemberId: observationInput.actorLinkedinMemberId,
+          actorAvatarSourceUrl: observationInput.actorAvatarSourceUrl,
           threadUrl: observationInput.threadUrl,
           sourceUrl: observationInput.sourceUrl,
           motionId: observationInput.motionId,
@@ -96,9 +104,16 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
       const derivedItemCount = surfaceInput.status === "failed"
         ? surfaceInput.itemCount
         : surfaceInput.itemCount ?? preparedObservations.length;
+      const visibleTotalCount = surfaceInput.visibleTotalCount ?? null;
       if (derivedItemCount !== null && derivedItemCount < preparedObservations.length) {
         throw new Error(
           `Inbound sync surface ${surfaceInput.surfaceKey} reported ${derivedItemCount} items but included ${preparedObservations.length} observations.`
+        );
+      }
+
+      if (visibleTotalCount !== null && derivedItemCount !== null && visibleTotalCount < derivedItemCount) {
+        throw new Error(
+          `Inbound sync surface ${surfaceInput.surfaceKey} cannot report a visible total smaller than its itemized count.`
         );
       }
 
@@ -106,11 +121,35 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         throw new Error(`Failed inbound sync surfaces cannot report positive item counts: ${surfaceInput.surfaceKey}`);
       }
 
+      if (surfaceInput.status === "failed" && visibleTotalCount && visibleTotalCount > 0) {
+        throw new Error(`Failed inbound sync surfaces cannot report positive visible totals: ${surfaceInput.surfaceKey}`);
+      }
+
       const newestObservationAt = newestObservedAt(preparedObservations);
       const observedAt = newestIsoDatetime(surfaceInput.observedAt, newestObservationAt);
-      if (surfaceInput.status !== "failed" && derivedItemCount && derivedItemCount > 0 && !observedAt) {
+      const reportedCount = visibleTotalCount ?? derivedItemCount;
+      if (surfaceInput.status !== "failed" && reportedCount && reportedCount > 0 && !observedAt) {
         throw new Error(`Inbound sync surface ${surfaceInput.surfaceKey} needs observedAt when items were found.`);
       }
+
+      const derivedDeltaObservations = deriveReconciledSurfaceDeltaObservations({
+        rawUser: updatedUser,
+        rawMotions: options.rawMotions ?? [],
+        rawExistingObservations: existingObservations,
+        accountId: account.id,
+        surfaceKey: surfaceInput.surfaceKey,
+        surfaceStatus: surfaceInput.status,
+        captureCompleteness: surfaceInput.captureCompleteness ?? null,
+        observedAt: observedAt ?? processedAt,
+        currentObservations: preparedObservations
+      });
+
+      for (const observation of derivedDeltaObservations) {
+        const existingDraft = observationDraftsByDedupeKey.get(observation.dedupeKey) ?? null;
+        observationDraftsByDedupeKey.set(observation.dedupeKey, mergeInboundObservation(existingDraft, observation));
+      }
+
+      const itemizationGapCount = Math.max(0, (visibleTotalCount ?? derivedItemCount ?? 0) - preparedObservations.length);
 
       updatedUser = recordUserInboundSyncRun(updatedUser, {
         accountId: account.id,
@@ -118,6 +157,14 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         status: surfaceInput.status,
         observedAt,
         itemCount: derivedItemCount,
+        visibleTotalCount,
+        captureCompleteness: surfaceInput.captureCompleteness,
+        requestedMode: surfaceInput.requestedMode,
+        actualMode: surfaceInput.actualMode,
+        reconcileRequired: surfaceInput.reconcileRequired,
+        reconcileReason: surfaceInput.reconcileReason,
+        observationCount: preparedObservations.length,
+        itemizationGapCount,
         error: surfaceInput.error
       });
 
@@ -126,9 +173,15 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         status: surfaceInput.status,
         observedAt,
         itemCount: derivedItemCount,
+        visibleTotalCount,
+        captureCompleteness: surfaceInput.captureCompleteness,
+        requestedMode: surfaceInput.requestedMode,
+        actualMode: surfaceInput.actualMode,
+        reconcileRequired: surfaceInput.reconcileRequired,
+        reconcileReason: surfaceInput.reconcileReason,
         error: surfaceInput.error,
         observationCount: preparedObservations.length,
-        itemizationGapCount: derivedItemCount === null ? 0 : Math.max(0, derivedItemCount - preparedObservations.length)
+        itemizationGapCount
       };
     });
 
@@ -261,6 +314,100 @@ function newestObservedAt(observations) {
     .sort()
     .at(-1) ?? null;
 }
+
+/**
+ * @param {{
+ *   rawUser: unknown,
+ *   rawMotions: unknown[],
+ *   rawExistingObservations: import("../schema/inbound.js").inboundObservationSchema._type[],
+ *   accountId: string,
+ *   surfaceKey: string,
+ *   surfaceStatus: "success" | "warning" | "failed",
+ *   captureCompleteness: import("../schema/inbound.js").inboundCaptureCompletenessSchema._type | null,
+ *   observedAt: string,
+ *   currentObservations: import("../schema/inbound.js").inboundObservationSchema._type[]
+ * }} input
+ */
+function deriveReconciledSurfaceDeltaObservations(input) {
+  if (input.surfaceStatus === "failed" || input.captureCompleteness !== "complete") {
+    return [];
+  }
+
+  const currentExternalIds = new Set(
+    input.currentObservations.flatMap((observation) => [...buildInboundObservationIdentityKeys(observation)])
+  );
+
+  const deltaDefinition = deltaObservationDefinitionBySurfaceKey[input.surfaceKey] ?? null;
+  if (!deltaDefinition) {
+    return [];
+  }
+
+  return input.rawExistingObservations
+    .filter((observation) =>
+      observation.accountId === input.accountId
+      && observation.surfaceKey === input.surfaceKey
+      && deltaDefinition.previousKinds.includes(observation.kind)
+      && buildObservationHasReconcilableIdentity(observation)
+      && ![...buildInboundObservationIdentityKeys(observation)].some((key) => currentExternalIds.has(key))
+    )
+    .map((observation) => recordInboundObservation(input.rawUser, {
+      accountId: input.accountId,
+      surfaceKey: input.surfaceKey,
+      kind: deltaDefinition.nextKind,
+      observedAt: input.observedAt,
+      summary: deltaDefinition.buildSummary(observation),
+      externalId: observation.externalId,
+      actorName: observation.actorName,
+      actorTitle: observation.actorTitle,
+      actorCompanyName: observation.actorCompanyName,
+      actorHandle: observation.actorHandle,
+      actorProfileUrl: observation.actorProfileUrl,
+      actorLinkedinPublicId: observation.actorLinkedinPublicId,
+      actorLinkedinMemberId: observation.actorLinkedinMemberId,
+      actorAvatarSourceUrl: observation.actorAvatarSourceUrl,
+      sourceUrl: observation.sourceUrl,
+      motionId: observation.motionId,
+      companyId: observation.companyId,
+      prospectId: observation.prospectId,
+      notes: deltaDefinition.notes
+    }, {
+      rawMotions: input.rawMotions
+    }));
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ */
+function buildObservationHasReconcilableIdentity(observation) {
+  return buildInboundObservationIdentityKeys(observation).size > 0;
+}
+
+const deltaObservationDefinitionBySurfaceKey = {
+  "linkedin-sent-invitations": {
+    previousKinds: ["connection_request_pending"],
+    nextKind: "connection_request_no_longer_pending",
+    notes: "Derived from a complete sent-invitations reconciliation pass.",
+    buildSummary: (observation) => `${observation.actorName ?? "A pending invite"} is no longer present in the live pending invitations list.`
+  },
+  "linkedin-received-invitations": {
+    previousKinds: ["connection_request_received"],
+    nextKind: "connection_request_received_no_longer_pending",
+    notes: "Derived from a complete received-invitations reconciliation pass.",
+    buildSummary: (observation) => `${observation.actorName ?? "An inbound invite"} is no longer present in the live received invitations list.`
+  },
+  "linkedin-followers-list": {
+    previousKinds: ["follower_added", "follower_confirmed"],
+    nextKind: "follower_removed",
+    notes: "Derived from a complete followers reconciliation pass.",
+    buildSummary: (observation) => `${observation.actorName ?? "A follower"} is no longer present in the live followers list.`
+  },
+  "linkedin-following-list": {
+    previousKinds: ["follow_state_changed", "follow_state_confirmed"],
+    nextKind: "follow_state_removed",
+    notes: "Derived from a complete following-list reconciliation pass.",
+    buildSummary: (observation) => `${observation.actorName ?? "A followed profile"} is no longer present in the live following list.`
+  }
+};
 
 /**
  * @param {string | null} left

@@ -1,0 +1,55 @@
+{
+  "mode": "quick",
+  "sentInvitations": {
+    "status": "success",
+    "checkedAt": "2026-05-30T19:12:00.000Z",
+    "itemCount": 0,
+    "error": null,
+    "items": []
+  },
+  "receivedInvitations": {
+    "status": "success",
+    "checkedAt": "2026-05-30T19:13:00.000Z",
+    "itemCount": 1,
+    "error": null,
+    "items": [
+      {
+        "invitationId": "invite-live-partial-123",
+        "kind": "connection_request_received",
+        "observedAt": "2026-05-30T19:11:00.000Z",
+        "summary": "Alicia Buyer sent a new inbound LinkedIn connection request.",
+        "actorName": "Alicia Buyer",
+        "actorTitle": null,
+        "actorCompanyName": null,
+        "actorHandle": null,
+        "actorProfileUrl": "https://www.linkedin.com/in/alicia-buyer/",
+        "sourceUrl": null,
+        "motionId": null,
+        "companyId": null,
+        "prospectId": null,
+        "notes": null
+      }
+    ]
+  },
+  "messagingInbox": {
+    "status": "success",
+    "checkedAt": "2026-05-30T19:14:00.000Z",
+    "itemCount": 0,
+    "error": null,
+    "items": []
+  },
+  "profileViews": {
+    "status": "success",
+    "checkedAt": "2026-05-30T19:15:00.000Z",
+    "itemCount": 0,
+    "error": null,
+    "items": []
+  },
+  "followingList": {
+    "status": "success",
+    "checkedAt": "2026-05-30T19:16:00.000Z",
+    "itemCount": 0,
+    "error": null,
+    "items": []
+  }
+}

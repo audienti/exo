@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // @ts-check
 
+import fs from "node:fs";
+import path from "node:path";
 import {
   renderCompanyList,
   renderCompanyMotions,
@@ -11,6 +13,7 @@ import { addCompany } from "../../core/add-company.js";
 import { assignCompanyProfile } from "../../core/assign-company-profile.js";
 import { assignCompanyUser } from "../../core/assign-company-user.js";
 import { buildCompanyExecutionView } from "../../core/build-company-execution-view.js";
+import { buildLiveLinkedinProfileEnrichmentView } from "../../core/build-live-linkedin-profile-enrichment.js";
 import { buildCompanyResearchBrief } from "../../core/build-company-research-brief.js";
 import { claimMotionProspectPacket } from "../../core/claim-motion-prospect-packet.js";
 import { claimMotionTargetAccountPacket } from "../../core/claim-target-account-packet.js";
@@ -43,6 +46,11 @@ import { normalizeRepeatedStringList, normalizeStringList } from "../../lib/coll
 import { buildMotionQueueSummary, isMotionQueueStatus, withDerivedTargetAccountQueueState } from "../../lib/motion-queue.js";
 import { companySchema } from "../../schema/company.js";
 import { motionSchema } from "../../schema/motion.js";
+import { linkedinProfileSnapshotSchema } from "../../schema/target-account.js";
+import {
+  buildLinkedinProfileUrlFromPublicId,
+  extractLinkedinPublicId
+} from "../../lib/prospect-contacts.js";
 
 /**
  * @param {import("commander").Command} program
@@ -72,6 +80,7 @@ Canonical companies interface:
   exo companies prospects show <company-id>
   exo companies prospects add <company-id>
   exo companies prospects update <company-id>
+  exo companies prospects enrich-linkedin-profile <company-id>
   exo companies prospects claim <company-id>
   exo companies prospects complete <company-id>
   exo companies through-line show <company-id>
@@ -1016,6 +1025,195 @@ Rules:
             `Contact Points: ${storedProspect.contactPoints.length}`,
             `Contact Enrichment: ${storedProspect.contactEnrichmentState.status}`,
             `Queue: ${storedProspect.queueState.status}`
+          ].join("\n")
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  prospects
+    .command("enrich-linkedin-profile")
+    .description("Persist one governed LinkedIn profile-page enrichment payload onto an existing prospect.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--prospect <prospect-id>", "Existing prospect identifier")
+    .requiredOption("--input <path>", "Path to a LinkedIn profile enrichment JSON file, or - to read JSON from stdin")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies prospects enrich-linkedin-profile <company-id> --motion <motion-id> --prospect <prospect-id> --input ./linkedin-profile.json --json
+
+Rules:
+  - Use this after the agent has opened the real LinkedIn profile page and captured one governed snapshot.
+  - The payload should carry stable profile identity, avatar, and recent-post evidence from that page.
+  - This path replaces the stored LinkedIn recent-post snapshot for that prospect in one write, then promotes the strongest captured post into liveSignal.
+  - Do not use this for generic note-taking. It is the governed writeback path for live LinkedIn profile context.
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { company, rawMotion } = context;
+
+      try {
+        const payload = parseLinkedinProfileEnrichmentPayload(loadJsonInput(options.input));
+        const linkedinProfileUrl = payload.profileUrl ?? buildLinkedinProfileUrlFromPublicId(payload.publicId);
+        const publicId = payload.publicId ?? extractLinkedinPublicId(linkedinProfileUrl);
+        const sourceUrl = linkedinProfileUrl ?? payload.profileUrl ?? null;
+        const contactPoints = buildLinkedinProfileEnrichmentContactPoints({
+          publicId,
+          memberId: payload.memberId,
+          observedAt: payload.capturedAt,
+          sourceUrl
+        });
+        const primaryPost = selectPrimaryLinkedinRecentPost(payload.recentPosts);
+
+        const updatedMotion = updateMotionProspect(rawMotion, company, {
+          prospectId: options.prospect,
+          name: payload.displayName ?? undefined,
+          title: payload.currentRoleTitle ?? undefined,
+          linkedinProfileUrl,
+          avatarSourceUrl: payload.avatarSourceUrl ?? undefined,
+          sourceUrl: sourceUrl ?? undefined,
+          observedAt: payload.capturedAt ?? undefined,
+          profileViewedAt: payload.capturedAt ?? undefined,
+          identityTells: {
+            headline: payload.headline ?? undefined
+          },
+          linkedinProfileSnapshot: {
+            capturedAt: payload.capturedAt,
+            profileUrl: linkedinProfileUrl,
+            publicId,
+            memberId: payload.memberId,
+            displayName: payload.displayName,
+            currentRoleTitle: payload.currentRoleTitle,
+            currentCompanyName: payload.currentCompanyName,
+            headline: payload.headline,
+            location: payload.location,
+            about: payload.about,
+            followerCount: payload.followerCount,
+            connectionCount: payload.connectionCount,
+            recentPosts: payload.recentPosts
+          },
+          liveSignal: primaryPost
+            ? {
+                channel: "linkedin",
+                activityType: primaryPost.activityType ?? undefined,
+                summary: primaryPost.summary ?? primaryPost.snippet ?? undefined,
+                url: primaryPost.url ?? undefined,
+                observedAt: primaryPost.postedAt ?? payload.capturedAt ?? undefined,
+                freshnessBand:
+                  primaryPost.freshnessBand
+                  ?? deriveFreshnessBand(primaryPost.postedAt, payload.capturedAt)
+                  ?? undefined,
+                engagementRationale: "Recent public LinkedIn activity was captured directly from the live profile page."
+              }
+            : undefined,
+          contactPoints: contactPoints.length ? contactPoints : undefined
+        });
+        const storedMotion = updateMotion(updatedMotion);
+        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
+        const storedProspect = account?.prospects.find((prospect) => prospect.id === options.prospect) ?? null;
+
+        if (options.json) {
+          console.log(JSON.stringify({
+            company,
+            motion: {
+              id: storedMotion.id,
+              name: storedMotion.name,
+              prospectTargetCount: storedMotion.targetingProfile.stakeholderTargetCount
+            },
+            account,
+            prospects: account?.prospects ?? [],
+            prospect: storedProspect
+          }, null, 2));
+          return;
+        }
+
+        if (!storedProspect) {
+          console.log(`No prospect state was stored for ${company.name}.`);
+          return;
+        }
+
+        console.log(
+          [
+            `Enriched LinkedIn Profile: ${company.name}`,
+            `Motion: ${storedMotion.name}`,
+            `Person: ${storedProspect.name}`,
+            `Prospect ID: ${storedProspect.id}`,
+            `LinkedIn Profile: ${storedProspect.linkedinProfileUrl ?? "none"}`,
+            `Recent Posts Stored: ${storedProspect.linkedinProfileSnapshot.recentPosts.length}`,
+            `Live Signal: ${storedProspect.liveSignal.summary ?? "none"}`
+          ].join("\n")
+        );
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  prospects
+    .command("enrich-linkedin-profile-live")
+    .description("Build the governed live LinkedIn profile-page capture contract for one existing prospect.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--prospect <prospect-id>", "Existing prospect identifier")
+    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .option("--runtime <runtime>", "Runtime to target, for example codex")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo companies prospects enrich-linkedin-profile-live <company-id> --motion <motion-id> --prospect <prospect-id> --runtime codex --json
+
+Rules:
+  - Use this when the outer agent should inspect the live LinkedIn profile page and land the governed profile payload directly into Exo.
+  - This command does not mutate prospect state by itself. It returns the capture contract, output schema, and payload writeback command.
+  - The target profile URL must already be derivable from the prospect record or its stored LinkedIn aliases.
+`
+    )
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) {
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const result = buildLiveLinkedinProfileEnrichmentView(
+          context.company,
+          context.rawMotion,
+          listBrowserProfiles(),
+          listUsers(),
+          {
+            prospectId: options.prospect,
+            runtime: options.runtime ?? null
+          }
+        );
+
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        const captureRequest = result.transport.captureRequest;
+        console.log(
+          [
+            `LinkedIn Profile Capture: ${result.company.name}`,
+            `Motion: ${result.motion?.name ?? "none"}`,
+            `Prospect: ${result.prospect.name} (${result.prospect.title})`,
+            `Target URL: ${result.prospect.linkedinProfileUrl ?? "none"}`,
+            `Transport: ${result.transport.kind}`,
+            `Reason: ${result.transport.reason ?? "none"}`,
+            `Payload Command: ${captureRequest?.buildPayloadCommand ?? "none"}`
           ].join("\n")
         );
       } catch (error) {
@@ -2092,6 +2290,130 @@ function collect(value, previous) {
   return previous;
 }
 
+function loadJsonInput(filePath) {
+  if (filePath === "-") {
+    if (process.stdin.isTTY) {
+      throw new Error("Expected JSON on stdin, but stdin is a terminal. Pipe input or pass --input <path>.");
+    }
+    return JSON.parse(fs.readFileSync(0, "utf8"));
+  }
+
+  const resolvedPath = path.resolve(process.cwd(), filePath);
+  return JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
+}
+
+/**
+ * @param {unknown} raw
+ */
+function parseLinkedinProfileEnrichmentPayload(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("LinkedIn profile enrichment payload must be an object.");
+  }
+
+  const source = /** @type {Record<string, any>} */ (raw);
+  const snapshot = linkedinProfileSnapshotSchema.parse({
+    capturedAt: source.capturedAt ?? null,
+    profileUrl: source.profileUrl ?? null,
+    publicId: source.publicId ?? null,
+    memberId: source.memberId ?? null,
+    displayName: source.displayName ?? null,
+    currentRoleTitle: source.currentRoleTitle ?? null,
+    currentCompanyName: source.currentCompanyName ?? null,
+    headline: source.headline ?? null,
+    location: source.location ?? null,
+    about: source.about ?? null,
+    followerCount: source.followerCount ?? null,
+    connectionCount: source.connectionCount ?? null,
+    recentPosts: Array.isArray(source.recentPosts) ? source.recentPosts : []
+  });
+
+  return {
+    ...snapshot,
+    avatarSourceUrl:
+      typeof source.avatarSourceUrl === "string" && source.avatarSourceUrl.trim()
+        ? source.avatarSourceUrl.trim()
+        : null
+  };
+}
+
+/**
+ * @param {{
+ *   publicId?: string | null,
+ *   memberId?: string | null,
+ *   observedAt?: string | null,
+ *   sourceUrl?: string | null
+ * }} input
+ */
+function buildLinkedinProfileEnrichmentContactPoints(input) {
+  const points = [];
+
+  if (input.publicId) {
+    points.push({
+      kind: "linkedin_public_id",
+      value: input.publicId,
+      label: "LinkedIn public profile id",
+      matchStatus: "same_person_verified",
+      verificationStatus: "observed",
+      confidence: "high",
+      source: "linkedin-profile-page",
+      sourceUrl: input.sourceUrl ?? undefined,
+      observedAt: input.observedAt ?? undefined,
+      usableForResearch: true,
+      usableForWarmup: true,
+      usableForOutreach: false
+    });
+  }
+
+  if (input.memberId) {
+    points.push({
+      kind: "linkedin_member_id",
+      value: input.memberId,
+      label: "LinkedIn member id",
+      matchStatus: "same_person_verified",
+      verificationStatus: "observed",
+      confidence: "high",
+      source: "linkedin-profile-page",
+      sourceUrl: input.sourceUrl ?? undefined,
+      observedAt: input.observedAt ?? undefined,
+      usableForResearch: true,
+      usableForWarmup: true,
+      usableForOutreach: false
+    });
+  }
+
+  return points;
+}
+
+/**
+ * @param {Array<import("../../schema/target-account.js").linkedinRecentPostSchema._type>} posts
+ */
+function selectPrimaryLinkedinRecentPost(posts) {
+  return posts.find((post) => post.summary || post.snippet || post.url) ?? null;
+}
+
+/**
+ * @param {string | null | undefined} observedAt
+ * @param {string | null | undefined} referenceAt
+ */
+function deriveFreshnessBand(observedAt, referenceAt) {
+  if (!observedAt) {
+    return null;
+  }
+
+  const observedMs = Date.parse(observedAt);
+  const referenceMs = Date.parse(referenceAt ?? observedAt);
+  if (Number.isNaN(observedMs) || Number.isNaN(referenceMs)) {
+    return null;
+  }
+
+  const ageDays = Math.max(0, Math.floor((referenceMs - observedMs) / 86400000));
+  if (ageDays <= 14) return "0-14-days";
+  if (ageDays <= 30) return "15-30-days";
+  if (ageDays <= 60) return "31-60-days";
+  if (ageDays <= 90) return "61-90-days";
+  return "stale";
+}
+
 /**
  * @param {Record<string, any>} options
  */
@@ -2325,6 +2647,8 @@ function normalizeContactPointKind(value) {
   const normalized = value?.toString().trim().toLowerCase();
   if (
     normalized === "linkedin_profile"
+    || normalized === "linkedin_public_id"
+    || normalized === "linkedin_member_id"
     || normalized === "email"
     || normalized === "phone"
     || normalized === "x_profile"
@@ -2742,6 +3066,8 @@ function renderProspectDetail(companyName, motionName, prospect) {
     `Role Truth: ${prospect.roleTruth.summary ?? "none"}`,
     `Trigger Window: ${prospect.triggerWindow.summary ?? "none"}`,
     `Identity Tells: ${prospect.identityTells.summary ?? "none"}`,
+    `LinkedIn Snapshot Company: ${prospect.linkedinProfileSnapshot.currentCompanyName ?? "none"}`,
+    `LinkedIn Recent Posts: ${prospect.linkedinProfileSnapshot.recentPosts.length}`,
     `Live Signal: ${prospect.liveSignal.summary ?? "none"}`,
     `Contact Points: ${prospect.contactPoints.length ? prospect.contactPoints.map((point) => `${point.kind}=${point.value}`).join(" | ") : "none"}`,
     `Contact Enrichment: ${prospect.contactEnrichmentState.status}`,

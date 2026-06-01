@@ -8,7 +8,13 @@ import { browserProfileSchema } from "../schema/browser-profile.js";
 import { gmailInboundSyncCaptureSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { buildGmailInboundSyncPayload, resolveGmailAccount } from "./inbound-gmail-sync.js";
+import {
+  buildCodexAgentHandoffTransport,
+  buildDirectLiveTransport,
+  shouldUseCodexAgentHandoff
+} from "./live-agent-handoff.js";
 import { probeUserHarnessConnections } from "./probe-user-harness-connections.js";
+import { resolveRuntimeHarnessConnection } from "./runtime-harness-resolution.js";
 
 const DEFAULT_GMAIL_THREAD_LIMIT = 20;
 
@@ -19,7 +25,7 @@ const gmailCaptureOutputSchema = {
   properties: {
     mode: {
       type: "string",
-      enum: ["quick"]
+      enum: ["quick", "full"]
     },
     status: {
       type: "string",
@@ -122,6 +128,7 @@ const gmailCaptureOutputSchema = {
  * @param {unknown[]} rawProfiles
  * @param {{
  *   accountId?: string | null,
+ *   mode?: import("../schema/inbound.js").inboundSyncPlanModeSchema._type | null,
  *   runtime?: string | null,
  *   connector?: string | null,
  *   limit?: number | null,
@@ -135,9 +142,12 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
   const user = userSchema.parse(rawUser);
   const profiles = rawProfiles.map((profile) => browserProfileSchema.parse(profile));
   const account = resolveGmailAccount(user, normalizeNullableString(options.accountId));
+  const mode = options.mode ?? "quick";
   const liveSource = resolveGmailLiveSource(user, profiles, account, {
     runtime: options.runtime ?? null,
-    connector: options.connector ?? null
+    connector: options.connector ?? null,
+    codexHome: options.codexHome ?? null,
+    claudeCli: options.claudeCli ?? null
   });
   const limit = normalizePositiveInteger(options.limit, DEFAULT_GMAIL_THREAD_LIMIT, "limit");
   const since = normalizeNullableString(options.since);
@@ -145,50 +155,93 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
     assertIsoDatetime(since, "since");
   }
 
-  const probeResult = probeUserHarnessConnections(user, {
-    runtime: liveSource.harnessConnection.runtime,
-    connector: liveSource.harnessConnection.connector,
+  const probe = liveSource.probe ?? buildStoredHarnessProbe(user, liveSource.harnessConnection, {
     codexHome: options.codexHome ?? null,
     claudeCli: options.claudeCli ?? null
   });
-  const probe = probeResult.probes.find((candidate) => candidate.connectionId === liveSource.harnessConnection.id) ?? {
-    connectionId: liveSource.harnessConnection.id,
-    runtime: liveSource.harnessConnection.runtime,
-    connector: liveSource.harnessConnection.connector,
-    label: liveSource.harnessConnection.label,
-    storedStatus: liveSource.harnessConnection.status,
-    detectedStatus: "unknown",
-    willWriteback: false,
-    supported: true,
-    source: {
-      kind: "runtime-probe",
-      path: null
-    },
-    reason: `No probe result was produced for ${liveSource.harnessConnection.runtime}:${liveSource.harnessConnection.connector}.`,
-    evidence: []
+  const runtime = liveSource.harnessConnection.runtime.trim().toLowerCase();
+  const connector = liveSource.harnessConnection.connector.trim().toLowerCase();
+  const transportBase = {
+    runtime,
+    connector,
+    source: liveSource.source
   };
 
   /** @type {unknown} */
   let rawCapture;
+  let transport = buildDirectLiveTransport(transportBase);
   if (probe.detectedStatus !== "available") {
     rawCapture = buildFailedCapture(
+      mode,
       `${liveSource.harnessConnection.runtime}:${liveSource.harnessConnection.connector} is not available for Gmail live sync: ${probe.reason}`
     );
   } else {
+    const prompt = buildGmailLiveCapturePrompt({
+      mode,
+      connector,
+      handle: account.handle,
+      profile: liveSource.profile,
+      limit,
+      since
+    });
+    if (shouldUseCodexAgentHandoff({
+      runtime,
+      codexCli: options.codexCli ?? null
+    })) {
+      return {
+        user: {
+          id: user.id,
+          label: user.label,
+          owner: user.owner
+        },
+        account: {
+          id: account.id,
+          handle: account.handle,
+          capability: account.capability,
+          sourceType: account.sourceType,
+          browserProfileId: account.browserProfileId,
+          harnessConnectionId: account.harnessConnectionId
+        },
+        profile: liveSource.profile
+          ? {
+              id: liveSource.profile.id,
+              label: liveSource.profile.label,
+              browser: liveSource.profile.browser,
+              profileDirectory: liveSource.profile.profileDirectory,
+              profilePath: liveSource.profile.profilePath,
+              identityAccounts: liveSource.profile.identity.accounts
+            }
+          : null,
+        probe,
+        transport: buildCodexAgentHandoffTransport({
+          capability: "gmail",
+          runtime,
+          connector,
+          source: liveSource.source,
+          prompt,
+          outputSchema: gmailCaptureOutputSchema,
+          buildPayloadCommand: `exo inbound sync gmail ${user.id} --account ${account.id} --input - --json`
+        }),
+        capture: null,
+        payload: null
+      };
+    }
+
     try {
       rawCapture = await captureGmailInbox({
-        runtime: liveSource.harnessConnection.runtime.trim().toLowerCase(),
-        connector: liveSource.harnessConnection.connector.trim().toLowerCase(),
+        runtime,
+        connector,
         handle: account.handle,
         profile: liveSource.profile,
         limit,
         since,
         codexCli: options.codexCli ?? normalizeNullableString(process.env.EXO_CODEX_CLI) ?? "codex",
         codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
-        claudeCli: options.claudeCli ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI) ?? "claude"
+        claudeCli: options.claudeCli ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI) ?? "claude",
+        prompt
       });
     } catch (error) {
-      rawCapture = buildFailedCapture(error instanceof Error ? error.message : String(error));
+      rawCapture = buildFailedCapture(mode, error instanceof Error ? error.message : String(error));
     }
   }
 
@@ -222,6 +275,7 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
         }
       : null,
     probe,
+    transport,
     capture: built.capture,
     payload: built.payload
   };
@@ -235,15 +289,20 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
  */
 function resolveGmailLiveSource(user, profiles, account, input) {
   if (account.sourceType === "browser-profile") {
+    const runtimeSource = resolveGmailRuntimeHarnessConnection(user, input);
     return {
       profile: resolveGmailBrowserProfile(profiles, account),
-      harnessConnection: resolveGmailRuntimeHarnessConnection(user, input)
+      harnessConnection: runtimeSource.harnessConnection,
+      probe: runtimeSource.probe,
+      source: runtimeSource.source
     };
   }
 
   return {
     profile: null,
-    harnessConnection: requireGmailHarnessConnection(user, account, input)
+    harnessConnection: requireGmailHarnessConnection(user, account, input),
+    probe: null,
+    source: "stored_harness_connection"
   };
 }
 
@@ -280,24 +339,14 @@ function resolveGmailRuntimeHarnessConnection(user, input) {
     throw new Error(`Profile-backed Gmail live sync currently supports runtime:chrome harness connections only. Received connector ${connectorFilter}.`);
   }
 
-  const supported = user.harnessConnections.filter((connection) =>
-    ["codex", "claude"].includes(connection.runtime.trim().toLowerCase())
-    && connection.connector.trim().toLowerCase() === connectorFilter
-    && (!runtimeFilter || connection.runtime.trim().toLowerCase() === runtimeFilter)
-  );
-
-  if (!supported.length) {
-    throw new Error(
-      `No supported runtime:chrome harness connection exists for Gmail live sync on ${user.label}. Add codex:chrome or claude:chrome first.`
-    );
-  }
-
-  if (supported.length > 1 && !runtimeFilter) {
-    const choices = supported.map((connection) => `${connection.runtime}:${connection.connector}`).join(", ");
-    throw new Error(`Multiple supported Gmail browser harnesses exist for ${user.label} (${choices}). Pass --runtime explicitly.`);
-  }
-
-  return supported[0];
+  return resolveRuntimeHarnessConnection(user, {
+    runtime: runtimeFilter,
+    connector: connectorFilter,
+    codexHome: input.codexHome ?? null,
+    claudeCli: input.claudeCli ?? null,
+    multipleMessage: (choices) =>
+      `Multiple supported Gmail browser harnesses exist for ${user.label} (${choices.join(", ")}). Pass --runtime explicitly.`
+  });
 }
 
 /**
@@ -336,6 +385,7 @@ function requireGmailHarnessConnection(user, account, input) {
 /**
  * @param {{
  *   runtime: string,
+ *   mode: string,
  *   connector: string,
  *   handle: string,
  *   profile: import("../schema/browser-profile.js").browserProfileSchema._type | null,
@@ -366,7 +416,8 @@ async function captureGmailInbox(input) {
  *   limit: number,
  *   since: string | null,
  *   codexCli: string,
- *   codexHome: string | null
+ *   codexHome: string | null,
+ *   prompt: string
  * }} input
  */
 async function captureGmailInboxThroughCodex(input) {
@@ -376,7 +427,6 @@ async function captureGmailInboxThroughCodex(input) {
   fs.writeFileSync(schemaPath, JSON.stringify(gmailCaptureOutputSchema, null, 2));
 
   try {
-    const prompt = buildGmailLiveCapturePrompt(input);
     const args = [
       "exec",
       "--skip-git-repo-check",
@@ -390,7 +440,7 @@ async function captureGmailInboxThroughCodex(input) {
       schemaPath,
       "-o",
       outputPath,
-      prompt
+      input.prompt
     ];
     const env = {
       ...process.env
@@ -424,10 +474,10 @@ async function captureGmailInboxThroughCodex(input) {
  *   limit: number,
  *   since: string | null,
  *   claudeCli: string
+ *   prompt: string
  * }} input
  */
 async function captureGmailInboxThroughClaude(input) {
-  const prompt = buildGmailLiveCapturePrompt(input);
   const schema = JSON.stringify(gmailCaptureOutputSchema);
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-gmail-live-claude-"));
   const args = [
@@ -439,7 +489,7 @@ async function captureGmailInboxThroughClaude(input) {
     "--permission-mode",
     "dontAsk",
     "--no-session-persistence",
-    prompt
+    input.prompt
   ];
 
   try {
@@ -505,7 +555,7 @@ function buildGmailLiveCapturePrompt(input) {
     ...lines,
     sinceInstruction,
     "Return only JSON that matches the provided schema.",
-    "Use mode quick.",
+    input.mode === "full" ? "Use mode full." : "Use mode quick.",
     "Set status to success when the inbox inspection succeeds, warning when the inbox was only partially inspected, and failed when the inbox could not be inspected.",
     "Set checkedAt to the ISO timestamp when you finished the inspection.",
     "Set itemCount to the number of returned threads on success or warning. Use 0 when failed.",
@@ -521,14 +571,44 @@ function buildGmailLiveCapturePrompt(input) {
 /**
  * @param {string} error
  */
-function buildFailedCapture(error) {
+function buildFailedCapture(mode, error) {
   return {
-    mode: "quick",
+    mode,
     status: "failed",
     checkedAt: new Date().toISOString(),
     itemCount: 0,
     error,
     threads: []
+  };
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type} user
+ * @param {import("../schema/user.js").userHarnessConnectionSchema._type} harnessConnection
+ * @param {{ codexHome?: string | null, claudeCli?: string | null }} options
+ */
+function buildStoredHarnessProbe(user, harnessConnection, options) {
+  const probeResult = probeUserHarnessConnections(user, {
+    runtime: harnessConnection.runtime,
+    connector: harnessConnection.connector,
+    codexHome: options.codexHome ?? null,
+    claudeCli: options.claudeCli ?? null
+  });
+  return probeResult.probes.find((candidate) => candidate.connectionId === harnessConnection.id) ?? {
+    connectionId: harnessConnection.id,
+    runtime: harnessConnection.runtime,
+    connector: harnessConnection.connector,
+    label: harnessConnection.label,
+    storedStatus: harnessConnection.status,
+    detectedStatus: "unknown",
+    willWriteback: false,
+    supported: true,
+    source: {
+      kind: "runtime-probe",
+      path: null
+    },
+    reason: `No probe result was produced for ${harnessConnection.runtime}:${harnessConnection.connector}.`,
+    evidence: []
   };
 }
 

@@ -1,0 +1,23 @@
+{
+  "mode": "quick",
+  "accounts": [
+    {
+      "accountId": "__ACCOUNT_ID__",
+      "surfaces": [
+        {
+          "surfaceKey": "linkedin-sent-invitations",
+          "status": "success",
+          "observedAt": "2026-05-31T16:00:00.000Z",
+          "itemCount": 0,
+          "visibleTotalCount": 0,
+          "captureCompleteness": "complete",
+          "requestedMode": "quick",
+          "actualMode": "full",
+          "reconcileRequired": false,
+          "reconcileReason": null,
+          "observations": []
+        }
+      ]
+    }
+  ]
+}

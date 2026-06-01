@@ -10,10 +10,11 @@ import { userSchema } from "../schema/user.js";
 import { classifyUserWorkingHours } from "./working-hours.js";
 import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
-import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
+import { isPlannerEligibleMotionStatus } from "../lib/motion-status.js";
 import { hasUsableEmailFallback } from "../lib/prospect-contacts.js";
 import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
 import { buildOutboundCapacityView } from "./build-outbound-capacity-view.js";
+import { buildMotionCompanyScopeKey, buildUserAssignedExecutionScopeIndex } from "./user-execution-scope.js";
 
 /**
  * @param {unknown} rawUser
@@ -34,7 +35,7 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
   const user = userSchema.parse(rawUser);
   const motions = rawMotions
     .map((item) => motionSchema.parse(item))
-    .filter((motion) => isExecutionEligibleMotionStatus(motion.status));
+    .filter((motion) => isPlannerEligibleMotionStatus(motion.status));
   const companies = rawCompanies.map((item) => companySchema.parse(item));
   const now = options.now ?? new Date().toISOString();
   const inbox = buildInboxView(user, rawObservations, motions, companies);
@@ -52,23 +53,23 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
     }
   }
 
-  const assignedCompanyIds = new Set(
-    companies
-      .filter((company) => company.engagementUserAssignment?.userId === user.id)
-      .map((company) => company.id)
-  );
+  const { assignedExecutionScopeKeys } = buildUserAssignedExecutionScopeIndex(user, motions, companies, {
+    motionId: options.motionId ?? null,
+    companyId: options.companyId ?? null
+  });
   const outboundCapacity = buildOutboundCapacityView(user, motions, companies, rawProfiles, {
     now,
     motionId: options.motionId ?? null,
     companyId: options.companyId ?? null,
-    prospectId: options.prospectId ?? null
+    prospectId: options.prospectId ?? null,
+    rawObservations
   });
   const cues = (options.rawCues ?? []).map((cue) => inboundCueSchema.parse(cue));
 
   const syncPlannerItem = buildSyncPlannerItem({
     user,
     motions,
-    assignedCompanyIds,
+    assignedExecutionScopeKeys,
     observationCount: rawObservations.length,
     cues,
     now,
@@ -86,10 +87,6 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
     .flatMap((motion) =>
       motion.targetMap.accounts.flatMap((account) =>
         account.prospects.map((prospect) => {
-          if (!assignedCompanyIds.has(account.companyId)) {
-            return null;
-          }
-
           if (options.motionId && motion.id !== options.motionId) {
             return null;
           }
@@ -102,6 +99,10 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
             return null;
           }
 
+          if (!assignedExecutionScopeKeys.has(buildMotionCompanyScopeKey(motion.id, account.companyId))) {
+            return null;
+          }
+
           if (prospect.cadenceState.status !== "ready") {
             return null;
           }
@@ -110,9 +111,13 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
             motion,
             account,
             prospect,
-            motionSupportProspects: motion.targetMap.accounts.flatMap((candidateAccount) =>
-              candidateAccount.prospects.map((candidateProspect) => toSupportProspect(candidateAccount, candidateProspect))
-            ),
+            motionSupportProspects: motion.targetMap.accounts
+              .filter((candidateAccount) =>
+                assignedExecutionScopeKeys.has(buildMotionCompanyScopeKey(motion.id, candidateAccount.companyId))
+              )
+              .flatMap((candidateAccount) =>
+                candidateAccount.prospects.map((candidateProspect) => toSupportProspect(candidateAccount, candidateProspect))
+              ),
             latestInboxItem: inboxByProspectId.get(prospect.id) ?? null,
             now
           });
@@ -360,7 +365,7 @@ function buildInboundReviewPlannerItems(review) {
  * @param {{
  *   user: import("../schema/user.js").userSchema._type,
  *   motions: import("../schema/motion.js").motionSchema._type[],
- *   assignedCompanyIds: Set<string>,
+ *   assignedExecutionScopeKeys: Set<string>,
  *   observationCount: number,
  *   cues: import("../schema/inbound.js").inboundCueSchema._type[],
  *   now: string,
@@ -373,8 +378,8 @@ function buildInboundReviewPlannerItems(review) {
  *   }
  * }} input
  */
-function buildSyncPlannerItem({ user, motions, assignedCompanyIds, observationCount, cues, now, options }) {
-  if (!assignedCompanyIds.size || options.prospectId) {
+function buildSyncPlannerItem({ user, motions, assignedExecutionScopeKeys, observationCount, cues, now, options }) {
+  if (!assignedExecutionScopeKeys.size || options.prospectId) {
     return null;
   }
 
@@ -450,7 +455,7 @@ function buildSyncPlannerItem({ user, motions, assignedCompanyIds, observationCo
     : `${baseRecommendedAction} Queue that sync for the next open working hours window instead of forcing it right now.`;
   const state = workingHours.openNow ? "due_now" : "waiting_until";
   const priority = workingHours.openNow ? "action" : "wait";
-  const priorityRank = workingHours.openNow ? 0.45 : 2.9;
+  const priorityRank = workingHours.openNow ? 1.5 : 2.9;
   const cadenceEffect = workingHours.openNow
     ? hasCue ? "sync_hint_detected" : "sync_needed"
     : "sync_waiting_for_working_hours";
@@ -720,6 +725,12 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
           name: supportAction.prospect.name,
           title: supportAction.prospect.title
         },
+        cadence: {
+          currentStep: supportAction.prospect.cadenceState.currentStep ?? null,
+          nextAction: supportAction.prospect.cadenceState.nextAction ?? supportAction.nextMove,
+          nextActionDueAt: supportAction.prospect.cadenceState.nextActionDueAt ?? supportAction.dueAt ?? null,
+          lastTouchOutcome: supportAction.prospect.cadenceState.lastTouchOutcome ?? null
+        },
         state: "due_now",
         priority: supportAction.priority,
         priorityRank: 1,
@@ -903,6 +914,7 @@ function shouldSurfaceInboundReviewItem(item) {
 
   return (
     item.state === "needs_decision"
+    || item.state === "needs_status_reconciliation"
     || item.state === "stale_withdraw_review"
   );
 }
@@ -914,6 +926,8 @@ function humanizeReviewState(state) {
   switch (state) {
     case "needs_decision":
       return "Needs decision";
+    case "needs_status_reconciliation":
+      return "Needs status reconciliation";
     case "stale_withdraw_review":
       return "Stale withdraw review";
     case "needs_reply":

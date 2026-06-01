@@ -1,6 +1,9 @@
 // @ts-check
 
-import { normalizeContactValue } from "../lib/prospect-contacts.js";
+import {
+  extractLinkedinPublicId,
+  normalizeContactValue
+} from "../lib/prospect-contacts.js";
 import { motionSchema } from "../schema/motion.js";
 
 /**
@@ -10,7 +13,9 @@ import { motionSchema } from "../schema/motion.js";
  *   companyId?: string | null | undefined,
  *   prospectId?: string | null | undefined,
  *   actorHandle?: string | null | undefined,
- *   actorProfileUrl?: string | null | undefined
+ *   actorProfileUrl?: string | null | undefined,
+ *   actorLinkedinPublicId?: string | null | undefined,
+ *   actorLinkedinMemberId?: string | null | undefined
  * }} input
  */
 export function resolveInboundObservationLinks(rawMotions, input) {
@@ -57,8 +62,18 @@ export function resolveInboundObservationLinks(rawMotions, input) {
   );
 
   const matchedByProfile = findMatchingProspectsByProfile(filteredProspects, input.actorProfileUrl ?? null);
+  const matchedByPublicId = findMatchingProspectsByLinkedinPublicId(
+    filteredProspects,
+    input.actorLinkedinPublicId ?? extractLinkedinPublicId(input.actorProfileUrl)
+  );
+  const matchedByMemberId = findMatchingProspectsByLinkedinMemberId(filteredProspects, input.actorLinkedinMemberId ?? null);
   const matchedByEmail = findMatchingProspectsByEmail(filteredProspects, input.actorHandle ?? null);
-  const resolvedProspect = chooseResolvedProspect(matchedByProfile, matchedByEmail);
+  const resolvedProspect = chooseResolvedProspect(
+    matchedByProfile,
+    matchedByPublicId,
+    matchedByMemberId,
+    matchedByEmail
+  );
 
   if (resolvedProspect) {
     return mergeResolvedLinks(resolved, resolvedProspect);
@@ -108,6 +123,52 @@ function findMatchingProspectsByProfile(prospectContexts, actorProfileUrl) {
  *     contactPoints?: Array<{ kind: string, value: string }>
  *   }
  * }>} prospectContexts
+ * @param {string | null} actorLinkedinPublicId
+ */
+function findMatchingProspectsByLinkedinPublicId(prospectContexts, actorLinkedinPublicId) {
+  const normalizedPublicId = normalizeNullableString(actorLinkedinPublicId);
+  if (!normalizedPublicId) {
+    return [];
+  }
+
+  const normalizedValue = normalizeContactValue("linkedin_public_id", normalizedPublicId);
+  return prospectContexts.filter((context) => hasMatchingContactPoint(context.prospect, "linkedin_public_id", normalizedValue));
+}
+
+/**
+ * @param {Array<{
+ *   motionId: string,
+ *   companyId: string,
+ *   prospectId: string,
+ *   prospect: {
+ *     email?: string | null,
+ *     linkedinProfileUrl?: string | null,
+ *     contactPoints?: Array<{ kind: string, value: string }>
+ *   }
+ * }>} prospectContexts
+ * @param {string | null} actorLinkedinMemberId
+ */
+function findMatchingProspectsByLinkedinMemberId(prospectContexts, actorLinkedinMemberId) {
+  const normalizedMemberId = normalizeNullableString(actorLinkedinMemberId);
+  if (!normalizedMemberId) {
+    return [];
+  }
+
+  const normalizedValue = normalizeContactValue("linkedin_member_id", normalizedMemberId);
+  return prospectContexts.filter((context) => hasMatchingContactPoint(context.prospect, "linkedin_member_id", normalizedValue));
+}
+
+/**
+ * @param {Array<{
+ *   motionId: string,
+ *   companyId: string,
+ *   prospectId: string,
+ *   prospect: {
+ *     email?: string | null,
+ *     linkedinProfileUrl?: string | null,
+ *     contactPoints?: Array<{ kind: string, value: string }>
+ *   }
+ * }>} prospectContexts
  * @param {string | null} actorHandle
  */
 function findMatchingProspectsByEmail(prospectContexts, actorHandle) {
@@ -126,7 +187,7 @@ function findMatchingProspectsByEmail(prospectContexts, actorHandle) {
  *   linkedinProfileUrl?: string | null,
  *   contactPoints?: Array<{ kind: string, value: string }>
  * }} prospect
- * @param {"email" | "linkedin_profile"} kind
+ * @param {"email" | "linkedin_profile" | "linkedin_public_id" | "linkedin_member_id"} kind
  * @param {string} normalizedValue
  */
 function hasMatchingContactPoint(prospect, kind, normalizedValue) {
@@ -134,9 +195,24 @@ function hasMatchingContactPoint(prospect, kind, normalizedValue) {
     return false;
   }
 
-  const directValue = kind === "email" ? prospect.email : prospect.linkedinProfileUrl;
-  if (directValue && normalizeContactValue(kind, directValue) === normalizedValue) {
-    return true;
+  if (kind === "email") {
+    if (prospect.email && normalizeContactValue(kind, prospect.email) === normalizedValue) {
+      return true;
+    }
+  } else if (kind === "linkedin_profile") {
+    if (prospect.linkedinProfileUrl && normalizeContactValue(kind, prospect.linkedinProfileUrl) === normalizedValue) {
+      return true;
+    }
+
+    const derivedPublicId = extractLinkedinPublicId(normalizedValue);
+    if (derivedPublicId && hasMatchingContactPoint(prospect, "linkedin_public_id", derivedPublicId)) {
+      return true;
+    }
+  } else if (kind === "linkedin_public_id") {
+    const directPublicId = extractLinkedinPublicId(prospect.linkedinProfileUrl);
+    if (directPublicId && normalizeContactValue(kind, directPublicId) === normalizedValue) {
+      return true;
+    }
   }
 
   return (prospect.contactPoints ?? []).some((point) =>
@@ -145,18 +221,25 @@ function hasMatchingContactPoint(prospect, kind, normalizedValue) {
 }
 
 /**
- * @param {Array<{ motionId: string, companyId: string, prospectId: string }>} profileMatches
- * @param {Array<{ motionId: string, companyId: string, prospectId: string }>} emailMatches
+ * @param {...Array<{ motionId: string, companyId: string, prospectId: string }>} matchGroups
  */
-function chooseResolvedProspect(profileMatches, emailMatches) {
-  const uniqueProfile = profileMatches.length === 1 ? profileMatches[0] : null;
-  const uniqueEmail = emailMatches.length === 1 ? emailMatches[0] : null;
+function chooseResolvedProspect(...matchGroups) {
+  const uniqueMatches = matchGroups
+    .map((matches) => matches.length === 1 ? matches[0] : null)
+    .filter(Boolean);
 
-  if (uniqueProfile && uniqueEmail) {
-    return sameResolvedProspect(uniqueProfile, uniqueEmail) ? uniqueProfile : null;
+  if (!uniqueMatches.length) {
+    return null;
   }
 
-  return uniqueProfile ?? uniqueEmail;
+  const first = uniqueMatches[0];
+  for (const match of uniqueMatches.slice(1)) {
+    if (!sameResolvedProspect(first, match)) {
+      return null;
+    }
+  }
+
+  return first;
 }
 
 /**

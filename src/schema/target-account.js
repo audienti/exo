@@ -66,6 +66,8 @@ const tenureBandSchema = z.enum(["under-6-months", "6-to-24-months", "24-to-60-m
 const freshnessBandSchema = z.enum(["0-14-days", "15-30-days", "31-60-days", "61-90-days", "stale", "unknown"]);
 const contactPointKindSchema = z.enum([
   "linkedin_profile",
+  "linkedin_public_id",
+  "linkedin_member_id",
   "email",
   "phone",
   "x_profile",
@@ -214,6 +216,31 @@ export const liveSignalSchema = z.object({
   engagementRationale: nullableString.default(null)
 });
 
+export const linkedinRecentPostSchema = z.object({
+  activityType: nullableString.default(null),
+  url: z.string().url().nullable().default(null),
+  postedAt: z.string().datetime().nullable().default(null),
+  freshnessBand: freshnessBandSchema.nullable().default(null),
+  summary: nullableString.default(null),
+  snippet: nullableString.default(null)
+});
+
+export const linkedinProfileSnapshotSchema = z.object({
+  capturedAt: z.string().datetime().nullable().default(null),
+  profileUrl: z.string().url().nullable().default(null),
+  publicId: nullableString.default(null),
+  memberId: nullableString.default(null),
+  displayName: nullableString.default(null),
+  currentRoleTitle: nullableString.default(null),
+  currentCompanyName: nullableString.default(null),
+  headline: nullableString.default(null),
+  location: nullableString.default(null),
+  about: nullableString.default(null),
+  followerCount: z.number().int().min(0).nullable().default(null),
+  connectionCount: z.number().int().min(0).nullable().default(null),
+  recentPosts: z.array(linkedinRecentPostSchema).default([])
+});
+
 export const contactPointEvidenceSchema = z.object({
   type: z.string().trim().min(1),
   summary: z.string().trim().min(1),
@@ -338,6 +365,7 @@ export const prospectSchema = z.object({
   roleTruth: roleTruthSchema.default({}),
   triggerWindow: triggerWindowSchema.default({}),
   identityTells: identityTellsSchema.default({}),
+  linkedinProfileSnapshot: linkedinProfileSnapshotSchema.default({}),
   liveSignal: liveSignalSchema.default({}),
   contactPoints: z.array(contactPointSchema).default([]),
   contactEnrichmentState: contactEnrichmentStateSchema.default({}),

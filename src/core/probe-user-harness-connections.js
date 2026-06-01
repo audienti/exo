@@ -56,7 +56,7 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
   );
 
   let updatedUser = user;
-  const probes = selectedConnections.map((connection) => {
+  let probes = selectedConnections.map((connection) => {
     const probe = probeHarnessConnection(connection, {
       codexHome: options.codexHome ?? null,
       claudeCli: options.claudeCli ?? null
@@ -74,6 +74,44 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
 
     return probe;
   });
+
+  if (!probes.length && runtimeFilter && connectorFilter) {
+    const runtimeProbe = probeRuntimeConnectorAvailability(runtimeFilter, connectorFilter, {
+      codexHome: options.codexHome ?? null,
+      claudeCli: options.claudeCli ?? null
+    });
+
+    if (options.writeback) {
+      const before = updatedUser.harnessConnections.find((connection) =>
+        connection.runtime.toLowerCase() === runtimeFilter
+        && connection.connector.toLowerCase() === connectorFilter
+      ) ?? null;
+      updatedUser = upsertUserHarnessConnection(updatedUser, {
+        runtime: runtimeFilter,
+        connector: connectorFilter,
+        label: before?.label ?? null,
+        notes: before?.notes ?? null,
+        status: runtimeProbe.detectedStatus
+      });
+      const persisted = updatedUser.harnessConnections.find((connection) =>
+        connection.runtime.toLowerCase() === runtimeFilter
+        && connection.connector.toLowerCase() === connectorFilter
+      ) ?? null;
+      probes = [
+        persisted
+          ? {
+              ...runtimeProbe,
+              connectionId: persisted.id,
+              label: persisted.label,
+              storedStatus: before?.status ?? "unknown",
+              willWriteback: true
+            }
+          : runtimeProbe
+      ];
+    } else {
+      probes = [runtimeProbe];
+    }
+  }
 
   return {
     user: {

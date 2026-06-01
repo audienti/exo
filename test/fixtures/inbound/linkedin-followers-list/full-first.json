@@ -1,0 +1,32 @@
+{
+  "mode": "full",
+  "accounts": [
+    {
+      "accountId": "__ACCOUNT_ID__",
+      "surfaces": [
+        {
+          "surfaceKey": "linkedin-followers-list",
+          "status": "success",
+          "observedAt": "2026-05-31T15:00:00.000Z",
+          "itemCount": 1,
+          "visibleTotalCount": 1,
+          "captureCompleteness": "complete",
+          "requestedMode": "full",
+          "actualMode": "full",
+          "reconcileRequired": false,
+          "reconcileReason": null,
+          "observations": [
+            {
+              "kind": "follower_confirmed",
+              "externalId": "follower-1",
+              "observedAt": "2026-05-31T15:00:00.000Z",
+              "actorName": "Grace Follower",
+              "actorProfileUrl": "https://www.linkedin.com/in/grace-follower/",
+              "summary": "Grace Follower currently follows this profile."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

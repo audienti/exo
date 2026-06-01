@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "node ./src/cli/index.js",
     "check": "node --check ./src/cli/index.js",
-    "test": "node --test"
+    "test": "node ./scripts/run-node-test.js"
   },
   "dependencies": {
     "commander": "^14.0.1",

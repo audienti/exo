@@ -5,6 +5,7 @@ import { inboundSyncPlanModeSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { buildLiveGmailInboundSyncPayload } from "./inbound-gmail-live-sync.js";
 import { buildLiveLinkedinInboundSyncPayload } from "./inbound-linkedin-live-sync.js";
+import { buildInboundLiveLandingPlan } from "./live-agent-handoff.js";
 import { buildUserInboundSyncPlan } from "./user-inbound-sync.js";
 
 const LIVE_SUPPORTED_CAPABILITIES = new Set(["gmail", "linkedin"]);
@@ -29,8 +30,8 @@ export async function buildLiveInboundSyncPayload(rawUser, rawProfiles, options 
   const capability = options.capability ? browserProfileCapabilitySchema.parse(options.capability) : null;
   const mode = inboundSyncPlanModeSchema.parse(options.mode ?? "quick");
 
-  if (mode !== "quick") {
-    throw new Error("Live inbound sync currently supports quick mode only.");
+  if (!["quick", "full"].includes(mode)) {
+    throw new Error("Live inbound sync currently supports quick or full mode only.");
   }
 
   const plan = buildUserInboundSyncPlan(user, {
@@ -53,6 +54,7 @@ export async function buildLiveInboundSyncPayload(rawUser, rawProfiles, options 
     if (accountPlan.capability === "linkedin") {
       const built = await buildLiveLinkedinInboundSyncPayload(user, rawProfiles, {
         accountId: accountPlan.accountId,
+        mode,
         runtime: options.runtime ?? null,
         limit: options.limit ?? null,
         codexCli: options.codexCli ?? null,
@@ -63,6 +65,7 @@ export async function buildLiveInboundSyncPayload(rawUser, rawProfiles, options 
         account: built.account,
         profile: built.profile,
         probe: built.probe,
+        transport: built.transport,
         capture: built.capture,
         payload: built.payload
       });
@@ -72,6 +75,7 @@ export async function buildLiveInboundSyncPayload(rawUser, rawProfiles, options 
     if (accountPlan.capability === "gmail") {
       const built = await buildLiveGmailInboundSyncPayload(user, rawProfiles, {
         accountId: accountPlan.accountId,
+        mode,
         runtime: options.runtime ?? null,
         limit: options.limit ?? null,
         since: options.since ?? null,
@@ -83,11 +87,26 @@ export async function buildLiveInboundSyncPayload(rawUser, rawProfiles, options 
         account: built.account,
         profile: built.profile,
         probe: built.probe,
+        transport: built.transport,
         capture: built.capture,
         payload: built.payload
       });
     }
   }
+
+  const transportStatus = accountResults.some((account) => account.transport?.kind === "agent_handoff")
+    ? "agent_capture_required"
+    : "ready";
+  const landingPlan = buildInboundLiveLandingPlan({
+    userId: user.id,
+    accounts: accountResults
+  });
+  const payload = transportStatus === "ready"
+    ? {
+        mode,
+        accounts: accountResults.flatMap((account) => account.payload.accounts)
+      }
+    : null;
 
   return {
     user: {
@@ -104,10 +123,10 @@ export async function buildLiveInboundSyncPayload(rawUser, rawProfiles, options 
       requestedAccountCount: plan.accounts.length,
       runnableAccountCount: accountResults.length
     },
+    transportStatus,
+    canApply: payload !== null,
+    landingPlan,
     accounts: accountResults,
-    payload: {
-      mode,
-      accounts: accountResults.flatMap((account) => account.payload.accounts)
-    }
+    payload
   };
 }

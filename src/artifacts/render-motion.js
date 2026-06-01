@@ -820,6 +820,8 @@ export function renderMotionWritingBrief(result) {
     `  Role Truth: ${prospect.roleTruth.summary ?? "none"}`,
     `  Trigger Window: ${prospect.triggerWindow.summary ?? "none"}`,
     `  Identity Tells: ${prospect.identityTells.summary ?? "none"}`,
+    `  LinkedIn Snapshot Company: ${prospect.linkedinProfileSnapshot.currentCompanyName ?? "none"}`,
+    `  LinkedIn Recent Posts Captured: ${prospect.linkedinProfileSnapshot.recentPosts.length}`,
     `  Live Signal: ${prospect.liveSignal.summary ?? "none"}`,
     `  Live Signal URL: ${prospect.liveSignal.url ?? "none"}`,
     `  Live Signal Freshness: ${prospect.liveSignal.freshnessBand ?? "unknown"}`,

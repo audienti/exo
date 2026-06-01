@@ -32,7 +32,12 @@ const catalog = [
     truthLevel: "authoritative",
     retrievalMode: "browser-capture",
     defaultEnabled: true,
-    observationKinds: ["connection_request_pending", "connection_request_accepted", "connection_request_withdrawn"]
+    observationKinds: [
+      "connection_request_pending",
+      "connection_request_no_longer_pending",
+      "connection_request_accepted",
+      "connection_request_withdrawn"
+    ]
   },
   {
     key: "linkedin-received-invitations",
@@ -43,7 +48,12 @@ const catalog = [
     truthLevel: "authoritative",
     retrievalMode: "browser-capture",
     defaultEnabled: true,
-    observationKinds: ["connection_request_received", "connection_request_accepted", "connection_request_declined"]
+    observationKinds: [
+      "connection_request_received",
+      "connection_request_received_no_longer_pending",
+      "connection_request_accepted",
+      "connection_request_declined"
+    ]
   },
   {
     key: "linkedin-messaging-inbox",
@@ -87,7 +97,7 @@ const catalog = [
     truthLevel: "authoritative",
     retrievalMode: "browser-capture",
     defaultEnabled: true,
-    observationKinds: ["follow_state_changed", "follow_state_confirmed"]
+    observationKinds: ["follow_state_changed", "follow_state_removed", "follow_state_confirmed"]
   },
   {
     key: "linkedin-comment-replies",

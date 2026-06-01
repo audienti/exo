@@ -67,10 +67,10 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
     && (!options.prospectId || observation.prospectId === options.prospectId)
   );
 
-  const surfaceObservationCounts = new Map();
+  const derivedSurfaceObservationCounts = new Map();
   for (const observation of filteredObservations) {
     const key = `${observation.accountId}:${observation.surfaceKey}`;
-    surfaceObservationCounts.set(key, (surfaceObservationCounts.get(key) ?? 0) + 1);
+    derivedSurfaceObservationCounts.set(key, (derivedSurfaceObservationCounts.get(key) ?? 0) + 1);
   }
 
   const surfaceState = accounts.map((account) => ({
@@ -82,10 +82,15 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
     surfaces: account.surfaces
       .filter((surface) => surface.enabled)
       .map((surface) => {
-        const observationCount = surfaceObservationCounts.get(`${account.accountId}:${surface.key}`) ?? 0;
-        const needsItemization = surface.lastRunStatus === "success"
-          && (surface.lastItemCount ?? 0) > 0
-          && observationCount === 0;
+        const derivedObservationCount = derivedSurfaceObservationCounts.get(`${account.accountId}:${surface.key}`) ?? 0;
+        const observationCount = surface.lastObservationCount ?? derivedObservationCount;
+        const reportedItemCount = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;
+        const missingObservationCount = surface.lastItemizationGapCount
+          ?? (reportedItemCount > 0 ? Math.max(reportedItemCount - observationCount, 0) : 0);
+        const needsItemization = (
+          surface.lastRunStatus === "success"
+          || surface.lastRunStatus === "warning"
+        ) && missingObservationCount > 0;
 
         return {
           key: surface.key,
@@ -95,9 +100,16 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
           lastSyncedAt: surface.lastSyncedAt,
           lastObservedAt: surface.lastObservedAt,
           lastItemCount: surface.lastItemCount,
+          lastVisibleTotalCount: surface.lastVisibleTotalCount,
+          lastCaptureCompleteness: surface.lastCaptureCompleteness,
+          lastRequestedMode: surface.lastRequestedMode,
+          lastActualMode: surface.lastActualMode,
+          lastReconcileRequired: surface.lastReconcileRequired,
+          lastReconcileReason: surface.lastReconcileReason,
           summary: summarizeSurfaceState(surface),
           recommendedAction: recommendSurfaceAction(surface),
           observationCount,
+          missingObservationCount,
           needsItemization
         };
       })
@@ -116,9 +128,26 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
         handle: account.handle,
         surfaceKey: surface.key,
         label: surface.label,
-        itemCount: surface.lastItemCount ?? 0,
-        summary: `${surface.label} reported ${surface.lastItemCount ?? 0} item${surface.lastItemCount === 1 ? "" : "s"} in the last sync, but no individual observations were written back.`,
-        recommendedAction: `Rerun ${surface.label} and write each concrete item back as its own observation so Exo can tell the operator what to review.`
+        itemCount: surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0,
+        itemizedCount: surface.lastItemCount ?? 0,
+        observationCount: surface.observationCount,
+        missingObservationCount: surface.missingObservationCount,
+        captureCompleteness: surface.lastCaptureCompleteness ?? null,
+        requestedMode: surface.lastRequestedMode ?? null,
+        actualMode: surface.lastActualMode ?? null,
+        reconcileRequired: surface.lastReconcileRequired ?? null,
+        reconcileReason: surface.lastReconcileReason ?? null,
+        summary: buildItemizationGapSummary(
+          surface.label,
+          surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0,
+          surface.observationCount
+        ),
+        recommendedAction: buildItemizationGapAction(
+          surface.label,
+          surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0,
+          surface.observationCount,
+          surface.missingObservationCount
+        )
       }))
   );
 
@@ -133,7 +162,11 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
       highPriorityCount: reviewItems.filter((item) => item.priority === "high").length,
       mediumPriorityCount: reviewItems.filter((item) => item.priority === "medium").length,
       lowPriorityCount: reviewItems.filter((item) => item.priority === "low").length,
-      decisionItemCount: reviewItems.filter((item) => item.state === "needs_decision" || item.state === "stale_withdraw_review").length,
+      decisionItemCount: reviewItems.filter((item) =>
+        item.state === "needs_decision"
+        || item.state === "stale_withdraw_review"
+        || item.state === "needs_status_reconciliation"
+      ).length,
       signalItemCount: reviewItems.filter((item) => item.category === "signal" || item.category === "visibility").length,
       itemizationGapCount: itemizationGaps.length
     },
@@ -150,6 +183,33 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
     reviewItems,
     itemizationGaps
   };
+}
+
+/**
+ * @param {string} label
+ * @param {number} itemCount
+ * @param {number} observationCount
+ */
+function buildItemizationGapSummary(label, itemCount, observationCount) {
+  if (observationCount === 0) {
+    return `${label} reported ${itemCount} item${itemCount === 1 ? "" : "s"} in the last sync, but no individual observations were written back.`;
+  }
+
+  return `${label} reported ${itemCount} item${itemCount === 1 ? "" : "s"} in the last sync, but only ${observationCount} individual observation${observationCount === 1 ? "" : "s"} ${observationCount === 1 ? "was" : "were"} written back.`;
+}
+
+/**
+ * @param {string} label
+ * @param {number} itemCount
+ * @param {number} observationCount
+ * @param {number} missingObservationCount
+ */
+function buildItemizationGapAction(label, itemCount, observationCount, missingObservationCount) {
+  if (observationCount === 0) {
+    return `Rerun ${label} and write each concrete item back as its own observation so Exo can tell the operator what to review.`;
+  }
+
+  return `Rerun ${label} and write the remaining ${missingObservationCount} concrete item${missingObservationCount === 1 ? "" : "s"} back as individual observations so Exo can tell the operator what to review.`;
 }
 
 /**
@@ -183,6 +243,14 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
     kind: observation.kind,
     surfaceKey: observation.surfaceKey,
     actorName: observation.actorName,
+    actorTitle: observation.actorTitle,
+    actorCompanyName: observation.actorCompanyName,
+    actorProfileUrl: observation.actorProfileUrl,
+    actorLinkedinPublicId: observation.actorLinkedinPublicId,
+    actorLinkedinMemberId: observation.actorLinkedinMemberId,
+    actorAvatarSourceUrl: observation.actorAvatarSourceUrl,
+    actorAvatarUrl: observation.actorAvatarUrl,
+    sourceUrl: observation.sourceUrl,
     summary: observation.summary,
     category: triage.category,
     priority: triage.priority,
@@ -218,6 +286,16 @@ function classifyReviewObservation(kind, ageDays, actorName) {
         recommendedAction: `Reply to ${actorName} and move the branch into an active conversation.`,
         decisionOptions: ["reply-now"]
       };
+    case "thread_updated":
+    case "email_thread_updated":
+      return {
+        category: "reply",
+        priority: "medium",
+        state: "thread_change_review",
+        whyItMatters: "A private thread moved, but the newest visible state is not clearly classifiable as a reply yet. The operator still needs to review what changed.",
+        recommendedAction: `Review ${actorName}'s updated thread and decide whether it needs a reply, a state change, or no action.`,
+        decisionOptions: ["reply-now", "note-change", "ignore"]
+      };
     case "connection_request_received":
       return {
         category: "incoming_invite",
@@ -227,6 +305,15 @@ function classifyReviewObservation(kind, ageDays, actorName) {
         recommendedAction: `Review ${actorName}'s inbound connection request and decide whether to accept or decline it.`,
         decisionOptions: ["accept", "decline"]
       };
+    case "connection_request_received_no_longer_pending":
+      return {
+        category: "incoming_invite",
+        priority: "high",
+        state: "needs_status_reconciliation",
+        whyItMatters: "A previously visible inbound connection request left the received-invitations list. The operator or the requester changed its state, and Exo needs that reconciled.",
+        recommendedAction: `Review whether ${actorName}'s inbound connection request was accepted, declined, withdrawn, or otherwise resolved, then update the governed branch accordingly.`,
+        decisionOptions: ["accepted", "declined", "other"]
+      };
     case "connection_request_accepted":
       return {
         category: "accepted_invite",
@@ -235,6 +322,24 @@ function classifyReviewObservation(kind, ageDays, actorName) {
         whyItMatters: "The connection gate opened. This is the moment to decide whether to send the first post-accept private message.",
         recommendedAction: `Decide whether to send the first post-accept direct message to ${actorName}.`,
         decisionOptions: ["message", "wait"]
+      };
+    case "connection_request_declined":
+      return {
+        category: "declined_invite",
+        priority: "low",
+        state: "resolved_declined",
+        whyItMatters: "The inbound connection request was explicitly declined. That branch is closed unless new evidence changes the judgment.",
+        recommendedAction: `No next move is required for ${actorName} unless this decline needs to be linked or audited.`,
+        decisionOptions: []
+      };
+    case "connection_request_no_longer_pending":
+      return {
+        category: "sent_invite",
+        priority: "high",
+        state: "needs_status_reconciliation",
+        whyItMatters: "A previously pending outbound invite disappeared from the full live pending list. The waiting assumption is broken, but the exact outcome still needs classification.",
+        recommendedAction: `Review whether ${actorName}'s connection request was accepted, rejected, or otherwise left the pending list, then update the governed branch accordingly.`,
+        decisionOptions: ["accepted", "rejected", "other"]
       };
     case "connection_request_pending":
       if (ageDays >= STALE_CONNECTION_REQUEST_DAYS) {
@@ -267,8 +372,10 @@ function classifyReviewObservation(kind, ageDays, actorName) {
         decisionOptions: ["note-signal", "hold"]
       };
     case "follower_added":
+    case "follower_removed":
     case "follower_confirmed":
     case "follow_state_changed":
+    case "follow_state_removed":
     case "follow_state_confirmed":
       return {
         category: "visibility",
@@ -328,13 +435,15 @@ function compareReviewItems(left, right) {
   const stateRank = {
     needs_reply: 0,
     needs_decision: 1,
-    stale_withdraw_review: 2,
-    ready_for_post_accept: 3,
-    attention_signal: 4,
-    visibility_signal: 5,
-    public_engagement_review: 6,
-    waiting: 7,
-    informational: 8
+    needs_status_reconciliation: 2,
+    stale_withdraw_review: 3,
+    ready_for_post_accept: 4,
+    thread_change_review: 5,
+    attention_signal: 6,
+    visibility_signal: 7,
+    public_engagement_review: 8,
+    waiting: 9,
+    informational: 10
   };
 
   return (

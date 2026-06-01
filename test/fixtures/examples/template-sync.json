@@ -1,0 +1,31 @@
+{
+  "mode": "quick",
+  "accounts": [
+    {
+      "accountId": "__ACCOUNT_ID__",
+      "surfaces": [
+        {
+          "surfaceKey": "linkedin-sent-invitations",
+          "status": "success",
+          "observedAt": "2026-05-31T16:00:00.000Z",
+          "itemCount": 1,
+          "visibleTotalCount": 1,
+          "captureCompleteness": "complete",
+          "requestedMode": "quick",
+          "actualMode": "full",
+          "reconcileRequired": false,
+          "reconcileReason": null,
+          "observations": [
+            {
+              "kind": "connection_request_pending",
+              "externalId": "__INVITE_ID__",
+              "observedAt": "2026-05-31T16:00:00.000Z",
+              "actorName": "__ACTOR_NAME__",
+              "summary": "__ACTOR_NAME__ is still pending."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

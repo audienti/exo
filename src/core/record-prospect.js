@@ -56,6 +56,28 @@ import {
  *     selfImageVerbs?: string[],
  *     metaphors?: string[]
  *   },
+ *   linkedinProfileSnapshot?: {
+ *     capturedAt?: string | null | undefined,
+ *     profileUrl?: string | null | undefined,
+ *     publicId?: string | null | undefined,
+ *     memberId?: string | null | undefined,
+ *     displayName?: string | null | undefined,
+ *     currentRoleTitle?: string | null | undefined,
+ *     currentCompanyName?: string | null | undefined,
+ *     headline?: string | null | undefined,
+ *     location?: string | null | undefined,
+ *     about?: string | null | undefined,
+ *     followerCount?: number | null | undefined,
+ *     connectionCount?: number | null | undefined,
+ *     recentPosts?: Array<{
+ *       activityType?: string | null | undefined,
+ *       url?: string | null | undefined,
+ *       postedAt?: string | null | undefined,
+ *       freshnessBand?: import("../schema/target-account.js").linkedinRecentPostSchema._type["freshnessBand"],
+ *       summary?: string | null | undefined,
+ *       snippet?: string | null | undefined
+ *     }>
+ *   },
  *   liveSignal?: {
  *     channel?: string | null | undefined,
  *     activityType?: string | null | undefined,
@@ -173,6 +195,7 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
           ? normalizeStringArray(input.identityTells.metaphors)
           : undefined
     },
+    linkedinProfileSnapshot: buildLinkedinProfileSnapshotInput(input.linkedinProfileSnapshot),
     liveSignal: {
       channel: normalizeOptionalNullableString(input.liveSignal?.channel),
       activityType: normalizeOptionalNullableString(input.liveSignal?.activityType),
@@ -247,6 +270,28 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
  *     quantifiedReceipts?: string[],
  *     selfImageVerbs?: string[],
  *     metaphors?: string[]
+ *   },
+ *   linkedinProfileSnapshot?: {
+ *     capturedAt?: string | null | undefined,
+ *     profileUrl?: string | null | undefined,
+ *     publicId?: string | null | undefined,
+ *     memberId?: string | null | undefined,
+ *     displayName?: string | null | undefined,
+ *     currentRoleTitle?: string | null | undefined,
+ *     currentCompanyName?: string | null | undefined,
+ *     headline?: string | null | undefined,
+ *     location?: string | null | undefined,
+ *     about?: string | null | undefined,
+ *     followerCount?: number | null | undefined,
+ *     connectionCount?: number | null | undefined,
+ *     recentPosts?: Array<{
+ *       activityType?: string | null | undefined,
+ *       url?: string | null | undefined,
+ *       postedAt?: string | null | undefined,
+ *       freshnessBand?: import("../schema/target-account.js").linkedinRecentPostSchema._type["freshnessBand"],
+ *       summary?: string | null | undefined,
+ *       snippet?: string | null | undefined
+ *     }>
  *   },
  *   liveSignal?: {
  *     channel?: string | null | undefined,
@@ -399,6 +444,10 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
             ? normalizeStringArray(input.identityTells.metaphors)
             : undefined
       }),
+      linkedinProfileSnapshot: buildLinkedinProfileSnapshotUpdate(
+        existing.linkedinProfileSnapshot,
+        buildLinkedinProfileSnapshotInput(input.linkedinProfileSnapshot)
+      ),
       liveSignal: buildLiveSignalUpdate(existing.liveSignal, {
         channel: normalizeOptionalNullableString(input.liveSignal?.channel),
         activityType: normalizeOptionalNullableString(input.liveSignal?.activityType),
@@ -476,6 +525,7 @@ function upsertProspect(prospects, nextProspect, limit, now) {
         roleTruth: buildRoleTruthUpdate({}, nextProspect.roleTruth),
         triggerWindow: buildTriggerWindowUpdate({}, nextProspect.triggerWindow),
         identityTells: buildIdentityTellsUpdate({}, nextProspect.identityTells),
+        linkedinProfileSnapshot: buildLinkedinProfileSnapshotUpdate({}, nextProspect.linkedinProfileSnapshot),
         liveSignal: buildLiveSignalUpdate({}, nextProspect.liveSignal),
         contactPoints: nextProspect.contactPoints,
         contactEnrichmentState: buildContactEnrichmentStateUpdate({}, nextProspect.contactEnrichmentState),
@@ -520,6 +570,10 @@ function upsertProspect(prospects, nextProspect, limit, now) {
       roleTruth: buildRoleTruthUpdate(existing.roleTruth, nextProspect.roleTruth),
       triggerWindow: buildTriggerWindowUpdate(existing.triggerWindow, nextProspect.triggerWindow),
       identityTells: buildIdentityTellsUpdate(existing.identityTells, nextProspect.identityTells),
+      linkedinProfileSnapshot: buildLinkedinProfileSnapshotUpdate(
+        existing.linkedinProfileSnapshot,
+        nextProspect.linkedinProfileSnapshot
+      ),
       liveSignal: buildLiveSignalUpdate(existing.liveSignal, nextProspect.liveSignal),
       contactPoints: mergeContactPointLists(existing.contactPoints, nextProspect.contactPoints),
       contactEnrichmentState: buildContactEnrichmentStateUpdate(existing.contactEnrichmentState, nextProspect.contactEnrichmentState),
@@ -634,6 +688,94 @@ function buildIdentityTellsUpdate(existing, patch = {}) {
       patch.metaphors !== undefined
         ? mergeStringLists(existing.metaphors ?? [], patch.metaphors)
         : existing.metaphors ?? []
+  };
+}
+
+/**
+ * @param {{
+ *   capturedAt?: string | null | undefined,
+ *   profileUrl?: string | null | undefined,
+ *   publicId?: string | null | undefined,
+ *   memberId?: string | null | undefined,
+ *   displayName?: string | null | undefined,
+ *   currentRoleTitle?: string | null | undefined,
+ *   currentCompanyName?: string | null | undefined,
+ *   headline?: string | null | undefined,
+ *   location?: string | null | undefined,
+ *   about?: string | null | undefined,
+ *   followerCount?: number | null | undefined,
+ *   connectionCount?: number | null | undefined,
+ *   recentPosts?: Array<{
+ *     activityType?: string | null | undefined,
+ *     url?: string | null | undefined,
+ *     postedAt?: string | null | undefined,
+ *     freshnessBand?: import("../schema/target-account.js").linkedinRecentPostSchema._type["freshnessBand"],
+ *     summary?: string | null | undefined,
+ *     snippet?: string | null | undefined
+ *   }>
+ * } | undefined} snapshot
+ */
+function buildLinkedinProfileSnapshotInput(snapshot) {
+  if (!snapshot) {
+    return {};
+  }
+
+  return {
+    capturedAt: normalizeOptionalNullableString(snapshot.capturedAt),
+    profileUrl: normalizeOptionalNullableString(snapshot.profileUrl),
+    publicId: normalizeOptionalNullableString(snapshot.publicId),
+    memberId: normalizeOptionalNullableString(snapshot.memberId),
+    displayName: normalizeOptionalNullableString(snapshot.displayName),
+    currentRoleTitle: normalizeOptionalNullableString(snapshot.currentRoleTitle),
+    currentCompanyName: normalizeOptionalNullableString(snapshot.currentCompanyName),
+    headline: normalizeOptionalNullableString(snapshot.headline),
+    location: normalizeOptionalNullableString(snapshot.location),
+    about: normalizeOptionalNullableString(snapshot.about),
+    followerCount: snapshot.followerCount === undefined ? undefined : snapshot.followerCount,
+    connectionCount: snapshot.connectionCount === undefined ? undefined : snapshot.connectionCount,
+    recentPosts:
+      snapshot.recentPosts === undefined
+        ? undefined
+        : snapshot.recentPosts.map((post) => ({
+            activityType: normalizeOptionalNullableString(post.activityType),
+            url: normalizeOptionalNullableString(post.url),
+            postedAt: normalizeOptionalNullableString(post.postedAt),
+            freshnessBand: post.freshnessBand,
+            summary: normalizeOptionalNullableString(post.summary),
+            snippet: normalizeOptionalNullableString(post.snippet)
+          }))
+  };
+}
+
+/**
+ * @param {import("../schema/target-account.js").linkedinProfileSnapshotSchema._type | Record<string, never>} existing
+ * @param {ReturnType<typeof buildLinkedinProfileSnapshotInput>} [patch]
+ */
+function buildLinkedinProfileSnapshotUpdate(existing, patch = {}) {
+  return {
+    capturedAt: patch.capturedAt ?? existing.capturedAt ?? null,
+    profileUrl: patch.profileUrl ?? existing.profileUrl ?? null,
+    publicId: patch.publicId ?? existing.publicId ?? null,
+    memberId: patch.memberId ?? existing.memberId ?? null,
+    displayName: patch.displayName ?? existing.displayName ?? null,
+    currentRoleTitle: patch.currentRoleTitle ?? existing.currentRoleTitle ?? null,
+    currentCompanyName: patch.currentCompanyName ?? existing.currentCompanyName ?? null,
+    headline: patch.headline ?? existing.headline ?? null,
+    location: patch.location ?? existing.location ?? null,
+    about: patch.about ?? existing.about ?? null,
+    followerCount: patch.followerCount ?? existing.followerCount ?? null,
+    connectionCount: patch.connectionCount ?? existing.connectionCount ?? null,
+    recentPosts:
+      patch.recentPosts !== undefined
+        ? patch.recentPosts.map((post) => ({
+            activityType: post.activityType ?? null,
+            url: post.url ?? null,
+            postedAt: post.postedAt ?? null,
+            freshnessBand: post.freshnessBand ?? null,
+            summary: post.summary ?? null,
+            snippet: post.snippet ?? null
+          }))
+        : existing.recentPosts ?? []
   };
 }
 

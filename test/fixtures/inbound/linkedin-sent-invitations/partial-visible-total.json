@@ -1,0 +1,33 @@
+{
+  "mode": "quick",
+  "accounts": [
+    {
+      "accountId": "__ACCOUNT_ID__",
+      "surfaces": [
+        {
+          "surfaceKey": "linkedin-sent-invitations",
+          "status": "warning",
+          "observedAt": "2026-05-31T16:50:13.000Z",
+          "itemCount": 10,
+          "visibleTotalCount": 74,
+          "captureCompleteness": "partial_visible_slice",
+          "requestedMode": "quick",
+          "actualMode": "quick",
+          "reconcileRequired": true,
+          "reconcileReason": "visible_total_exceeds_itemized_rows",
+          "error": "LinkedIn showed a larger pending queue than the visible top slice.",
+          "observations": [
+            {
+              "kind": "connection_request_pending",
+              "externalId": "invite-1",
+              "observedAt": "2026-05-31T16:50:13.000Z",
+              "actorName": "Jordan Cipolla",
+              "actorProfileUrl": "https://www.linkedin.com/in/jordan-cipolla/",
+              "summary": "Jordan Cipolla is still pending."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

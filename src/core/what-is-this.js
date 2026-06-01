@@ -184,7 +184,7 @@ export function describeExo() {
       "Browser-backed work should fail closed if no profile is attached or trusted.",
       "A ready profile means the local browser context looks structurally usable.",
       "Profile checks do not yet prove live LinkedIn, Sales Navigator, Gmail, or HubSpot auth.",
-      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through supported runtime adapters, including runtime:gmail harness-backed accounts and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn quick-mode surfaces can also be retrieved live through a trusted Chrome profile plus a supported runtime:chrome harness, but broader inbound retrieval still needs dedicated producers.",
+      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through supported runtime adapters, including runtime:gmail harness-backed accounts and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn's authoritative quick surfaces can now be retrieved through a trusted Chrome profile plus a supported runtime:chrome harness in either bounded quick mode or full reconciliation mode, but broader inbound retrieval still needs dedicated producers. In Codex desktop shell mode without an explicit EXO_CODEX_CLI override, Exo now returns an agent-side live-capture contract instead of shelling out to codex exec.",
       "Configured weekly quotas on the claimed profile identity should govern outreach pacing. InMail credits are still a separate live observation, not a static config knob.",
       "Exo resolves browser identity. The agent runtime should choose the browser-control harness.",
       "In Codex, prefer the Chrome skill or native Chrome connector before Playwriter for Chrome-profile work."
@@ -322,7 +322,7 @@ export function describeExo() {
     currentLimitations: [
       "No MCP wrapper yet.",
       "Live browser auth probes now exist for trusted Chrome profiles through supported runtime:chrome adapters, but Exo still does not do broader cross-browser auth proof or live non-browser connector auth proof by itself.",
-      "Limited live inbound retrieval now exists for Gmail and LinkedIn quick-mode surfaces through supported runtime adapters, but Exo still does not do broader LinkedIn or other inbound retrieval by itself.",
+      "Limited live inbound retrieval now exists for Gmail and for LinkedIn's authoritative quick surfaces through supported runtime adapters, including full reconciliation mode for those LinkedIn quick surfaces, but Exo still does not do broader LinkedIn or other inbound retrieval by itself. In Codex desktop shell mode, native live capture still has to be performed by the outer agent and then landed through Exo's governed writeback path.",
       "Ambient inbound cues and working-hours-aware sync pressure now exist, but cues are still suspicion rather than truth and the planner still depends on governed sync runs to confirm what actually changed.",
       "Motion-level sticky execution defaults now exist, but canonical company execution still needs explicit motion context when the same company belongs to more than one motion.",
       "No automatic company population from motion retrieval yet.",

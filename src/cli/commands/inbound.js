@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildInboundCueListView, buildInboundCueDedupeKey, recordInboundCue, resolveInboundCue } from "../../core/inbound-cues.js";
 import {
+  inboundObservationsShareIdentity,
   buildInboundObservationListView,
   mergeInboundObservation,
   parseInboundObservations,
@@ -16,6 +17,7 @@ import { buildLiveLinkedinInboundSyncPayload } from "../../core/inbound-linkedin
 import { buildGmailInboundSyncPayload } from "../../core/inbound-gmail-sync.js";
 import { buildLinkedinInboundSyncPayload } from "../../core/inbound-linkedin-sync.js";
 import { buildInboundSyncRefreshSummary, prepareUserInboundSyncRun } from "../../core/inbound-sync-run.js";
+import { updateMotionProspect } from "../../core/record-prospect.js";
 import {
   buildUserInboundSyncPlan,
   buildUserInboundSyncView,
@@ -27,6 +29,8 @@ import {
   findInboundCueById,
   findInboundObservationByDedupeKey,
   findInboundObservationById,
+  findCompanyById,
+  findMotionById,
   listBrowserProfiles,
   listInboundCues,
   listUsers,
@@ -34,6 +38,7 @@ import {
   listCompanies,
   listInboundObservations,
   listMotions,
+  updateMotion,
   updateUser,
   upsertInboundCue,
   upsertInboundObservation
@@ -51,6 +56,7 @@ import {
 } from "../../artifacts/render-inbound.js";
 import { buildInboundReviewView } from "../../core/build-inbound-review-view.js";
 import { classifyUserWorkingHours } from "../../core/working-hours.js";
+import { buildLinkedinProfileUrlFromPublicId } from "../../lib/prospect-contacts.js";
 import { browserProfileCapabilitySchema } from "../../schema/browser-profile.js";
 import {
   inboundCueKindSchema,
@@ -92,13 +98,14 @@ Rules:
   - Start with the canonical truth surfaces, not the LinkedIn notifications bell.
   - Notification dots and unread badges are ambient cues, not canonical truth. Record them as cues or trigger a sync; do not treat them as observations by themselves.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
-  - Sync policy and observation storage exist now. Gmail has a first live retrieval path through supported runtime adapters, including runtime:gmail harness connections and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn quick-mode surfaces also have a first live retrieval path through a trusted Chrome profile plus a supported runtime:chrome harness, but broader live retrieval still does not.
+  - Sync policy and observation storage exist now. Gmail has a first live retrieval path through supported runtime adapters, including runtime:gmail harness connections and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn's authoritative quick surfaces now support either a bounded quick pass or a full reconciliation pass through a trusted Chrome profile plus a supported runtime:chrome harness, but broader LinkedIn retrieval still does not.
+  - In Codex desktop shell mode without an explicit EXO_CODEX_CLI override, the live commands now return an agent-side capture contract instead of shelling out to codex exec. The agent should use native browser or Gmail tools, then land the capture through exo inbound sync gmail/linkedin or exo inbound sync run.
   - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
-  - Use inbound sync live when Exo itself should run one governed quick-mode inbound pass across every enabled Gmail and LinkedIn account that already has live retrieval support.
-  - Use inbound sync linkedin when another agent already inspected LinkedIn quick-mode surfaces and needs Exo to build or apply the governed writeback payload.
-  - Use inbound sync linkedin-live when Exo itself should inspect LinkedIn quick-mode surfaces through a trusted Chrome profile plus a supported runtime:chrome harness.
+  - Use inbound sync live when Exo itself should run one governed quick or full inbound pass across every enabled Gmail and LinkedIn account that already has live retrieval support, or when another agent needs the structured Codex handoff contract for native capture plus governed writeback.
+  - Use inbound sync linkedin when another agent already inspected LinkedIn surfaces and needs Exo to build or apply the governed writeback payload.
+  - Use inbound sync linkedin-live when Exo itself should inspect LinkedIn's authoritative quick surfaces through a trusted Chrome profile plus a supported runtime:chrome harness in quick or full mode, or when Codex needs the structured LinkedIn capture handoff contract.
   - Use inbound sync gmail when another agent already inspected Gmail and needs Exo to build or apply the governed writeback payload.
-  - Use inbound sync gmail-live when Exo itself should inspect Gmail through either a supported runtime:gmail harness-backed account or a trusted Chrome profile plus a supported runtime:chrome harness.
+  - Use inbound sync gmail-live when Exo itself should inspect Gmail through either a supported runtime:gmail harness-backed account or a trusted Chrome profile plus a supported runtime:chrome harness, or when Codex needs the structured Gmail capture handoff contract.
   - Use inbound sync run when another agent already inspected the live surfaces and needs one governed writeback path for the whole pass.
   - Use inbound review when you need the management surface: what was checked, what needs a decision, what is stale, and what still needs itemization.
 `
@@ -442,11 +449,11 @@ Rules:
 
   sync
     .command("live")
-    .description("Inspect every enabled live-supported inbound account for one user, then optionally apply one governed quick-mode writeback.")
+    .description("Inspect every enabled live-supported inbound account for one user, then optionally apply one governed quick-mode or full-mode writeback.")
     .argument("<user-id>", "Execution user identifier")
     .option("--account <account-id>", "Only inspect one connected account")
     .option("--capability <capability>", "Only inspect one capability like linkedin or gmail")
-    .option("--mode <mode>", "Currently quick only")
+    .option("--mode <mode>", "quick | full")
     .option("--runtime <runtime>", "Preferred runtime override when multiple supported harnesses exist, such as codex or claude")
     .option("--limit <count>", "Maximum relevant items to inspect per live surface")
     .option("--since <iso-datetime>", "Only keep Gmail threads whose newest relevant message is at or after this time")
@@ -483,6 +490,12 @@ Rules:
       };
 
       if (options.apply || options.refresh) {
+        if (!result.payload) {
+          console.error(result.landingPlan?.nextStep ?? "This live sync requires agent-side capture before Exo can apply a governed writeback.");
+          process.exitCode = 1;
+          return;
+        }
+
         try {
           response.applied = applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
@@ -507,7 +520,7 @@ Rules:
 
   sync
     .command("linkedin")
-    .description("Turn one LinkedIn quick-mode capture into a governed sync payload and optionally apply it.")
+    .description("Turn one LinkedIn capture into a governed sync payload and optionally apply it.")
     .argument("<user-id>", "Execution user identifier")
     .option("--account <account-id>", "Connected LinkedIn account identifier; inferred when only one LinkedIn account exists")
     .requiredOption("--input <path>", "Path to a LinkedIn capture JSON file, or - to read JSON from stdin")
@@ -565,9 +578,10 @@ Rules:
 
   sync
     .command("linkedin-live")
-    .description("Inspect LinkedIn quick-mode surfaces through the resolved trusted Chrome profile and supported runtime:chrome harness.")
+    .description("Inspect LinkedIn's authoritative quick surfaces through the resolved trusted Chrome profile and supported runtime:chrome harness in quick or full mode.")
     .argument("<user-id>", "Execution user identifier")
     .option("--account <account-id>", "Connected LinkedIn account identifier; inferred when only one LinkedIn account exists")
+    .option("--mode <mode>", "quick | full")
     .option("--runtime <runtime>", "Browser-control runtime to use when multiple supported harnesses exist, such as codex or claude")
     .option("--connector <connector>", "Browser-control connector; currently chrome only")
     .option("--limit <count>", "Maximum relevant items to inspect per LinkedIn surface")
@@ -586,6 +600,7 @@ Rules:
       try {
         result = await buildLiveLinkedinInboundSyncPayload(rawUser, listBrowserProfiles(), {
           accountId: options.account ?? null,
+          mode: options.mode ?? "quick",
           runtime: options.runtime ?? null,
           connector: options.connector ?? null,
           limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
@@ -597,6 +612,7 @@ Rules:
       }
 
       const response = {
+        transport: result.transport,
         probe: result.probe,
         capture: result.capture,
         payload: result.payload,
@@ -604,6 +620,12 @@ Rules:
       };
 
       if (options.apply || options.refresh) {
+        if (!result.payload) {
+          console.error(result.transport?.reason ?? "This LinkedIn live sync requires agent-side capture before Exo can apply a governed writeback.");
+          process.exitCode = 1;
+          return;
+        }
+
         try {
           response.applied = applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
@@ -689,6 +711,7 @@ Rules:
     .description("Inspect Gmail through the resolved supported runtime, build a governed sync payload, and optionally apply it.")
     .argument("<user-id>", "Execution user identifier")
     .option("--account <account-id>", "Connected Gmail account identifier; inferred when only one Gmail account exists")
+    .option("--mode <mode>", "quick | full")
     .option("--runtime <runtime>", "Live retrieval runtime to use when multiple supported harnesses exist, such as codex or claude")
     .option("--connector <connector>", "Harness connector to use, such as gmail or chrome")
     .option("--limit <count>", "Maximum inbox threads to inspect from live Gmail")
@@ -708,6 +731,7 @@ Rules:
       try {
         result = await buildLiveGmailInboundSyncPayload(rawUser, listBrowserProfiles(), {
           accountId: options.account ?? null,
+          mode: options.mode ?? "quick",
           runtime: options.runtime ?? null,
           connector: options.connector ?? null,
           limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null,
@@ -720,6 +744,7 @@ Rules:
       }
 
       const response = {
+        transport: result.transport,
         probe: result.probe,
         capture: result.capture,
         payload: result.payload,
@@ -727,6 +752,12 @@ Rules:
       };
 
       if (options.apply || options.refresh) {
+        if (!result.payload) {
+          console.error(result.transport?.reason ?? "This Gmail live sync requires agent-side capture before Exo can apply a governed writeback.");
+          process.exitCode = 1;
+          return;
+        }
+
         try {
           response.applied = applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
@@ -776,7 +807,10 @@ Rules:
       let prepared;
       try {
         prepared = prepareUserInboundSyncRun(rawUser, payload, {
-          rawMotions: listMotions()
+          rawMotions: listMotions(),
+          rawExistingObservations: listInboundObservations({
+            userId
+          })
         });
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -953,6 +987,8 @@ Rules:
     .option("--actor-company <company-name>", "Actor company name")
     .option("--actor-handle <handle>", "Actor handle or email")
     .option("--actor-profile-url <url>", "Actor profile URL")
+    .option("--actor-linkedin-public-id <id>", "Stable LinkedIn vanity/public identifier when known")
+    .option("--actor-linkedin-member-id <id>", "Stable LinkedIn member id when known")
     .option("--thread-url <url>", "Conversation or thread URL")
     .option("--source-url <url>", "Canonical source URL for the observation")
     .option("--motion <motion-id>", "Related motion id if already known")
@@ -980,6 +1016,8 @@ Rules:
         actorCompanyName: options.actorCompany ?? null,
         actorHandle: options.actorHandle ?? null,
         actorProfileUrl: options.actorProfileUrl ?? null,
+        actorLinkedinPublicId: options.actorLinkedinPublicId ?? null,
+        actorLinkedinMemberId: options.actorLinkedinMemberId ?? null,
         threadUrl: options.threadUrl ?? null,
         sourceUrl: options.sourceUrl ?? null,
         motionId: options.motion ?? null,
@@ -1023,7 +1061,10 @@ function loadJsonInput(filePath) {
 
 function applyInboundSyncRunPayload(rawUser, payload, options = {}) {
   const prepared = prepareUserInboundSyncRun(rawUser, payload, {
-    rawMotions: listMotions()
+    rawMotions: listMotions(),
+    rawExistingObservations: listInboundObservations({
+      userId: rawUser.id
+    })
   });
   return applyPreparedInboundSyncRun(prepared.user.id, prepared, options);
 }
@@ -1032,8 +1073,11 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
   let createdObservationCount = 0;
   let updatedObservationCount = 0;
   let resolvedCueCount = 0;
+  const existingObservations = listInboundObservations({ userId });
   const storedObservations = prepared.observations.map((observation) => {
-    const existing = findInboundObservationByDedupeKey(observation.dedupeKey);
+    const existing = findInboundObservationByDedupeKey(observation.dedupeKey)
+      ?? existingObservations.find((candidate) => inboundObservationsShareIdentity(candidate, observation))
+      ?? null;
     const merged = mergeInboundObservation(existing, observation);
     upsertInboundObservation(merged);
     if (existing) {
@@ -1069,6 +1113,7 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
     }
   }
   updateUser(prepared.updatedUser);
+  const enrichedProspectCount = applyInboundProspectEnrichment(storedObservations);
 
   const result = {
     user: prepared.user,
@@ -1078,7 +1123,8 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
       ...prepared.counts,
       createdObservationCount,
       updatedObservationCount,
-      resolvedCueCount
+      resolvedCueCount,
+      enrichedProspectCount
     },
     followUpCommands: prepared.followUpCommands,
     accounts: prepared.accounts,
@@ -1104,4 +1150,177 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
   }
 
   return result;
+}
+
+/**
+ * @param {import("../../schema/inbound.js").inboundObservationSchema._type[]} observations
+ */
+function applyInboundProspectEnrichment(observations) {
+  const byProspectKey = new Map();
+
+  for (const observation of observations) {
+    if (!observation.motionId || !observation.companyId || !observation.prospectId) {
+      continue;
+    }
+
+    const key = `${observation.motionId}:${observation.companyId}:${observation.prospectId}`;
+    const current = byProspectKey.get(key) ?? null;
+    byProspectKey.set(key, chooseRicherObservation(current, observation));
+  }
+
+  let enrichedCount = 0;
+  for (const observation of byProspectKey.values()) {
+    const rawMotion = findMotionById(observation.motionId);
+    const rawCompany = findCompanyById(observation.companyId);
+    if (!rawMotion || !rawCompany) {
+      continue;
+    }
+
+    const actorEmail = observation.actorHandle?.includes("@") ? observation.actorHandle : undefined;
+    const derivedLinkedinProfileUrl = observation.actorProfileUrl ?? buildLinkedinProfileUrlFromPublicId(observation.actorLinkedinPublicId);
+    const contactPoints = buildObservationProspectContactPoints(observation, actorEmail);
+    const hasEnrichment =
+      Boolean(observation.actorName)
+      || Boolean(observation.actorTitle)
+      || Boolean(derivedLinkedinProfileUrl)
+      || Boolean(observation.actorLinkedinPublicId)
+      || Boolean(observation.actorLinkedinMemberId)
+      || Boolean(observation.actorAvatarSourceUrl)
+      || Boolean(actorEmail);
+    if (!hasEnrichment) {
+      continue;
+    }
+
+    const updatedMotion = updateMotionProspect(rawMotion, rawCompany, {
+      prospectId: observation.prospectId,
+      name: observation.actorName ?? undefined,
+      title: observation.actorTitle ?? undefined,
+      linkedinProfileUrl: derivedLinkedinProfileUrl ?? undefined,
+      avatarSourceUrl: observation.actorAvatarSourceUrl ?? undefined,
+      email: actorEmail,
+      sourceUrl: observation.sourceUrl ?? derivedLinkedinProfileUrl ?? undefined,
+      observedAt: observation.observedAt,
+      contactPoints: contactPoints.length ? contactPoints : undefined,
+      profileViewedAt: (
+        observation.kind === "profile_view_after_touch"
+        || observation.kind === "profile_view_received"
+      ) ? observation.observedAt : undefined
+    });
+    updateMotion(updatedMotion);
+    enrichedCount += 1;
+  }
+
+  return enrichedCount;
+}
+
+/**
+ * @param {import("../../schema/inbound.js").inboundObservationSchema._type | null} left
+ * @param {import("../../schema/inbound.js").inboundObservationSchema._type} right
+ */
+function chooseRicherObservation(left, right) {
+  if (!left) {
+    return right;
+  }
+
+  if (right.observedAt > left.observedAt) {
+    return right;
+  }
+
+  if (right.observedAt < left.observedAt) {
+    return left;
+  }
+
+  const rightScore = scoreObservationEnrichment(right);
+  const leftScore = scoreObservationEnrichment(left);
+  return rightScore >= leftScore ? right : left;
+}
+
+/**
+ * @param {import("../../schema/inbound.js").inboundObservationSchema._type} observation
+ */
+function scoreObservationEnrichment(observation) {
+  return [
+    observation.actorName,
+    observation.actorTitle,
+    observation.actorProfileUrl,
+    observation.actorLinkedinPublicId,
+    observation.actorLinkedinMemberId,
+    observation.actorAvatarSourceUrl,
+    observation.actorHandle
+  ].filter(Boolean).length;
+}
+
+/**
+ * @param {import("../../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {string | undefined} actorEmail
+ */
+function buildObservationProspectContactPoints(observation, actorEmail) {
+  const sourceUrl = observation.sourceUrl ?? observation.actorProfileUrl ?? buildLinkedinProfileUrlFromPublicId(observation.actorLinkedinPublicId) ?? null;
+  const observedAt = observation.observedAt;
+  const evidence = [
+    {
+      type: "inbound_observation",
+      summary: observation.summary,
+      sourceUrl,
+      observedAt
+    }
+  ];
+
+  const points = [];
+
+  if (observation.actorLinkedinPublicId) {
+    points.push({
+      kind: "linkedin_public_id",
+      value: observation.actorLinkedinPublicId,
+      label: "LinkedIn public identifier",
+      matchStatus: "same_person_verified",
+      verificationStatus: "observed",
+      confidence: "high",
+      source: "linkedin-inbound-sync",
+      sourceUrl,
+      observedAt,
+      evidence,
+      usableForOutreach: Boolean(observation.actorProfileUrl || observation.actorLinkedinPublicId),
+      usableForResearch: true,
+      usableForWarmup: true
+    });
+  }
+
+  if (observation.actorLinkedinMemberId) {
+    points.push({
+      kind: "linkedin_member_id",
+      value: observation.actorLinkedinMemberId,
+      label: "LinkedIn member identifier",
+      matchStatus: "same_person_verified",
+      verificationStatus: "observed",
+      confidence: "high",
+      source: "linkedin-inbound-sync",
+      sourceUrl,
+      observedAt,
+      evidence,
+      usableForOutreach: false,
+      usableForResearch: true,
+      usableForWarmup: false
+    });
+  }
+
+  if (actorEmail) {
+    points.push({
+      kind: "email",
+      value: actorEmail,
+      label: "Inbound actor email",
+      matchStatus: "same_person_verified",
+      verificationStatus: "observed",
+      confidence: "high",
+      source: observation.capability === "gmail" ? "gmail-inbound-sync" : "linkedin-inbound-sync",
+      sourceUrl,
+      observedAt,
+      evidence,
+      usableForOutreach: true,
+      usableForResearch: true,
+      usableForWarmup: false
+    });
+  }
+
+  return points;
 }

@@ -60,6 +60,7 @@ export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanie
           lastSyncedAt: surface.lastSyncedAt,
           lastObservedAt: surface.lastObservedAt,
           lastItemCount: surface.lastItemCount,
+          lastVisibleTotalCount: surface.lastVisibleTotalCount,
           summary: summarizeSurfaceState(surface),
           recommendedAction: recommendSurfaceAction(surface)
         }))
@@ -119,6 +120,12 @@ function buildInboxItem(observation, motions, companiesById, prospectContextById
     surfaceKey: observation.surfaceKey,
     summary: observation.summary,
     actorName: observation.actorName,
+    actorTitle: observation.actorTitle,
+    actorCompanyName: observation.actorCompanyName,
+    actorProfileUrl: observation.actorProfileUrl,
+    actorLinkedinPublicId: observation.actorLinkedinPublicId,
+    actorLinkedinMemberId: observation.actorLinkedinMemberId,
+    actorAvatarUrl: observation.actorAvatarUrl,
     priority: triage.priority,
     status: triage.status,
     whyItMatters: triage.whyItMatters,
@@ -147,11 +154,26 @@ function classifyObservation(kind) {
         whyItMatters: "A prospect replied on a direct channel. This is no longer speculative outreach; it needs a live response."
       };
     case "connection_request_received":
+    case "connection_request_received_no_longer_pending":
     case "connection_request_accepted":
+    case "connection_request_no_longer_pending":
       return {
         priority: "high",
         status: "needs-triage",
         whyItMatters: "The connection state changed, which can unlock or require the next private move."
+      };
+    case "connection_request_declined":
+      return {
+        priority: "low",
+        status: "resolved",
+        whyItMatters: "The inbound connection request was explicitly declined, so the branch no longer needs a yes-or-no decision."
+      };
+    case "thread_updated":
+    case "email_thread_updated":
+      return {
+        priority: "medium",
+        status: "needs-triage",
+        whyItMatters: "A private thread moved, but the newest visible state is not yet strong enough to classify as a direct reply. It still needs review."
       };
     case "public_reply_received":
     case "comment_thread_updated":
@@ -165,7 +187,11 @@ function classifyObservation(kind) {
     case "profile_view_after_touch":
     case "profile_view_received":
     case "follower_added":
+    case "follower_removed":
     case "follower_confirmed":
+    case "follow_state_changed":
+    case "follow_state_removed":
+    case "follow_state_confirmed":
       return {
         priority: "medium",
         status: "attention-signal",
@@ -188,14 +214,23 @@ function recommendAction(kind, prospect) {
   switch (kind) {
     case "connection_request_pending":
       return `Keep the branch patient for now, but review whether the pending invite has become stale enough to withdraw under current policy.`;
+    case "connection_request_no_longer_pending":
+      return `Review whether the invite was accepted, rejected, or otherwise left the pending list before continuing the old waiting branch.`;
     case "inbound_reply_received":
     case "email_reply_received":
     case "message_received":
       return `Reply to ${prospect?.name ?? "the prospect"} and move the cadence branch into a live conversation.`;
     case "connection_request_received":
       return `Decide whether to accept or decline the inbound connection request.`;
+    case "connection_request_received_no_longer_pending":
+      return `Review whether the inbound connection request was accepted, declined, withdrawn, or otherwise resolved before continuing from stale assumptions.`;
+    case "thread_updated":
+    case "email_thread_updated":
+      return `Review the updated thread and decide whether it now needs a reply, a state change, or no action.`;
     case "connection_request_accepted":
       return `Send the first post-accept direct message for ${prospect?.name ?? "this prospect"}.`;
+    case "connection_request_declined":
+      return `No next move is required unless this declined invite should be linked to a governed branch or audited.`;
     case "public_reply_received":
     case "comment_thread_updated":
       return `Review the public thread and reply only if there is a legitimate contribution to make.`;
@@ -206,7 +241,11 @@ function recommendAction(kind, prospect) {
     case "profile_view_received":
       return `Treat this as attention evidence and decide whether cadence should stay patient or advance.`;
     case "follower_added":
+    case "follower_removed":
     case "follower_confirmed":
+    case "follow_state_changed":
+    case "follow_state_removed":
+    case "follow_state_confirmed":
       return `Record the visibility signal and consider whether a public follow-up move is now more legitimate.`;
     default:
       return `Review this observation and decide whether it changes the motion state.`;
@@ -239,7 +278,8 @@ function compareInboxItems(left, right) {
  *   lastRunStatus: string,
  *   lastSyncedAt: string | null,
  *   lastObservedAt: string | null,
- *   lastItemCount: number | null
+ *   lastItemCount: number | null,
+ *   lastVisibleTotalCount?: number | null
  * }} surface
  */
 export function summarizeSurfaceState(surface) {
@@ -255,7 +295,7 @@ export function summarizeSurfaceState(surface) {
     return `${surface.label} completed with warnings on the last sync.`;
   }
 
-  const count = surface.lastItemCount ?? 0;
+  const count = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;
   if (count === 0) {
     return `${surface.label} was checked and is currently quiet.`;
   }
@@ -287,7 +327,8 @@ export function summarizeSurfaceState(surface) {
  * @param {{
  *   key: string,
  *   lastRunStatus: string,
- *   lastItemCount: number | null
+ *   lastItemCount: number | null,
+ *   lastVisibleTotalCount?: number | null
  * }} surface
  */
 export function recommendSurfaceAction(surface) {
@@ -299,7 +340,7 @@ export function recommendSurfaceAction(surface) {
     return "Rerun this surface check and fix the capture path before trusting silence.";
   }
 
-  const count = surface.lastItemCount ?? 0;
+  const count = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;
   if (count === 0) {
     return "No action from this surface right now.";
   }
@@ -326,15 +367,15 @@ export function recommendSurfaceAction(surface) {
 }
 
 /**
- * @param {{ enabled?: boolean, lastRunStatus: string, lastItemCount: number | null }} surface
+ * @param {{ enabled?: boolean, lastRunStatus: string, lastItemCount: number | null, lastVisibleTotalCount?: number | null }} surface
  */
 export function isActionableSurface(surface) {
-  return surface.enabled !== false && surface.lastRunStatus === "success" && (surface.lastItemCount ?? 0) > 0;
+  return surface.enabled !== false && surface.lastRunStatus === "success" && ((surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0) > 0);
 }
 
 /**
- * @param {{ enabled?: boolean, lastRunStatus: string, lastItemCount: number | null }} surface
+ * @param {{ enabled?: boolean, lastRunStatus: string, lastItemCount: number | null, lastVisibleTotalCount?: number | null }} surface
  */
 export function isQuietSurface(surface) {
-  return surface.enabled !== false && surface.lastRunStatus === "success" && (surface.lastItemCount ?? 0) === 0;
+  return surface.enabled !== false && surface.lastRunStatus === "success" && ((surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0) === 0);
 }

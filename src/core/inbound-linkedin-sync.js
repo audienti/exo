@@ -3,7 +3,7 @@
 import { linkedinInboundSyncCaptureSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 
-const QUICK_SURFACE_BUILDERS = [
+const LINKEDIN_SURFACE_BUILDERS = [
   {
     surfaceKey: "linkedin-sent-invitations",
     sectionKey: "sentInvitations",
@@ -44,11 +44,11 @@ export function buildLinkedinInboundSyncPayload(rawUser, input) {
   const capture = linkedinInboundSyncCaptureSchema.parse(input.capture);
   const account = resolveLinkedinAccount(user, input.accountId ?? null);
 
-  if (capture.mode !== "quick") {
-    throw new Error(`LinkedIn capture currently supports quick mode only. Received: ${capture.mode}`);
+  if (!["quick", "full"].includes(capture.mode)) {
+    throw new Error(`LinkedIn capture currently supports quick or full mode. Received: ${capture.mode}`);
   }
 
-  const builtSurfaces = QUICK_SURFACE_BUILDERS.map((definition) =>
+  const builtSurfaces = LINKEDIN_SURFACE_BUILDERS.map((definition) =>
     buildQuickSurface(definition, capture[definition.sectionKey])
   );
 
@@ -61,6 +61,8 @@ export function buildLinkedinInboundSyncPayload(rawUser, input) {
         surfaceKey: surface.surfaceKey,
         status: surface.status,
         itemCount: surface.itemCount,
+        visibleTotalCount: surface.visibleTotalCount,
+        captureCompleteness: surface.captureCompleteness,
         observationCount: surface.observations.length,
         error: surface.error
       }))
@@ -97,9 +99,16 @@ function buildQuickSurface(definition, section) {
   const derivedItemCount = section.status === "failed"
     ? section.itemCount
     : section.itemCount ?? section.items.length;
+  const visibleTotalCount = section.visibleTotalCount ?? null;
   if (derivedItemCount !== null && derivedItemCount < section.items.length) {
     throw new Error(
       `LinkedIn capture reported ${derivedItemCount} items but included ${section.items.length} items for ${definition.surfaceKey}.`
+    );
+  }
+
+  if (visibleTotalCount !== null && derivedItemCount !== null && visibleTotalCount < derivedItemCount) {
+    throw new Error(
+      `LinkedIn capture cannot report a visible total smaller than the itemized count for ${definition.surfaceKey}.`
     );
   }
 
@@ -107,9 +116,22 @@ function buildQuickSurface(definition, section) {
     throw new Error(`Failed LinkedIn captures cannot report positive item counts: ${definition.surfaceKey}`);
   }
 
+  if (section.status === "failed" && visibleTotalCount && visibleTotalCount > 0) {
+    throw new Error(`Failed LinkedIn captures cannot report positive visible totals: ${definition.surfaceKey}`);
+  }
+
+  if (section.status === "failed" && section.captureCompleteness && section.captureCompleteness !== "failed") {
+    throw new Error(`Failed LinkedIn captures must mark captureCompleteness as failed for ${definition.surfaceKey}.`);
+  }
+
+  if (section.status !== "failed" && section.captureCompleteness === "failed") {
+    throw new Error(`Successful or warning LinkedIn captures cannot mark captureCompleteness as failed for ${definition.surfaceKey}.`);
+  }
+
   const newestItemAt = section.items.map((item) => item.observedAt).sort().at(-1) ?? null;
   const observedAt = newestIsoDatetime(section.checkedAt, newestItemAt);
-  if (section.status !== "failed" && derivedItemCount && derivedItemCount > 0 && !observedAt) {
+  const reportedCount = visibleTotalCount ?? derivedItemCount;
+  if (section.status !== "failed" && reportedCount && reportedCount > 0 && !observedAt) {
     throw new Error(`LinkedIn capture needs checkedAt or item observedAt when items were found: ${definition.surfaceKey}`);
   }
 
@@ -123,6 +145,9 @@ function buildQuickSurface(definition, section) {
     actorCompanyName: item.actorCompanyName,
     actorHandle: item.actorHandle,
     actorProfileUrl: item.actorProfileUrl,
+    actorLinkedinPublicId: item.actorLinkedinPublicId,
+    actorLinkedinMemberId: item.actorLinkedinMemberId,
+    actorAvatarSourceUrl: item.actorAvatarSourceUrl,
     threadUrl: definition.threadUrlField ? item[definition.threadUrlField] : null,
     sourceUrl: item.sourceUrl,
     motionId: item.motionId,
@@ -136,6 +161,12 @@ function buildQuickSurface(definition, section) {
     status: section.status,
     observedAt,
     itemCount: derivedItemCount,
+    visibleTotalCount,
+    captureCompleteness: section.captureCompleteness,
+    requestedMode: section.requestedMode,
+    actualMode: section.actualMode,
+    reconcileRequired: section.reconcileRequired,
+    reconcileReason: section.reconcileReason,
     error: section.error,
     observations
   };
