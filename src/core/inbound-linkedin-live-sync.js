@@ -48,6 +48,11 @@ const linkedinSurfaceSchema = {
     "actualMode",
     "reconcileRequired",
     "reconcileReason",
+    "exhaustionStatus",
+    "exhaustionReason",
+    "paginationAttempted",
+    "terminalSignalSeen",
+    "stalledPassCount",
     "error",
     "items"
   ],
@@ -85,6 +90,23 @@ const linkedinSurfaceSchema = {
     },
     reconcileReason: {
       type: ["string", "null"]
+    },
+    exhaustionStatus: {
+      type: ["string", "null"],
+      enum: ["complete", "incomplete", "blocked", null]
+    },
+    exhaustionReason: {
+      type: ["string", "null"]
+    },
+    paginationAttempted: {
+      type: ["boolean", "null"]
+    },
+    terminalSignalSeen: {
+      type: ["boolean", "null"]
+    },
+    stalledPassCount: {
+      type: ["integer", "null"],
+      minimum: 0
     },
     error: {
       type: ["string", "null"]
@@ -589,8 +611,11 @@ function buildLinkedinLiveCapturePrompt(handle, profile, limit, options = {}) {
       : "Requested mode is quick. If a surfaceHint says reconcile is required because the visible total exceeds the itemized rows, you may continue paginating that one surface and set actualMode to full while keeping requestedMode quick.",
     "For each surface: set status to success when the surface was checked, warning when it was only partially checked or itemized, and failed when it could not be checked.",
     "Set checkedAt to when you finished that surface. Set itemCount to the number of rows or concrete items you actually itemized. Set visibleTotalCount to the full count visibly shown by LinkedIn for that surface when the UI exposes one; otherwise use itemCount when the surface is fully exhausted or null when no trustworthy total is visible. Use 0 or null fields consistently on failed surfaces.",
-    "Set captureCompleteness to complete only when the relevant live surface was exhausted enough that disappearance or silence is trustworthy. Use partial_visible_slice when you only itemized the visible slice or otherwise stopped before a full reconciliation. Use failed only when the surface could not be checked.",
-    "Set requestedMode and actualMode for every surface. Set reconcileRequired true whenever the visible total is larger than the itemized rows or the surfaceHints told you the operator still needs a full reconciliation. Set reconcileReason to a short snake_case explanation such as visible_total_exceeds_itemized_rows or bounded_capture_stopped_early.",
+    "Set exhaustionStatus to complete only when the relevant live surface was exhausted enough that disappearance or silence is trustworthy. Set exhaustionStatus to incomplete when you reached the right surface but stopped before terminal exhaustion, including visible-slice-only captures, wrong scroll container attempts, or bounded passes that stopped early. Set exhaustionStatus to blocked only when the surface could not be checked because of a structural failure such as identity mismatch, authwall, or a page that never rendered the required surface.",
+    "Set captureCompleteness to complete when exhaustionStatus is complete. Use partial_visible_slice when you only itemized the visible slice or otherwise stopped before a full reconciliation. Use failed only when the surface could not be checked.",
+    "Set requestedMode and actualMode for every surface. Set reconcileRequired true whenever the visible total is larger than the itemized rows and exhaustionStatus is not complete, or whenever the surfaceHints told you the operator still needs a full reconciliation. Set reconcileReason to a short snake_case explanation such as visible_total_exceeds_itemized_rows or bounded_capture_stopped_early.",
+    "Set paginationAttempted true when you actually used the known scroll or load-more path for that surface. Set terminalSignalSeen true only when the surfaceHints completion rule was genuinely reached, such as no new payloads after the final bounded passes. Set stalledPassCount to how many terminal no-new-results passes you observed before stopping.",
+    "Do not mark a surface failed just because you stopped early. Early stop is incomplete reconciliation, not transport failure.",
     "Use clear operator-ready summaries under 280 characters.",
     "Use actorProfileUrl whenever visible. Use actorLinkedinPublicId whenever the live surface exposes a stable vanity/public identifier. Use actorLinkedinMemberId whenever the live surface exposes the internal member id or equivalent stable LinkedIn profile id. Use actorAvatarSourceUrl whenever LinkedIn exposes a concrete avatar image URL for the person. Do not invent motionId, companyId, or prospectId. Set them to null unless you truly know them from the LinkedIn surface itself.",
     "Ignore noisy suggestions, ads, or unrelated feed items. Only include items that materially change operator action."
@@ -657,6 +682,11 @@ function buildFailedSurface(error, checkedAt, mode) {
     actualMode: mode,
     reconcileRequired: false,
     reconcileReason: null,
+    exhaustionStatus: "blocked",
+    exhaustionReason: "transport_or_surface_failure",
+    paginationAttempted: null,
+    terminalSignalSeen: null,
+    stalledPassCount: null,
     error,
     items: []
   };

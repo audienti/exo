@@ -63,6 +63,7 @@ export function buildLinkedinInboundSyncPayload(rawUser, input) {
         itemCount: surface.itemCount,
         visibleTotalCount: surface.visibleTotalCount,
         captureCompleteness: surface.captureCompleteness,
+        exhaustionStatus: surface.exhaustionStatus,
         observationCount: surface.observations.length,
         error: surface.error
       }))
@@ -84,6 +85,12 @@ export function buildLinkedinInboundSyncPayload(rawUser, input) {
  * @param {any} section
  */
 function buildQuickSurface(definition, section) {
+  const exhaustionStatus = normalizeSurfaceExhaustionStatus(section);
+  const exhaustionReason = normalizeNullableString(section.exhaustionReason);
+  const paginationAttempted = typeof section.paginationAttempted === "boolean" ? section.paginationAttempted : null;
+  const terminalSignalSeen = typeof section.terminalSignalSeen === "boolean" ? section.terminalSignalSeen : null;
+  const stalledPassCount = Number.isInteger(section.stalledPassCount) ? section.stalledPassCount : null;
+
   if (section.status === "success" && section.error) {
     throw new Error(`Successful LinkedIn captures cannot include an error: ${definition.surfaceKey}`);
   }
@@ -128,6 +135,22 @@ function buildQuickSurface(definition, section) {
     throw new Error(`Successful or warning LinkedIn captures cannot mark captureCompleteness as failed for ${definition.surfaceKey}.`);
   }
 
+  if (section.status === "failed" && exhaustionStatus !== "blocked") {
+    throw new Error(`Failed LinkedIn captures must mark exhaustionStatus as blocked for ${definition.surfaceKey}.`);
+  }
+
+  if (section.status !== "failed" && exhaustionStatus === "blocked") {
+    throw new Error(`Only failed LinkedIn captures can mark exhaustionStatus as blocked for ${definition.surfaceKey}.`);
+  }
+
+  if (section.captureCompleteness === "complete" && exhaustionStatus !== "complete") {
+    throw new Error(`Complete LinkedIn captures must mark exhaustionStatus as complete for ${definition.surfaceKey}.`);
+  }
+
+  if (exhaustionStatus === "complete" && section.captureCompleteness !== "complete") {
+    throw new Error(`LinkedIn captures with complete exhaustion must mark captureCompleteness as complete for ${definition.surfaceKey}.`);
+  }
+
   const newestItemAt = section.items.map((item) => item.observedAt).sort().at(-1) ?? null;
   const observedAt = newestIsoDatetime(section.checkedAt, newestItemAt);
   const reportedCount = visibleTotalCount ?? derivedItemCount;
@@ -167,9 +190,45 @@ function buildQuickSurface(definition, section) {
     actualMode: section.actualMode,
     reconcileRequired: section.reconcileRequired,
     reconcileReason: section.reconcileReason,
+    exhaustionStatus,
+    exhaustionReason,
+    paginationAttempted,
+    terminalSignalSeen,
+    stalledPassCount,
     error: section.error,
     observations
   };
+}
+
+/**
+ * @param {any} section
+ */
+function normalizeSurfaceExhaustionStatus(section) {
+  if (section.exhaustionStatus) {
+    return section.exhaustionStatus;
+  }
+
+  if (section.status === "failed" || section.captureCompleteness === "failed") {
+    return "blocked";
+  }
+
+  if (section.captureCompleteness === "complete") {
+    return "complete";
+  }
+
+  return "incomplete";
+}
+
+/**
+ * @param {string | null | undefined} value
+ */
+function normalizeNullableString(value) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
 }
 
 /**

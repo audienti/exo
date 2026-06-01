@@ -219,10 +219,18 @@ export function recordUserInboundSyncRun(rawUser, input) {
   const currentStates = materializeSurfaceStates(account);
   const nextObservationCount = input.observationCount ?? null;
   const nextVisibleTotalCount = input.visibleTotalCount ?? null;
+  const nextExhaustionStatus = input.exhaustionStatus ?? inferExhaustionStatus({
+    status,
+    captureCompleteness: input.captureCompleteness ?? null
+  });
+  const nextCountDiscrepancyCount = input.countDiscrepancyCount
+    ?? Math.max((nextVisibleTotalCount ?? input.itemCount ?? 0) - (input.itemCount ?? 0), 0);
   const nextItemizationGapCount = input.itemizationGapCount
-    ?? (nextObservationCount == null
-      ? null
-      : Math.max((nextVisibleTotalCount ?? input.itemCount ?? 0) - nextObservationCount, 0));
+    ?? (nextExhaustionStatus === "complete"
+      ? 0
+      : nextObservationCount == null
+        ? null
+        : Math.max((nextVisibleTotalCount ?? input.itemCount ?? 0) - nextObservationCount, 0));
 
   const nextAccounts = user.accounts.map((candidate) => {
     if (candidate.id !== input.accountId) {
@@ -247,8 +255,14 @@ export function recordUserInboundSyncRun(rawUser, input) {
         lastActualMode: input.actualMode ?? null,
         lastReconcileRequired: input.reconcileRequired ?? null,
         lastReconcileReason: normalizeNullableString(input.reconcileReason),
+        lastExhaustionStatus: nextExhaustionStatus,
+        lastExhaustionReason: normalizeNullableString(input.exhaustionReason),
+        lastPaginationAttempted: typeof input.paginationAttempted === "boolean" ? input.paginationAttempted : null,
+        lastTerminalSignalSeen: typeof input.terminalSignalSeen === "boolean" ? input.terminalSignalSeen : null,
+        lastStalledPassCount: Number.isInteger(input.stalledPassCount) ? input.stalledPassCount : null,
         lastObservationCount: nextObservationCount,
         lastItemizationGapCount: nextItemizationGapCount,
+        lastCountDiscrepancyCount: nextCountDiscrepancyCount,
         lastError: status === "failed"
           ? normalizeNullableString(input.error) ?? surface.lastError
           : status === "warning"
@@ -271,8 +285,14 @@ export function recordUserInboundSyncRun(rawUser, input) {
         lastActualMode: input.actualMode ?? null,
         lastReconcileRequired: input.reconcileRequired ?? null,
         lastReconcileReason: normalizeNullableString(input.reconcileReason),
+        lastExhaustionStatus: nextExhaustionStatus,
+        lastExhaustionReason: normalizeNullableString(input.exhaustionReason),
+        lastPaginationAttempted: typeof input.paginationAttempted === "boolean" ? input.paginationAttempted : null,
+        lastTerminalSignalSeen: typeof input.terminalSignalSeen === "boolean" ? input.terminalSignalSeen : null,
+        lastStalledPassCount: Number.isInteger(input.stalledPassCount) ? input.stalledPassCount : null,
         lastObservationCount: nextObservationCount,
         lastItemizationGapCount: nextItemizationGapCount,
+        lastCountDiscrepancyCount: nextCountDiscrepancyCount,
         lastError: status === "failed" || status === "warning" ? normalizeNullableString(input.error) : null
       }));
     }
@@ -369,8 +389,14 @@ function buildAccountInboundView(account) {
       lastActualMode: state.lastActualMode,
       lastReconcileRequired: state.lastReconcileRequired,
       lastReconcileReason: state.lastReconcileReason,
+      lastExhaustionStatus: state.lastExhaustionStatus,
+      lastExhaustionReason: state.lastExhaustionReason,
+      lastPaginationAttempted: state.lastPaginationAttempted,
+      lastTerminalSignalSeen: state.lastTerminalSignalSeen,
+      lastStalledPassCount: state.lastStalledPassCount,
       lastObservationCount: state.lastObservationCount,
       lastItemizationGapCount: state.lastItemizationGapCount,
+      lastCountDiscrepancyCount: state.lastCountDiscrepancyCount,
       lastError: state.lastError
     };
   }).filter(Boolean);
@@ -521,8 +547,14 @@ function materializeSurfaceStates(account) {
       lastActualMode: configuredStates.get(definition.key)?.lastActualMode ?? null,
       lastReconcileRequired: configuredStates.get(definition.key)?.lastReconcileRequired ?? null,
       lastReconcileReason: configuredStates.get(definition.key)?.lastReconcileReason ?? null,
+      lastExhaustionStatus: configuredStates.get(definition.key)?.lastExhaustionStatus ?? null,
+      lastExhaustionReason: configuredStates.get(definition.key)?.lastExhaustionReason ?? null,
+      lastPaginationAttempted: configuredStates.get(definition.key)?.lastPaginationAttempted ?? null,
+      lastTerminalSignalSeen: configuredStates.get(definition.key)?.lastTerminalSignalSeen ?? null,
+      lastStalledPassCount: configuredStates.get(definition.key)?.lastStalledPassCount ?? null,
       lastObservationCount: configuredStates.get(definition.key)?.lastObservationCount ?? null,
       lastItemizationGapCount: configuredStates.get(definition.key)?.lastItemizationGapCount ?? null,
+      lastCountDiscrepancyCount: configuredStates.get(definition.key)?.lastCountDiscrepancyCount ?? null,
       lastError: configuredStates.get(definition.key)?.lastError ?? null
     })
   );
@@ -674,4 +706,22 @@ function normalizeNullableString(value) {
 
   const normalized = value.trim();
   return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {{
+ *   status: import("../schema/inbound.js").inboundSyncRunStatusSchema._type,
+ *   captureCompleteness: import("../schema/inbound.js").inboundCaptureCompletenessSchema._type | null
+ * }} input
+ */
+function inferExhaustionStatus(input) {
+  if (input.status === "failed" || input.captureCompleteness === "failed") {
+    return "blocked";
+  }
+
+  if (input.captureCompleteness === "complete") {
+    return "complete";
+  }
+
+  return "incomplete";
 }

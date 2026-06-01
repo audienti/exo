@@ -11,6 +11,7 @@ import { buildNextView } from "./build-next-view.js";
 import { buildUserInboundSyncPlan, recordUserInboundSyncRun } from "./user-inbound-sync.js";
 import { describeExo } from "./what-is-this.js";
 import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
+import { findInboundSurfaceDefinition } from "../lib/inbound-surface-catalog.js";
 import { inboundObservationSchema, inboundSyncRunPayloadSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 
@@ -105,6 +106,10 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         ? surfaceInput.itemCount
         : surfaceInput.itemCount ?? preparedObservations.length;
       const visibleTotalCount = surfaceInput.visibleTotalCount ?? null;
+      const exhaustionStatus = normalizeExhaustionStatus(surfaceInput);
+      const countDiscrepancyCount = Math.max((visibleTotalCount ?? derivedItemCount ?? 0) - (derivedItemCount ?? 0), 0);
+      const surfaceDefinition = findInboundSurfaceDefinition(surfaceInput.surfaceKey);
+      const isAuthoritative = surfaceDefinition?.truthLevel === "authoritative";
       if (derivedItemCount !== null && derivedItemCount < preparedObservations.length) {
         throw new Error(
           `Inbound sync surface ${surfaceInput.surfaceKey} reported ${derivedItemCount} items but included ${preparedObservations.length} observations.`
@@ -125,6 +130,41 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         throw new Error(`Failed inbound sync surfaces cannot report positive visible totals: ${surfaceInput.surfaceKey}`);
       }
 
+      if (surfaceInput.status === "failed" && exhaustionStatus !== "blocked") {
+        throw new Error(`Failed inbound sync surfaces must mark exhaustionStatus as blocked: ${surfaceInput.surfaceKey}`);
+      }
+
+      if (surfaceInput.status !== "failed" && exhaustionStatus === "blocked") {
+        throw new Error(`Only failed inbound sync surfaces can mark exhaustionStatus as blocked: ${surfaceInput.surfaceKey}`);
+      }
+
+      if (surfaceInput.captureCompleteness === "complete" && exhaustionStatus !== "complete") {
+        throw new Error(`Complete inbound sync surfaces must mark exhaustionStatus as complete: ${surfaceInput.surfaceKey}`);
+      }
+
+      if (exhaustionStatus === "complete" && surfaceInput.captureCompleteness !== "complete") {
+        throw new Error(`Inbound sync surfaces with complete exhaustion must mark captureCompleteness as complete: ${surfaceInput.surfaceKey}`);
+      }
+
+      if (
+        payload.mode === "full"
+        && isAuthoritative
+        && surfaceInput.status !== "failed"
+        && exhaustionStatus !== "complete"
+      ) {
+        if (!surfaceInput.reconcileRequired) {
+          throw new Error(
+            `Full authoritative inbound sync surfaces must mark reconcileRequired when exhaustion is incomplete: ${surfaceInput.surfaceKey}.`
+          );
+        }
+
+        if (surfaceInput.status !== "warning") {
+          throw new Error(
+            `Full authoritative inbound sync surfaces must use warning status when exhaustion is incomplete: ${surfaceInput.surfaceKey}.`
+          );
+        }
+      }
+
       const newestObservationAt = newestObservedAt(preparedObservations);
       const observedAt = newestIsoDatetime(surfaceInput.observedAt, newestObservationAt);
       const reportedCount = visibleTotalCount ?? derivedItemCount;
@@ -140,6 +180,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         surfaceKey: surfaceInput.surfaceKey,
         surfaceStatus: surfaceInput.status,
         captureCompleteness: surfaceInput.captureCompleteness ?? null,
+        exhaustionStatus,
         observedAt: observedAt ?? processedAt,
         currentObservations: preparedObservations
       });
@@ -149,7 +190,9 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         observationDraftsByDedupeKey.set(observation.dedupeKey, mergeInboundObservation(existingDraft, observation));
       }
 
-      const itemizationGapCount = Math.max(0, (visibleTotalCount ?? derivedItemCount ?? 0) - preparedObservations.length);
+      const itemizationGapCount = exhaustionStatus === "complete"
+        ? 0
+        : Math.max(0, (visibleTotalCount ?? derivedItemCount ?? 0) - preparedObservations.length);
 
       updatedUser = recordUserInboundSyncRun(updatedUser, {
         accountId: account.id,
@@ -163,8 +206,14 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         actualMode: surfaceInput.actualMode,
         reconcileRequired: surfaceInput.reconcileRequired,
         reconcileReason: surfaceInput.reconcileReason,
+        exhaustionStatus,
+        exhaustionReason: surfaceInput.exhaustionReason,
+        paginationAttempted: surfaceInput.paginationAttempted,
+        terminalSignalSeen: surfaceInput.terminalSignalSeen,
+        stalledPassCount: surfaceInput.stalledPassCount,
         observationCount: preparedObservations.length,
         itemizationGapCount,
+        countDiscrepancyCount,
         error: surfaceInput.error
       });
 
@@ -179,9 +228,15 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         actualMode: surfaceInput.actualMode,
         reconcileRequired: surfaceInput.reconcileRequired,
         reconcileReason: surfaceInput.reconcileReason,
+        exhaustionStatus,
+        exhaustionReason: surfaceInput.exhaustionReason,
+        paginationAttempted: surfaceInput.paginationAttempted,
+        terminalSignalSeen: surfaceInput.terminalSignalSeen,
+        stalledPassCount: surfaceInput.stalledPassCount,
         error: surfaceInput.error,
         observationCount: preparedObservations.length,
-        itemizationGapCount
+        itemizationGapCount,
+        countDiscrepancyCount
       };
     });
 
@@ -324,12 +379,13 @@ function newestObservedAt(observations) {
  *   surfaceKey: string,
  *   surfaceStatus: "success" | "warning" | "failed",
  *   captureCompleteness: import("../schema/inbound.js").inboundCaptureCompletenessSchema._type | null,
+ *   exhaustionStatus: import("../schema/inbound.js").inboundSurfaceExhaustionStatusSchema._type,
  *   observedAt: string,
  *   currentObservations: import("../schema/inbound.js").inboundObservationSchema._type[]
  * }} input
  */
 function deriveReconciledSurfaceDeltaObservations(input) {
-  if (input.surfaceStatus === "failed" || input.captureCompleteness !== "complete") {
+  if (input.surfaceStatus === "failed" || input.captureCompleteness !== "complete" || input.exhaustionStatus !== "complete") {
     return [];
   }
 
@@ -380,6 +436,29 @@ function deriveReconciledSurfaceDeltaObservations(input) {
  */
 function buildObservationHasReconcilableIdentity(observation) {
   return buildInboundObservationIdentityKeys(observation).size > 0;
+}
+
+/**
+ * @param {{
+ *   status: "success" | "warning" | "failed",
+ *   captureCompleteness: import("../schema/inbound.js").inboundCaptureCompletenessSchema._type | null,
+ *   exhaustionStatus?: import("../schema/inbound.js").inboundSurfaceExhaustionStatusSchema._type | null
+ * }} input
+ */
+function normalizeExhaustionStatus(input) {
+  if (input.exhaustionStatus) {
+    return input.exhaustionStatus;
+  }
+
+  if (input.status === "failed" || input.captureCompleteness === "failed") {
+    return "blocked";
+  }
+
+  if (input.captureCompleteness === "complete") {
+    return "complete";
+  }
+
+  return "incomplete";
 }
 
 const deltaObservationDefinitionBySurfaceKey = {

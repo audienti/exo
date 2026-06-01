@@ -11,6 +11,7 @@ import { buildLinkedinInboundSyncPayload } from "../src/core/inbound-linkedin-sy
 import { buildInboxView } from "../src/core/build-inbox-view.js";
 import { buildInboundReviewView } from "../src/core/build-inbound-review-view.js";
 import { recordInboundObservation } from "../src/core/inbound-observations.js";
+import { prepareUserInboundSyncRun } from "../src/core/inbound-sync-run.js";
 import { buildBizBridgeImageProxyUrl } from "../src/lib/image-proxy.js";
 import { loadJsonCassette, writeJsonCassette } from "./support/cassettes.js";
 
@@ -215,6 +216,241 @@ test("linkedin capture payload preserves visible totals and reconcile metadata f
   assert.equal(sentInvitations.actualMode, "quick");
   assert.equal(sentInvitations.reconcileRequired, true);
   assert.equal(sentInvitations.reconcileReason, "visible_total_exceeds_itemized_rows");
+});
+
+test("full authoritative sent-invitation reconciliation can complete after terminal exhaustion even when the visible count badge is slightly higher", () => {
+  const rawUser = {
+    id: "user-1",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    label: "william-main",
+    owner: "William",
+    accounts: [
+      {
+        id: "linkedin-account-1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        capability: "linkedin",
+        handle: "william-main",
+        sourceType: "browser-profile",
+        browserProfileId: "profile-1",
+        preferred: true
+      }
+    ],
+    harnessConnections: []
+  };
+
+  const result = buildLinkedinInboundSyncPayload(rawUser, {
+    accountId: "linkedin-account-1",
+    capture: {
+      mode: "full",
+      sentInvitations: {
+        status: "success",
+        checkedAt: timestamp,
+        itemCount: 1,
+        visibleTotalCount: 2,
+        captureCompleteness: "complete",
+        requestedMode: "full",
+        actualMode: "full",
+        reconcileRequired: false,
+        reconcileReason: null,
+        exhaustionStatus: "complete",
+        exhaustionReason: "terminal_zero_row_pagination_seen",
+        paginationAttempted: true,
+        terminalSignalSeen: true,
+        stalledPassCount: 2,
+        error: null,
+        items: [
+          {
+            invitationId: "invite-1",
+            kind: "connection_request_pending",
+            observedAt: timestamp,
+            actorName: "Jordan Cipolla",
+            actorTitle: null,
+            actorCompanyName: null,
+            actorHandle: null,
+            actorProfileUrl: "https://www.linkedin.com/in/jordan-cipolla/",
+            sourceUrl: "https://www.linkedin.com/mynetwork/invitation-manager/sent/",
+            motionId: null,
+            companyId: null,
+            prospectId: null,
+            notes: null,
+            summary: "Jordan Cipolla is still pending."
+          }
+        ]
+      },
+      receivedInvitations: {
+        status: "success",
+        checkedAt: timestamp,
+        itemCount: 0,
+        visibleTotalCount: 0,
+        captureCompleteness: "complete",
+        requestedMode: "full",
+        actualMode: "full",
+        reconcileRequired: false,
+        reconcileReason: null,
+        exhaustionStatus: "complete",
+        exhaustionReason: "terminal_zero_row_pagination_seen",
+        paginationAttempted: true,
+        terminalSignalSeen: true,
+        stalledPassCount: 1,
+        error: null,
+        items: []
+      },
+      messagingInbox: {
+        status: "success",
+        checkedAt: timestamp,
+        itemCount: 0,
+        visibleTotalCount: 0,
+        captureCompleteness: "complete",
+        requestedMode: "full",
+        actualMode: "full",
+        reconcileRequired: false,
+        reconcileReason: null,
+        exhaustionStatus: "complete",
+        exhaustionReason: "terminal_zero_row_pagination_seen",
+        paginationAttempted: true,
+        terminalSignalSeen: true,
+        stalledPassCount: 1,
+        error: null,
+        items: []
+      },
+      profileViews: {
+        status: "success",
+        checkedAt: timestamp,
+        itemCount: 0,
+        visibleTotalCount: 0,
+        captureCompleteness: "complete",
+        requestedMode: "full",
+        actualMode: "full",
+        reconcileRequired: false,
+        reconcileReason: null,
+        exhaustionStatus: "complete",
+        exhaustionReason: "terminal_zero_row_pagination_seen",
+        paginationAttempted: true,
+        terminalSignalSeen: true,
+        stalledPassCount: 1,
+        error: null,
+        items: []
+      },
+      followingList: {
+        status: "success",
+        checkedAt: timestamp,
+        itemCount: 0,
+        visibleTotalCount: 0,
+        captureCompleteness: "complete",
+        requestedMode: "full",
+        actualMode: "full",
+        reconcileRequired: false,
+        reconcileReason: null,
+        exhaustionStatus: "complete",
+        exhaustionReason: "terminal_zero_row_pagination_seen",
+        paginationAttempted: true,
+        terminalSignalSeen: true,
+        stalledPassCount: 1,
+        error: null,
+        items: []
+      }
+    }
+  });
+
+  const prepared = prepareUserInboundSyncRun(rawUser, result.payload, {
+    rawMotions: [],
+    rawExistingObservations: []
+  });
+
+  const sentInvitations = prepared.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-sent-invitations");
+  assert.ok(sentInvitations);
+  assert.equal(sentInvitations.captureCompleteness, "complete");
+  assert.equal(sentInvitations.exhaustionStatus, "complete");
+  assert.equal(sentInvitations.itemizationGapCount, 0);
+  assert.equal(sentInvitations.countDiscrepancyCount, 1);
+
+  const storedSurface = prepared.updatedUser.accounts[0].inboundSync.surfaces.find((surface) => surface.surfaceKey === "linkedin-sent-invitations");
+  assert.ok(storedSurface);
+  assert.equal(storedSurface.lastItemizationGapCount, 0);
+  assert.equal(storedSurface.lastCountDiscrepancyCount, 1);
+  assert.equal(storedSurface.lastTerminalSignalSeen, true);
+});
+
+test("full authoritative inbound sync cannot claim success when exhaustion is incomplete", () => {
+  const rawUser = {
+    id: "user-1",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    label: "william-main",
+    owner: "William",
+    accounts: [
+      {
+        id: "linkedin-account-1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        capability: "linkedin",
+        handle: "william-main",
+        sourceType: "browser-profile",
+        browserProfileId: "profile-1",
+        preferred: true
+      }
+    ],
+    harnessConnections: []
+  };
+
+  assert.throws(
+    () => prepareUserInboundSyncRun(rawUser, {
+      mode: "full",
+      accounts: [
+        {
+          accountId: "linkedin-account-1",
+          surfaces: [
+            {
+              surfaceKey: "linkedin-sent-invitations",
+              status: "success",
+              observedAt: timestamp,
+              itemCount: 10,
+              visibleTotalCount: 74,
+              captureCompleteness: "partial_visible_slice",
+              requestedMode: "full",
+              actualMode: "full",
+              reconcileRequired: true,
+              reconcileReason: "bounded_capture_stopped_early",
+              exhaustionStatus: "incomplete",
+              exhaustionReason: "bounded_capture_stopped_early",
+              paginationAttempted: true,
+              terminalSignalSeen: false,
+              stalledPassCount: 0,
+              error: null,
+              observations: [
+                {
+                  kind: "connection_request_pending",
+                  observedAt: timestamp,
+                  summary: "Jordan Cipolla is still pending.",
+                  externalId: "invite-1",
+                  actorName: "Jordan Cipolla",
+                  actorTitle: null,
+                  actorCompanyName: null,
+                  actorHandle: null,
+                  actorProfileUrl: "https://www.linkedin.com/in/jordan-cipolla/",
+                  actorLinkedinPublicId: null,
+                  actorLinkedinMemberId: null,
+                  actorAvatarSourceUrl: null,
+                  threadUrl: null,
+                  sourceUrl: "https://www.linkedin.com/mynetwork/invitation-manager/sent/",
+                  motionId: null,
+                  companyId: null,
+                  prospectId: null,
+                  notes: null
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, {
+      rawMotions: [],
+      rawExistingObservations: []
+    }),
+    /must use warning status when exhaustion is incomplete/i
+  );
 });
 
 test("daily suppresses new connection-request pressure until a partial live sent-invitations surface is fully reconciled", () => {

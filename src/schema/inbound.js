@@ -22,6 +22,7 @@ export const inboundSyncRunStatusSchema = z.enum(["never", "success", "warning",
 
 export const inboundSyncPlanModeSchema = z.enum(["quick", "normal", "full"]);
 export const inboundCaptureCompletenessSchema = z.enum(["complete", "partial_visible_slice", "failed"]);
+export const inboundSurfaceExhaustionStatusSchema = z.enum(["complete", "incomplete", "blocked"]);
 
 export const inboundSyncWriteStatusSchema = z.enum(["success", "warning", "failed"]);
 export const inboundCueKindSchema = z.enum([
@@ -74,8 +75,14 @@ export const inboundSurfaceStateSchema = z.object({
   lastActualMode: inboundSyncPlanModeSchema.nullable().default(null),
   lastReconcileRequired: z.boolean().nullable().default(null),
   lastReconcileReason: z.string().trim().min(1).nullable().default(null),
+  lastExhaustionStatus: inboundSurfaceExhaustionStatusSchema.nullable().default(null),
+  lastExhaustionReason: z.string().trim().min(1).nullable().default(null),
+  lastPaginationAttempted: z.boolean().nullable().default(null),
+  lastTerminalSignalSeen: z.boolean().nullable().default(null),
+  lastStalledPassCount: z.coerce.number().int().min(0).nullable().default(null),
   lastObservationCount: z.coerce.number().int().min(0).nullable().default(null),
   lastItemizationGapCount: z.coerce.number().int().min(0).nullable().default(null),
+  lastCountDiscrepancyCount: z.coerce.number().int().min(0).nullable().default(null),
   lastError: z.string().nullable().default(null)
 });
 
@@ -167,6 +174,11 @@ export const inboundSyncRunSurfaceInputSchema = z.object({
   actualMode: inboundSyncPlanModeSchema.nullable().default(null),
   reconcileRequired: z.boolean().nullable().default(null),
   reconcileReason: z.string().trim().min(1).nullable().default(null),
+  exhaustionStatus: inboundSurfaceExhaustionStatusSchema.nullable().default(null),
+  exhaustionReason: z.string().trim().min(1).nullable().default(null),
+  paginationAttempted: z.boolean().nullable().default(null),
+  terminalSignalSeen: z.boolean().nullable().default(null),
+  stalledPassCount: z.coerce.number().int().min(0).nullable().default(null),
   error: z.string().trim().min(1).nullable().default(null),
   observations: z.array(inboundSyncRunObservationInputSchema).default([])
 });
@@ -275,6 +287,11 @@ export const linkedinSurfaceCaptureSchema = z.object({
   actualMode: inboundSyncPlanModeSchema.nullable().default(null),
   reconcileRequired: z.boolean().nullable().default(null),
   reconcileReason: z.string().trim().min(1).nullable().default(null),
+  exhaustionStatus: inboundSurfaceExhaustionStatusSchema.nullable().default(null),
+  exhaustionReason: z.string().trim().min(1).nullable().default(null),
+  paginationAttempted: z.boolean().nullable().default(null),
+  terminalSignalSeen: z.boolean().nullable().default(null),
+  stalledPassCount: z.coerce.number().int().min(0).nullable().default(null),
   error: z.string().trim().min(1).nullable().default(null)
 });
 
