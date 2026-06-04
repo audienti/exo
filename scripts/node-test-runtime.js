@@ -14,6 +14,8 @@ export function buildNodeTestEnv(baseEnv = process.env) {
 
   return {
     ...baseEnv,
-    NODE_OPTIONS: parts.join(" ").trim()
+    NODE_OPTIONS: parts.join(" ").trim(),
+    // Never make real image-proxy network calls during tests.
+    EXO_DISABLE_IMAGE_WARMING: "1"
   };
 }

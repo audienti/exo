@@ -2,7 +2,7 @@
 
 import { fileURLToPath } from "node:url";
 
-export const LINKEDIN_QUICK_CAPTURE_SCAFFOLD_VERSION = "exo-linkedin-quick-capture-v1";
+export const LINKEDIN_QUICK_CAPTURE_SCAFFOLD_VERSION = "exo-linkedin-quick-capture-v2";
 export const LINKEDIN_QUICK_CAPTURE_SCAFFOLD_MODULE_PATH = fileURLToPath(import.meta.url);
 
 /**
@@ -30,7 +30,7 @@ export function buildLinkedinQuickCaptureScaffold(input = {}) {
     helperSummary: [
       "Normalizes text, absolute URLs, and LinkedIn public-id extraction.",
       "Finds finite-scroll or list roots from surface hints instead of hard-coding one container.",
-      "Extracts normalized snapshot rows for sent invitations, messaging inbox, and profile views.",
+      "Extracts normalized snapshot rows for sent invitations, messaging inbox, profile views, and followers.",
       "Returns DOM snapshot metadata only. Exhaustion and reconcile semantics stay outside the scaffold."
     ],
     supportedSurfaces: {
@@ -38,6 +38,11 @@ export function buildLinkedinQuickCaptureScaffold(input = {}) {
         snapshotKind: "pending_invitation_rows",
         hintKey: "surfaceHints.sentInvitations",
         rowStrategy: "withdraw_control_or_profile_anchor_row"
+      },
+      receivedInvitations: {
+        snapshotKind: "received_invitation_rows",
+        hintKey: "surfaceHints.receivedInvitations",
+        rowStrategy: "accept_or_ignore_control_row"
       },
       messagingInbox: {
         snapshotKind: "conversation_rows",
@@ -48,6 +53,16 @@ export function buildLinkedinQuickCaptureScaffold(input = {}) {
         snapshotKind: "viewer_rows",
         hintKey: "surfaceHints.profileViews",
         rowStrategy: "finite_scroll_profile_view_row"
+      },
+      followersList: {
+        snapshotKind: "follower_rows",
+        hintKey: "surfaceHints.followersList",
+        rowStrategy: "network_followers_list_row"
+      },
+      followingList: {
+        snapshotKind: "following_rows",
+        hintKey: "surfaceHints.followingList",
+        rowStrategy: "network_following_list_row"
       }
     },
     suggestedItemLimit: limit
@@ -60,7 +75,7 @@ export function buildLinkedinQuickCaptureBootstrapSource() {
 
 /**
  * @param {{
- *   surfaceKey: "sentInvitations" | "messagingInbox" | "profileViews",
+ *   surfaceKey: "sentInvitations" | "receivedInvitations" | "messagingInbox" | "profileViews" | "followersList" | "followingList",
  *   requestedMode?: string | null,
  *   limit?: number | null,
  *   hint?: unknown
@@ -81,7 +96,8 @@ export function buildLinkedinQuickCaptureEvaluateSource(input) {
 
 function installLinkedinQuickCapture() {
   const symbol = "__exoLinkedinQuickCapture";
-  if (window[symbol]) {
+  const version = "exo-linkedin-quick-capture-v2";
+  if (window[symbol] && window[symbol].version === version) {
     return window[symbol];
   }
 
@@ -101,6 +117,17 @@ function installLinkedinQuickCapture() {
     } catch (_error) {
       return null;
     }
+  }
+
+  function uniqueNodes(nodes) {
+    const seen = new Set();
+    return nodes.filter((node) => {
+      if (!node || seen.has(node)) {
+        return false;
+      }
+      seen.add(node);
+      return true;
+    });
   }
 
   function pickFirst(root, selectors) {
@@ -168,26 +195,120 @@ function installLinkedinQuickCapture() {
     return matches.length ? Math.max(...matches) : null;
   }
 
+  function isInvitationChromeLine(value) {
+    const text = normalizeText(value);
+    if (!text) {
+      return false;
+    }
+    return /^invitation settings$/i.test(text)
+      || /^manage invitations$/i.test(text)
+      || /^received$/i.test(text)
+      || /^sent$/i.test(text)
+      || /^people \(\d+\)$/i.test(text);
+  }
+
+  function isInvitationRelativeLine(value) {
+    const text = normalizeText(value);
+    if (!text) {
+      return false;
+    }
+    return /^sent\s+(today|yesterday|\d+\s+(?:hour|day|week|month|year)s?\s+ago)$/i.test(text);
+  }
+
+  function findLikelyInvitationNameFromLines(lines) {
+    if (!Array.isArray(lines) || !lines.length) {
+      return null;
+    }
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = normalizeText(lines[index]);
+      if (!line || isInvitationChromeLine(line) || isInvitationControlLabel(line) || isInvitationRelativeLine(line)) {
+        continue;
+      }
+      const next = normalizeText(lines[index + 1] || "");
+      const next2 = normalizeText(lines[index + 2] || "");
+      if (isInvitationRelativeLine(next) || isInvitationRelativeLine(next2)) {
+        return line;
+      }
+    }
+
+    return lines.find((line) => {
+      const text = normalizeText(line);
+      return text && !isInvitationChromeLine(text) && !isInvitationControlLabel(text) && !isInvitationRelativeLine(text);
+    }) || null;
+  }
+
+  function normalizeInvitationMetadataLine(value) {
+    const line = normalizeText(value);
+    if (!line || isInvitationChromeLine(line) || isInvitationControlLabel(line) || isInvitationRelativeLine(line)) {
+      return null;
+    }
+    return line;
+  }
+
   function extractActorFromRow(row) {
     const profileAnchor = row.querySelector('a[href*="/in/"]');
     const profileUrl = absoluteUrl(profileAnchor?.getAttribute("href") ?? null);
-    const actorName = normalizeText(
-      profileAnchor?.textContent
-        || row.querySelector("strong, h3, h4, [aria-label]")?.textContent
-        || ""
-    ) || null;
-    const summaryText = normalizeText(row.innerText || "");
-    const lines = summaryText.split(/\\n+/).map(normalizeText).filter(Boolean);
+    const rawText = typeof row.innerText === "string"
+      ? row.innerText
+      : (row.textContent || "");
+    const lines = rawText.split(/\n+/).map(normalizeText).filter(Boolean);
+    const lineActorName = findLikelyInvitationNameFromLines(lines);
+    const actorNameCandidates = [
+      profileAnchor?.textContent,
+      profileAnchor?.getAttribute("aria-label"),
+      lineActorName,
+      row.querySelector("strong, h3, h4, span[dir='ltr'], .t-16")?.textContent,
+      row.querySelector("[aria-label]")?.getAttribute("aria-label"),
+    ]
+      .map((value) => normalizeText(value || ""))
+      .filter((value) => value && !isInvitationChromeLine(value));
+    const actorName = actorNameCandidates[0] || null;
+    const summaryText = normalizeText(rawText || "");
+    const actorNameLineIndex = actorName
+      ? lines.findIndex((line) => normalizeText(line) === actorName)
+      : -1;
+    const actorTitle = actorNameLineIndex >= 0
+      ? normalizeInvitationMetadataLine(lines[actorNameLineIndex + 1])
+      : normalizeInvitationMetadataLine(lines[1]);
+    const actorCompanyName = actorTitle
+      ? normalizeInvitationMetadataLine(lines[(actorNameLineIndex >= 0 ? actorNameLineIndex : 0) + 2])
+      : null;
+    const invitationNote = extractInvitationNote(lines, {
+      actorName,
+      actorNameLineIndex,
+      actorTitle,
+      actorCompanyName,
+    });
 
     return {
       actorName,
       actorProfileUrl: profileUrl,
       actorLinkedinPublicId: extractPublicIdFromUrl(profileUrl),
-      actorTitle: lines[1] ?? null,
-      actorCompanyName: lines[2] ?? null,
+      actorTitle,
+      actorCompanyName,
+      invitationNote,
       actorAvatarSourceUrl: absoluteUrl(row.querySelector("img")?.getAttribute("src") ?? null),
       rowText: summaryText
     };
+  }
+
+  function extractInvitationNote(lines, actor) {
+    const startIndex = actor.actorNameLineIndex >= 0 ? actor.actorNameLineIndex : 0;
+    const ignored = new Set([
+      actor.actorName,
+      actor.actorTitle,
+      actor.actorCompanyName,
+    ].map((value) => normalizeText(value || "")).filter(Boolean));
+    const noteLines = lines
+      .slice(startIndex)
+      .map((line) => normalizeText(line))
+      .filter(Boolean)
+      .filter((line) => !ignored.has(line))
+      .filter((line) => !isInvitationChromeLine(line))
+      .filter((line) => !isInvitationControlLabel(line))
+      .filter((line) => !isInvitationRelativeLine(line));
+    return noteLines.length ? noteLines.join("\n") : null;
   }
 
   function uniqueRows(rows) {
@@ -202,42 +323,179 @@ function installLinkedinQuickCapture() {
     });
   }
 
-  function captureSentInvitations(input) {
+  function isInvitationControlLabel(value) {
+    const text = normalizeText(value);
+    if (!text) {
+      return false;
+    }
+    return /^(withdraw|accept|ignore)\b/i.test(text);
+  }
+
+  function resolveInvitationRow(control, root) {
+    if (!control || !root) {
+      return null;
+    }
+
+    const semanticRow = control.closest("li, article, section");
+    if (semanticRow && semanticRow !== root) {
+      return semanticRow;
+    }
+
+    const controlText = normalizeText(control.textContent || control.getAttribute("aria-label") || "");
+    let fallback = null;
+    let current = control.parentElement;
+    while (current && current !== root) {
+      const rowText = normalizeText(current.innerText || "");
+      const hasProfileAnchor = !!current.querySelector('a[href*="/in/"]');
+      const hasAvatar = !!current.querySelector("img");
+      if (!fallback && (hasProfileAnchor || hasAvatar)) {
+        fallback = current;
+      }
+      if (hasProfileAnchor && rowText && rowText !== controlText) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+
+    return fallback || control.closest("div");
+  }
+
+  function resolveInvitationRowFromProfileAnchor(anchor, root, controlPattern) {
+    if (!anchor || !root) {
+      return null;
+    }
+
+    const anchorText = normalizeText(anchor.textContent || anchor.getAttribute("aria-label") || "");
+    let fallback = null;
+    let current = anchor.parentElement;
+    while (current && current !== root) {
+      const controls = Array.from(current.querySelectorAll("button, a, span"));
+      const hasMatchingControl = controls.some((node) => controlPattern.test(normalizeText(node.textContent || node.getAttribute("aria-label") || "")));
+      if (hasMatchingControl) {
+        const rowText = normalizeText(current.innerText || "");
+        if (!fallback) {
+          fallback = current;
+        }
+        if (rowText && rowText !== anchorText && current.matches("li, article, section")) {
+          return current;
+        }
+      }
+      current = current.parentElement;
+    }
+
+    return fallback;
+  }
+
+  function normalizeInvitationActorLabel(value) {
+    const text = normalizeText(value);
+    if (!text) {
+      return null;
+    }
+    const sentMatch = text.match(/^withdraw invitation sent to (.+)$/i);
+    if (sentMatch) {
+      return normalizeText(sentMatch[1]) || null;
+    }
+    const receivedMatch = text.match(/^(?:accept|ignore)\s+(.+?)'s invitation$/i);
+    if (receivedMatch) {
+      return normalizeText(receivedMatch[1]) || null;
+    }
+    if (isInvitationControlLabel(text)) {
+      return null;
+    }
+    return text;
+  }
+
+  function extractInvitationRelativePhrase(value) {
+    const text = normalizeText(value);
+    if (!text) {
+      return null;
+    }
+    const match = text.match(/\bSent\s+(today|yesterday|\d+\s+(?:hour|day|week|month|year)s?\s+ago)\b/i);
+    return match ? normalizeText(match[0]) : null;
+  }
+
+  function buildInvitationSummary(config, actorName, rowText, index) {
+    const normalizedActorName = normalizeInvitationActorLabel(actorName);
+    if (config.surfaceKey === "sentInvitations") {
+      const relativePhrase = extractInvitationRelativePhrase(rowText);
+      if (normalizedActorName && relativePhrase) {
+        return `${normalizedActorName} ${relativePhrase}`;
+      }
+      if (normalizedActorName) {
+        return `${normalizedActorName} is still in the sent invitations queue.`;
+      }
+    }
+    if (config.surfaceKey === "receivedInvitations" && normalizedActorName) {
+      return `${normalizedActorName} sent an inbound connection request.`;
+    }
+    return rowText || `${config.summaryPrefix} ${index + 1}`;
+  }
+
+  function captureInvitationRows(input, config) {
     const root = findRoot(input.hint, [
       ".scaffold-finite-scroll__content",
       ".scaffold-finite-scroll",
       "main[role='main']",
       "main"
     ]);
-    const withdrawButtons = Array.from(root.querySelectorAll("button, a"))
-      .filter((node) => /withdraw/i.test(normalizeText(node.textContent || node.getAttribute("aria-label") || "")));
-    const rows = withdrawButtons.map((button) => {
-      const row = button.closest("li, article, div");
+    const controlPattern = config.controlPattern;
+    const profileAnchorRows = uniqueNodes(
+      Array.from(root.querySelectorAll('a[href*="/in/"]'))
+        .map((anchor) => resolveInvitationRowFromProfileAnchor(anchor, root, controlPattern))
+        .filter(Boolean)
+    );
+    const matchedControls = Array.from(root.querySelectorAll("button, a, span"))
+      .filter((node) => controlPattern.test(normalizeText(node.textContent || node.getAttribute("aria-label") || "")));
+    const controlRows = uniqueNodes(matchedControls.map((control) => {
+      const row = resolveInvitationRow(control, root);
       return row && row !== root ? row : null;
-    }).filter(Boolean);
+    }).filter(Boolean));
+    const rows = uniqueNodes([...profileAnchorRows, ...controlRows]);
 
     return {
-      surfaceKey: "sentInvitations",
+      surfaceKey: config.surfaceKey,
       capturedAt: new Date().toISOString(),
       visibleTotalCount: extractVisibleTotalCount(root),
       rowCount: rows.length,
       rows: uniqueRows(rows.slice(0, input.limit || 20).map((row, index) => {
         const actor = extractActorFromRow(row);
-        const summary = actor.rowText || `Pending sent invitation ${index + 1}`;
+        const normalizedActorName = normalizeInvitationActorLabel(actor.actorName) ?? actor.actorName;
+        const summary = buildInvitationSummary(config, normalizedActorName, actor.rowText, index);
         return {
-          rowKey: actor.actorProfileUrl || actor.actorLinkedinPublicId || `sent-row-${index + 1}`,
-          invitationId: actor.actorProfileUrl || actor.actorLinkedinPublicId || `sent-row-${index + 1}`,
+          rowKey: actor.actorProfileUrl || actor.actorLinkedinPublicId || normalizedActorName || `${config.idPrefix}-${index + 1}`,
+          invitationId: actor.actorProfileUrl || actor.actorLinkedinPublicId || normalizedActorName || `${config.idPrefix}-${index + 1}`,
           summary,
-          profileUrl: actor.actorProfileUrl,
-          actorName: actor.actorName,
+          actorProfileUrl: actor.actorProfileUrl,
+          actorName: normalizedActorName,
           actorTitle: actor.actorTitle,
           actorCompanyName: actor.actorCompanyName,
+          invitationNote: actor.invitationNote,
           actorLinkedinPublicId: actor.actorLinkedinPublicId,
           actorAvatarSourceUrl: actor.actorAvatarSourceUrl,
-          availableAction: "withdraw"
+          availableAction: config.availableAction
         };
       }))
     };
+  }
+
+  function captureSentInvitations(input) {
+    return captureInvitationRows(input, {
+      surfaceKey: "sentInvitations",
+      controlPattern: /withdraw/i,
+      summaryPrefix: "Pending sent invitation",
+      idPrefix: "sent-row",
+      availableAction: "withdraw"
+    });
+  }
+
+  function captureReceivedInvitations(input) {
+    return captureInvitationRows(input, {
+      surfaceKey: "receivedInvitations",
+      controlPattern: /\b(accept|ignore)\b/i,
+      summaryPrefix: "Received invitation",
+      idPrefix: "received-row",
+      availableAction: "accept_or_ignore"
+    });
   }
 
   function captureMessagingInbox(input) {
@@ -313,6 +571,58 @@ function installLinkedinQuickCapture() {
     };
   }
 
+  function captureFollowersList(input) {
+    return captureFollowList(input, {
+      surfaceKey: "followersList",
+      summaryPrefix: "Follower",
+      idPrefix: "follower"
+    });
+  }
+
+  function captureFollowingList(input) {
+    return captureFollowList(input, {
+      surfaceKey: "followingList",
+      summaryPrefix: "Following",
+      idPrefix: "following"
+    });
+  }
+
+  function captureFollowList(input, config) {
+    const root = findRoot(input.hint, [
+      ".scaffold-finite-scroll__content",
+      ".scaffold-finite-scroll",
+      "main[role='main']",
+      "main"
+    ]);
+    const rows = pickAll(root, [
+      ...(input.hint?.readyHints?.rowSelectors ?? []),
+      "li",
+      "article",
+      "[class*='follow-list'] li"
+    ]).filter((row) => row.querySelector('a[href*="/in/"], img'));
+
+    return {
+      surfaceKey: config.surfaceKey,
+      capturedAt: new Date().toISOString(),
+      visibleTotalCount: extractVisibleTotalCount(root),
+      rowCount: rows.length,
+      rows: uniqueRows(rows.slice(0, input.limit || 20).map((row, index) => {
+        const actor = extractActorFromRow(row);
+        return {
+          rowKey: actor.actorProfileUrl || actor.actorLinkedinPublicId || `${config.idPrefix}-${index + 1}`,
+          entryId: actor.actorProfileUrl || actor.actorLinkedinPublicId || `${config.idPrefix}-${index + 1}`,
+          summary: actor.rowText || `${config.summaryPrefix} ${index + 1}`,
+          actorName: actor.actorName,
+          actorTitle: actor.actorTitle,
+          actorCompanyName: actor.actorCompanyName,
+          actorProfileUrl: actor.actorProfileUrl,
+          actorLinkedinPublicId: actor.actorLinkedinPublicId,
+          actorAvatarSourceUrl: actor.actorAvatarSourceUrl
+        };
+      }))
+    };
+  }
+
   function captureSurface(input) {
     const normalized = {
       surfaceKey: input?.surfaceKey ?? null,
@@ -324,23 +634,32 @@ function installLinkedinQuickCapture() {
     if (normalized.surfaceKey === "sentInvitations") {
       return captureSentInvitations(normalized);
     }
+    if (normalized.surfaceKey === "receivedInvitations") {
+      return captureReceivedInvitations(normalized);
+    }
     if (normalized.surfaceKey === "messagingInbox") {
       return captureMessagingInbox(normalized);
     }
     if (normalized.surfaceKey === "profileViews") {
       return captureProfileViews(normalized);
     }
+    if (normalized.surfaceKey === "followersList") {
+      return captureFollowersList(normalized);
+    }
+    if (normalized.surfaceKey === "followingList") {
+      return captureFollowingList(normalized);
+    }
 
     return {
       surfaceKey: normalized.surfaceKey,
       capturedAt: new Date().toISOString(),
       unsupported: true,
-      reason: "This scaffold currently supports sentInvitations, messagingInbox, and profileViews only."
+      reason: "This scaffold currently supports sentInvitations, receivedInvitations, messagingInbox, profileViews, followersList, and followingList only."
     };
   }
 
   const api = {
-    version: "exo-linkedin-quick-capture-v1",
+    version,
     captureSurface
   };
   window[symbol] = api;

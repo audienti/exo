@@ -51,6 +51,9 @@ const LINKEDIN_PROFILE_ENRICHMENT_OUTPUT_SCHEMA = {
     followerCount: { type: ["integer", "null"], minimum: 0 },
     connectionCount: { type: ["integer", "null"], minimum: 0 },
     avatarSourceUrl: { type: ["string", "null"], format: "uri" },
+    isPremium: { type: ["boolean", "null"] },
+    isOpenProfile: { type: ["boolean", "null"] },
+    connectionDegree: { type: ["integer", "null"], minimum: 1, maximum: 3 },
     recentPosts: {
       type: "array",
       items: {
@@ -242,6 +245,8 @@ function buildLinkedinProfileEnrichmentPrompt(input) {
     "Native-tools only applies to the live browser capture transport. Use captureGuide.writebackRules and verificationCommands for the governed Exo landing path after capture.",
     `Honor the execution plan. Preferred transport is ${input.preferredTransport}. Do not drift to another LinkedIn identity.`,
     "Capture one unified profile payload: stable identity fields, avatar source URL, and the strongest recent posts visible on the page.",
+    "Record isPremium=true when a LinkedIn Premium badge is visible on the profile, and isOpenProfile=true when the profile shows Open Profile / Free to message (any Premium member can message them without an InMail credit). Use null when you cannot tell.",
+    "Record connectionDegree as the network distance badge shown next to their name: 1 for a 1st-degree connection (you are connected — a connection request was accepted), 2 for 2nd, 3 for 3rd or 3rd+. Use null only if the badge is genuinely not visible. This is the authoritative signal for whether a connection request was accepted.",
     "Inspect the real LinkedIn profile page and recent activity routes directly; do not leave the result in scratch notes or ad hoc JavaScript output.",
     "Keep at most the three strongest recent posts or comments that produce legitimate writing context.",
     "If the page identity renders but recent activity does not, return the identity fields and an empty recentPosts array with no invented filler.",

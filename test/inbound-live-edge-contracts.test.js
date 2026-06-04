@@ -230,9 +230,9 @@ test("inbound sync linkedin-live records governed failure when the selected runt
 
     assert.equal(result.probe.detectedStatus, "unavailable");
     assert.equal(result.capture.mode, "quick");
-    assert.equal(result.capture.sectionCount, 5);
+    assert.equal(result.capture.sectionCount, 6);
     assert.equal(result.capture.sections.every((section) => section.status === "failed"), true);
-    assert.equal(result.applied.counts.failedSurfaceCount, 5);
+    assert.equal(result.applied.counts.failedSurfaceCount, 6);
     assert.equal(result.applied.counts.observationCount, 0);
 
     const syncView = runCliJson(tempDir, ["inbound", "sync", "show", user.id, "--json"]);
@@ -321,7 +321,7 @@ test("inbound sync live auto-discovers codex chrome for browser-backed accounts 
     assert.match(linkedin.transport.captureRequest.prompt, /start from captureScaffold/i);
     assert.ok(linkedin.transport.captureRequest.captureGuide.captureRules.some((line) => /Do not shell out through codex exec, EXO_CODEX_CLI/i.test(line)));
     assert.match(linkedin.transport.captureRequest.captureGuide.rediscoveryPolicy, /Do not reopen repo source files, CLI help, or prior chat history/i);
-    assert.equal(linkedin.transport.captureRequest.captureScaffold.version, "exo-linkedin-quick-capture-v1");
+    assert.equal(linkedin.transport.captureRequest.captureScaffold.version, "exo-linkedin-quick-capture-v2");
     assert.equal(linkedin.transport.captureRequest.outputGuide.modePolicy.requestedMode, "quick");
     assert.match(linkedin.transport.captureRequest.buildPayloadCommand, /exo inbound sync linkedin .* --input - --json/i);
     assert.match(linkedin.transport.captureRequest.applyCommand, /exo inbound sync run .* --input <combined-inbound-sync\.json> --refresh --json/i);
@@ -516,8 +516,8 @@ test("inbound sync live preserves mixed-account partial failure when Gmail fails
     assert.equal(result.accounts.length, 2);
     assert.equal(result.accounts.find((account) => account.account.id === gmailAccountId).probe.detectedStatus, "unavailable");
     assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).probe.detectedStatus, "available");
-    assert.equal(result.applied.counts.checkedSurfaceCount, 6);
-    assert.equal(result.applied.counts.successSurfaceCount, 5);
+    assert.equal(result.applied.counts.checkedSurfaceCount, 7);
+    assert.equal(result.applied.counts.successSurfaceCount, 6);
     assert.equal(result.applied.counts.failedSurfaceCount, 1);
     assert.equal(result.applied.counts.observationCount, 1);
 

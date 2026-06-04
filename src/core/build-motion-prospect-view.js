@@ -73,8 +73,6 @@ export function buildMotionProspectView(rawMotion, options = {}) {
           },
           prospect: selectedProspect,
           signalMatches: selectedProspect.signalMatches,
-          throughLine: selectedProspect.throughLine,
-          openingPlan: selectedProspect.openingPlan,
           cadenceState: selectedProspect.cadenceState,
           touches: selectedProspect.touches,
           messageTestReady: selectedProspect.messageTestReady,
@@ -89,15 +87,10 @@ export function buildMotionProspectView(rawMotion, options = {}) {
  * @param {import("../schema/target-account.js").prospectSchema._type} prospect
  */
 function buildProspectView(account, prospect) {
-  const signalMatches = account.signalMatches.filter((match) =>
-    prospect.signalMatchIds.includes(match.id)
-    || prospect.throughLine.signalMatchIds.includes(match.id)
-    || prospect.openingPlan.signalMatchIds.includes(match.id)
-  );
+  const signalMatches = account.signalMatches.filter((match) => prospect.signalMatchIds.includes(match.id));
   const recentPost = buildRecentPostReadiness(prospect);
-  const messageTestReady = prospect.throughLine.status === "ready"
-    && prospect.openingPlan.status === "ready"
-    && prospect.cadenceState.status === "ready";
+  const messageTestReady = prospect.cadenceState.status === "ready";
+  const latestSignalMatch = signalMatches[0] ?? null;
 
   return {
     companyId: account.companyId,
@@ -132,18 +125,11 @@ function buildProspectView(account, prospect) {
     recentPost,
     signalMatches,
     signalMatchCount: signalMatches.length,
+    latestSignalSummary: latestSignalMatch?.summary ?? null,
     touches: prospect.touches,
-    throughLineStatus: prospect.throughLine.status,
-    openingPlanStatus: prospect.openingPlan.status,
     cadenceStatus: prospect.cadenceState.status,
     messageTestReady,
-    throughLine: prospect.throughLine,
-    openingPlan: prospect.openingPlan,
     cadenceState: prospect.cadenceState,
-    primaryChannel: prospect.openingPlan.primaryChannel,
-    fallbackChannel: prospect.openingPlan.fallbackChannel,
-    replyPath: prospect.openingPlan.replyPath,
-    compressionLine: prospect.throughLine.compressionLine,
     nextAction: prospect.cadenceState.nextAction
   };
 }

@@ -1,14 +1,15 @@
 ---
 principles:
   - Selected prospects are still backlog, not ready execution.
-  - One selected prospect should travel as one coherent packet through research, enrichment, through-line, opening-plan, and cadence work.
+  - One selected prospect should travel as one coherent packet through research, enrichment, and cadence work.
   - A prospect packet is not done just because a name was chosen; it is done when the branch is genuinely ready or intentionally suppressed.
 do:
   - Open the first packet contract with `exo motion packet-brief {{firstClaimableProspectResearchPacketMotionId}} --packet {{firstClaimableProspectResearchPacketId}}` before you start, so the worker sees the exact scope and writeback path.
   - Claim the selected prospect packet before splitting work across agents.
   - Before any live LinkedIn/browser step inside that packet, run `exo companies execution show <company-id> --capability linkedin --json` and honor the preferred transport, fallback transport, and failure classes.
-  - Keep role truth, trigger window, identity tells, live signal, contact enrichment, through-line, opening plan, and cadence work together on the same prospect.
-  - If the branch becomes genuinely ready, make sure the stored through-line, opening plan, and cadence state reflect that before completing the packet.
+  - Keep role truth, trigger window, identity tells, live signal, contact enrichment, and cadence work together on the same prospect.
+  - When contact enrichment is still open, use whatever email-finding, phone-finding, and validation tools are actually available in the runtime to try to land a verified direct email and verified mobile number, then write the result back onto that same prospect record.
+  - If the branch becomes genuinely ready, make sure the stored cadence state and prospect context reflect that before completing the packet.
   - If the branch should stop, complete it into suppressed or exhausted state explicitly.
 avoid:
   - Do not split one prospect into five microtasks that all touch the same record independently.

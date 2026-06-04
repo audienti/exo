@@ -96,6 +96,7 @@ The MVP verbs should be:
 - `what-is-this`
 - `actions list`
 - `actions show`
+- `actions result`
 - `config export`
 - `config import`
 - `motion add`
@@ -141,6 +142,7 @@ Examples:
 - `exo what-is-this --json` <-> `exo.what_is_this`
 - `exo actions list --json` <-> `exo.actions_list`
 - `exo actions show connection_request --json` <-> `exo.actions_show`
+- `exo actions result --action connection_request --result sent --company <company-id> --prospect <prospect-id> --occurred-at <iso-datetime> --json` <-> `exo.actions_result`
 - `exo config export --out ./exo-config.json` <-> `exo.config_export`
 - `exo config import ./exo-config.json` <-> `exo.config_import`
 - `exo motion add --url <product-url> --premise ... --audience ... --signal ... --geo ... --icp ... --industry ... --company-shape ... --title ... --segment ... --exclude-account ... --exclude-domain ... --dnc-file ...` <-> `exo.define_motion`

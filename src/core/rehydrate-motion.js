@@ -148,8 +148,6 @@ function buildStakeholderSummaries(targetAccounts) {
       buyingCommitteeRole: prospect.buyingCommitteeRole,
       decisionAuthority: prospect.decisionAuthority,
       fitConfidence: prospect.fitConfidence,
-      throughLineStatus: prospect.throughLine.status,
-      openingPlanStatus: prospect.openingPlan.status,
       cadenceStatus: prospect.cadenceState.status
     }))
   );
@@ -161,17 +159,16 @@ function buildStakeholderSummaries(targetAccounts) {
 function buildMotionPlanVariants(targetAccounts) {
   return targetAccounts.flatMap((account) =>
     account.prospects
-      .filter((prospect) => prospect.openingPlan.status === "ready")
+      .filter((prospect) => prospect.cadenceState.status === "ready")
       .map((prospect) => ({
         companyId: account.companyId,
         companyName: account.companyName,
         prospectId: prospect.id,
         prospectName: prospect.name,
         title: prospect.title,
-        primaryChannel: prospect.openingPlan.primaryChannel,
-        fallbackChannel: prospect.openingPlan.fallbackChannel,
+        currentStep: prospect.cadenceState.currentStep,
         nextAction: prospect.cadenceState.nextAction,
-        replyPath: prospect.openingPlan.replyPath
+        nextActionDueAt: prospect.cadenceState.nextActionDueAt
       }))
   );
 }
@@ -186,14 +183,7 @@ function summarizeTargetAccountReadiness(targetAccounts) {
     accountCount: targetAccounts.length,
     hasSignalMatches: targetAccounts.some((account) => account.signalMatches.length > 0),
     prospectCount: prospects.length,
-    readyThroughLineCount: prospects.filter((prospect) => prospect.throughLine.status === "ready").length,
-    readyOpeningPlanCount: prospects.filter((prospect) => prospect.openingPlan.status === "ready").length,
     readyCadenceCount: prospects.filter((prospect) => prospect.cadenceState.status === "ready").length,
-    missingEmailFallbackCount: prospects.filter(
-      (prospect) =>
-        prospect.openingPlan.status === "ready"
-        && !prospect.email
-        && (!prospect.openingPlan.fallbackChannel || prospect.openingPlan.fallbackChannel === "none")
-    ).length
+    missingEmailFallbackCount: prospects.filter((prospect) => !prospect.email).length
   };
 }

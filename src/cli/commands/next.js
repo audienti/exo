@@ -2,6 +2,7 @@
 // @ts-check
 
 import { buildNextView } from "../../core/build-next-view.js";
+import { buildUserWorkspaceContext } from "../../core/workspace-context.js";
 import { describeExo } from "../../core/what-is-this.js";
 import {
   findMotionById,
@@ -68,21 +69,25 @@ Rules:
             prospectId: options.prospect ?? null
           })
         : [];
+      const workspaceContext = rawUser
+        ? buildUserWorkspaceContext(rawUser, {
+            rawObservations,
+            rawCues: listInboundCues({
+              userId: rawUser.id,
+              status: "open"
+            })
+          })
+        : null;
 
       const result = buildNextView({
-        rawUser,
+        rawUser: workspaceContext?.user ?? rawUser,
         rawMotion,
         rawMotions,
         rawCompanies,
         rawProfiles: listBrowserProfiles(),
         rawUsers,
-        rawObservations,
-        rawCues: rawUser
-          ? listInboundCues({
-              userId: rawUser.id,
-              status: "open"
-            })
-          : [],
+        rawObservations: workspaceContext?.observations ?? rawObservations,
+        rawCues: workspaceContext?.cues ?? [],
         filters: {
           motionId: options.motion ?? null,
           companyId: options.company ?? null,

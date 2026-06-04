@@ -116,9 +116,83 @@ async function buildCodexLinkedinHandoffResult(options = {}) {
   }
 }
 
+async function buildCodexUnipileLinkedinHandoffResult() {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-live-agent-handoff-unipile-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n")
+  );
+
+  const previousCodexHome = process.env.CODEX_HOME;
+  const previousCodexShell = process.env.CODEX_SHELL;
+  process.env.CODEX_HOME = codexHome;
+  process.env.CODEX_SHELL = "1";
+
+  try {
+    return await buildLiveLinkedinInboundSyncPayload(
+      {
+        id: "user-2",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        label: "connector-contract-user",
+        owner: "william",
+        accounts: [
+          {
+            id: "account-2",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            capability: "linkedin",
+            handle: "connector-contract-user",
+            sourceType: "harness-connection",
+            harnessConnectionId: "harness-1",
+            preferred: true
+          }
+        ],
+        harnessConnections: [
+          {
+            id: "harness-1",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            runtime: "codex",
+            connector: "unipile",
+            label: "unipile-main",
+            status: "unknown",
+            notes: null
+          }
+        ]
+      },
+      [],
+      {
+        runtime: "codex"
+      }
+    );
+  } finally {
+    if (previousCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = previousCodexHome;
+    }
+
+    if (previousCodexShell === undefined) {
+      delete process.env.CODEX_SHELL;
+    } else {
+      process.env.CODEX_SHELL = previousCodexShell;
+    }
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 test("codex live handoff includes structured LinkedIn messaging inbox hints distilled from legacy retrieval logic", async () => {
   const result = await buildCodexLinkedinHandoffResult();
   const messagingInbox = result.transport.captureRequest.surfaceHints.messagingInbox;
+  const followersList = result.transport.captureRequest.surfaceHints.followersList;
   const profileSelection = result.transport.captureRequest.profileSelection;
 
   assert.equal(result.transport.kind, "agent_handoff");
@@ -152,7 +226,7 @@ test("codex live handoff includes structured LinkedIn messaging inbox hints dist
   assert.ok(result.transport.captureRequest.captureGuide.writebackRules.some((line) => /applyCommand via stdin/i.test(line)));
   assert.match(result.transport.captureRequest.captureGuide.rediscoveryPolicy, /Do not reopen repo source files, CLI help, or prior chat history/i);
   assert.match(result.transport.captureRequest.captureGuide.verificationPolicy, /report their literal outputs instead of inferring Exo state/i);
-  assert.equal(result.transport.captureRequest.captureScaffold.version, "exo-linkedin-quick-capture-v1");
+  assert.equal(result.transport.captureRequest.captureScaffold.version, "exo-linkedin-quick-capture-v2");
   assert.match(result.transport.captureRequest.captureScaffold.modulePath, /src\/lib\/linkedin-quick-capture-scaffold\.js$/);
   assert.equal(result.transport.captureRequest.captureScaffold.runtime, "browser_page_evaluate");
   assert.equal(result.transport.captureRequest.captureScaffold.mode, "snapshot_extractor");
@@ -168,6 +242,7 @@ test("codex live handoff includes structured LinkedIn messaging inbox hints dist
     "received_invitations",
     "messaging_inbox",
     "profile_views",
+    "followers_list",
     "following_list"
   ]);
   assert.equal(result.transport.captureRequest.outputGuide.modePolicy.requestedMode, "quick");
@@ -219,6 +294,10 @@ test("codex live handoff includes structured LinkedIn messaging inbox hints dist
   );
   assert.ok(messagingInbox.extractionHints.threadNodeKeys.includes("messengerConversationsBySyncToken"));
   assert.ok(messagingInbox.extractionHints.messageNodeKeys.includes("messengerMessagesByConversation"));
+  assert.equal(followersList.surface, "linkedin-followers-list");
+  assert.equal(followersList.entryHints.directFollowersUrl, "https://www.linkedin.com/mynetwork/network-manager/people-follow/followers/");
+  assert.ok(followersList.paginationHints.reconcileMode.triggers.includes("follower_change_signal_needs_truth"));
+  assert.ok(followersList.extractionHints.itemKinds.includes("follower_confirmed"));
 });
 
 test("codex shell handoff ignores EXO_CODEX_CLI and stays on the native capture contract", async () => {
@@ -234,6 +313,23 @@ test("codex shell handoff ignores EXO_CODEX_CLI and stays on the native capture 
   assert.equal(result.transport.captureRequest.coldStartReady, true);
   assert.ok(result.transport.captureRequest.disallowedFallbacks.includes("codex_exec"));
   assert.match(result.transport.reason, /native agent tools/i);
+});
+
+test("connector-backed LinkedIn handoff uses the managed connector contract instead of browser binding", async () => {
+  const result = await buildCodexUnipileLinkedinHandoffResult();
+
+  assert.equal(result.transport.kind, "agent_handoff");
+  assert.equal(result.transport.connector, "unipile");
+  assert.equal(result.transport.captureRequest.captureTransportMode, "connector_native_only");
+  assert.equal(result.profile, null);
+  assert.equal(result.account.sourceType, "harness-connection");
+  assert.equal(result.account.harnessConnectionId, "harness-1");
+  assert.equal(result.transport.captureRequest.profileSelection, null);
+  assert.match(result.transport.captureRequest.prompt, /native unipile connector/i);
+  assert.match(result.transport.captureRequest.prompt, /Do not open or rely on a browser session/i);
+  assert.match(result.transport.captureRequest.prompt, /account_selection_mismatch/i);
+  assert.equal(result.transport.captureRequest.captureGuide.contractInputs.profileSelection, null);
+  assert.match(result.probe.reason, /unipile/i);
 });
 
 test("codex live handoff includes structured LinkedIn sent invitations hints with pagination and reconciliation rules", async () => {

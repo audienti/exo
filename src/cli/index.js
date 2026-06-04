@@ -3,6 +3,7 @@
 
 import { Command } from "commander";
 import { registerActions } from "./commands/actions.js";
+import { registerAgent } from "./commands/agent.js";
 import { registerCompanies } from "./commands/companies.js";
 import { registerConfig } from "./commands/config.js";
 import { registerDaily } from "./commands/daily.js";
@@ -10,8 +11,11 @@ import { registerInbound } from "./commands/inbound.js";
 import { registerInbox } from "./commands/inbox.js";
 import { registerMotion } from "./commands/motion.js";
 import { registerNext } from "./commands/next.js";
+import { registerPolicy } from "./commands/policy.js";
 import { registerProfiles } from "./commands/profiles.js";
 import { registerReport } from "./commands/report.js";
+import { registerTransition } from "./commands/transition.js";
+import { registerUi } from "./commands/ui.js";
 import { registerUsers } from "./commands/users.js";
 import { registerWhatIsThis } from "./commands/what-is-this.js";
 
@@ -19,7 +23,7 @@ const program = new Command();
 
 program
   .name("exo")
-  .description("Exo GTM operating kernel CLI")
+  .description("Exo agentic CRM and GTM motion system of record")
   .version("0.1.0")
   .showHelpAfterError()
   .addHelpText(
@@ -29,12 +33,14 @@ Operating rules:
   - Run from the repo root when you want multiple shells or agent chats to share the same Exo state.
   - Or pin a shared state store explicitly with EXO_STATE_DIR=/absolute/path/to/.exo.
   - Prefer --json when Claude/Codex is calling Exo and needs structured output.
-  - Register and test a browser profile before any browser-backed work.
-  - Treat profile status as a gate, not a hint.
+  - Prefer connected account and harness-connector paths over any browser profile path.
+  - Browser profiles are legacy state only. They do not create a governed execution path.
+  - Use exo users intake when the store is still missing its first managed execution user.
   - Use exo motion intake when an agent should ask one setup question at a time before launching a new motion.
 
 Common patterns:
   exo what-is-this --json
+  exo users intake --json
   exo motion intake --json
   exo motion start --url https://example.com/product --premise "This offer matters when regulated lenders enter more complex credit-decision environments." --audience "Traditional FI risk owners" --signal "company::Is there recent evidence that this company expanded into a more complex lending segment?" --json
   exo motion start --url https://example.com/product --existing continue --json
@@ -60,11 +66,15 @@ Common patterns:
   exo inbound review <user-id> --json
   exo inbound observations list <user-id> --json
   exo inbound observations add <user-id> --account <account-id> --surface linkedin-messaging-inbox --kind inbound_reply_received --observed-at 2026-05-28T14:00:00.000Z --summary "Prospect replied in LinkedIn" --json
+  exo policy list --scope effective --json
+  exo policy add --scope global --kind ignore_identity --actor-handle person@example.com --reason "Never show this sender again" --json
+  exo policy add --scope local --kind hide_surface --capability linkedin --surface linkedin-received-invitations --reason "Hide inbound invites in this repo" --json
   exo inbox --user <user-id> --json
   exo daily --user <user-id> --json
   exo next --json
   exo actions list
   exo actions show connection_request
+  exo actions result --action connection_request --result sent --company <company-id> --prospect <prospect-id> --occurred-at <iso-datetime> --json
   exo companies list
   exo companies find chainguard
   exo companies update <company-id> --website-url https://example.com
@@ -74,31 +84,24 @@ Common patterns:
   exo companies signal-matches show <company-id> --json
   exo companies prospects add <company-id> --name "Person Name" --title "Director Title" --email person@example.com --profile-viewed-at <iso-datetime> --live-signal-summary "Recent post shows channel activity" --why-relevant "Why this person matters now"
   exo companies prospects update <company-id> --prospect <prospect-id> --email person@example.com --source-url https://example.com/profile --observed-at <iso-datetime>
-  exo companies through-line set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them "Specific to them" --shared-problem "Shared problem" --why-now "Why now" --legitimate-wedge "Why they would reply" --compression-line "One sentence"
-  exo companies opening-plan set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --why-now "Reason to talk now" --angle "Opening angle" --reply-path "Why this person would legitimately reply now" --primary-channel connection-request --fallback-channel email --fallback-trigger "Use email if LinkedIn is blocked or there is no reply." --preflight-action "View the prospect profile" --first-move "First move" --first-message-goal "Desired response"
   exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action "Send the first touch"
-  exo companies profile assign <company-id> --profile <profile-id> --reason "Use one identity consistently"
-  exo profiles discover --json
-  exo profiles add --browser chrome --label work-linkedin --profile-directory "Profile 2" --capability linkedin --capability sales-navigator
-  exo profiles claim <profile-id> --label workspace-main --workspace workspace --account linkedin:operator-linkedin --max-connection-requests 40 --max-inmail-messages 20
-  exo profiles list
-  exo profiles capabilities --json
-  exo profiles resolve --capability linkedin --json
-  exo profiles test <profile-id>
-  exo profiles auth <profile-id> --runtime codex --json
   exo users add --label operator-main --owner operator
-  exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --profile <profile-id> --preferred
-  exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --preferred
+  exo users harness probe <user-id> --runtime codex --json
+  exo users accounts map-runtime <user-id> --runtime codex --apply --json
+  exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --runtime codex --connector <connector-from-probe> --provider-account-id <provider-account-id> --preferred --max-connection-requests 125
+  exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --provider-account-id <provider-account-id> --preferred
   exo users resolve <user-id> --capability gmail --json
   exo config export --out ./exo-config.json
   exo config import ./exo-config.json
 
 Current state location:
-  EXO_STATE_DIR/exo.db or ./.exo/exo.db
+  Single-store mode: EXO_STATE_DIR/exo.db or ./.exo/exo.db
+  Layered mode: EXO_HOME_STATE_DIR/exo.db + EXO_STATE_DIR/exo.db + ./exo-policy.jsonl
 `
   );
 
 registerActions(program);
+registerAgent(program);
 registerCompanies(program);
 registerConfig(program);
 registerDaily(program);
@@ -106,8 +109,11 @@ registerInbound(program);
 registerInbox(program);
 registerMotion(program);
 registerNext(program);
+registerPolicy(program);
 registerProfiles(program);
 registerReport(program);
+registerTransition(program);
+registerUi(program);
 registerUsers(program);
 registerWhatIsThis(program);
 

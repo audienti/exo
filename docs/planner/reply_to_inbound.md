@@ -4,7 +4,7 @@ principles:
   - Read the newest inbound before drafting anything.
 do:
   - Inspect the actual thread first.
-  - Use the stored through-line and opening plan as context, not as a script.
+  - Use the stored prospect context and cadence branch as context, not as a script.
 avoid:
   - Do not send the stale planned follow-up.
   - Do not answer without checking the latest message body.

@@ -109,8 +109,6 @@ Purpose:
 - canonical company list
 - canonical prospect list
 - enrichment state
-- through-lines
-- opening plans
 - cadence
 - touches
 - relationship context
@@ -239,7 +237,7 @@ Render these sections:
 1. Company list
 2. Prospect list
 3. Enrichment status
-4. Through-line and opening-plan completeness
+4. Cadence completeness
 5. Cadence state
 6. Touch history and current branch state
 
@@ -439,4 +437,3 @@ A redesign is correct if, within a few seconds, an operator can answer:
 - is the truth fresh enough to trust?
 
 If the redesign makes those answers slower in exchange for tidier object browsing, it failed.
-

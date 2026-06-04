@@ -5,8 +5,12 @@ import { inboundObservationSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { buildUserInboundSyncView } from "./user-inbound-sync.js";
 import { summarizeSurfaceState, recommendSurfaceAction } from "./build-inbox-view.js";
-
-const STALE_CONNECTION_REQUEST_DAYS = 21;
+import { isStalePendingConnectionRequest, STALE_CONNECTION_REQUEST_DAYS } from "../lib/cadence-helpers.js";
+import { steerSuppression } from "./prospect-steer.js";
+import {
+  classifyPrivateInboundMessage,
+  describePrivateInboundResponse,
+} from "./private-inbound-message-classification.js";
 
 /**
  * @param {unknown} rawUser
@@ -164,7 +168,6 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
       lowPriorityCount: reviewItems.filter((item) => item.priority === "low").length,
       decisionItemCount: reviewItems.filter((item) =>
         item.state === "needs_decision"
-        || item.state === "stale_withdraw_review"
         || item.state === "needs_status_reconciliation"
       ).length,
       signalItemCount: reviewItems.filter((item) => item.category === "signal" || item.category === "visibility").length,
@@ -233,7 +236,94 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
     ? account.prospects.find((candidate) => candidate.id === observation.prospectId) ?? null
     : null);
   const ageDays = calculateAgeDays(observation.observedAt);
-  const triage = classifyReviewObservation(observation.kind, ageDays, prospect?.name ?? observation.actorName ?? "this person");
+  let triage = classifyReviewObservation(
+    observation,
+    ageDays,
+    observation.observedAt,
+    prospect?.name ?? observation.actorName ?? "this person",
+  );
+
+  const handledPrivateInbound = classifyHandledPrivateInboundStage(
+    observation,
+    prospect,
+    prospect?.name ?? observation.actorName ?? "this person",
+  );
+  if (handledPrivateInbound) {
+    triage = handledPrivateInbound;
+  }
+
+  // Reconcile against what's already been done: if the accepted-invite's first
+  // post-accept message has already been sent, it's no longer a decision —
+  // we're now waiting on their reply. Without this it stays a live "send the
+  // first message" decision forever (the Operator next-move bug).
+  if (observation.kind === "connection_request_accepted" && hasSentPostAcceptMessage(prospect)) {
+    const name = prospect?.name ?? observation.actorName ?? "this prospect";
+    triage = {
+      category: "accepted_invite",
+      priority: "low",
+      state: "post_accept_sent",
+      whyItMatters: "The first post-accept message was already sent. The branch is now waiting on their reply.",
+      recommendedAction: `First message already sent to ${name} — waiting for a reply.`,
+      decisionOptions: [],
+    };
+  }
+
+  // A send-ready first message means the decision is DONE — it now lives in
+  // the agent send queue, not the operator decision lane. Without this, the
+  // prospect sits as the live next move forever because the message isn't SENT
+  // yet (that's the agent's step).
+  if (observation.kind === "connection_request_accepted" && hasQueuedPostAcceptMessage(prospect)) {
+    const name = prospect?.name ?? observation.actorName ?? "this prospect";
+    triage = {
+      category: "accepted_invite",
+      priority: "low",
+      state: "queued_for_send",
+      whyItMatters: "The first message is already send-ready in the agent queue. No operator action needed.",
+      recommendedAction: `First message queued for ${name} — the agent will send it.`,
+      decisionOptions: [],
+    };
+  }
+
+  if (observation.kind === "connection_request_accepted" && hasReviewablePostAcceptDraft(prospect)) {
+    const name = prospect?.name ?? observation.actorName ?? "this prospect";
+    triage = {
+      category: "accepted_invite",
+      priority: "high",
+      state: "ready_for_post_accept",
+      whyItMatters: "The agent already drafted the first post-accept message. The operator can review the actual copy instead of deciding in the abstract.",
+      recommendedAction: `Review the drafted first post-accept message for ${name} and decide whether to queue it for send.`,
+      decisionOptions: ["message", "wait"],
+    };
+  }
+
+  if (observation.kind === "connection_request_accepted" && prospect && !hasSentPostAcceptMessage(prospect) && !hasQueuedPostAcceptMessage(prospect) && !hasReviewablePostAcceptDraft(prospect)) {
+    const name = prospect?.name ?? observation.actorName ?? "this prospect";
+    triage = {
+      category: "accepted_invite",
+      priority: "low",
+      state: "agent_draft_due",
+      whyItMatters: "The connection is accepted, but the operator should not get a send decision until the agent has written the first message.",
+      recommendedAction: `Agent should draft the first post-accept message for ${name} before this returns to the operator lane.`,
+      decisionOptions: [],
+    };
+  }
+
+  // Operator steers are binding here too: a "do not contact / works for us"
+  // steer pulls the prospect out of the operator decision queue entirely, so
+  // the Operator view stays consistent with the agent queue.
+  const suppression = steerSuppression(prospect);
+  if (suppression.suppressed) {
+    triage = {
+      category: "operator_excluded",
+      priority: "low",
+      state: "excluded_by_steer",
+      whyItMatters: `Excluded by an operator steer: ${suppression.reason}`,
+      recommendedAction: `No outreach — operator steer says do not contact ${prospect?.name ?? observation.actorName ?? "this person"}.`,
+      decisionOptions: [],
+    };
+  }
+
+  const preview = buildReviewPreview(observation, prospect, triage.state);
 
   return {
     id: observation.id,
@@ -252,6 +342,9 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
     actorAvatarUrl: observation.actorAvatarUrl,
     sourceUrl: observation.sourceUrl,
     summary: observation.summary,
+    previewLabel: preview.label,
+    previewSubject: preview.subject,
+    previewText: preview.text,
     category: triage.category,
     priority: triage.priority,
     state: triage.state,
@@ -269,15 +362,122 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
 }
 
 /**
+ * Has an outbound post-accept message already gone out to this prospect?
+ * (a sent touch or a sent draft on the post-accept / follow-up DM surfaces).
+ * @param {any} prospect
+ */
+function hasSentPostAcceptMessage(prospect) {
+  if (!prospect) return false;
+  const surfaces = new Set(["post_accept_message", "follow_up_direct_message"]);
+  const touchSent = (prospect.touches ?? []).some(
+    (t) => surfaces.has(t.surface) && t.direction !== "inbound" && ["sent", "accepted", "replied"].includes(t.outcome),
+  );
+  const draftSent = (prospect.drafts ?? []).some((d) => surfaces.has(d.surface) && d.status === "sent");
+  return touchSent || draftSent;
+}
+
+/**
+ * Has a send-ready post-accept message already been staged for this prospect?
+ * An approved/queued draft on the post-accept or follow-up DM surface means the
+ * work has moved to the agent send queue, so it should drop out of the operator
+ * decision lane.
+ * @param {any} prospect
+ */
+function hasQueuedPostAcceptMessage(prospect) {
+  if (!prospect) return false;
+  const surfaces = new Set(["post_accept_message", "follow_up_direct_message"]);
+  return (prospect.drafts ?? []).some(
+    (d) => surfaces.has(d.surface) && (d.status === "approved" || d.status === "queued"),
+  );
+}
+
+/**
+ * Has the agent already written a reviewable post-accept draft for this
+ * prospect? `ready` means the operator can open the compose panel and inspect
+ * the actual copy immediately.
+ * @param {any} prospect
+ */
+function hasReviewablePostAcceptDraft(prospect) {
+  return Boolean(findReviewablePostAcceptDraft(prospect));
+}
+
+/**
+ * @param {any} prospect
+ */
+function findReviewablePostAcceptDraft(prospect) {
+  if (!prospect) return null;
+  const surfaces = new Set(["post_accept_message", "follow_up_direct_message"]);
+  return (prospect.drafts ?? []).find(
+    (d) => surfaces.has(d.surface) && d.status === "ready",
+  ) ?? null;
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {any | null} prospect
+ * @param {string} actorName
+ * @returns {{ category: string, priority: string, state: string, whyItMatters: string, recommendedAction: string, decisionOptions: string[] } | null}
+ */
+function classifyHandledPrivateInboundStage(observation, prospect, actorName) {
+  const response = describePrivateInboundResponse(observation, prospect);
+  const responseState = response.state;
+  if (responseState === "queued") {
+    return {
+      category: classifyPrivateInboundMessage(observation) === "first_inbound" ? "inbound_message" : "reply",
+      priority: "low",
+      state: "queued_for_send",
+      whyItMatters: "The reply is already send-ready in the agent queue. No operator action is still pending.",
+      recommendedAction: `Reply queued for ${actorName} — the agent will send it.`,
+      decisionOptions: [],
+    };
+  }
+  if (responseState === "sent") {
+    return {
+      category: classifyPrivateInboundMessage(observation) === "first_inbound" ? "inbound_message" : "reply",
+      priority: "low",
+      state: "reply_sent",
+      whyItMatters: "A reply was already sent after this inbound message. The branch is now waiting on them.",
+      recommendedAction: `Reply already sent to ${actorName} — waiting for their next message.`,
+      decisionOptions: [],
+    };
+  }
+  if (responseState === "blocked") {
+    const detail = summarizeUnavailableReplyReason(response.touch?.notes);
+    return {
+      category: classifyPrivateInboundMessage(observation) === "first_inbound" ? "inbound_message" : "reply",
+      priority: "low",
+      state: "reply_unavailable",
+      whyItMatters: detail,
+      recommendedAction: `Reply unavailable for ${actorName} — ${detail}`,
+      decisionOptions: [],
+    };
+  }
+  return null;
+}
+
+/**
  * @param {string} kind
  * @param {number} ageDays
+ * @param {string} observedAt
  * @param {string} actorName
  */
-function classifyReviewObservation(kind, ageDays, actorName) {
+function classifyReviewObservation(observation, ageDays, observedAt, actorName) {
+  const kind = observation.kind;
+  const privateInboundState = classifyPrivateInboundMessage(observation);
   switch (kind) {
     case "inbound_reply_received":
     case "email_reply_received":
     case "message_received":
+      if (privateInboundState === "first_inbound") {
+        return {
+          category: "inbound_message",
+          priority: "high",
+          state: "needs_triage",
+          whyItMatters: "A private inbound message arrived, but Exo does not have evidence that it is a reply to your prior message.",
+          recommendedAction: `Review ${actorName}'s inbound message and decide whether to reply or ignore it.`,
+          decisionOptions: ["reply-now", "ignore"]
+        };
+      }
       return {
         category: "reply",
         priority: "high",
@@ -317,11 +517,20 @@ function classifyReviewObservation(kind, ageDays, actorName) {
     case "connection_request_accepted":
       return {
         category: "accepted_invite",
-        priority: "high",
-        state: "ready_for_post_accept",
-        whyItMatters: "The connection gate opened. This is the moment to decide whether to send the first post-accept private message.",
-        recommendedAction: `Decide whether to send the first post-accept direct message to ${actorName}.`,
-        decisionOptions: ["message", "wait"]
+        priority: "low",
+        state: "agent_draft_due",
+        whyItMatters: "The connection gate opened. The next step is for the agent to draft the first post-accept private message before asking the operator to review anything.",
+        recommendedAction: `Have the agent draft the first post-accept direct message for ${actorName}.`,
+        decisionOptions: []
+      };
+    case "connection_request_decline_requested":
+      return {
+        category: "declined_invite",
+        priority: "low",
+        state: "decline_queued",
+        whyItMatters: "The operator queued this invite for rejection. The agent will decline it on LinkedIn. Nothing for the operator to do.",
+        recommendedAction: `Rejection queued for ${actorName} — the agent will decline the invite.`,
+        decisionOptions: []
       };
     case "connection_request_declined":
       return {
@@ -342,14 +551,14 @@ function classifyReviewObservation(kind, ageDays, actorName) {
         decisionOptions: ["accepted", "rejected", "other"]
       };
     case "connection_request_pending":
-      if (ageDays >= STALE_CONNECTION_REQUEST_DAYS) {
+      if (isStalePendingConnectionRequest({ kind, observedAt })) {
         return {
           category: "sent_invite",
           priority: "high",
-          state: "stale_withdraw_review",
-          whyItMatters: `This sent invite has been pending for ${ageDays} days, which crosses the stale-withdraw review threshold.`,
-          recommendedAction: `Review whether to withdraw ${actorName}'s pending connection request now that it is stale.`,
-          decisionOptions: ["withdraw", "keep-pending"]
+          state: "agent_withdraw_due",
+          whyItMatters: `This sent invite has been pending for ${ageDays} days, which crosses the ${STALE_CONNECTION_REQUEST_DAYS}-day auto-withdraw threshold.`,
+          recommendedAction: `Agent should withdraw ${actorName}'s stale pending connection request now.`,
+          decisionOptions: []
         };
       }
 
@@ -409,6 +618,70 @@ function classifyReviewObservation(kind, ageDays, actorName) {
   }
 }
 
+/** @param {string | null | undefined} notes */
+function summarizeUnavailableReplyReason(notes) {
+  const normalized = String(notes ?? "").trim();
+  if (/disabledfeatures/i.test(normalized) && /reply/i.test(normalized)) {
+    return "The governed LinkedIn thread is read-only and reply is disabled.";
+  }
+  if (/read[ -]?only/i.test(normalized)) {
+    return "The governed LinkedIn thread is read-only.";
+  }
+  return "The governed reply path is not writable on this thread.";
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {any | null} prospect
+ * @param {string} state
+ * @returns {{ label: string | null, subject: string | null, text: string | null }}
+ */
+function buildReviewPreview(observation, prospect, state) {
+  if (state === "ready_for_post_accept") {
+    const draft = findReviewablePostAcceptDraft(prospect);
+    const text = compactPreviewText(draft?.body ?? null);
+    if (text) {
+      return {
+        label: "Draft message",
+        subject: normalizeNullableString(draft?.subject) ?? null,
+        text,
+      };
+    }
+  }
+
+  const parsedNotes = parseObservationNotes(observation.notes);
+  const latestMessage = pickLatestMeaningfulMessage(observation);
+  const previewSubject = normalizeNullableString(observation.subject) ?? parsedNotes.subject;
+  const latestText = compactPreviewText(latestMessage?.body ?? null);
+  if (latestText) {
+    return {
+      label: "Latest message",
+      subject: previewSubject,
+      text: latestText,
+    };
+  }
+
+  const noteText = compactPreviewText(parsedNotes.body);
+  if (noteText) {
+    return {
+      label: observation.kind === "connection_request_received" ? "Invitation note" : "Thread context",
+      subject: previewSubject,
+      text: noteText,
+    };
+  }
+
+  const summaryText = compactPreviewText(observation.summary);
+  if (summaryText) {
+    return {
+      label: "Engagement",
+      subject: previewSubject,
+      text: summaryText,
+    };
+  }
+
+  return { label: null, subject: previewSubject, text: null };
+}
+
 /**
  * @param {string} observedAt
  */
@@ -436,14 +709,15 @@ function compareReviewItems(left, right) {
     needs_reply: 0,
     needs_decision: 1,
     needs_status_reconciliation: 2,
-    stale_withdraw_review: 3,
+    agent_withdraw_due: 3,
     ready_for_post_accept: 4,
-    thread_change_review: 5,
-    attention_signal: 6,
-    visibility_signal: 7,
-    public_engagement_review: 8,
-    waiting: 9,
-    informational: 10
+    agent_draft_due: 5,
+    thread_change_review: 6,
+    attention_signal: 7,
+    visibility_signal: 8,
+    public_engagement_review: 9,
+    waiting: 10,
+    informational: 11
   };
 
   return (
@@ -452,4 +726,58 @@ function compareReviewItems(left, right) {
     || right.observedAt.localeCompare(left.observedAt)
     || right.recordedAt.localeCompare(left.recordedAt)
   );
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ */
+function pickLatestMeaningfulMessage(observation) {
+  const messages = (observation.messages ?? [])
+    .filter((message) => typeof message?.body === "string" && message.body.trim().length > 0)
+    .slice()
+    .sort((left, right) => (Date.parse(left.sentAt ?? "") || 0) - (Date.parse(right.sentAt ?? "") || 0));
+  return messages.findLast((message) => String(message.direction ?? "").toLowerCase() === "inbound")
+    ?? messages.at(-1)
+    ?? null;
+}
+
+/**
+ * @param {string | null | undefined} notes
+ * @returns {{ subject: string | null, body: string | null }}
+ */
+function parseObservationNotes(notes) {
+  const normalized = normalizeNullableString(notes);
+  if (!normalized) {
+    return { subject: null, body: null };
+  }
+
+  const subjectMatch = normalized.match(/^Subject:\s*(.+?)(?:\r?\n|$)/i);
+  const subject = normalizeNullableString(subjectMatch?.[1] ?? null);
+  const body = subjectMatch
+    ? normalizeNullableString(normalized.slice(subjectMatch[0].length))
+    : normalized;
+
+  return {
+    subject,
+    body,
+  };
+}
+
+/**
+ * @param {string | null | undefined} value
+ */
+function compactPreviewText(value) {
+  const normalized = normalizeNullableString(value)?.replace(/\s+/g, " ") ?? null;
+  if (!normalized) return null;
+  if (normalized.length <= 220) return normalized;
+  return `${normalized.slice(0, 217).replace(/\s+\S*$/, "").trimEnd()}...`;
+}
+
+/**
+ * @param {string | null | undefined} value
+ */
+function normalizeNullableString(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized ? normalized : null;
 }

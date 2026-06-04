@@ -161,6 +161,17 @@ export function applyCompleteTargetAccountPacket(rawAccount, input, now) {
       throw new Error(`Prospect selection packets can only complete into suppressed or exhausted override states, not ${input.nextStatus}.`);
     }
 
+    if (!input.nextStatus) {
+      const missingLinkedinProfileEnrichment = listSelectedProspectsMissingLinkedinProfileEnrichment(account);
+      if (missingLinkedinProfileEnrichment.length) {
+        throw new Error(
+          `Cannot complete Prospect selection packet: selected LinkedIn prospect${missingLinkedinProfileEnrichment.length === 1 ? "" : "s"} ` +
+          `missing stored profile enrichment: ${missingLinkedinProfileEnrichment.map((prospect) => prospect.name).join(", ")}. ` +
+          "Store the governed LinkedIn profile viewback before completing selection."
+        );
+      }
+    }
+
     const advancedAccount = input.nextStatus
       ? applyManualTargetAccountQueueState(account, {
         status: input.nextStatus,
@@ -360,6 +371,44 @@ function buildMotionPacket(company, account, stakeholderTargetCount) {
     claimedAt: null,
     notes: null
   };
+}
+
+/**
+ * @param {import("../schema/target-account.js").targetAccountSchema._type} account
+ */
+function listSelectedProspectsMissingLinkedinProfileEnrichment(account) {
+  return (account.prospects ?? [])
+    .map((prospect) => prospectSchema.parse(prospect))
+    .filter((prospect) => prospect.queueState?.status === "selected")
+    .filter((prospect) => hasLinkedinProfileIdentity(prospect))
+    .filter((prospect) => !hasStoredLinkedinProfileEnrichment(prospect));
+}
+
+/**
+ * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ */
+function hasLinkedinProfileIdentity(prospect) {
+  if (normalizeNullableString(prospect.linkedinProfileUrl)) {
+    return true;
+  }
+
+  return Array.isArray(prospect.contactPoints) && prospect.contactPoints.some((point) => (
+    point.kind === "linkedin_profile"
+    || point.kind === "linkedin_public_id"
+    || point.kind === "linkedin_member_id"
+  ));
+}
+
+/**
+ * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ */
+function hasStoredLinkedinProfileEnrichment(prospect) {
+  const snapshot = prospect.linkedinProfileSnapshot ?? {};
+  return Boolean(
+    normalizeNullableString(prospect.profileViewedAt)
+    && normalizeNullableString(snapshot.capturedAt)
+    && normalizeNullableString(snapshot.profileUrl)
+  );
 }
 
 /**

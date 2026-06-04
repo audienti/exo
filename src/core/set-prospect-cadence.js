@@ -27,6 +27,10 @@ import {
 export function setMotionProspectCadence(rawMotion, rawCompany, input) {
   const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
   const prospectIndex = baseAccount.prospects.findIndex((prospect) => prospect.id === input.prospectId);
+  const normalizedLastTouchAt = normalizeOptionalNullableString(input.lastTouchAt);
+  const normalizedNextAction = normalizeOptionalNullableString(input.nextAction);
+  const normalizedNextActionDueAt = normalizeOptionalNullableString(input.nextActionDueAt);
+  const normalizedNotes = normalizeOptionalNullableString(input.notes);
 
   if (prospectIndex === -1) {
     throw new Error(`Prospect not found: ${input.prospectId}`);
@@ -45,16 +49,16 @@ export function setMotionProspectCadence(rawMotion, rawCompany, input) {
         currentStep: input.currentStep ?? prospect.cadenceState.currentStep ?? null,
         lastTouchChannel: input.lastTouchChannel ?? prospect.cadenceState.lastTouchChannel ?? null,
         lastTouchOutcome: input.lastTouchOutcome ?? prospect.cadenceState.lastTouchOutcome ?? null,
-        lastTouchAt: normalizeOptionalNullableString(input.lastTouchAt) ?? prospect.cadenceState.lastTouchAt ?? null,
-        nextAction: normalizeOptionalNullableString(input.nextAction) ?? prospect.cadenceState.nextAction ?? null,
+        lastTouchAt: normalizedLastTouchAt === undefined ? prospect.cadenceState.lastTouchAt ?? null : normalizedLastTouchAt,
+        nextAction: normalizedNextAction === undefined ? prospect.cadenceState.nextAction ?? null : normalizedNextAction,
         nextActionDueAt:
-          normalizeOptionalNullableString(input.nextActionDueAt) ?? prospect.cadenceState.nextActionDueAt ?? null,
+          normalizedNextActionDueAt === undefined ? prospect.cadenceState.nextActionDueAt ?? null : normalizedNextActionDueAt,
         blockedChannels:
           input.blockedChannels !== undefined
             ? normalizeStringArray(input.blockedChannels)
             : prospect.cadenceState.blockedChannels,
         requireNewHook: input.requireNewHook ?? prospect.cadenceState.requireNewHook,
-        notes: normalizeOptionalNullableString(input.notes) ?? prospect.cadenceState.notes ?? null,
+        notes: normalizedNotes === undefined ? prospect.cadenceState.notes ?? null : normalizedNotes,
         updatedAt: now
       })
     });

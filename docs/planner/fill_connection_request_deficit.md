@@ -15,6 +15,6 @@ avoid:
   - Do not leave newly built ready branches outside Exo.
 writeback:
   - Record every sent connection request as a touch in Exo.
-  - Persist any new companies, prospects, through-lines, opening plans, and cadence branches you create to close the deficit.
+  - Persist any new companies, prospects, prospect context, and cadence branches you create to close the deficit.
 ---
 Close today's LinkedIn invitation deficit for {{userLabel}}. The target is {{dailyInvitationTarget}} connection request(s) today. {{sentTodayCount}} have been sent today, {{pendingInvitationCount}} are already pending from earlier work, {{readyConnectionRequestCount}} more branch(es) are ready right now, and {{remainingInvitationCount}} invitations still need to be filled today. Current queue pressure: discovered companies {{discoveredCompanyCount}}, manually queued research companies {{queuedResearchCompanyCount}}, researched companies {{researchedCompanyCount}}, selected prospects {{selectedProspectCount}}, and queue-ready prospects {{readyProspectCount}}. If ready branches exist, send them first. If inventory is short by {{inventoryShortfallCount}}, first make sure discovered companies actually exist in the active motion backlog with `exo motion discover`, then work the earliest blocked queue stage that will create additional connection-request-ready branches before the day ends.

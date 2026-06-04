@@ -18,9 +18,6 @@ import { hasExhaustedEnrichmentState } from "../lib/prospect-contacts.js";
  *     lastTouchOutcome: string | null,
  *     notes?: string | null
  *   },
- *   openingPlan: {
- *     firstMove: string | null
- *   },
  *   nextAction: string | null
  * }>} prospects
  * @param {{
@@ -38,9 +35,6 @@ import { hasExhaustedEnrichmentState } from "../lib/prospect-contacts.js";
  *     lastTouchOutcome: string | null,
  *     notes?: string | null
  *   },
- *   openingPlan: {
- *     firstMove: string | null
- *   },
  *   nextAction: string | null
  * }} waitingProspect
  */
@@ -56,7 +50,7 @@ export function selectParallelSupportAction(prospects, waitingProspect) {
       priority: "action",
       effect: "supporting_waiting_branch",
       dueAt: sameAccountProspect.cadenceState.nextActionDueAt ?? null,
-      nextMove: sameAccountProspect.nextAction ?? sameAccountProspect.openingPlan.firstMove ?? `Execute the first planned touch for ${sameAccountProspect.name}.`,
+      nextMove: sameAccountProspect.nextAction ?? `Execute the first planned touch for ${sameAccountProspect.name}.`,
       why: `${waitingProspect.name}'s primary branch is waiting on an external trigger, so the strongest action now is to work another ready prospect at ${waitingProspect.companyName}.`,
       company: sameAccountProspect,
       prospect: sameAccountProspect
@@ -75,7 +69,7 @@ export function selectParallelSupportAction(prospects, waitingProspect) {
       priority: "action",
       effect: "supporting_waiting_branch",
       dueAt: null,
-      nextMove: `While ${waitingProspect.name}'s connection request is pending, try to find a verified direct email and other usable contact points for ${sameAccountReserveProspect.name} so the reserve path is stronger if the primary branch stalls.`,
+      nextMove: `While ${waitingProspect.name}'s connection request is pending, use whatever runtime tools are available to try to find a verified direct email, a verified mobile phone number, and any other usable contact points for ${sameAccountReserveProspect.name} so the reserve path is stronger if the primary branch stalls.`,
       why: `${waitingProspect.name}'s primary branch is waiting, and the contact-enrichment pass on that branch is already exhausted. The strongest parallel move now is to deepen the held-in-reserve path for ${sameAccountReserveProspect.name} at ${waitingProspect.companyName}.`,
       company: sameAccountReserveProspect,
       prospect: sameAccountReserveProspect
@@ -93,7 +87,7 @@ export function selectParallelSupportAction(prospects, waitingProspect) {
       priority: "action",
       effect: "supporting_waiting_branch",
       dueAt: otherProspect.cadenceState.nextActionDueAt ?? null,
-      nextMove: otherProspect.nextAction ?? otherProspect.openingPlan.firstMove ?? `Execute the first planned touch for ${otherProspect.name}.`,
+      nextMove: otherProspect.nextAction ?? `Execute the first planned touch for ${otherProspect.name}.`,
       why: `${waitingProspect.name}'s primary branch is waiting on an external trigger, so the strongest action now is to work another ready prospect branch elsewhere in the motion.`,
       company: otherProspect,
       prospect: otherProspect
@@ -107,7 +101,7 @@ export function selectParallelSupportAction(prospects, waitingProspect) {
       priority: "action",
       effect: "supporting_waiting_branch",
       dueAt: null,
-      nextMove: `While ${waitingProspect.name}'s connection request is pending, try to find a verified direct email and other usable contact points for them in parallel.`,
+      nextMove: `While ${waitingProspect.name}'s connection request is pending, use whatever runtime tools are available to try to find a verified direct email, a verified mobile phone number, and any other usable contact points for them in parallel.`,
       why: `${waitingProspect.name}'s primary branch is waiting on an external trigger. The best action now is parallel contact enrichment so the branch gains channel depth without replacing the live LinkedIn path.`,
       company: waitingProspect,
       prospect: waitingProspect

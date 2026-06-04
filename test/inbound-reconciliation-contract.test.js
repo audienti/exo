@@ -190,6 +190,19 @@ test("linkedin capture payload preserves visible totals and reconcile metadata f
           error: null,
           items: []
         },
+        followersList: {
+          status: "success",
+          checkedAt: timestamp,
+          itemCount: 0,
+          visibleTotalCount: 0,
+          captureCompleteness: "complete",
+          requestedMode: "quick",
+          actualMode: "quick",
+          reconcileRequired: false,
+          reconcileReason: null,
+          error: null,
+          items: []
+        },
         followingList: {
           status: "success",
           checkedAt: timestamp,
@@ -216,6 +229,82 @@ test("linkedin capture payload preserves visible totals and reconcile metadata f
   assert.equal(sentInvitations.actualMode, "quick");
   assert.equal(sentInvitations.reconcileRequired, true);
   assert.equal(sentInvitations.reconcileReason, "visible_total_exceeds_itemized_rows");
+});
+
+test("linkedin capture payload maps followers captures into the governed followers surface", () => {
+  const result = buildLinkedinInboundSyncPayload(
+    {
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "william-main",
+      owner: "William",
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "william-main",
+          sourceType: "browser-profile",
+          browserProfileId: "profile-1",
+          preferred: true
+        }
+      ],
+      harnessConnections: []
+    },
+    {
+      accountId: "linkedin-account-1",
+      capture: {
+        mode: "quick",
+        sentInvitations: { status: "success", checkedAt: timestamp, itemCount: 0, error: null, items: [] },
+        receivedInvitations: { status: "success", checkedAt: timestamp, itemCount: 0, error: null, items: [] },
+        messagingInbox: { status: "success", checkedAt: timestamp, itemCount: 0, error: null, items: [] },
+        profileViews: { status: "success", checkedAt: timestamp, itemCount: 0, error: null, items: [] },
+        followersList: {
+          status: "success",
+          checkedAt: timestamp,
+          itemCount: 1,
+          visibleTotalCount: 1,
+          captureCompleteness: "complete",
+          requestedMode: "quick",
+          actualMode: "quick",
+          reconcileRequired: false,
+          reconcileReason: null,
+          error: null,
+          items: [
+            {
+              entryId: "follower-1",
+              kind: "follower_confirmed",
+              observedAt: timestamp,
+              actorName: "Grace Follower",
+              actorTitle: "CRO",
+              actorCompanyName: "Follower Co",
+              actorHandle: null,
+              actorProfileUrl: "https://www.linkedin.com/in/grace-follower/",
+              actorLinkedinPublicId: "grace-follower",
+              actorLinkedinMemberId: null,
+              actorAvatarSourceUrl: null,
+              sourceUrl: "https://www.linkedin.com/mynetwork/network-manager/people-follow/followers/",
+              motionId: null,
+              companyId: null,
+              prospectId: null,
+              notes: null,
+              summary: "Grace Follower currently follows this profile."
+            }
+          ]
+        },
+        followingList: { status: "success", checkedAt: timestamp, itemCount: 0, error: null, items: [] }
+      }
+    }
+  );
+
+  const followers = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-followers-list");
+  assert.ok(followers);
+  assert.equal(followers.itemCount, 1);
+  assert.equal(followers.observations[0].kind, "follower_confirmed");
+  assert.equal(followers.observations[0].externalId, "follower-1");
+  assert.equal(followers.observations[0].actorProfileUrl, "https://www.linkedin.com/in/grace-follower/");
 });
 
 test("full authoritative sent-invitation reconciliation can complete after terminal exhaustion even when the visible count badge is slightly higher", () => {
@@ -316,6 +405,24 @@ test("full authoritative sent-invitation reconciliation can complete after termi
         items: []
       },
       profileViews: {
+        status: "success",
+        checkedAt: timestamp,
+        itemCount: 0,
+        visibleTotalCount: 0,
+        captureCompleteness: "complete",
+        requestedMode: "full",
+        actualMode: "full",
+        reconcileRequired: false,
+        reconcileReason: null,
+        exhaustionStatus: "complete",
+        exhaustionReason: "terminal_zero_row_pagination_seen",
+        paginationAttempted: true,
+        terminalSignalSeen: true,
+        stalledPassCount: 1,
+        error: null,
+        items: []
+      },
+      followersList: {
         status: "success",
         checkedAt: timestamp,
         itemCount: 0,
@@ -556,58 +663,10 @@ test("daily suppresses new connection-request pressure until a partial live sent
       "high",
       "--why-relevant",
       "Owns the current primary outbound branch",
+      "--linkedin-profile-url",
+      "https://www.linkedin.com/in/quinn-waiting",
       "--json"
     ])).prospects[0];
-
-    runCli(tempDir, [
-      "companies",
-      "through-line",
-      "set",
-      company.id,
-      "--motion",
-      motion.id,
-      "--prospect",
-      prospect.id,
-      "--specific-to-them",
-      "Quinn owns the branch.",
-      "--shared-problem",
-      "Pipeline creation needs consistent executive access.",
-      "--why-now",
-      "The account has a messy sent-invitation backlog.",
-      "--legitimate-wedge",
-      "A pacing-aware outbound system is missing.",
-      "--compression-line",
-      "Live account truth should outrank clean-room planner assumptions.",
-      "--json"
-    ]);
-
-    runCli(tempDir, [
-      "companies",
-      "opening-plan",
-      "set",
-      company.id,
-      "--motion",
-      motion.id,
-      "--prospect",
-      prospect.id,
-      "--why-now",
-      "The current motion is inventory-thin.",
-      "--angle",
-      "Connect outbound pacing to motion throughput.",
-      "--reply-path",
-      "Quinn should see why weak inventory ruins daily capacity.",
-      "--primary-channel",
-      "connection-request",
-      "--fallback-channel",
-      "email",
-      "--fallback-trigger",
-      "Use email only if LinkedIn is blocked or the branch later needs escalation.",
-      "--first-move",
-      "Send a short connection request.",
-      "--first-message-goal",
-      "Validate whether Quinn owns outbound pacing.",
-      "--json"
-    ]);
 
     runCli(tempDir, [
       "companies",
@@ -684,9 +743,17 @@ test("daily suppresses new connection-request pressure until a partial live sent
     assert.equal(daily.capacity.linkedin.execution.pendingInvitationReconcileRequired, true);
     assert.equal(daily.capacity.linkedin.execution.pendingInvitationItemizationGapCount, 64);
     assert.equal(daily.capacity.linkedin.plannerItem, null);
-    assert.equal(daily.items[0].source.type, "inbound_itemization_gap");
-    assert.equal(daily.items[0].source.kind, "linkedin-sent-invitations");
-    assert.equal(daily.items[0].guidance.key, "itemize_inbound_surface");
+    assert.ok(daily.items.every((item) => item.source.type !== "inbound_itemization_gap"));
+
+    const queue = JSON.parse(runCli(tempDir, ["agent", "queue", "--json"]));
+    const syncTask = queue.tasks.find((task) =>
+      task.kind === "run_inbound_sync"
+      && task.reason === "itemization_gap"
+      && task.accountId === linkedinAccount.id
+    );
+    assert.ok(syncTask);
+    assert.equal(syncTask.mode, "full");
+    assert.ok(syncTask.surfaceKeys.includes("linkedin-sent-invitations"));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

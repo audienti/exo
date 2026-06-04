@@ -25,7 +25,8 @@ export function resolveScopedExecutionAssignment(input) {
     company.engagementUserAssignment?.userId ?? null,
     users,
     profiles,
-    input.capability
+    input.capability,
+    company.engagementUserAssignment?.accountRefs ?? []
   );
   if (companyUserResolution) {
     return {
@@ -54,7 +55,8 @@ export function resolveScopedExecutionAssignment(input) {
       motion.engagementUserAssignment?.userId ?? null,
       users,
       profiles,
-      input.capability
+      input.capability,
+      motion.engagementUserAssignment?.accountRefs ?? []
     );
     if (motionUserResolution) {
       return {
@@ -79,6 +81,16 @@ export function resolveScopedExecutionAssignment(input) {
     }
   }
 
+  const singletonUserResolution = resolveSingletonUserAssignment(users, profiles, input.capability);
+  if (singletonUserResolution) {
+    return {
+      source: "auto-singleton-user",
+      userAssignmentRecord: null,
+      profileAssignmentRecord: null,
+      ...singletonUserResolution,
+    };
+  }
+
   return {
     source: "none",
     userAssignmentRecord: null,
@@ -86,8 +98,27 @@ export function resolveScopedExecutionAssignment(input) {
     assignedUser: null,
     assignedProfile: null,
     resolvedAccount: null,
-    resolvedProfile: null
+    resolvedProfile: null,
+    accountResolution: null
   };
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type[]} users
+ * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
+ * @param {string} capability
+ */
+function resolveSingletonUserAssignment(users, profiles, capability) {
+  const candidates = users
+    .map((user) => resolveUserAssignment(user.id, users, profiles, capability))
+    .filter(Boolean)
+    .filter((candidate) => candidate.accountResolution?.sourceType === "harness-connection");
+
+  if (candidates.length !== 1) {
+    return null;
+  }
+
+  return candidates[0];
 }
 
 /**
@@ -95,8 +126,9 @@ export function resolveScopedExecutionAssignment(input) {
  * @param {import("../schema/user.js").userSchema._type[]} users
  * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
  * @param {string} capability
+ * @param {string[]} accountRefs
  */
-function resolveUserAssignment(userId, users, profiles, capability) {
+function resolveUserAssignment(userId, users, profiles, capability, accountRefs = []) {
   if (!userId) {
     return null;
   }
@@ -106,7 +138,8 @@ function resolveUserAssignment(userId, users, profiles, capability) {
     return null;
   }
 
-  const resolvedAccount = resolveUserConnection(assignedUser, profiles, { capability }).resolved;
+  const resolution = resolveUserConnectionForScopedAccountRefs(assignedUser, profiles, capability, accountRefs);
+  const resolvedAccount = resolution.resolved;
   const resolvedProfile = resolvedAccount?.browserProfile
     ? profiles.find((profile) => profile.id === resolvedAccount.browserProfile.id) ?? null
     : null;
@@ -115,8 +148,90 @@ function resolveUserAssignment(userId, users, profiles, capability) {
     assignedUser,
     assignedProfile: resolvedProfile,
     resolvedAccount,
-    resolvedProfile
+    resolvedProfile,
+    accountResolution: {
+      status: resolution.resolutionStatus,
+      reason: resolution.reason,
+      sourceType: resolution.sourceType ?? null
+    }
   };
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type} user
+ * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
+ * @param {string} capability
+ * @param {string[]} accountRefs
+ */
+function resolveUserConnectionForScopedAccountRefs(user, profiles, capability, accountRefs) {
+  const capabilityAccounts = user.accounts.filter((account) => account.capability === capability);
+  const scopedHandles = [...new Set(
+    (accountRefs ?? [])
+      .filter((ref) => typeof ref === "string" && ref.startsWith(`${capability}:`))
+      .map((ref) => ref.slice(capability.length + 1).trim())
+      .filter(Boolean)
+  )];
+
+  if (!scopedHandles.length) {
+    return resolveUserConnection(user, profiles, { capability });
+  }
+
+  if (scopedHandles.length > 1) {
+    return {
+      user: {
+        id: user.id,
+        label: user.label,
+        owner: user.owner
+      },
+      capability,
+      resolved: null,
+      candidates: capabilityAccounts,
+      resolutionStatus: "identity_ambiguous",
+      reason: `Multiple ${capability} account refs are pinned for ${user.label}. Keep only one exact ${capability} account on this assignment before launch.`,
+      sourceType: inferAccountSourceType(capabilityAccounts)
+    };
+  }
+
+  const scopedAccounts = capabilityAccounts.filter((account) => account.handle === scopedHandles[0]);
+  if (!scopedAccounts.length) {
+    return {
+      user: {
+        id: user.id,
+        label: user.label,
+        owner: user.owner
+      },
+      capability,
+      resolved: null,
+      candidates: capabilityAccounts,
+      resolutionStatus: "not_found",
+      reason: `The pinned ${capability} account ref ${capability}:${scopedHandles[0]} is not stored on ${user.label}.`,
+      sourceType: inferAccountSourceType(capabilityAccounts)
+    };
+  }
+
+  return resolveUserConnection(
+    {
+      ...user,
+      accounts: scopedAccounts
+    },
+    profiles,
+    { capability }
+  );
+}
+
+/**
+ * @param {import("../schema/user.js").userConnectedAccountSchema._type[]} accounts
+ */
+function inferAccountSourceType(accounts) {
+  if (accounts.some((account) => account.sourceType === "harness-connection")) {
+    return "harness-connection";
+  }
+
+  if (accounts.some((account) => account.sourceType === "browser-profile")) {
+    return "browser-profile";
+  }
+
+  return null;
 }
 
 /**
@@ -137,6 +252,7 @@ function resolveProfileAssignment(profileId, profiles) {
     assignedUser: null,
     assignedProfile,
     resolvedAccount: null,
-    resolvedProfile: assignedProfile
+    resolvedProfile: assignedProfile,
+    accountResolution: null
   };
 }

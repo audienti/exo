@@ -8,6 +8,7 @@ do:
   - Open the first packet contract with `exo motion packet-brief {{firstClaimableProspectSelectionPacketMotionId}} --packet {{firstClaimableProspectSelectionPacketId}}` before you start, so the worker sees the exact scope and writeback path.
   - Claim the packet explicitly with `exo companies queue claim <company-id> --motion <motion-id> --worker <label>`.
   - Add the best-fit prospects to the motion-owned target account with `exo companies prospects add ...`.
+  - If you opened a selected person's LinkedIn profile to justify the selection, land that governed profile enrichment into Exo before you complete the packet.
   - Complete the packet with `exo companies queue complete <company-id> --motion <motion-id> --worker <label>` after the chosen prospect set is in Exo.
 avoid:
   - Do not keep selecting people outside Exo.
@@ -16,6 +17,7 @@ avoid:
   - Do not complete the packet before the selected prospect set is durable.
 writeback:
   - Persist the chosen prospects on the motion-owned target account.
+  - Persist the LinkedIn profile viewback for any selected prospect whose profile you opened during selection.
   - Include the strongest why-relevant reasoning and any direct channel fallbacks you already know.
   - Complete the packet so the backlog can advance into planning and ready-branch work.
 ---

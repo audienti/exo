@@ -4,6 +4,11 @@ import { buildMotionDraftView } from "./build-motion-draft-view.js";
 import { buildMotionProspectView } from "./build-motion-prospect-view.js";
 import { listActionCatalog, normalizeActionKey } from "../lib/action-catalog.js";
 import { motionSchema } from "../schema/motion.js";
+import {
+  hasAcceptedConnection,
+  hasPriorPrivateOutbound,
+  isFirstPrivateDirectMessagePath,
+} from "./select-next-draft-surface.js";
 
 /**
  * @param {unknown} rawMotion
@@ -167,7 +172,7 @@ function availabilityForAction(context) {
         return {
           available: false,
           status: "blocked",
-          reason: "No accepted connection or inbound thread is recorded for this prospect yet."
+          reason: "No governed direct-message branch is writable for this prospect yet."
         };
       }
 
@@ -228,11 +233,11 @@ function availabilityForAction(context) {
       if (!brief.prospect.linkedinProfileUrl) {
         return { available: false, status: "blocked", reason: "No LinkedIn profile URL is stored for this prospect." };
       }
-      if (hasAcceptedConnection(touches)) {
+      if (hasAcceptedConnection(brief.prospect)) {
         return { available: false, status: "blocked", reason: "A connection is already accepted. Use direct message instead of InMail." };
       }
-      if (!brief.messageTestReady) {
-        return { available: false, status: "blocked", reason: "Through-line, opening plan, and cadence must all be ready before testing InMail." };
+      if (brief.prospect.cadenceState.status !== "ready") {
+        return { available: false, status: "blocked", reason: "Cadence is not ready for a first outbound test yet." };
       }
       return {
         available: true,
@@ -243,7 +248,7 @@ function availabilityForAction(context) {
       if (!hasNonBlockedSurface(touches, "connection_request")) {
         return { available: false, status: "blocked", reason: "No connection request is recorded for this prospect." };
       }
-      if (hasAcceptedConnection(touches)) {
+      if (hasAcceptedConnection(brief.prospect)) {
         return { available: false, status: "blocked", reason: "The connection is already accepted, so there is nothing to withdraw." };
       }
       if (hasSurface(touches, "withdraw_connection")) {
@@ -331,22 +336,19 @@ function resolveDirectMessageSurface(brief) {
     return "inbound_reply";
   }
 
-  if (brief.prospect.touches.some((touch) => touch.surface === "post_accept_message" || touch.surface === "follow_up_direct_message" || touch.surface === "in_mail_message")) {
+  if (hasPriorPrivateOutbound(brief.prospect.touches)) {
     return "follow_up_direct_message";
   }
 
-  if (hasAcceptedConnection(brief.prospect.touches)) {
+  if (hasAcceptedConnection(brief.prospect, brief.prospect.touches)) {
     return "post_accept_message";
   }
 
-  return null;
-}
+  if (isFirstPrivateDirectMessagePath(brief.prospect, brief.prospect.touches)) {
+    return "follow_up_direct_message";
+  }
 
-/**
- * @param {Array<{ surface: string, outcome: string }>} touches
- */
-function hasAcceptedConnection(touches) {
-  return touches.some((touch) => touch.surface === "connection_request" && touch.outcome === "accepted");
+  return null;
 }
 
 /**
@@ -380,11 +382,11 @@ function countSurfaceOutcome(touches, surface, outcome) {
  */
 function isRecommendedAction(brief, actionKey) {
   if (actionKey === "profile_view") {
-    return brief.prospect.openingPlan.preflightActions.some((action) => /view the prospect profile/i.test(action));
+    return !brief.prospect.profileViewedAt && Boolean(brief.prospect.linkedinProfileUrl);
   }
 
   if (actionKey === "create_post_comment") {
-    return brief.prospect.openingPlan.preflightActions.some((action) => /recent relevant linkedin post/i.test(action));
+    return brief.recentPost.engageable;
   }
 
   if (actionKey === "connection_request") {
@@ -392,10 +394,10 @@ function isRecommendedAction(brief, actionKey) {
   }
 
   if (actionKey === "send_email") {
-    return brief.prospect.openingPlan.fallbackChannel === "email";
+    return brief.prospect.cadenceState.currentStep === "value-add-email";
   }
 
-  return brief.prospect.openingPlan.primaryChannel?.replace(/-/g, "_") === actionKey;
+  return recommendedActionKeyForCadenceStep(brief.prospect.cadenceState.currentStep) === actionKey;
 }
 
 /**
@@ -439,7 +441,7 @@ function buildExecutionSteps(actionView, action) {
       steps.push("Keep the action low-friction. The goal is acceptance, not a meeting ask.");
       break;
     case "send_direct_message":
-      steps.push("Match the actual conversation stage: first DM after acceptance, follow-up DM, or inbound reply.");
+      steps.push("Match the actual conversation stage: first private message on an open profile, first DM after acceptance, follow-up DM, or inbound reply.");
       break;
     case "send_email":
       steps.push("Treat email as the governed fallback or parallel channel only when the stored address is actually present.");
@@ -497,7 +499,9 @@ function buildContextualHints(brief, action) {
  */
 function buildWritebackCommand(actionView, action) {
   const surface = deriveWritebackSurface(action);
-  return `exo companies touches add ${actionView.company.id} --motion ${actionView.motion.id} --prospect ${actionView.prospect.prospectId} --surface ${surface} --direction outbound --outcome sent --occurred-at <iso-datetime> --summary "Describe what actually happened" --json`;
+  const resultKey = deriveWritebackResultKey(action);
+  const surfaceFlag = surface ? ` --surface ${surface}` : "";
+  return `exo actions result --action ${action.key} --result ${resultKey} --motion ${actionView.motion.id} --company ${actionView.company.id} --prospect ${actionView.prospect.prospectId}${surfaceFlag} --occurred-at <iso-datetime> --summary "Describe what actually happened" --json`;
 }
 
 /**
@@ -525,6 +529,39 @@ function deriveWritebackSurface(action) {
       return action.key;
     default:
       return "connection_request";
+  }
+}
+
+/**
+ * @param {ReturnType<typeof buildMotionActionView>["actions"][number]} action
+ */
+function deriveWritebackResultKey(action) {
+  if (action.key === "accept_connection") {
+    return "accepted";
+  }
+
+  if (action.key === "decline_connection") {
+    return "declined";
+  }
+
+  return "sent";
+}
+
+/**
+ * @param {string | null | undefined} currentStep
+ */
+function recommendedActionKeyForCadenceStep(currentStep) {
+  switch (currentStep) {
+    case "connection-request":
+      return "connection_request";
+    case "direct-message":
+      return "send_direct_message";
+    case "value-add-email":
+      return "send_email";
+    case "inmail":
+      return "in_mail_message";
+    default:
+      return null;
   }
 }
 
@@ -578,7 +615,7 @@ function buildExecutionIdentity(rawCompany, rawMotion) {
 
     return {
       status: "unassigned",
-      message: "No sticky company profile is pinned yet. Resolve or assign one before live browser work.",
+      message: "No sticky execution user is pinned yet. Resolve or assign one before live governed work.",
       label: null,
       userId: null,
       profileId: null,

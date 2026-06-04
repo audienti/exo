@@ -1,7 +1,7 @@
 ---
 principles:
   - Connection acceptance advances the branch immediately.
-  - The first private message should stay consistent with the stored opening plan.
+  - The first private message should stay consistent with the stored prospect context and cadence branch.
 do:
   - Confirm the connection is actually accepted in the live surface.
   - Pull the direct-message draft brief before writing the note.

@@ -659,8 +659,8 @@ Examples:
       `
 What this command does:
   - Checks the motion preflight: offer URL, premise, audience hypotheses, and signals.
-  - Evaluates whether a trusted browser identity exists for engagement.
-  - Walks the linked companies through the targeting loop: company identity, signal matches, prospects, through-lines, opening plans, and cadence.
+  - Evaluates whether a governed connector path exists for engagement.
+  - Walks the linked companies through the targeting loop: company identity, signal matches, prospects, and cadence.
   - Stops at targeting-ready. It does not draft or send messages.
 
 Use this when:
@@ -987,7 +987,7 @@ Examples:
       `
 What this command does:
   - Maps one targeted prospect into the same high-level touch surfaces Audienti uses.
-  - Reads the stored through-line, opening plan, cadence, signal matches, recent-post state, and prior touches.
+  - Reads the stored cadence, signal matches, recent-post state, and prior touches.
   - Returns draft cases the agent can write from locally.
   - Does not generate or send the actual message text.
 
@@ -1486,6 +1486,7 @@ Examples:
     .description("Pin one execution user to a motion so linked companies inherit the same default identity.")
     .argument("<motion-id>", "Motion identifier")
     .requiredOption("--user <user-id>", "Execution user identifier")
+    .option("--account <capability:handle>", "Pin one exact account ref for this motion assignment; repeat for multiple capabilities", collect, [])
     .option("--by <actor>", "Who made the assignment")
     .option("--reason <reason>", "Why this user is being pinned")
     .option("--json", "Emit machine-readable JSON")
@@ -1508,7 +1509,8 @@ Examples:
       try {
         updated = assignMotionUser(rawMotion, rawUser, listBrowserProfiles(), {
           assignedBy: options.by ?? null,
-          reason: options.reason ?? null
+          reason: options.reason ?? null,
+          accountRefs: normalizeStringList(options.account)
         });
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));

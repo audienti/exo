@@ -1,13 +1,10 @@
 // @ts-check
 
-import { inboundCueSchema } from "../schema/inbound.js";
 import { buildInboxView } from "./build-inbox-view.js";
 import { buildInboundReviewView } from "./build-inbound-review-view.js";
-import { buildUserInboundSyncView, classifyInboundSurfaceFreshness } from "./user-inbound-sync.js";
 import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
-import { classifyUserWorkingHours } from "./working-hours.js";
 import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
 import { isPlannerEligibleMotionStatus } from "../lib/motion-status.js";
@@ -25,6 +22,7 @@ import { buildMotionCompanyScopeKey, buildUserAssignedExecutionScopeIndex } from
  * @param {{
  *   now?: string | null | undefined,
  *   rawCues?: unknown[] | undefined,
+ *   rawUsers?: unknown[] | undefined,
  *   motionId?: string | null | undefined,
  *   companyId?: string | null | undefined,
  *   prospectId?: string | null | undefined,
@@ -37,6 +35,8 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
     .map((item) => motionSchema.parse(item))
     .filter((motion) => isPlannerEligibleMotionStatus(motion.status));
   const companies = rawCompanies.map((item) => companySchema.parse(item));
+  const profiles = rawProfiles;
+  const allUsers = (options.rawUsers ?? [rawUser]).map((item) => userSchema.parse(item));
   const now = options.now ?? new Date().toISOString();
   const inbox = buildInboxView(user, rawObservations, motions, companies);
   const inboundReview = buildInboundReviewView(user, rawObservations, motions, companies, {
@@ -54,30 +54,20 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
   }
 
   const { assignedExecutionScopeKeys } = buildUserAssignedExecutionScopeIndex(user, motions, companies, {
+    users: allUsers,
+    profiles,
     motionId: options.motionId ?? null,
     companyId: options.companyId ?? null
   });
   const outboundCapacity = buildOutboundCapacityView(user, motions, companies, rawProfiles, {
     now,
+    rawUsers: allUsers,
     motionId: options.motionId ?? null,
     companyId: options.companyId ?? null,
     prospectId: options.prospectId ?? null,
     rawObservations
   });
-  const cues = (options.rawCues ?? []).map((cue) => inboundCueSchema.parse(cue));
-
-  const syncPlannerItem = buildSyncPlannerItem({
-    user,
-    motions,
-    assignedExecutionScopeKeys,
-    observationCount: rawObservations.length,
-    cues,
-    now,
-    options
-  });
-
   const items = dedupeDailyItems([
-    syncPlannerItem,
     buildOutboundCapacityPlannerItem(outboundCapacity, {
       motionId: options.motionId ?? null,
       motions
@@ -155,15 +145,24 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
 }
 
 /**
- * @param {Array<ReturnType<typeof buildDailyItem> | ReturnType<typeof buildInboundReviewPlannerItems>[number] | ReturnType<typeof buildSyncPlannerItem> | ReturnType<typeof buildOutboundCapacityPlannerItem> | null>} items
+ * @param {Array<ReturnType<typeof buildDailyItem> | ReturnType<typeof buildInboundReviewPlannerItems>[number] | ReturnType<typeof buildOutboundCapacityPlannerItem> | null>} items
  */
 function dedupeDailyItems(items) {
   const deduped = [];
   const seenProspectActions = new Set();
+  const seenInboundItems = new Set();
 
   for (const item of items) {
     if (!item) {
       continue;
+    }
+
+    const inboundKey = buildInboundDailyDedupKey(item);
+    if (inboundKey) {
+      if (seenInboundItems.has(inboundKey)) {
+        continue;
+      }
+      seenInboundItems.add(inboundKey);
     }
 
     const sourceType = item.source?.type ?? "";
@@ -209,10 +208,10 @@ function buildOutboundCapacityPlannerItem(capacity, { motionId, motions }) {
       : {
           id: "outbound-capacity:linkedin",
           name: "LinkedIn outbound capacity"
-        },
+    },
     company: {
       id: "outbound-capacity:linkedin",
-      name: capacity.account.profileLabel ?? capacity.account.handle
+      name: capacity.account.displayLabel ?? capacity.account.profileLabel ?? capacity.account.handle
     },
     prospect: {
       id: "outbound-capacity:linkedin",
@@ -228,7 +227,7 @@ function buildOutboundCapacityPlannerItem(capacity, { motionId, motions }) {
     guidance: buildPlannerGuidance(capacity.plannerItem.guidanceKey, {
       motionId: filteredMotion?.id ?? "",
       motionName: filteredMotion?.name ?? "active motions",
-      companyName: capacity.account.profileLabel ?? capacity.account.handle,
+      companyName: capacity.account.displayLabel ?? capacity.account.profileLabel ?? capacity.account.handle,
       prospectName: "LinkedIn invitation target",
       prospectTitle: capacity.status === "needs_configuration" ? "Quota configuration needed" : "Daily deficit",
       recommendedAction: capacity.plannerItem.recommendedAction,
@@ -256,10 +255,16 @@ function buildOutboundCapacityPlannerItem(capacity, { motionId, motions }) {
  * @param {ReturnType<typeof buildInboundReviewView>} review
  */
 function buildInboundReviewPlannerItems(review) {
-  const decisionItems = review.reviewItems
+  return review.reviewItems
     .filter((item) => shouldSurfaceInboundReviewItem(item))
     .map((item) => {
       const dueAt = item.observedAt;
+      const plannerMeta = inboundReviewPlannerMeta(item.state);
+      const guidanceKey = item.state === "needs_reply"
+        ? "reply_to_inbound"
+        : item.state === "ready_for_post_accept"
+          ? "advance_after_connection_accept"
+          : "review_inbound_item";
       return {
         motion: item.motion ?? {
           id: `inbound-review:${item.account.id}`,
@@ -280,7 +285,7 @@ function buildInboundReviewPlannerItems(review) {
           nextActionDueAt: dueAt,
           lastTouchOutcome: null
         },
-        guidance: buildPlannerGuidance("review_inbound_item", {
+        guidance: buildPlannerGuidance(guidanceKey, {
           motionId: item.motion?.id ?? "",
           motionName: item.motion?.name ?? "inbound review",
           companyId: item.company?.id ?? "",
@@ -296,9 +301,9 @@ function buildInboundReviewPlannerItems(review) {
           inboundState: item.state
         }),
         state: "due_now",
-        priority: "action",
-        priorityRank: 0.75,
-        cadenceEffect: "inbound_review_needed",
+        priority: plannerMeta.priority,
+        priorityRank: plannerMeta.priorityRank,
+        cadenceEffect: plannerMeta.cadenceEffect,
         dueAt,
         whyItMatters: item.whyItMatters,
         recommendedAction: item.recommendedAction,
@@ -309,216 +314,26 @@ function buildInboundReviewPlannerItems(review) {
         }
       };
     });
-
-  const itemizationGapItems = review.itemizationGaps.map((gap) => {
-    const dueAt = new Date().toISOString();
-    return {
-      motion: {
-        id: `inbound-gap:${gap.accountId}`,
-        name: "Inbound itemization"
-      },
-      company: {
-        id: `inbound-gap:${gap.accountId}`,
-        name: `${gap.capability}:${gap.handle}`
-      },
-      prospect: {
-        id: `inbound-gap:${gap.accountId}:${gap.surfaceKey}`,
-        name: gap.label,
-        title: "Itemization gap"
-      },
-      cadence: {
-        currentStep: null,
-        nextAction: gap.recommendedAction,
-        nextActionDueAt: dueAt,
-        lastTouchOutcome: null
-      },
-      guidance: buildPlannerGuidance("itemize_inbound_surface", {
-        motionName: "inbound review",
-        companyName: `${gap.capability}:${gap.handle}`,
-        prospectName: gap.label,
-        prospectTitle: "Itemization gap",
-        recommendedAction: gap.recommendedAction,
-        dueAt,
-        whyItMatters: gap.summary,
-        surfaceLabel: gap.label,
-        itemCount: String(gap.itemCount)
-      }),
-      state: "due_now",
-      priority: "action",
-      priorityRank: 0.8,
-      cadenceEffect: "inbound_itemization_needed",
-      dueAt,
-      whyItMatters: gap.summary,
-      recommendedAction: gap.recommendedAction,
-      source: {
-        type: "inbound_itemization_gap",
-        kind: gap.surfaceKey,
-        accountId: gap.accountId
-      }
-    };
-  });
-
-  return [...decisionItems, ...itemizationGapItems];
 }
 
 /**
- * @param {{
- *   user: import("../schema/user.js").userSchema._type,
- *   motions: import("../schema/motion.js").motionSchema._type[],
- *   assignedExecutionScopeKeys: Set<string>,
- *   observationCount: number,
- *   cues: import("../schema/inbound.js").inboundCueSchema._type[],
- *   now: string,
- *   options: {
- *     rawCues?: unknown[] | undefined,
- *     motionId?: string | null | undefined,
- *     companyId?: string | null | undefined,
- *     prospectId?: string | null | undefined,
- *     limit?: number | null | undefined
- *   }
- * }} input
+ * @param {ReturnType<typeof buildInboundReviewView>["reviewItems"][number]["state"]} state
  */
-function buildSyncPlannerItem({ user, motions, assignedExecutionScopeKeys, observationCount, cues, now, options }) {
-  if (!assignedExecutionScopeKeys.size || options.prospectId) {
-    return null;
+function inboundReviewPlannerMeta(state) {
+  switch (state) {
+    case "needs_reply":
+      return { priority: "reply", priorityRank: 0, cadenceEffect: "overridden_by_inbound" };
+    case "thread_change_review":
+      return { priority: "action", priorityRank: 0.25, cadenceEffect: "inbound_review_needed" };
+    case "ready_for_post_accept":
+      return { priority: "action", priorityRank: 0.5, cadenceEffect: "advanced_by_inbound" };
+    case "needs_decision":
+      return { priority: "action", priorityRank: 0.75, cadenceEffect: "inbound_review_needed" };
+    case "needs_status_reconciliation":
+      return { priority: "action", priorityRank: 1, cadenceEffect: "inbound_review_needed" };
+    default:
+      return { priority: "action", priorityRank: 1.25, cadenceEffect: "inbound_review_needed" };
   }
-
-  const openCues = cues.filter((cue) =>
-    cue.userId === user.id
-    && cue.status === "open"
-    && (!options.motionId || cue.motionId === options.motionId)
-    && (!options.companyId || cue.companyId === options.companyId)
-  );
-  if (observationCount > 0 && !openCues.length) {
-    return null;
-  }
-
-  const syncView = buildUserInboundSyncView(user);
-  const relevantAccounts = syncView.accounts
-    .map((account) => {
-      const staleSurfaces = account.surfaces
-        .filter((surface) => surface.enabled && surface.truthLevel === "authoritative")
-        .map((surface) => ({
-          ...surface,
-          freshness: classifyInboundSurfaceFreshness(surface, now)
-        }))
-        .filter((surface) => surface.freshness);
-      const accountCues = openCues.filter((cue) => cue.accountId === account.accountId);
-      if (!staleSurfaces.length && !accountCues.length) {
-        return null;
-      }
-
-      return {
-        account,
-        staleSurfaces,
-        cues: accountCues
-      };
-    })
-    .filter((entry) => entry && (entry.staleSurfaces.length || entry.cues.length));
-
-  if (!relevantAccounts.length) {
-    return null;
-  }
-
-  const filteredMotion = options.motionId
-    ? motions.find((motion) => motion.id === options.motionId) ?? null
-    : null;
-  const workingHours = classifyUserWorkingHours(user, now);
-  const hasCue = relevantAccounts.some((entry) => entry.cues.length > 0);
-  const capabilityLabels = [...new Set(relevantAccounts.map((entry) => humanizeCapability(entry.account.capability)))];
-  const staleSurfaceLabels = relevantAccounts.flatMap((entry) => entry.staleSurfaces.map((surface) => surface.label));
-  const cueSurfaceLabels = relevantAccounts.flatMap((entry) => entry.cues.map((cue) => cueLabelForAccount(entry.account, cue.surfaceKey)));
-  const surfaceLabels = [...new Set([...staleSurfaceLabels, ...cueSurfaceLabels])];
-  const neverOrFailed = relevantAccounts.some((entry) =>
-    entry.staleSurfaces.some((surface) => surface.freshness.reason === "never" || surface.freshness.reason === "failed")
-  );
-  const reasonSummary = hasCue
-    ? "ambient cues suggest something changed on live inbound surfaces even though Exo has not checked the canonical truth yet"
-    : neverOrFailed
-      ? "enabled inbound surfaces have never been checked yet or have a failed sync state"
-      : "enabled inbound surfaces are stale enough that the planner should refresh them before trusting silence";
-  const whyItMatters = hasCue
-    ? `While doing other governed work, the agent saw ambient inbound cues on ${surfaceLabels.join(", ")}. That is not canonical truth by itself, but it is enough smoke that Exo should check the real surfaces before trusting silence.`
-    : `Exo has no fresh inbound truth for ${capabilityLabels.join(" and ")}, so the planner should refresh those surfaces before trusting the absence of replies, accepts, or attention signals.`;
-  const baseRecommendedAction = hasCue
-    ? `Run a quick inbound sync for ${capabilityLabels.join(" and ")}, starting with ${surfaceLabels.join(", ")}, because the agent saw ambient cue${openCues.length === 1 ? "" : "s"} that something may have changed.`
-    : `Run a quick inbound sync for ${capabilityLabels.join(" and ")}, record any observations you find, mark the surfaces checked, and then rerun inbox, daily, and next.`;
-  const naturalDueAt = relevantAccounts
-    .flatMap((entry) => entry.staleSurfaces.map((surface) => surface.freshness.dueAt))
-    .concat(openCues.map((cue) => cue.observedAt))
-    .sort()[0] ?? now;
-  const dueAt = workingHours.openNow
-    ? naturalDueAt
-    : workingHours.nextOpenAt ?? naturalDueAt;
-  const recommendedAction = workingHours.openNow
-    ? baseRecommendedAction
-    : `${baseRecommendedAction} Queue that sync for the next open working hours window instead of forcing it right now.`;
-  const state = workingHours.openNow ? "due_now" : "waiting_until";
-  const priority = workingHours.openNow ? "action" : "wait";
-  const priorityRank = workingHours.openNow ? 1.5 : 2.9;
-  const cadenceEffect = workingHours.openNow
-    ? hasCue ? "sync_hint_detected" : "sync_needed"
-    : "sync_waiting_for_working_hours";
-
-  return {
-    motion: filteredMotion
-      ? {
-          id: filteredMotion.id,
-          name: filteredMotion.name
-        }
-      : {
-          id: `inbound-sync:${user.id}`,
-          name: "Cross-motion inbound truth"
-        },
-    company: {
-      id: `inbound-sync:${user.id}`,
-      name: capabilityLabels.join(" + ")
-    },
-    prospect: {
-      id: `inbound-sync:${user.id}`,
-      name: "Inbound sync",
-      title: hasCue
-        ? `${surfaceLabels.length} surface${surfaceLabels.length === 1 ? "" : "s"} have cue-driven sync pressure`
-        : `${surfaceLabels.length} authoritative surface${surfaceLabels.length === 1 ? "" : "s"} need refresh`
-    },
-    cadence: {
-      currentStep: null,
-      nextAction: recommendedAction,
-      nextActionDueAt: dueAt,
-      lastTouchOutcome: null
-    },
-    guidance: buildPlannerGuidance("sync_inbound_surfaces", {
-      motionId: filteredMotion?.id ?? "",
-      motionName: filteredMotion?.name ?? "active motions",
-      recommendedAction,
-      dueAt,
-      whyItMatters,
-      accountCapabilityList: capabilityLabels.join(", "),
-      surfaceList: surfaceLabels.join(", "),
-      syncReason: reasonSummary
-    }),
-    state,
-    priority,
-    priorityRank,
-    cadenceEffect,
-    dueAt,
-    whyItMatters,
-    recommendedAction,
-    source: {
-      type: "inbound_sync",
-      kind: hasCue ? "sync_hint" : neverOrFailed ? "sync_needed" : "sync_stale",
-      accountCount: relevantAccounts.length,
-      surfaceCount: surfaceLabels.length
-    }
-  };
-}
-
-/**
- * @param {ReturnType<typeof buildUserInboundSyncView>["accounts"][number]} account
- * @param {string} surfaceKey
- */
-function cueLabelForAccount(account, surfaceKey) {
-  return account.surfaces.find((surface) => surface.key === surfaceKey)?.label ?? surfaceKey;
 }
 
 /**
@@ -573,6 +388,14 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
 
   if (latestInboxItem) {
     if (isReplyObservation(latestInboxItem.kind)) {
+      if (
+        latestInboxItem.status === "queued"
+        || latestInboxItem.status === "resolved"
+        || latestInboxItem.reviewState === "queued_for_send"
+        || latestInboxItem.reviewState === "reply_unavailable"
+      ) {
+        return null;
+      }
       const whyItMatters = "A live reply overtook the planned cadence branch. The next move is to respond, not to continue the old follow-up.";
       const recommendedAction = latestInboxItem.recommendedAction;
       return {
@@ -600,6 +423,9 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
     }
 
     if (latestInboxItem.kind === "connection_request_accepted") {
+      if (latestInboxItem.reviewState !== "ready_for_post_accept") {
+        return null;
+      }
       const whyItMatters = "Connection acceptance unlocked the next private touch. The cadence branch should advance instead of waiting on the old step.";
       const recommendedAction = latestInboxItem.recommendedAction;
       return {
@@ -866,14 +692,6 @@ function inferCadenceGuidanceKey(cadence, waiting) {
 }
 
 /**
- * @param {{
- *   lastRunStatus: "never" | "success" | "warning" | "failed",
- *   lastSyncedAt: string | null,
- *   lastObservedAt: string | null
- * }} surface
- * @param {string} now
- */
-/**
  * @param {ReturnType<typeof buildDailyItem>} left
  * @param {ReturnType<typeof buildDailyItem>} right
  */
@@ -886,36 +704,15 @@ function compareDailyItems(left, right) {
 }
 
 /**
- * @param {string} capability
- */
-function humanizeCapability(capability) {
-  switch (capability) {
-    case "linkedin":
-      return "LinkedIn";
-    case "gmail":
-      return "Gmail";
-    case "sales-navigator":
-      return "Sales Navigator";
-    default:
-      return capability
-        .split("-")
-        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-        .join(" ");
-  }
-}
-
-/**
  * @param {ReturnType<typeof buildInboundReviewView>["reviewItems"][number]} item
  */
 function shouldSurfaceInboundReviewItem(item) {
-  if (item.state === "needs_reply" || item.state === "ready_for_post_accept") {
-    return false;
-  }
-
   return (
-    item.state === "needs_decision"
+    item.state === "needs_reply"
+    || item.state === "thread_change_review"
+    || item.state === "ready_for_post_accept"
+    || item.state === "needs_decision"
     || item.state === "needs_status_reconciliation"
-    || item.state === "stale_withdraw_review"
   );
 }
 
@@ -928,12 +725,14 @@ function humanizeReviewState(state) {
       return "Needs decision";
     case "needs_status_reconciliation":
       return "Needs status reconciliation";
-    case "stale_withdraw_review":
-      return "Stale withdraw review";
+    case "agent_withdraw_due":
+      return "Agent withdraw due";
     case "needs_reply":
       return "Needs reply";
     case "ready_for_post_accept":
       return "Post-accept ready";
+    case "agent_draft_due":
+      return "Agent draft due";
     default:
       return state
         .split("_")
@@ -954,13 +753,50 @@ function toSupportProspect(account, prospect) {
     name: prospect.name,
     title: prospect.title,
     hasEmailFallback: hasUsableEmailFallback(prospect),
-    messageTestReady: prospect.throughLine.status === "ready"
-      && prospect.openingPlan.status === "ready"
-      && prospect.cadenceState.status === "ready",
+    messageTestReady: prospect.cadenceState.status === "ready",
     notes: prospect.notes,
     contactEnrichmentState: prospect.contactEnrichmentState,
     cadenceState: prospect.cadenceState,
-    openingPlan: prospect.openingPlan,
     nextAction: prospect.cadenceState.nextAction
   };
+}
+
+/**
+ * @param {ReturnType<typeof dedupeDailyItems>[number]} item
+ */
+function buildInboundDailyDedupKey(item) {
+  const prospectId = item?.prospect?.id ?? null;
+  if (!prospectId) {
+    return null;
+  }
+
+  if (item.source?.type === "inbound_review") {
+    switch (item.source.kind) {
+      case "needs_reply":
+        return `${prospectId}::reply`;
+      case "ready_for_post_accept":
+        return `${prospectId}::post_accept_review`;
+      case "needs_decision":
+        return `${prospectId}::connection_decision`;
+      default:
+        return null;
+    }
+  }
+
+  if (item.source?.type === "inbound_observation") {
+    switch (item.source.kind) {
+      case "inbound_reply_received":
+      case "email_reply_received":
+      case "message_received":
+        return `${prospectId}::reply`;
+      case "connection_request_accepted":
+        return `${prospectId}::post_accept_review`;
+      case "connection_request_received":
+        return `${prospectId}::connection_decision`;
+      default:
+        return null;
+    }
+  }
+
+  return null;
 }

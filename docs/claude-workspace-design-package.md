@@ -313,8 +313,7 @@ Prospect rows can already expose:
 - `linkedinProfileUrl`
 - `avatarUrl`
 - `queueStatus`
-- `throughLineStatus`
-- `openingPlanStatus`
+- `cadenceStatus`
 - `contactEnrichmentState.status`
 - `engagementLane`
 - `dailyItem`
@@ -514,4 +513,3 @@ Ask Claude to return:
 - Current interactive workspace: `http://127.0.0.1:4312/`
 - Current renderer: `/Users/williamflanagan/Projects/omalab/exo/prototype/build-motion-workspace.mjs`
 - Existing IA brief: `/Users/williamflanagan/Projects/omalab/exo/docs/workspace-redesign-brief.md`
-

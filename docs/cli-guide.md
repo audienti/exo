@@ -191,8 +191,6 @@ exo motion target <motion-id> --json
 - browser gate
 - company targeting
 - prospect readiness
-- through-lines
-- opening plans
 - cadence
 
 It stops at `targeting-ready`. Exo does not write the message and it does not send the touch.
@@ -207,8 +205,7 @@ exo companies motions <company-id>
 exo companies research-brief <company-id> --json
 exo companies signal-matches add <company-id> --signal <signal-id> --summary "Stored reason to talk" --json
 exo companies prospects add <company-id> --name "Person Name" --title "Director Title" --email person@example.com --profile-viewed-at <iso-datetime> --live-signal-summary "Recent post shows channel activity" --why-relevant "Why this person matters now" --json
-exo companies through-line set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them "Specific to them" --shared-problem "Shared problem" --why-now "Why now" --legitimate-wedge "Why they would reply" --compression-line "One sentence" --json
-exo companies opening-plan set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --why-now "Reason to talk now" --angle "Opening angle" --reply-path "Why this person would legitimately reply now" --primary-channel connection-request --fallback-channel email --fallback-trigger "Use email if LinkedIn is blocked or there is no reply." --preflight-action "View the prospect profile" --first-move "First move" --first-message-goal "Desired response" --json
+exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action "Send the first touch" --json
 exo companies profile assign <company-id> --profile <profile-id> --reason "Use one identity consistently"
 exo companies profile show <company-id>
 ```

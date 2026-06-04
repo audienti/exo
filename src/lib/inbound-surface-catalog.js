@@ -6,6 +6,10 @@ import {
   inboundSurfaceKeySchema,
   inboundTruthLevelSchema
 } from "../schema/inbound.js";
+import {
+  LINKEDIN_SYNC_RECEIVED_INVITATIONS_METHOD,
+  LINKEDIN_SYNC_SENT_INVITATIONS_METHOD
+} from "./linkedin-tool-methods.js";
 
 /**
  * @typedef {{
@@ -17,7 +21,10 @@ import {
  *   truthLevel: import("../schema/inbound.js").inboundTruthLevelSchema._type,
  *   retrievalMode: import("../schema/inbound.js").inboundRetrievalModeSchema._type,
  *   defaultEnabled: boolean,
- *   observationKinds: string[]
+ *   autonomousBackgroundRetrieval: boolean,
+ *   autonomousBackgroundReason: string | null,
+ *   observationKinds: string[],
+ *   toolMethodId: string | null
  * }} InboundSurfaceDefinition
  */
 
@@ -32,6 +39,9 @@ const catalog = [
     truthLevel: "authoritative",
     retrievalMode: "browser-capture",
     defaultEnabled: true,
+    autonomousBackgroundRetrieval: true,
+    autonomousBackgroundReason: null,
+    toolMethodId: LINKEDIN_SYNC_SENT_INVITATIONS_METHOD,
     observationKinds: [
       "connection_request_pending",
       "connection_request_no_longer_pending",
@@ -48,10 +58,14 @@ const catalog = [
     truthLevel: "authoritative",
     retrievalMode: "browser-capture",
     defaultEnabled: true,
+    autonomousBackgroundRetrieval: true,
+    autonomousBackgroundReason: null,
+    toolMethodId: LINKEDIN_SYNC_RECEIVED_INVITATIONS_METHOD,
     observationKinds: [
       "connection_request_received",
       "connection_request_received_no_longer_pending",
       "connection_request_accepted",
+      "connection_request_decline_requested",
       "connection_request_declined"
     ]
   },
@@ -64,6 +78,9 @@ const catalog = [
     truthLevel: "authoritative",
     retrievalMode: "browser-capture",
     defaultEnabled: true,
+    autonomousBackgroundRetrieval: true,
+    autonomousBackgroundReason: null,
+    toolMethodId: null,
     observationKinds: ["message_received", "thread_updated", "inbound_reply_received"]
   },
   {
@@ -75,6 +92,9 @@ const catalog = [
     truthLevel: "authoritative",
     retrievalMode: "browser-capture",
     defaultEnabled: true,
+    autonomousBackgroundRetrieval: true,
+    autonomousBackgroundReason: null,
+    toolMethodId: null,
     observationKinds: ["profile_view_after_touch", "profile_view_received"]
   },
   {
@@ -86,6 +106,9 @@ const catalog = [
     truthLevel: "supplementary",
     retrievalMode: "browser-capture",
     defaultEnabled: true,
+    autonomousBackgroundRetrieval: true,
+    autonomousBackgroundReason: null,
+    toolMethodId: null,
     observationKinds: ["follower_added", "follower_removed", "follower_confirmed"]
   },
   {
@@ -97,6 +120,9 @@ const catalog = [
     truthLevel: "authoritative",
     retrievalMode: "browser-capture",
     defaultEnabled: true,
+    autonomousBackgroundRetrieval: true,
+    autonomousBackgroundReason: null,
+    toolMethodId: null,
     observationKinds: ["follow_state_changed", "follow_state_removed", "follow_state_confirmed"]
   },
   {
@@ -107,7 +133,10 @@ const catalog = [
     summary: "Public replies or comment-thread changes that matter for extrovert and inbound handling.",
     truthLevel: "supplementary",
     retrievalMode: "browser-capture",
-    defaultEnabled: true,
+    defaultEnabled: false,
+    autonomousBackgroundRetrieval: false,
+    autonomousBackgroundReason: "This surface is not yet wired through Exo's autonomous LinkedIn live-capture path.",
+    toolMethodId: null,
     observationKinds: ["public_reply_received", "comment_thread_updated"]
   },
   {
@@ -119,6 +148,9 @@ const catalog = [
     truthLevel: "supplementary",
     retrievalMode: "browser-capture",
     defaultEnabled: false,
+    autonomousBackgroundRetrieval: false,
+    autonomousBackgroundReason: "This surface is not yet wired through Exo's autonomous LinkedIn live-capture path.",
+    toolMethodId: null,
     observationKinds: ["catch_up_update_detected", "public_engagement_opportunity"]
   },
   {
@@ -130,10 +162,20 @@ const catalog = [
     truthLevel: "authoritative",
     retrievalMode: "connector",
     defaultEnabled: true,
+    autonomousBackgroundRetrieval: true,
+    autonomousBackgroundReason: null,
+    toolMethodId: null,
     observationKinds: ["email_reply_received", "email_thread_updated"]
   }
 ].map((surface) => ({
   ...surface,
+  autonomousBackgroundRetrieval: surface.autonomousBackgroundRetrieval !== false,
+  autonomousBackgroundReason: typeof surface.autonomousBackgroundReason === "string" && surface.autonomousBackgroundReason.trim().length
+    ? surface.autonomousBackgroundReason.trim()
+    : null,
+  toolMethodId: typeof surface.toolMethodId === "string" && surface.toolMethodId.trim().length
+    ? surface.toolMethodId.trim()
+    : null,
   key: inboundSurfaceKeySchema.parse(surface.key),
   capability: browserProfileCapabilitySchema.parse(surface.capability),
   truthLevel: inboundTruthLevelSchema.parse(surface.truthLevel),
@@ -154,6 +196,14 @@ export function listInboundSurfaceCatalog(options = {}) {
 export function findInboundSurfaceDefinition(key) {
   const normalized = key.trim().toLowerCase();
   return catalog.find((surface) => surface.key === normalized) ?? null;
+}
+
+/**
+ * @param {string} toolMethodId
+ */
+export function findInboundSurfaceDefinitionByToolMethodId(toolMethodId) {
+  const normalized = toolMethodId.trim();
+  return catalog.find((surface) => surface.toolMethodId === normalized) ?? null;
 }
 
 /**

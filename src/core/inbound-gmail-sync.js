@@ -12,7 +12,7 @@ import { userSchema } from "../schema/user.js";
  */
 export function buildGmailInboundSyncPayload(rawUser, input) {
   const user = userSchema.parse(rawUser);
-  const capture = gmailInboundSyncCaptureSchema.parse(input.capture);
+  const capture = gmailInboundSyncCaptureSchema.parse(normalizeGmailInboundSyncCapture(input.capture));
   const account = resolveGmailAccount(user, input.accountId ?? null);
 
   if (capture.status === "success" && capture.error) {
@@ -60,10 +60,12 @@ export function buildGmailInboundSyncPayload(rawUser, input) {
     actorCompanyName: thread.actorCompanyName,
     threadUrl: thread.threadUrl,
     sourceUrl: thread.sourceUrl ?? thread.threadUrl,
+    subject: thread.subject,
     motionId: thread.motionId,
     companyId: thread.companyId,
     prospectId: thread.prospectId,
-    notes: buildThreadNotes(thread.subject, thread.notes)
+    notes: buildThreadNotes(thread.notes),
+    messages: thread.messages
   }));
 
   return {
@@ -93,6 +95,25 @@ export function buildGmailInboundSyncPayload(rawUser, input) {
         }
       ]
     }
+  };
+}
+
+/**
+ * Accept Gmail connector/browser captures that use local datetimes without an
+ * explicit offset and coerce them into strict ISO strings before validation.
+ *
+ * @param {unknown} rawCapture
+ */
+export function normalizeGmailInboundSyncCapture(rawCapture) {
+  const checkedAt = normalizeNullableIsoDatetime(rawCapture?.checkedAt);
+  const threads = Array.isArray(rawCapture?.threads)
+    ? rawCapture.threads.map((thread) => normalizeGmailThreadCapture(thread, checkedAt))
+    : [];
+
+  return {
+    ...(rawCapture && typeof rawCapture === "object" ? rawCapture : {}),
+    checkedAt,
+    threads,
   };
 }
 
@@ -127,19 +148,14 @@ export function resolveGmailAccount(user, accountId) {
 }
 
 /**
- * @param {string | null} subject
  * @param {string | null} notes
  */
-function buildThreadNotes(subject, notes) {
-  const parts = [];
-  if (subject) {
-    parts.push(`Subject: ${subject}`);
+function buildThreadNotes(notes) {
+  if (!notes) {
+    return null;
   }
-  if (notes) {
-    parts.push(notes);
-  }
-
-  return parts.length ? parts.join("\n\n") : null;
+  const normalized = notes.trim();
+  return normalized.length ? normalized : null;
 }
 
 /**
@@ -156,4 +172,43 @@ function newestIsoDatetime(left, right) {
   }
 
   return left >= right ? left : right;
+}
+
+/**
+ * @param {any} thread
+ * @param {string | null} checkedAt
+ */
+function normalizeGmailThreadCapture(thread, checkedAt) {
+  const observedAt = normalizeNullableIsoDatetime(thread?.observedAt) ?? checkedAt ?? thread?.observedAt ?? null;
+  const messages = Array.isArray(thread?.messages)
+    ? thread.messages.map((message) => normalizeGmailThreadMessage(message))
+    : [];
+
+  return {
+    ...(thread && typeof thread === "object" ? thread : {}),
+    observedAt,
+    messages,
+  };
+}
+
+/** @param {any} message */
+function normalizeGmailThreadMessage(message) {
+  return {
+    ...(message && typeof message === "object" ? message : {}),
+    sentAt: normalizeNullableIsoDatetime(message?.sentAt),
+  };
+}
+
+/** @param {unknown} value */
+function normalizeNullableIsoDatetime(value) {
+  if (typeof value !== "string" || !value.trim().length) {
+    return null;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString();
 }

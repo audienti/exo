@@ -3,8 +3,10 @@
 
 import { renderInbox } from "../../artifacts/render-inbox.js";
 import { buildInboxView } from "../../core/build-inbox-view.js";
+import { buildUserWorkspaceContext } from "../../core/workspace-context.js";
 import { findUserById, listCompanies, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
 import { summarizeExecutionUsers } from "../../lib/execution-users.js";
+import { buildUserScopedBootstrapView } from "../../lib/user-scoped-bootstrap.js";
 
 /**
  * @param {import("commander").Command} program
@@ -34,10 +36,14 @@ Rules:
 `
     )
     .action((options) => {
-      const user = resolveInboxUser(options.user);
-      if (!user) {
+      const resolution = resolveInboxUser(options.user, { json: Boolean(options.json) });
+      if (!resolution.user) {
+        if (resolution.bootstrapView) {
+          console.log(JSON.stringify(resolution.bootstrapView, null, 2));
+        }
         return;
       }
+      const user = resolution.user;
 
       const observations = listInboundObservations({
         userId: user.id,
@@ -47,7 +53,10 @@ Rules:
         prospectId: options.prospect ?? null,
         limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
       });
-      const result = buildInboxView(user, observations, listMotions(), listCompanies(), {
+      const workspaceContext = buildUserWorkspaceContext(user, {
+        rawObservations: observations,
+      });
+      const result = buildInboxView(workspaceContext.user, workspaceContext.observations, listMotions(), listCompanies(), {
         accountId: options.account ?? null
       });
 
@@ -62,31 +71,62 @@ Rules:
 
 /**
  * @param {string | undefined} explicitUserId
+ * @param {{ json?: boolean | undefined }} [options]
  */
-function resolveInboxUser(explicitUserId) {
+function resolveInboxUser(explicitUserId, options = {}) {
   if (explicitUserId) {
     const user = findUserById(explicitUserId);
     if (!user) {
       console.error(`User not found: ${explicitUserId}`);
       process.exitCode = 1;
-      return null;
+      return {
+        user: null,
+        bootstrapView: null
+      };
     }
-    return user;
+    return {
+      user,
+      bootstrapView: null
+    };
   }
 
   const users = listUsers();
   const { totalUserCount, eligibleUserCount, eligibleUsers } = summarizeExecutionUsers(users);
   if (eligibleUserCount === 1) {
-    return eligibleUsers[0];
+    return {
+      user: eligibleUsers[0],
+      bootstrapView: null
+    };
   }
 
   if (!totalUserCount) {
-    console.error("No execution users exist yet. Add a user first or pass --user explicitly.");
+    if (options.json) {
+      return {
+        user: null,
+        bootstrapView: buildUserScopedBootstrapView({
+          surface: "inbox",
+          reason: "no_users"
+        })
+      };
+    }
+    console.error("No execution users exist yet. Start with `exo users intake --json`, then add a user or pass --user explicitly.");
   } else if (!eligibleUserCount) {
-    console.error("No execution-capable users exist yet. Add at least one connected account or pass --user explicitly.");
+    if (options.json) {
+      return {
+        user: null,
+        bootstrapView: buildUserScopedBootstrapView({
+          surface: "inbox",
+          reason: "no_execution_capable_users"
+        })
+      };
+    }
+    console.error("No execution-capable users exist yet. Start with `exo users intake --json`, then map at least one connected account or pass --user explicitly.");
   } else {
     console.error("More than one execution-capable user exists. Pass --user to choose the inbox owner.");
   }
   process.exitCode = 1;
-  return null;
+  return {
+    user: null,
+    bootstrapView: null
+  };
 }

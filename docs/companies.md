@@ -25,10 +25,6 @@ Without that, every future target list gets trapped inside a motion payload and 
 - `exo companies signal-matches`
 - `exo companies prospects`
 - `exo companies prospects add`
-- `exo companies through-line`
-- `exo companies through-line set`
-- `exo companies opening-plan`
-- `exo companies opening-plan set`
 - `exo companies cadence`
 - `exo companies cadence set`
 
@@ -207,53 +203,22 @@ Important rule:
 - recent post activity is positive evidence the channel is active, so store the strongest usable hook when it exists
 - store direct email when you can so the motion has a fallback when LinkedIn is blocked or produces no reply
 
-## Through-line and opening plan
+## Cadence branch
 
-Once the signal matches and people are good enough, store the prospect-specific through-line and first opening plan:
+Once the signal matches and people are good enough, store the first real branch directly in cadence:
 
 ```bash
-exo companies through-line set <company-id> \
+exo companies cadence set <company-id> \
   --motion <motion-id> \
   --prospect <prospect-id> \
-  --signal-match <signal-match-id> \
-  --specific-to-them "Specific to them" \
-  --shared-problem "Shared problem" \
-  --why-now "Recent data-sharing and merchant-surface expansion increase decisioning complexity" \
-  --legitimate-wedge "Give the likely owner a concrete reason to clarify ownership or priority rather than answer a generic pitch" \
-  --compression-line "One-sentence compression line" \
+  --current-step connection-request \
+  --next-action "Send a short connection request" \
   --json
-```
-
-```bash
-exo companies opening-plan set <company-id> \
-  --motion <motion-id> \
-  --prospect <prospect-id> \
-  --signal-match <signal-match-id> \
-  --why-now "Recent data-sharing and merchant-surface expansion increase decisioning complexity" \
-  --angle "Controlled expansion needs tighter risk and decisioning control" \
-  --reply-path "Give the likely owner a concrete reason to clarify ownership or priority rather than answer a generic pitch" \
-  --primary-channel connection-request \
-  --fallback-channel email \
-  --fallback-trigger "Use email if LinkedIn is blocked or there is no reply after the first LinkedIn touch." \
-  --preflight-action "View the prospect profile" \
-  --preflight-action "Engage the most recent relevant LinkedIn post only if the interaction is natural" \
-  --first-move "LinkedIn connect plus short note" \
-  --first-message-goal "Confirm ownership of risk and decisioning modernization" \
-  --json
-```
-
-Read the stored plan with:
-
-```bash
-exo companies opening-plan show <company-id> --motion <motion-id> --prospect <prospect-id> --json
 ```
 
 Important rule:
 
-- the through-line and opening plan are prospect-specific
-- they should be tied to stored signal matches
-- they should store the most likely legitimate reply path, given the evidence, to get this person to answer
-- Exo stores the plan and cadence; the agent still writes the actual message
-- it should name the primary channel and the fallback path when LinkedIn is unavailable or cold
-- it should store any preflight actions like profile view or a legitimate recent-post engagement
-- it should stay concise enough to drive writing and execution directly
+- cadence is now the only required branch-planning object
+- it should be tied to stored signal matches and prospect context, not generic filler
+- Exo stores the governed branch state; the agent still writes the actual message
+- keep the next action concrete enough to drive execution directly

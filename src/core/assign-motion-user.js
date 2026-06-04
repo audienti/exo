@@ -3,22 +3,20 @@
 import { browserProfileSchema } from "../schema/browser-profile.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
-import { resolveUserConnection } from "./resolve-user-connection.js";
 
 /**
  * @param {unknown} rawMotion
  * @param {unknown} rawUser
  * @param {unknown[]} rawProfiles
- * @param {{ assignedBy?: string | null, reason?: string | null, browserCapability?: string | null }} input
+ * @param {{ assignedBy?: string | null, reason?: string | null, accountRefs?: string[] | null }} input
  */
 export function assignMotionUser(rawMotion, rawUser, rawProfiles, input) {
   const motion = motionSchema.parse(rawMotion);
   const user = userSchema.parse(rawUser);
-  const profiles = rawProfiles.map((profile) => browserProfileSchema.parse(profile));
+  for (const profile of rawProfiles) {
+    browserProfileSchema.parse(profile);
+  }
   const now = new Date().toISOString();
-  const browserCapability = input.browserCapability ?? "linkedin";
-  const resolvedBrowserAccount = resolveUserConnection(user, profiles, { capability: browserCapability }).resolved;
-  const resolvedBrowserProfile = resolvedBrowserAccount?.browserProfile ?? null;
 
   return motionSchema.parse({
     ...motion,
@@ -27,29 +25,13 @@ export function assignMotionUser(rawMotion, rawUser, rawProfiles, input) {
       userId: user.id,
       label: user.label,
       owner: user.owner,
-      accountRefs: user.accounts.map((account) => `${account.capability}:${account.handle}`),
+      accountRefs: resolveAssignmentAccountRefs(user, input.accountRefs),
       assignedAt: now,
       assignedBy: normalizeNullableString(input.assignedBy),
       reason: normalizeNullableString(input.reason),
       sticky: true
     },
-    engagementProfileAssignment: resolvedBrowserProfile
-      ? {
-          profileId: resolvedBrowserProfile.id,
-          label: resolvedBrowserProfile.label,
-          browser: resolvedBrowserProfile.browser,
-          profileDirectory: resolvedBrowserProfile.profileDirectory,
-          owner: user.owner,
-          workspace: null,
-          accountRefs: user.accounts
-            .filter((account) => account.browserProfileId === resolvedBrowserProfile.id)
-            .map((account) => `${account.capability}:${account.handle}`),
-          assignedAt: now,
-          assignedBy: normalizeNullableString(input.assignedBy),
-          reason: normalizeNullableString(input.reason),
-          sticky: true
-        }
-      : null
+    engagementProfileAssignment: null
   });
 }
 
@@ -64,4 +46,24 @@ function normalizeNullableString(value) {
 
   const normalized = value.trim();
   return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type} user
+ * @param {string[] | null | undefined} rawAccountRefs
+ */
+function resolveAssignmentAccountRefs(user, rawAccountRefs) {
+  const availableRefs = new Set(user.accounts.map((account) => `${account.capability}:${account.handle}`));
+  const providedRefs = (rawAccountRefs ?? [])
+    .map((value) => normalizeNullableString(value))
+    .filter(Boolean);
+  const refs = providedRefs.length ? [...new Set(providedRefs)] : [...availableRefs];
+
+  for (const ref of refs) {
+    if (!availableRefs.has(ref)) {
+      throw new Error(`User ${user.label} does not have a connected account for ${ref}.`);
+    }
+  }
+
+  return refs;
 }

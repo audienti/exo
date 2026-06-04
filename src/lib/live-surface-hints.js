@@ -23,6 +23,12 @@ const LINKEDIN_PROFILE_VIEWS_SOURCE_FILES = [
   "/Users/williamflanagan/Projects/omalab/v10/docs/superpowers/specs/2026-05-01-linkedin-profile-view-reply-sync-design.md"
 ];
 
+const LINKEDIN_FOLLOW_LIST_SOURCE_FILES = [
+  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/follow_lists/orchestrator.rb",
+  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/follow_lists/extractor.rb",
+  "/Users/williamflanagan/Projects/omalab/v10/docs/superpowers/specs/2026-04-10-linkedin-followings-sync-design.md"
+];
+
 const LINKEDIN_PROFILE_PAGE_SOURCE_FILES = [
   "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/view_profile/orchestrator.rb",
   "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/view_profile/extractor.rb",
@@ -129,8 +135,11 @@ const LINKEDIN_MESSAGING_CUE_HINTS = {
 export function buildLinkedinQuickSurfaceHints(input = {}) {
   return {
     sentInvitations: buildLinkedinSentInvitationsSurfaceHint(input),
+    receivedInvitations: buildLinkedinReceivedInvitationsSurfaceHint(input),
     messagingInbox: buildLinkedinMessagingInboxSurfaceHint(input),
-    profileViews: buildLinkedinProfileViewsSurfaceHint(input)
+    profileViews: buildLinkedinProfileViewsSurfaceHint(input),
+    followersList: buildLinkedinFollowersSurfaceHint(input),
+    followingList: buildLinkedinFollowingSurfaceHint(input)
   };
 }
 
@@ -453,7 +462,331 @@ export function buildLinkedinSentInvitationsSurfaceHint(input = {}) {
         "inviter_action_type",
         "invitation_id"
       ],
-      terminalZeroRowRule: "Treat a final pagination body with zero extracted rows as the completion signal for full sent-surface reconciliation."
+      terminalZeroRowRule: "Treat a final pagination body with zero extracted rows as the completion signal for full sent-surface reconciliation.",
+      eventAtRule: "Each sent-invitations row carries a visible relative-time string near the actor (e.g. 'Sent today', 'Sent yesterday', 'Sent 1 day ago', 'Sent 3 weeks ago', 'Sent 1 month ago', 'Sent 2 months ago', 'Sent 1 year ago'). Convert that string to an absolute ISO 8601 timestamp by subtracting the stated interval from the moment you observe the row (today=0d, yesterday=1d, N hours=N*3600s, N days=N*86400s, N weeks=N*7d, N months=N*30d, N years=N*365d), and emit it as the row's eventAt (the moment the invitation was sent). When LinkedIn shows no relative-time string for a row, set eventAt to null — do not fall back to the observedAt timestamp."
+    }
+  };
+}
+
+/**
+ * @param {{ limit?: number | null }} [input]
+ */
+export function buildLinkedinReceivedInvitationsSurfaceHint(input = {}) {
+  const limit = normalizePositiveInteger(input.limit, 20);
+
+  return {
+    surface: "linkedin-received-invitations",
+    goal: "Inspect the live LinkedIn received-invitations surface, itemize the inbound requests currently waiting for operator action, and fail closed if the list never renders.",
+    source: {
+      kind: "legacy_bootstrap",
+      app: "v10",
+      files: LINKEDIN_SENT_INVITATIONS_SOURCE_FILES,
+      note: "There was no separate legacy received-invitations contract. This mirrors the invitation-manager sent capture path against the received queue."
+    },
+    entryHints: {
+      startUrls: [
+        "https://www.linkedin.com/feed/",
+        "https://www.linkedin.com/mynetwork/",
+        "https://www.linkedin.com/mynetwork/invitation-manager/received/"
+      ],
+      invitationManagerRootUrls: [
+        "https://www.linkedin.com/mynetwork/invitation-manager/",
+        "https://www.linkedin.com/flagship-web/mynetwork/invitation-manager/"
+      ],
+      receivedManagerUrls: [
+        "https://www.linkedin.com/mynetwork/invitation-manager/received/",
+        "https://www.linkedin.com/flagship-web/mynetwork/invitation-manager/received"
+      ],
+      receivedTabTexts: ["received"],
+      directFallbackAllowed: true
+    },
+    readyHints: {
+      managerUrlPatterns: [
+        "/mynetwork/invitation-manager/received",
+        "/flagship-web/mynetwork/invitation-manager/received"
+      ],
+      finiteScrollSelectors: [
+        ".scaffold-finite-scroll__content",
+        ".scaffold-finite-scroll",
+        "[data-finite-scroll]",
+        "[class*='invitation-manager']",
+        "main[role='main']",
+        "main"
+      ],
+      rowActionSignals: [
+        "accept",
+        "ignore"
+      ]
+    },
+    fallbackHints: {
+      entryStrategies: [
+        "navigate_via_feed_to_mynetwork",
+        "click_invitation_manager_entry",
+        "click_received_tab",
+        "direct_received_manager_url"
+      ],
+      paginationRecovery: [
+        "scroll_invitation_manager_list",
+        "click_load_more"
+      ]
+    },
+    paginationHints: {
+      loadMoreTriggerText: ["load more"],
+      quickMode: {
+        strategy: "top_slice_with_gap_accounting",
+        stopCondition: "itemize the visible received-invite slice, then preserve any larger visible total as an explicit gap"
+      },
+      reconcileMode: {
+        strategy: "paginate_until_terminal_zero_row",
+        triggers: [
+          "visible_total_exceeds_itemized_rows",
+          "operator_requests_full_reconcile"
+        ],
+        advanceOrder: [
+          "scroll_invitation_manager_list",
+          "click_load_more"
+        ],
+        maxPassesHint: 2,
+        completeSignal: "terminal_zero_row_pagination_seen",
+        incompleteSignal: "received_invitation_itemization_gap"
+      }
+    },
+    failureHints: {
+      failClosedReasons: [
+        "The active signed-in LinkedIn identity could not be verified against the intended Exo account.",
+        "The invitation manager received surface never rendered a usable inbound-invite list."
+      ],
+      warningCases: [
+        "Only the visible top slice of received invitations was itemized.",
+        "The received invitations surface showed a larger visible total than the current bounded itemization."
+      ]
+    },
+    extractionHints: {
+      perSurfaceItemLimit: limit,
+      identityFields: [
+        "profile_platform_id",
+        "invitee_member_id",
+        "username",
+        "profile_url",
+        "invitation_id"
+      ]
+    }
+  };
+}
+
+/**
+ * @param {{ limit?: number | null }} [input]
+ */
+export function buildLinkedinFollowersSurfaceHint(input = {}) {
+  const limit = normalizePositiveInteger(input.limit, 20);
+
+  return {
+    surface: "linkedin-followers-list",
+    goal: "Inspect the live LinkedIn followers surface, capture who currently follows us, and distinguish a bounded visible slice from a full followers reconciliation.",
+    source: {
+      kind: "legacy_bootstrap",
+      app: "v10",
+      files: LINKEDIN_FOLLOW_LIST_SOURCE_FILES,
+      note: "There was no dedicated legacy followers extractor. This contract mirrors the follow-lists architecture and applies it to LinkedIn's followers surface."
+    },
+    entryHints: {
+      startUrls: [
+        "https://www.linkedin.com/feed/",
+        "https://www.linkedin.com/mynetwork/",
+        "https://www.linkedin.com/mynetwork/network-manager/people-follow/followers/"
+      ],
+      directFollowersUrl: "https://www.linkedin.com/mynetwork/network-manager/people-follow/followers/",
+      directFallbackAllowed: true
+    },
+    readyHints: {
+      pageUrlPatterns: [
+        "/mynetwork/network-manager/people-follow/followers"
+      ],
+      finiteScrollSelectors: [
+        ".scaffold-finite-scroll__content",
+        ".scaffold-finite-scroll",
+        "[data-finite-scroll]",
+        "[class*='mn-follow']",
+        "[class*='network-manager']",
+        "main[role='main']",
+        "main"
+      ],
+      rowSelectors: [
+        "li",
+        "article",
+        "[data-view-name='people-follow-list'] li",
+        "[class*='follow-list'] li"
+      ],
+      rowIdentitySignals: [
+        "profile anchor",
+        "profile image",
+        "follow-back row"
+      ]
+    },
+    fallbackHints: {
+      entryStrategies: [
+        "navigate_via_feed_to_mynetwork",
+        "open_followers_manager_url_directly",
+        "switch_to_followers_tab_if_following_page_loaded"
+      ],
+      paginationRecovery: [
+        "scroll_followers_list",
+        "click_load_more"
+      ]
+    },
+    paginationHints: {
+      loadMoreTriggerText: ["load more", "show more"],
+      quickMode: {
+        strategy: "top_slice_with_gap_accounting",
+        stopCondition: "itemize the strongest visible follower slice, then preserve the remainder as an explicit itemization gap when the visible total is larger"
+      },
+      reconcileMode: {
+        strategy: "paginate_until_surface_stalls_or_cap",
+        triggers: [
+          "visible_total_exceeds_itemized_rows",
+          "operator_requests_full_reconcile",
+          "follower_change_signal_needs_truth"
+        ],
+        advanceOrder: [
+          "scroll_followers_list",
+          "click_load_more"
+        ],
+        stopCondition: "stop when no new follower rows appear across the allowed stalled passes"
+      }
+    },
+    failureHints: {
+      failClosedReasons: [
+        "The active signed-in LinkedIn identity could not be verified against the intended Exo account.",
+        "The followers surface never rendered a usable list of current followers."
+      ],
+      warningCases: [
+        "Only the visible top slice of followers was itemized.",
+        "The followers surface showed a larger visible total than the current bounded itemization."
+      ]
+    },
+    extractionHints: {
+      perSurfaceItemLimit: limit,
+      itemKinds: [
+        "follower_confirmed",
+        "follower_added"
+      ],
+      identityFields: [
+        "profile_platform_id",
+        "member_id",
+        "username",
+        "profile_url",
+        "display_name",
+        "headline",
+        "company_name",
+        "avatar_url"
+      ],
+      captureRule: "Emit follower_confirmed for ordinary current-list rows. Use follower_added only when the live surface itself clearly marks the follow as newly happened during this capture window.",
+      signalRule: "Followers are real attention signals. They do not prove connection state, but they should be written back as durable inbound observations."
+    }
+  };
+}
+
+/**
+ * @param {{ limit?: number | null }} [input]
+ */
+export function buildLinkedinFollowingSurfaceHint(input = {}) {
+  const limit = normalizePositiveInteger(input.limit, 20);
+
+  return {
+    surface: "linkedin-following-list",
+    goal: "Inspect the live LinkedIn following surface, capture who we are currently following, and distinguish a bounded visible slice from a full following reconciliation.",
+    source: {
+      kind: "legacy_bootstrap",
+      app: "v10",
+      files: LINKEDIN_FOLLOW_LIST_SOURCE_FILES,
+      note: "Distilled from the legacy follow-lists contract for the current following state."
+    },
+    entryHints: {
+      startUrls: [
+        "https://www.linkedin.com/feed/",
+        "https://www.linkedin.com/mynetwork/",
+        "https://www.linkedin.com/mynetwork/network-manager/people-follow/following/"
+      ],
+      directFollowingUrl: "https://www.linkedin.com/mynetwork/network-manager/people-follow/following/",
+      directFallbackAllowed: true
+    },
+    readyHints: {
+      pageUrlPatterns: [
+        "/mynetwork/network-manager/people-follow/following"
+      ],
+      finiteScrollSelectors: [
+        ".scaffold-finite-scroll__content",
+        ".scaffold-finite-scroll",
+        "[data-finite-scroll]",
+        "[class*='mn-follow']",
+        "[class*='network-manager']",
+        "main[role='main']",
+        "main"
+      ],
+      rowSelectors: [
+        "li",
+        "article",
+        "[data-view-name='people-follow-list'] li",
+        "[class*='follow-list'] li"
+      ]
+    },
+    fallbackHints: {
+      entryStrategies: [
+        "navigate_via_feed_to_mynetwork",
+        "open_following_manager_url_directly",
+        "switch_to_following_tab_if_followers_page_loaded"
+      ],
+      paginationRecovery: [
+        "scroll_following_list",
+        "click_load_more"
+      ]
+    },
+    paginationHints: {
+      loadMoreTriggerText: ["load more", "show more"],
+      quickMode: {
+        strategy: "top_slice_with_gap_accounting",
+        stopCondition: "itemize the strongest visible following slice, then preserve the remainder as an explicit itemization gap when the visible total is larger"
+      },
+      reconcileMode: {
+        strategy: "paginate_until_surface_stalls_or_cap",
+        triggers: [
+          "visible_total_exceeds_itemized_rows",
+          "operator_requests_full_reconcile",
+          "follow_state_truth_needs_reconcile"
+        ],
+        advanceOrder: [
+          "scroll_following_list",
+          "click_load_more"
+        ],
+        stopCondition: "stop when no new following rows appear across the allowed stalled passes"
+      }
+    },
+    failureHints: {
+      failClosedReasons: [
+        "The active signed-in LinkedIn identity could not be verified against the intended Exo account.",
+        "The following surface never rendered a usable list of current follows."
+      ],
+      warningCases: [
+        "Only the visible top slice of following rows was itemized.",
+        "The following surface showed a larger visible total than the current bounded itemization."
+      ]
+    },
+    extractionHints: {
+      perSurfaceItemLimit: limit,
+      itemKinds: [
+        "follow_state_confirmed",
+        "follow_state_changed"
+      ],
+      identityFields: [
+        "profile_platform_id",
+        "member_id",
+        "username",
+        "profile_url",
+        "display_name",
+        "headline",
+        "company_name",
+        "avatar_url"
+      ]
     }
   };
 }
@@ -552,6 +885,7 @@ export function buildLinkedinProfileViewsSurfaceHint(input = {}) {
         "company",
         "anonymous"
       ],
+      eventAtRule: "Each viewer row shows a relative-viewed string (relative_viewed_text, e.g. 'Viewed today', 'Viewed 2 days ago', 'Viewed last week', 'Viewed 3 weeks ago'). Convert it to an absolute ISO 8601 timestamp by subtracting the stated interval from the moment you observe the row (today=0d, yesterday/last day=1d, N hours=N*3600s, N days=N*86400s, last week=7d, N weeks=N*7d, last month=30d, N months=N*30d, N years=N*365d), and emit it as the row's eventAt (the moment the view happened). When no relative-viewed string is shown, set eventAt to null — do not fall back to the observedAt timestamp.",
       note: "Treat identifiable person viewers as stronger truth than anonymous/company-only rows. Company-only rows can remain attention signals rather than full cadence truth."
     }
   };

@@ -1,6 +1,7 @@
 // @ts-check
 
 import fs from "node:fs";
+import { listSupportedActionResults } from "./action-result-catalog.js";
 
 /**
  * The Exo action catalog mirrors the real action vocabulary already present in
@@ -23,7 +24,7 @@ export const ACTION_CATALOG = [
     fields: ["text"],
     draftSurface: "connection_request",
     activityKeys: ["action.profile.connect_request_sent"],
-    aliases: ["connect_request"],
+    aliases: ["connect_request", "send_connection_request"],
     knowledgeRefs: defaultKnowledgeRefs("Connection Request", { key: "connection_request", platform: "linkedin" }),
     hintDocPath: defaultHintDocPath({ key: "connection_request", platform: "linkedin" })
   },
@@ -410,7 +411,8 @@ function cloneActionDefinition(action) {
     activityKeys: [...action.activityKeys],
     aliases: [...action.aliases],
     knowledgeRefs: action.knowledgeRefs.map((reference) => ({ ...reference })),
-    executionHints: loadActionHints(action.hintDocPath ?? defaultHintDocPath(action))
+    executionHints: loadActionHints(action.hintDocPath ?? defaultHintDocPath(action)),
+    supportedResults: listSupportedActionResults(action.key),
   };
 }
 

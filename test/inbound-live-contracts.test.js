@@ -207,7 +207,7 @@ test("inbound sync linkedin turns one quick capture cassette into governed write
     ]);
 
     assert.equal(result.capture.mode, "quick");
-    assert.equal(result.capture.sectionCount, 5);
+    assert.equal(result.capture.sectionCount, 6);
     assert.equal(result.applied.refreshed.inbox.itemCount, 1);
 
     const observations = runCliJson(tempDir, ["inbound", "observations", "list", user.id, "--json"]);
@@ -441,6 +441,19 @@ test("inbound sync linkedin accepts a full reconciliation capture and lands disa
         error: null,
         items: []
       },
+      followersList: {
+        status: "success",
+        checkedAt: "2026-05-31T15:00:00.000Z",
+        itemCount: 0,
+        visibleTotalCount: 0,
+        captureCompleteness: "complete",
+        requestedMode: "full",
+        actualMode: "full",
+        reconcileRequired: false,
+        reconcileReason: null,
+        error: null,
+        items: []
+      },
       followingList: {
         status: "success",
         checkedAt: "2026-05-31T15:00:00.000Z",
@@ -515,6 +528,19 @@ test("inbound sync linkedin accepts a full reconciliation capture and lands disa
         items: []
       },
       profileViews: {
+        status: "success",
+        checkedAt: "2026-05-31T16:00:00.000Z",
+        itemCount: 0,
+        visibleTotalCount: 0,
+        captureCompleteness: "complete",
+        requestedMode: "full",
+        actualMode: "full",
+        reconcileRequired: false,
+        reconcileReason: null,
+        error: null,
+        items: []
+      },
+      followersList: {
         status: "success",
         checkedAt: "2026-05-31T16:00:00.000Z",
         itemCount: 0,

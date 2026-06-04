@@ -4,6 +4,10 @@ import { inboundObservationSchema } from "../schema/inbound.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
 import { buildUserInboundSyncView } from "./user-inbound-sync.js";
+import {
+  classifyPrivateInboundMessage,
+  describePrivateInboundResponse,
+} from "./private-inbound-message-classification.js";
 
 /**
  * @param {unknown} rawUser
@@ -110,7 +114,16 @@ function buildInboxItem(observation, motions, companiesById, prospectContextById
   const prospect = prospectContext?.prospect ?? (account && observation.prospectId
     ? account.prospects.find((candidate) => candidate.id === observation.prospectId) ?? null
     : null);
-  const triage = classifyObservation(observation.kind);
+  const messageContext = classifyPrivateInboundMessage(observation);
+  const triage = classifyObservation(observation, messageContext);
+  const acceptedStage = observation.kind === "connection_request_accepted"
+    ? classifyAcceptedConnectionStage(prospect, observation.actorName ?? null)
+    : null;
+  const handledPrivateInboundStage = classifyHandledPrivateInboundStage(
+    observation,
+    prospect,
+    observation.actorName ?? null,
+  );
 
   return {
     id: observation.id,
@@ -126,10 +139,12 @@ function buildInboxItem(observation, motions, companiesById, prospectContextById
     actorLinkedinPublicId: observation.actorLinkedinPublicId,
     actorLinkedinMemberId: observation.actorLinkedinMemberId,
     actorAvatarUrl: observation.actorAvatarUrl,
-    priority: triage.priority,
-    status: triage.status,
-    whyItMatters: triage.whyItMatters,
-    recommendedAction: recommendAction(observation.kind, prospect),
+    priority: acceptedStage?.priority ?? handledPrivateInboundStage?.priority ?? triage.priority,
+    status: acceptedStage?.status ?? handledPrivateInboundStage?.status ?? triage.status,
+    whyItMatters: acceptedStage?.whyItMatters ?? handledPrivateInboundStage?.whyItMatters ?? triage.whyItMatters,
+    recommendedAction: acceptedStage?.recommendedAction ?? handledPrivateInboundStage?.recommendedAction ?? recommendAction(observation, prospect, messageContext),
+    reviewState: acceptedStage?.state ?? handledPrivateInboundStage?.state ?? null,
+    messageContext,
     account: {
       id: observation.accountId,
       capability: observation.capability
@@ -141,13 +156,22 @@ function buildInboxItem(observation, motions, companiesById, prospectContextById
 }
 
 /**
- * @param {string} kind
+ * @param {any} observation
+ * @param {"reply" | "first_inbound" | "not_private_inbound"} messageContext
  */
-function classifyObservation(kind) {
+function classifyObservation(observation, messageContext) {
+  const kind = observation.kind;
   switch (kind) {
     case "inbound_reply_received":
     case "email_reply_received":
     case "message_received":
+      if (messageContext === "first_inbound") {
+        return {
+          priority: "high",
+          status: "needs-triage",
+          whyItMatters: "A private inbound message arrived, but Exo does not have evidence that it is a reply to your prior message."
+        };
+      }
       return {
         priority: "high",
         status: "needs-reply",
@@ -207,18 +231,23 @@ function classifyObservation(kind) {
 }
 
 /**
- * @param {string} kind
+ * @param {any} observation
  * @param {any | null} prospect
+ * @param {"reply" | "first_inbound" | "not_private_inbound"} messageContext
  */
-function recommendAction(kind, prospect) {
+function recommendAction(observation, prospect, messageContext) {
+  const kind = observation.kind;
   switch (kind) {
     case "connection_request_pending":
-      return `Keep the branch patient for now, but review whether the pending invite has become stale enough to withdraw under current policy.`;
+      return `Keep the branch patient for now. If the pending invite crosses policy age, the agent should withdraw it automatically.`;
     case "connection_request_no_longer_pending":
       return `Review whether the invite was accepted, rejected, or otherwise left the pending list before continuing the old waiting branch.`;
     case "inbound_reply_received":
     case "email_reply_received":
     case "message_received":
+      if (messageContext === "first_inbound") {
+        return `Review ${prospect?.name ?? "this person"}'s inbound message and decide whether to reply or ignore it.`;
+      }
       return `Reply to ${prospect?.name ?? "the prospect"} and move the cadence branch into a live conversation.`;
     case "connection_request_received":
       return `Decide whether to accept or decline the inbound connection request.`;
@@ -250,6 +279,130 @@ function recommendAction(kind, prospect) {
     default:
       return `Review this observation and decide whether it changes the motion state.`;
   }
+}
+
+/**
+ * @param {any} observation
+ * @param {any | null} prospect
+ * @param {string | null} actorName
+ * @returns {{ priority: string, status: string, state: string, whyItMatters: string, recommendedAction: string } | null}
+ */
+function classifyHandledPrivateInboundStage(observation, prospect, actorName) {
+  const response = describePrivateInboundResponse(observation, prospect);
+  const responseState = response.state;
+  const name = prospect?.name ?? actorName ?? "this person";
+  if (responseState === "queued") {
+    return {
+      priority: "low",
+      status: "queued",
+      state: "queued_for_send",
+      whyItMatters: "The reply is already send-ready in the agent queue.",
+      recommendedAction: `Reply queued for ${name} — the agent will send it.`,
+    };
+  }
+  if (responseState === "sent") {
+    return {
+      priority: "low",
+      status: "resolved",
+      state: "reply_sent",
+      whyItMatters: "A reply was already sent after this inbound message. The branch is now waiting on them.",
+      recommendedAction: `Reply already sent to ${name} — waiting for their next message.`,
+    };
+  }
+  if (responseState === "blocked") {
+    const detail = summarizeUnavailableReplyReason(response.touch?.notes);
+    return {
+      priority: "low",
+      status: "resolved",
+      state: "reply_unavailable",
+      whyItMatters: detail,
+      recommendedAction: `Reply unavailable for ${name} — ${detail}`,
+    };
+  }
+  return null;
+}
+
+/**
+ * @param {any | null} prospect
+ * @param {string | null} actorName
+ */
+function classifyAcceptedConnectionStage(prospect, actorName) {
+  const name = prospect?.name ?? actorName ?? "this prospect";
+  if (hasSentPostAcceptMessage(prospect)) {
+    return {
+      priority: "low",
+      status: "resolved",
+      state: "post_accept_sent",
+      whyItMatters: "The first post-accept message was already sent. The branch is now waiting on their reply.",
+      recommendedAction: `First message already sent to ${name} — waiting for a reply.`,
+    };
+  }
+  if (hasQueuedPostAcceptMessage(prospect)) {
+    return {
+      priority: "low",
+      status: "queued",
+      state: "queued_for_send",
+      whyItMatters: "The first message is already send-ready in the agent queue.",
+      recommendedAction: `First message queued for ${name} — the agent will send it.`,
+    };
+  }
+  if (hasReviewablePostAcceptDraft(prospect)) {
+    return {
+      priority: "high",
+      status: "needs-triage",
+      state: "ready_for_post_accept",
+      whyItMatters: "The agent already drafted the first post-accept message. The operator can review the actual copy now.",
+      recommendedAction: `Review the drafted first post-accept direct message for ${name} and decide whether to queue it for send.`,
+    };
+  }
+  return {
+    priority: "low",
+    status: "agent-draft",
+    state: "agent_draft_due",
+    whyItMatters: "The connection is accepted, but the operator should not get a send decision until the agent has drafted the first message.",
+    recommendedAction: `Agent should draft the first post-accept direct message for ${name} before this returns to the operator lane.`,
+  };
+}
+
+/** @param {any | null} prospect */
+function hasSentPostAcceptMessage(prospect) {
+  if (!prospect) return false;
+  const surfaces = new Set(["post_accept_message", "follow_up_direct_message"]);
+  const touchSent = (prospect.touches ?? []).some(
+    (t) => surfaces.has(t.surface) && t.direction !== "inbound" && ["sent", "accepted", "replied"].includes(t.outcome),
+  );
+  const draftSent = (prospect.drafts ?? []).some((d) => surfaces.has(d.surface) && d.status === "sent");
+  return touchSent || draftSent;
+}
+
+/** @param {string | null | undefined} notes */
+function summarizeUnavailableReplyReason(notes) {
+  const normalized = String(notes ?? "").trim();
+  if (/disabledfeatures/i.test(normalized) && /reply/i.test(normalized)) {
+    return "the governed LinkedIn thread is read-only and reply is disabled.";
+  }
+  if (/read[ -]?only/i.test(normalized)) {
+    return "the governed LinkedIn thread is read-only.";
+  }
+  return "the governed reply path is not writable on this thread.";
+}
+
+/** @param {any | null} prospect */
+function hasQueuedPostAcceptMessage(prospect) {
+  if (!prospect) return false;
+  const surfaces = new Set(["post_accept_message", "follow_up_direct_message"]);
+  return (prospect.drafts ?? []).some(
+    (d) => surfaces.has(d.surface) && (d.status === "approved" || d.status === "queued"),
+  );
+}
+
+/** @param {any | null} prospect */
+function hasReviewablePostAcceptDraft(prospect) {
+  if (!prospect) return false;
+  const surfaces = new Set(["post_accept_message", "follow_up_direct_message"]);
+  return (prospect.drafts ?? []).some(
+    (d) => surfaces.has(d.surface) && d.status === "ready",
+  );
 }
 
 /**
@@ -347,7 +500,7 @@ export function recommendSurfaceAction(surface) {
 
   switch (surface.key) {
     case "linkedin-sent-invitations":
-      return "Review pending and changed invites for accepts, withdrawals, or stale requests.";
+      return "Review changed invite outcomes and reconciliation gaps. Stale pending invites should be withdrawn automatically.";
     case "linkedin-received-invitations":
       return "Review inbound invites and decide whether to accept or decline them.";
     case "linkedin-messaging-inbox":

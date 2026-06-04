@@ -1,19 +1,18 @@
 // @ts-check
 
-import { linkedinInboundSyncCaptureSchema } from "../schema/inbound.js";
+import { buildInboundSyncPayloadFromCanonicalToolResults } from "./canonical-inbound-sync-adapter.js";
+import { executeToolMethodSync, parseToolMethodResultBatch } from "../lib/tool-registry.js";
+import {
+  ensureLinkedinToolMethodsRegistered,
+  LINKEDIN_SYNC_RECEIVED_INVITATIONS_METHOD,
+  LINKEDIN_SYNC_SENT_INVITATIONS_METHOD
+} from "../lib/linkedin-tool-methods.js";
+import { linkedinInboundSyncCaptureSchema } from "../schema/linkedin-capture.js";
 import { userSchema } from "../schema/user.js";
 
-const LINKEDIN_SURFACE_BUILDERS = [
-  {
-    surfaceKey: "linkedin-sent-invitations",
-    sectionKey: "sentInvitations",
-    externalIdField: "invitationId"
-  },
-  {
-    surfaceKey: "linkedin-received-invitations",
-    sectionKey: "receivedInvitations",
-    externalIdField: "invitationId"
-  },
+ensureLinkedinToolMethodsRegistered();
+
+const LEGACY_LINKEDIN_SURFACE_BUILDERS = [
   {
     surfaceKey: "linkedin-messaging-inbox",
     sectionKey: "messagingInbox",
@@ -24,6 +23,11 @@ const LINKEDIN_SURFACE_BUILDERS = [
     surfaceKey: "linkedin-profile-views",
     sectionKey: "profileViews",
     externalIdField: "viewId"
+  },
+  {
+    surfaceKey: "linkedin-followers-list",
+    sectionKey: "followersList",
+    externalIdField: "entryId"
   },
   {
     surfaceKey: "linkedin-following-list",
@@ -41,35 +45,28 @@ const LINKEDIN_SURFACE_BUILDERS = [
  */
 export function buildLinkedinInboundSyncPayload(rawUser, input) {
   const user = userSchema.parse(rawUser);
-  const capture = linkedinInboundSyncCaptureSchema.parse(input.capture);
   const account = resolveLinkedinAccount(user, input.accountId ?? null);
+  const normalized = normalizeLinkedinCaptureInput(input.capture);
 
-  if (!["quick", "full"].includes(capture.mode)) {
-    throw new Error(`LinkedIn capture currently supports quick or full mode. Received: ${capture.mode}`);
-  }
-
-  const builtSurfaces = LINKEDIN_SURFACE_BUILDERS.map((definition) =>
-    buildQuickSurface(definition, capture[definition.sectionKey])
-  );
+  const canonicalBuilt = buildInboundSyncPayloadFromCanonicalToolResults({
+    accountId: account.id,
+    mode: normalized.mode,
+    results: normalized.results
+  });
+  const legacySurfaces = normalized.legacyCapture
+    ? LEGACY_LINKEDIN_SURFACE_BUILDERS.map((definition) =>
+      buildLegacySurface(definition, normalized.legacyCapture[definition.sectionKey])
+    )
+    : [];
+  const builtSurfaces = [
+    ...canonicalBuilt.payload.accounts[0].surfaces,
+    ...legacySurfaces
+  ];
 
   return {
-    capture: {
-      mode: capture.mode,
-      sectionCount: builtSurfaces.length,
-      itemCount: builtSurfaces.reduce((sum, surface) => sum + (surface.itemCount ?? 0), 0),
-      sections: builtSurfaces.map((surface) => ({
-        surfaceKey: surface.surfaceKey,
-        status: surface.status,
-        itemCount: surface.itemCount,
-        visibleTotalCount: surface.visibleTotalCount,
-        captureCompleteness: surface.captureCompleteness,
-        exhaustionStatus: surface.exhaustionStatus,
-        observationCount: surface.observations.length,
-        error: surface.error
-      }))
-    },
+    capture: buildCaptureSummary(normalized.mode, builtSurfaces),
     payload: {
-      mode: capture.mode,
+      mode: normalized.mode,
       accounts: [
         {
           accountId: account.id,
@@ -81,10 +78,83 @@ export function buildLinkedinInboundSyncPayload(rawUser, input) {
 }
 
 /**
+ * @param {unknown} rawCapture
+ */
+function normalizeLinkedinCaptureInput(rawCapture) {
+  if (rawCapture && typeof rawCapture === "object" && Array.isArray(rawCapture.results)) {
+    const batch = parseToolMethodResultBatch(rawCapture);
+    return {
+      mode: batch.mode,
+      results: batch.results,
+      legacyCapture: null
+    };
+  }
+
+  const capture = linkedinInboundSyncCaptureSchema.parse(rawCapture);
+  if (!["quick", "full"].includes(capture.mode)) {
+    throw new Error(`LinkedIn capture currently supports quick or full mode. Received: ${capture.mode}`);
+  }
+
+  return {
+    mode: capture.mode,
+    results: [
+      {
+        toolMethodId: LINKEDIN_SYNC_SENT_INVITATIONS_METHOD,
+        output: executeToolMethodSync(
+          LINKEDIN_SYNC_SENT_INVITATIONS_METHOD,
+          { runtime: "legacy_capture", connector: "legacy_capture", mode: "development" },
+          { mode: capture.mode, legacyCapture: capture.sentInvitations }
+        )
+      },
+      {
+        toolMethodId: LINKEDIN_SYNC_RECEIVED_INVITATIONS_METHOD,
+        output: executeToolMethodSync(
+          LINKEDIN_SYNC_RECEIVED_INVITATIONS_METHOD,
+          { runtime: "legacy_capture", connector: "legacy_capture", mode: "development" },
+          { mode: capture.mode, legacyCapture: capture.receivedInvitations }
+        )
+      }
+    ],
+    legacyCapture: capture
+  };
+}
+
+/**
+ * @param {"quick" | "full"} mode
+ * @param {Array<{
+ *   surfaceKey: string,
+ *   status: string,
+ *   itemCount: number | null,
+ *   visibleTotalCount: number | null,
+ *   captureCompleteness: string | null,
+ *   exhaustionStatus: string | null,
+ *   observations: unknown[],
+ *   error: string | null
+ * }>} surfaces
+ */
+function buildCaptureSummary(mode, surfaces) {
+  return {
+    mode,
+    sectionCount: surfaces.length,
+    itemCount: surfaces.reduce((sum, surface) => sum + (surface.itemCount ?? 0), 0),
+    sections: surfaces.map((surface) => ({
+      surfaceKey: surface.surfaceKey,
+      status: surface.status,
+      itemCount: surface.itemCount,
+      visibleTotalCount: surface.visibleTotalCount,
+      captureCompleteness: surface.captureCompleteness,
+      exhaustionStatus: surface.exhaustionStatus,
+      observationCount: surface.observations.length,
+      error: surface.error
+    }))
+  };
+}
+
+/**
  * @param {{ surfaceKey: string, sectionKey: string, externalIdField: string, threadUrlField?: string }} definition
  * @param {any} section
  */
-function buildQuickSurface(definition, section) {
+function buildLegacySurface(definition, section) {
   const exhaustionStatus = normalizeSurfaceExhaustionStatus(section);
   const exhaustionReason = normalizeNullableString(section.exhaustionReason);
   const paginationAttempted = typeof section.paginationAttempted === "boolean" ? section.paginationAttempted : null;
@@ -161,6 +231,7 @@ function buildQuickSurface(definition, section) {
   const observations = section.items.map((item) => ({
     kind: item.kind,
     observedAt: item.observedAt,
+    eventAt: item.eventAt ?? null,
     summary: item.summary,
     externalId: item[definition.externalIdField],
     actorName: item.actorName,
@@ -173,10 +244,12 @@ function buildQuickSurface(definition, section) {
     actorAvatarSourceUrl: item.actorAvatarSourceUrl,
     threadUrl: definition.threadUrlField ? item[definition.threadUrlField] : null,
     sourceUrl: item.sourceUrl,
+    subject: item.subject ?? null,
     motionId: item.motionId,
     companyId: item.companyId,
     prospectId: item.prospectId,
-    notes: item.notes
+    notes: item.notes,
+    messages: item.messages ?? []
   }));
 
   return {

@@ -193,8 +193,6 @@ export function buildSignals(inputs) {
  *   accountCount?: number,
  *   hasSignalMatches?: boolean,
  *   prospectCount?: number,
- *   readyThroughLineCount?: number,
- *   readyOpeningPlanCount?: number,
  *   readyCadenceCount?: number,
  *   missingEmailFallbackCount?: number
  * } | undefined} state
@@ -205,8 +203,6 @@ export function buildNextSteps(targetingProfile, suppressionPolicy, premise, aud
   const accountCount = state?.accountCount ?? 0;
   const hasSignalMatches = state?.hasSignalMatches ?? false;
   const prospectCount = state?.prospectCount ?? 0;
-  const readyThroughLineCount = state?.readyThroughLineCount ?? 0;
-  const readyOpeningPlanCount = state?.readyOpeningPlanCount ?? 0;
   const readyCadenceCount = state?.readyCadenceCount ?? 0;
   const missingEmailFallbackCount = state?.missingEmailFallbackCount ?? 0;
 
@@ -238,28 +234,14 @@ export function buildNextSteps(targetingProfile, suppressionPolicy, premise, aud
   if (!prospectCount) {
     steps.push(`Resolve up to ${targetingProfile.stakeholderTargetCount} director-level-or-above prospects for each target account. Start with exact titles, but move to the best-fit owner and adjacent operators when the org chart is messy.`);
     steps.push("For chosen prospects, check recent public activity and recent posts. Treat legitimate recent activity as positive evidence the channel is active, then store profile-view state and direct-email fallback when available.");
-    steps.push("Build a prospect-specific through-line using the strongest recent signal matches as the why-now spine.");
-    steps.push("Build a prospect-specific opening plan and cadence state with a primary channel and a fallback path for LinkedIn blocked-or-cold cases.");
+    steps.push("Set cadence state for each chosen prospect with the right first branch and next action.");
   } else {
-    if (readyThroughLineCount < prospectCount) {
-      steps.push("Complete prospect-specific through-lines for the remaining chosen prospects before launch.");
-    }
-
-    if (readyOpeningPlanCount < prospectCount) {
-      steps.push("Complete prospect-specific opening plans for the remaining chosen prospects before launch.");
-    }
-
     if (readyCadenceCount < prospectCount) {
       steps.push("Complete cadence state for the remaining chosen prospects before launch.");
     }
 
-    if (
-      prospectCount > 0
-      && readyThroughLineCount >= prospectCount
-      && readyOpeningPlanCount >= prospectCount
-      && readyCadenceCount >= prospectCount
-    ) {
-      steps.push("The first prospect batch is launch-ready. Wait for operator approval, then execute the stored opening plans through the pinned browser identity.");
+    if (prospectCount > 0 && readyCadenceCount >= prospectCount) {
+      steps.push("The first prospect batch is launch-ready. Let the agent execute the stored cadence branches through the pinned governed connector path, and surface only real exceptions or review decisions to the operator.");
     }
 
     if (missingEmailFallbackCount > 0) {

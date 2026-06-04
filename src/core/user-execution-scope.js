@@ -1,31 +1,31 @@
 // @ts-check
 
+import { resolveUserConnection } from "./resolve-user-connection.js";
+
 /**
  * @param {import("../schema/user.js").userSchema._type} user
  * @param {import("../schema/motion.js").motionSchema._type} motion
  * @param {import("../schema/company.js").companySchema._type} company
- * @param {{ capability?: string | null | undefined }} [options]
+ * @param {{
+ *   capability?: string | null | undefined,
+ *   singletonReadyUserId?: string | null | undefined
+ * }} [options]
  */
 export function classifyUserExecutionScope(user, motion, company, options = {}) {
-  const capability = options.capability ?? "linkedin";
-  const preferredAccount = user.accounts.find((account) => account.capability === capability && account.preferred)
-    ?? user.accounts.find((account) => account.capability === capability)
-    ?? null;
   const scopedUserId = company.engagementUserAssignment?.userId
     ?? motion.engagementUserAssignment?.userId
     ?? null;
   const scopedProfileId = company.engagementProfileAssignment?.profileId
     ?? motion.engagementProfileAssignment?.profileId
     ?? null;
-  const userProfileId = preferredAccount?.browserProfileId ?? null;
   const assignedToUser = scopedUserId === user.id
-    || (!scopedUserId && Boolean(scopedProfileId) && scopedProfileId === userProfileId);
+    || (!scopedUserId && !scopedProfileId && options.singletonReadyUserId === user.id);
 
   return {
     key: buildMotionCompanyScopeKey(motion.id, company.id),
     assignedToUser,
     assignedToOtherUser: Boolean(scopedUserId) && scopedUserId !== user.id,
-    blockedByOtherProfile: Boolean(!scopedUserId && scopedProfileId && scopedProfileId !== userProfileId),
+    blockedByOtherProfile: Boolean(!scopedUserId && scopedProfileId),
     blockedByMissingAssignment: !scopedUserId && !scopedProfileId,
     scopedUserId,
     scopedProfileId
@@ -47,13 +47,20 @@ export function buildMotionCompanyScopeKey(motionId, companyId) {
  * @param {{
  *   capability?: string | null | undefined,
  *   motionId?: string | null | undefined,
- *   companyId?: string | null | undefined
+ *   companyId?: string | null | undefined,
+ *   users?: import("../schema/user.js").userSchema._type[] | null | undefined,
+ *   profiles?: import("../schema/browser-profile.js").browserProfileSchema._type[] | null | undefined
  * }} [options]
  */
 export function buildUserAssignedExecutionScopeIndex(user, motions, companies, options = {}) {
   const assignedExecutionScopeKeys = new Set();
   const assignedMotionIds = new Set();
   const assignedCompanyIdsByMotion = new Map();
+  const singletonReadyUserId = resolveSingletonReadyUserId(
+    options.users ?? [user],
+    options.profiles ?? [],
+    options.capability ?? "linkedin"
+  );
 
   for (const motion of motions) {
     if (options.motionId && motion.id !== options.motionId) {
@@ -70,7 +77,8 @@ export function buildUserAssignedExecutionScopeIndex(user, motions, companies, o
       }
 
       const executionScope = classifyUserExecutionScope(user, motion, company, {
-        capability: options.capability
+        capability: options.capability,
+        singletonReadyUserId,
       });
       if (!executionScope.assignedToUser) {
         continue;
@@ -89,4 +97,17 @@ export function buildUserAssignedExecutionScopeIndex(user, motions, companies, o
     assignedMotionIds,
     assignedCompanyIdsByMotion
   };
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type[]} users
+ * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
+ * @param {string} capability
+ */
+function resolveSingletonReadyUserId(users, profiles, capability) {
+  const readyUsers = users.filter((candidate) => {
+    const resolution = resolveUserConnection(candidate, profiles, { capability });
+    return resolution.sourceType === "harness-connection" && resolution.resolved?.status === "ready";
+  });
+  return readyUsers.length === 1 ? readyUsers[0].id : null;
 }

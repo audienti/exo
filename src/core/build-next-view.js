@@ -29,9 +29,13 @@ import { buildOperatorPromptFromDailyItem, buildOperatorPromptFromExecutionActio
 export function buildNextView(input) {
   const description = describeExo();
   const filters = input.filters ?? {};
+  const executionBootstrapIncomplete =
+    description.agentUsage.recommendedPath.mode === "configure-execution-user"
+    || description.agentUsage.recommendedPath.mode === "configure-execution-connectors";
 
   if (input.rawUser) {
     const daily = buildDailyView(input.rawUser, input.rawMotions, input.rawCompanies, input.rawProfiles, input.rawObservations, {
+      rawUsers: input.rawUsers,
       rawCues: input.rawCues ?? [],
       motionId: filters.motionId ?? null,
       companyId: filters.companyId ?? null,
@@ -66,6 +70,42 @@ export function buildNextView(input) {
         }
       };
     }
+  }
+
+  if (executionBootstrapIncomplete) {
+    return {
+      source: "operator-call",
+      headline: description.operatorInterface.currentCall.headline,
+      nextMove: description.operatorInterface.currentCall.nextMove,
+      operatorPrompt: description.operatorInterface.currentCall.operatorPrompt ?? null,
+      why: description.agentUsage.recommendedPath.reason,
+      status: {
+        kind: description.agentUsage.recommendedPath.mode,
+        priority: description.agentUsage.recommendedPath.blockers.length ? "action" : "wait",
+        effect: description.agentUsage.recommendedPath.blockers.length ? "blocked" : "guided",
+        dueAt: null
+      },
+      guidance: buildPlannerGuidance(operatorCallGuidanceKey(description.agentUsage.recommendedPath.mode), {
+        motionName: description.agentUsage.recommendedPath.focusMotionName ?? "",
+        recommendedAction: description.operatorInterface.currentCall.nextMove,
+        whyItMatters: description.agentUsage.recommendedPath.reason
+      }),
+      context: {
+        user: null,
+        motion: description.agentUsage.recommendedPath.focusMotionId
+          ? {
+              id: description.agentUsage.recommendedPath.focusMotionId,
+              name: description.agentUsage.recommendedPath.focusMotionName
+            }
+          : null,
+        company: null,
+        prospect: null,
+        source: {
+          type: "operator_interface",
+          kind: description.agentUsage.recommendedPath.mode
+        }
+      }
+    };
   }
 
   if (input.rawMotion) {
@@ -159,7 +199,7 @@ export function buildNextView(input) {
         effect: report.targeting.readyToEngage ? "ready_to_engage" : report.targeting.readyToTarget ? "ready_to_target" : "blocked",
         dueAt: null
       },
-      guidance: buildPlannerGuidance(motionGuidanceKey(report.targeting.overallStage), {
+      guidance: buildPlannerGuidance(motionGuidanceKey(report), {
         motionId: report.motion.id,
         motionName: report.motion.name,
         recommendedAction: selectMotionNextMove(report),
@@ -175,7 +215,7 @@ export function buildNextView(input) {
         prospect: null,
         source: {
           type: "motion_report",
-          kind: report.targeting.overallStage
+          kind: report.targeting.inventoryTarget?.shortfall > 0 ? "seed_motion_targets" : report.targeting.overallStage
         }
       }
     };
@@ -193,7 +233,7 @@ export function buildNextView(input) {
       effect: description.agentUsage.recommendedPath.blockers.length ? "blocked" : "guided",
       dueAt: null
     },
-    guidance: buildPlannerGuidance("reinitialize_context", {
+    guidance: buildPlannerGuidance(operatorCallGuidanceKey(description.agentUsage.recommendedPath.mode), {
       motionName: description.agentUsage.recommendedPath.focusMotionName ?? "",
       recommendedAction: description.operatorInterface.currentCall.nextMove,
       whyItMatters: description.agentUsage.recommendedPath.reason
@@ -217,9 +257,28 @@ export function buildNextView(input) {
 }
 
 /**
+ * @param {string} mode
+ */
+function operatorCallGuidanceKey(mode) {
+  if (mode === "configure-execution-user" || mode === "configure-execution-connectors") {
+    return "configure_execution_connectors";
+  }
+
+  if (mode === "create-motion") {
+    return "create_first_motion";
+  }
+
+  return "reinitialize_context";
+}
+
+/**
  * @param {ReturnType<typeof buildMotionReport>} report
  */
 function summarizeMotionWhy(report) {
+  if ((report.targeting.inventoryTarget?.shortfall ?? 0) > 0) {
+    return `This motion only has ${report.targeting.inventoryTarget.availableProspectCount} available prospects against a floor of ${report.targeting.inventoryTarget.minimumAvailableProspects}, so the next move should keep feeding discovery instead of forcing weak-fit branches.`;
+  }
+
   if (report.targeting.readyToEngage) {
     return "The motion is structurally ready to engage, so the next move should come from its highest-priority governed action branch.";
   }
@@ -244,8 +303,6 @@ function selectMotionNextMove(report) {
     report.targeting.overallStage === "needs-company-targeting"
     || report.targeting.overallStage === "needs-company-research"
     || report.targeting.overallStage === "needs-prospect-selection"
-    || report.targeting.overallStage === "needs-through-line"
-    || report.targeting.overallStage === "needs-opening-plan"
     || report.targeting.overallStage === "needs-cadence"
   ) {
     return actions.find((action) => !/trusted browser profile|email fallback/i.test(action)) ?? actions[0];
@@ -255,16 +312,18 @@ function selectMotionNextMove(report) {
 }
 
 /**
- * @param {string} stage
+ * @param {ReturnType<typeof buildMotionReport>} report
  */
-function motionGuidanceKey(stage) {
+function motionGuidanceKey(report) {
+  if ((report.targeting.inventoryTarget?.shortfall ?? 0) > 0) {
+    return "seed_motion_targets";
+  }
+
   if (
-    stage === "needs-company-targeting"
-    || stage === "needs-company-research"
-    || stage === "needs-prospect-selection"
-    || stage === "needs-through-line"
-    || stage === "needs-opening-plan"
-    || stage === "needs-cadence"
+    report.targeting.overallStage === "needs-company-targeting"
+    || report.targeting.overallStage === "needs-company-research"
+    || report.targeting.overallStage === "needs-prospect-selection"
+    || report.targeting.overallStage === "needs-cadence"
   ) {
     return "clear_motion_blocker";
   }
@@ -296,7 +355,7 @@ function selectExecutionNext(prospects) {
         priority: "action",
         effect: "ready_to_engage",
         dueAt: cadence.nextActionDueAt ?? null,
-        nextMove: prospect.nextAction ?? prospect.openingPlan.firstMove ?? `Execute the first planned touch for ${prospect.name}.`,
+        nextMove: prospect.nextAction ?? `Execute the first planned touch for ${prospect.name}.`,
         why: `The motion is already engagement-ready, and ${prospect.name} is the strongest ready prospect branch that has not been worked yet.`,
         company: prospect,
         prospect

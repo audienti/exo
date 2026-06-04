@@ -2,8 +2,10 @@
 // @ts-check
 
 import { addUser } from "../../core/add-user.js";
+import { buildUserIntake } from "../../core/build-user-intake.js";
+import { mapUserRuntimeAccounts } from "../../core/map-user-runtime-accounts.js";
 import { buildUserWorkingHoursView, setUserWorkingHours } from "../../core/working-hours.js";
-import { probeUserHarnessConnections } from "../../core/probe-user-harness-connections.js";
+import { probeRuntimeConnectorAvailability, probeUserHarnessConnections } from "../../core/probe-user-harness-connections.js";
 import { resolveUserConnection } from "../../core/resolve-user-connection.js";
 import { upsertUserConnectedAccount, upsertUserHarnessConnection } from "../../core/upsert-user-harness-connection.js";
 import {
@@ -16,7 +18,13 @@ import {
   listUsers,
   updateUser
 } from "../../db/database.js";
-import { renderUserHarnessProbe, renderUserList, renderUserSummary, renderUserWorkingHours } from "../../artifacts/render-user.js";
+import {
+  renderUserHarnessProbe,
+  renderUserList,
+  renderUserRuntimeAccountMapping,
+  renderUserSummary,
+  renderUserWorkingHours
+} from "../../artifacts/render-user.js";
 import { browserProfileCapabilitySchema } from "../../schema/browser-profile.js";
 import { userHarnessConnectionStatusSchema, userSchema } from "../../schema/user.js";
 
@@ -26,26 +34,60 @@ import { userHarnessConnectionStatusSchema, userSchema } from "../../schema/user
 export function registerUsers(program) {
   const users = program
     .command("users")
-    .description("Manage execution users that own connected accounts across browser profiles and harness connectors.")
+    .description("Manage execution users that own governed connected accounts across harness connectors.")
     .addHelpText(
       "after",
       `
 Examples:
+  exo users intake --json
   exo users add --label operator-main --owner operator
   exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 09:00 --end 17:00
   exo users harness add <user-id> --runtime codex --connector chrome --status available
+  exo users harness probe <user-id> --runtime codex --json
   exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json
-  exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --profile <profile-id> --preferred
-  exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --preferred
+  exo users accounts map-runtime <user-id> --runtime codex --apply --json
+  exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --runtime codex --connector <connector-from-probe> --provider-account-id <provider-account-id> --preferred
+  exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --runtime codex --connector <connector-from-probe> --provider-account-id acct-linkedin-1 --preferred --max-connection-requests 125
+  exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --provider-account-id <provider-account-id> --preferred
   exo users resolve <user-id> --capability gmail --json
 
 Rules:
   - A user is the human or business identity.
   - Accounts are capability-specific connections owned by that user.
-  - Accounts can resolve through a browser profile or a harness connection.
+  - Accounts resolve through harness connections. Legacy browser-profile mappings do not create a governed execution path.
   - Working hours describe when Exo should treat sync pressure as due now versus queued for the next open window.
 `
     );
+
+  users
+    .command("intake")
+    .description("Inspect execution bootstrap state and return the next setup question before live work.")
+    .option("--label <label>", "Candidate execution-user label such as william-main")
+    .option("--json", "Emit machine-readable JSON")
+    .action((options) => {
+      const result = buildUserIntake(
+        {
+          label: options.label ?? null,
+        },
+        {
+          rawUsers: listUsers(),
+          rawProfiles: listBrowserProfiles(),
+        },
+      );
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(`User Intake: ${result.status}`);
+      if (result.nextQuestion) {
+        console.log(`Next Question: ${result.nextQuestion.prompt}`);
+      }
+      if (result.launchCommandHint) {
+        console.log(`Launch Command: ${result.launchCommandHint}`);
+      }
+    });
 
   users
     .command("add")
@@ -219,7 +261,7 @@ Rules:
 
   harness
     .command("probe")
-    .description("Inspect the current runtime config and infer which stored harness connectors are actually callable.")
+    .description("Inspect stored harness rows and the current runtime, then infer which connectors are actually callable.")
     .argument("<user-id>", "Execution user identifier")
     .option("--runtime <runtime>", "Filter to one runtime such as codex")
     .option("--connector <connector>", "Filter to one connector such as gmail or chrome")
@@ -265,7 +307,9 @@ Rules:
     .option("--profile <profile-id>", "Resolve this account through a registered browser profile")
     .option("--runtime <runtime>", "Resolve this account through a harness connector runtime such as codex")
     .option("--connector <connector>", "Harness connector such as gmail or chrome")
+    .option("--provider-account-id <account-id>", "Exact external account identity for managed connector accounts")
     .option("--preferred", "Mark this as the preferred account for the capability")
+    .option("--max-connection-requests <count>", "Weekly quota for connection requests/invitations, or 'unlimited'")
     .option("--notes <notes>", "Freeform notes")
     .option("--json", "Emit machine-readable JSON")
     .action((userId, options) => {
@@ -290,6 +334,12 @@ Rules:
         return;
       }
 
+      if (options.profile && options.providerAccountId) {
+        console.error("--provider-account-id can only be used with --runtime and --connector.");
+        process.exitCode = 1;
+        return;
+      }
+
       let nextRaw = raw;
       let harnessConnectionId = null;
 
@@ -300,10 +350,14 @@ Rules:
           return;
         }
 
+        const probe = probeRuntimeConnectorAvailability(options.runtime, options.connector, {
+          codexHome: process.env.CODEX_HOME ?? null,
+          claudeCli: process.env.EXO_CLAUDE_CLI ?? null
+        });
         const updatedHarnessUser = upsertUserHarnessConnection(nextRaw, {
           runtime: options.runtime,
           connector: options.connector,
-          status: "available"
+          status: probe.detectedStatus
         });
         nextRaw = updatedHarnessUser;
         harnessConnectionId = updatedHarnessUser.harnessConnections.find(
@@ -319,7 +373,9 @@ Rules:
         label: options.label ?? null,
         browserProfileId: options.profile ?? null,
         harnessConnectionId,
-        preferred: Boolean(options.preferred),
+        providerAccountId: options.providerAccountId ?? null,
+        preferred: options.preferred ? true : null,
+        automationControls: buildAccountAutomationControlsFromOptions(options),
         notes: options.notes ?? null
       });
       updateUser(updated);
@@ -330,6 +386,44 @@ Rules:
       }
 
       console.log(renderUserSummary(updated));
+    });
+
+  accounts
+    .command("map-runtime")
+    .description("Probe one runtime for managed capability coverage, then map discovered LinkedIn, email, and related connector accounts onto a user.")
+    .argument("<user-id>", "Execution user identifier")
+    .requiredOption("--runtime <runtime>", "Runtime such as codex or claude")
+    .option("--connector <connector>", "Limit mapping to one connector such as unipile, gmail, or hubspot")
+    .option("--apply", "Persist the discovered connector mappings onto this user")
+    .option("--prefer-managed", "Mark mapped managed accounts as preferred for their capability")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const raw = findUserById(userId);
+      if (!raw) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const result = mapUserRuntimeAccounts(raw, {
+        runtime: options.runtime,
+        connector: options.connector ?? null,
+        apply: Boolean(options.apply),
+        preferManaged: Boolean(options.preferManaged),
+        codexHome: process.env.CODEX_HOME ?? null,
+        claudeCli: process.env.EXO_CLAUDE_CLI ?? null
+      });
+
+      if (options.apply) {
+        updateUser(result.updatedUser);
+      }
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+
+      console.log(renderUserRuntimeAccountMapping(result));
     });
 
   users
@@ -376,7 +470,7 @@ Rules:
       }
 
       if (!result.resolved) {
-        console.log(`No connected account found for ${result.capability} on ${result.user.label}.`);
+        console.log(result.reason);
         return;
       }
 
@@ -397,4 +491,47 @@ Rules:
  */
 function collect(value, previous) {
   return previous ? [previous, value].flat() : [value];
+}
+
+/**
+ * @param {Record<string, any>} options
+ * @returns {{
+ *   weeklyQuotas?: {
+ *     invitations?: number | null
+ *   }
+ * } | null}
+ */
+function buildAccountAutomationControlsFromOptions(options) {
+  const invitations = options.maxConnectionRequests !== undefined
+    ? parseQuotaValue(options.maxConnectionRequests, "max-connection-requests")
+    : undefined;
+
+  if (invitations === undefined) {
+    return null;
+  }
+
+  return {
+    weeklyQuotas: {
+      invitations
+    }
+  };
+}
+
+/**
+ * @param {string} value
+ * @param {string} label
+ * @returns {number | null}
+ */
+function parseQuotaValue(value, label) {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "unlimited" || normalized === "none" || normalized === "null") {
+    return null;
+  }
+
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid ${label}: ${value}. Use a non-negative integer or 'unlimited'.`);
+  }
+
+  return parsed;
 }

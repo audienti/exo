@@ -14,4 +14,4 @@ writeback:
   - Persist the company-to-user assignment in Exo before you continue execution.
   - Keep the same execution user and browser identity for the whole company after you pin it.
 ---
-Ready LinkedIn branches already exist, but they are blocked on missing execution ownership. Pin the blocked ready companies to {{userLabel}} first so Exo can turn the stored through-lines, opening plans, and cadence into live executable work today.
+Ready LinkedIn branches already exist, but they are blocked on missing execution ownership. Pin the blocked ready companies to {{userLabel}} first so Exo can turn the stored cadence branches and prospect context into live executable work today.

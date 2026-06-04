@@ -275,7 +275,7 @@ They should reproduce the operator motions the spreadsheet is currently encoding
 - define the motion
 - build the target map
 - verify or enrich stakeholders
-- inspect the through-line
+- inspect the stored prospect context and cadence branch
 - generate or revise the sequence plan
 - record execution
 - record outcomes

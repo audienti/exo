@@ -6,29 +6,51 @@ import { buildMotionName } from "../core/motion-support.js";
 import { rehydrateMotion } from "../core/rehydrate-motion.js";
 import { inboundCueSchema, inboundObservationSchema } from "../schema/inbound.js";
 import { applyMigrations } from "./migrations.js";
-import { getDatabasePath, getStateDir } from "./paths.js";
+import {
+  getHomeDatabasePath,
+  getHomeStateDir,
+  getLocalDatabasePath,
+  getLocalStateDir,
+} from "./paths.js";
 
-let db = null;
+const databases = new Map();
+
+/**
+ * @param {"home" | "local"} [scope]
+ * @returns {DatabaseSync}
+ */
+function getDatabase(scope = "local") {
+  const { stateDir, dbPath } = scope === "home"
+    ? { stateDir: getHomeStateDir(), dbPath: getHomeDatabasePath() }
+    : { stateDir: getLocalStateDir(), dbPath: getLocalDatabasePath() };
+
+  const cached = databases.get(dbPath);
+  if (cached) {
+    return cached;
+  }
+
+  fs.mkdirSync(stateDir, { recursive: true });
+
+  const database = new DatabaseSync(dbPath);
+  database.exec("PRAGMA busy_timeout = 5000;");
+  safelyEnableWal(database);
+  applyMigrations(database);
+  databases.set(dbPath, database);
+  return database;
+}
 
 /**
  * @returns {DatabaseSync}
  */
-function getDatabase() {
-  if (db) {
-    return db;
-  }
+function getHomeDatabase() {
+  return getDatabase("home");
+}
 
-  const exoDir = getStateDir();
-  const dbPath = getDatabasePath();
-
-  fs.mkdirSync(exoDir, { recursive: true });
-
-  db = new DatabaseSync(dbPath);
-  db.exec("PRAGMA busy_timeout = 5000;");
-  safelyEnableWal(db);
-  applyMigrations(db);
-
-  return db;
+/**
+ * @returns {DatabaseSync}
+ */
+function getLocalDatabase() {
+  return getDatabase("local");
 }
 
 /**
@@ -49,7 +71,7 @@ function safelyEnableWal(database) {
  * @returns {import("../schema/motion.js").motionSchema._type}
  */
 export function insertMotion(motion) {
-  const database = getDatabase();
+  const database = getLocalDatabase();
   const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
   const statement = database.prepare(`
     INSERT INTO motions (id, status, source_url, created_at, updated_at, payload_json)
@@ -73,7 +95,7 @@ export function insertMotion(motion) {
  * @returns {import("../schema/motion.js").motionSchema._type}
  */
 export function updateMotion(motion) {
-  const database = getDatabase();
+  const database = getLocalDatabase();
   const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
   const statement = database.prepare(`
     UPDATE motions
@@ -100,7 +122,7 @@ export function updateMotion(motion) {
  * @returns {unknown | null}
  */
 export function findMotionById(id) {
-  const row = getDatabase()
+  const row = getLocalDatabase()
     .prepare(`SELECT payload_json FROM motions WHERE id = ?`)
     .get(id);
 
@@ -118,7 +140,7 @@ export function findMotionById(id) {
  * @returns {unknown[]}
  */
 export function listMotions() {
-  const rows = getDatabase()
+  const rows = getLocalDatabase()
     .prepare(`
       SELECT payload_json
       FROM motions
@@ -140,7 +162,7 @@ export function listMotions() {
  * @param {string} id
  */
 export function deleteMotion(id) {
-  getDatabase()
+  getLocalDatabase()
     .prepare(`DELETE FROM motions WHERE id = ?`)
     .run(id);
 }
@@ -149,7 +171,7 @@ export function deleteMotion(id) {
  * @param {import("../schema/browser-profile.js").browserProfileSchema._type} profile
  */
 export function insertBrowserProfile(profile) {
-  const statement = getDatabase().prepare(`
+  const statement = getHomeDatabase().prepare(`
     INSERT INTO browser_profiles (id, status, browser, label, profile_path, created_at, updated_at, payload_json)
     VALUES (@id, @status, @browser, @label, @profilePath, @createdAt, @updatedAt, @payloadJson)
   `);
@@ -170,7 +192,7 @@ export function insertBrowserProfile(profile) {
  * @param {import("../schema/browser-profile.js").browserProfileSchema._type} profile
  */
 export function updateBrowserProfile(profile) {
-  const statement = getDatabase().prepare(`
+  const statement = getHomeDatabase().prepare(`
     UPDATE browser_profiles
     SET status = @status,
         browser = @browser,
@@ -197,7 +219,7 @@ export function updateBrowserProfile(profile) {
  * @returns {unknown | null}
  */
 export function findBrowserProfileById(id) {
-  const row = getDatabase()
+  const row = getHomeDatabase()
     .prepare(`SELECT payload_json FROM browser_profiles WHERE id = ?`)
     .get(id);
 
@@ -210,7 +232,7 @@ export function findBrowserProfileById(id) {
  * @returns {unknown | null}
  */
 export function findBrowserProfileByPath(profilePath) {
-  const row = getDatabase()
+  const row = getHomeDatabase()
     .prepare(`SELECT payload_json FROM browser_profiles WHERE profile_path = ?`)
     .get(profilePath);
 
@@ -222,7 +244,7 @@ export function findBrowserProfileByPath(profilePath) {
  * @returns {unknown[]}
  */
 export function listBrowserProfiles() {
-  const rows = getDatabase()
+  const rows = getHomeDatabase()
     .prepare(`
       SELECT payload_json
       FROM browser_profiles
@@ -237,7 +259,7 @@ export function listBrowserProfiles() {
  * @param {string} id
  */
 export function deleteBrowserProfile(id) {
-  getDatabase()
+  getHomeDatabase()
     .prepare(`DELETE FROM browser_profiles WHERE id = ?`)
     .run(id);
 }
@@ -246,7 +268,7 @@ export function deleteBrowserProfile(id) {
  * @param {import("../schema/user.js").userSchema._type} user
  */
 export function insertUser(user) {
-  const statement = getDatabase().prepare(`
+  const statement = getHomeDatabase().prepare(`
     INSERT INTO users (id, label, created_at, updated_at, payload_json)
     VALUES (@id, @label, @createdAt, @updatedAt, @payloadJson)
   `);
@@ -264,7 +286,7 @@ export function insertUser(user) {
  * @param {import("../schema/user.js").userSchema._type} user
  */
 export function updateUser(user) {
-  const statement = getDatabase().prepare(`
+  const statement = getHomeDatabase().prepare(`
     UPDATE users
     SET label = @label,
         updated_at = @updatedAt,
@@ -285,7 +307,7 @@ export function updateUser(user) {
  * @returns {unknown | null}
  */
 export function findUserById(id) {
-  const row = getDatabase()
+  const row = getHomeDatabase()
     .prepare(`SELECT payload_json FROM users WHERE id = ?`)
     .get(id);
 
@@ -298,7 +320,7 @@ export function findUserById(id) {
  * @returns {unknown | null}
  */
 export function findUserByLabel(label) {
-  const row = getDatabase()
+  const row = getHomeDatabase()
     .prepare(`SELECT payload_json FROM users WHERE lower(label) = lower(?)`)
     .get(label);
 
@@ -310,7 +332,7 @@ export function findUserByLabel(label) {
  * @returns {unknown[]}
  */
 export function listUsers() {
-  const rows = getDatabase()
+  const rows = getHomeDatabase()
     .prepare(`
       SELECT payload_json
       FROM users
@@ -325,7 +347,7 @@ export function listUsers() {
  * @param {string} id
  */
 export function deleteUser(id) {
-  getDatabase()
+  getHomeDatabase()
     .prepare(`DELETE FROM users WHERE id = ?`)
     .run(id);
 }
@@ -335,7 +357,7 @@ export function deleteUser(id) {
  */
 export function upsertInboundCue(cue) {
   const normalized = inboundCueSchema.parse(cue);
-  const statement = getDatabase().prepare(`
+  const statement = getHomeDatabase().prepare(`
     INSERT INTO inbound_cues (
       id,
       dedupe_key,
@@ -413,7 +435,7 @@ export function upsertInboundCue(cue) {
  * @returns {unknown | null}
  */
 export function findInboundCueById(id) {
-  const row = getDatabase()
+  const row = getHomeDatabase()
     .prepare(`SELECT payload_json FROM inbound_cues WHERE id = ?`)
     .get(id);
 
@@ -426,7 +448,7 @@ export function findInboundCueById(id) {
  * @returns {unknown | null}
  */
 export function findInboundCueByDedupeKey(dedupeKey) {
-  const row = getDatabase()
+  const row = getHomeDatabase()
     .prepare(`SELECT payload_json FROM inbound_cues WHERE dedupe_key = ?`)
     .get(dedupeKey);
 
@@ -494,7 +516,7 @@ export function listInboundCues(filters = {}) {
 
   const clauses = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const limit = Number.isInteger(filters.limit) && filters.limit ? `LIMIT ${filters.limit}` : "";
-  const rows = getDatabase()
+  const rows = getHomeDatabase()
     .prepare(`
       SELECT payload_json
       FROM inbound_cues
@@ -512,7 +534,7 @@ export function listInboundCues(filters = {}) {
  */
 export function upsertInboundObservation(observation) {
   const normalized = inboundObservationSchema.parse(observation);
-  const statement = getDatabase().prepare(`
+  const statement = getHomeDatabase().prepare(`
     INSERT INTO inbound_observations (
       id,
       dedupe_key,
@@ -582,7 +604,7 @@ export function upsertInboundObservation(observation) {
  * @returns {unknown | null}
  */
 export function findInboundObservationById(id) {
-  const row = getDatabase()
+  const row = getHomeDatabase()
     .prepare(`SELECT payload_json FROM inbound_observations WHERE id = ?`)
     .get(id);
 
@@ -595,7 +617,7 @@ export function findInboundObservationById(id) {
  * @returns {unknown | null}
  */
 export function findInboundObservationByDedupeKey(dedupeKey) {
-  const row = getDatabase()
+  const row = getHomeDatabase()
     .prepare(`SELECT payload_json FROM inbound_observations WHERE dedupe_key = ?`)
     .get(dedupeKey);
 
@@ -607,7 +629,7 @@ export function findInboundObservationByDedupeKey(dedupeKey) {
  * @param {string} id
  */
 export function deleteInboundObservationById(id) {
-  getDatabase()
+  getHomeDatabase()
     .prepare(`DELETE FROM inbound_observations WHERE id = ?`)
     .run(id);
 }
@@ -666,7 +688,7 @@ export function listInboundObservations(filters = {}) {
 
   const clauses = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const limit = Number.isInteger(filters.limit) && filters.limit ? `LIMIT ${filters.limit}` : "";
-  const rows = getDatabase()
+  const rows = getHomeDatabase()
     .prepare(`
       SELECT payload_json
       FROM inbound_observations
@@ -683,7 +705,7 @@ export function listInboundObservations(filters = {}) {
  * @param {import("../schema/company.js").companySchema._type} company
  */
 export function insertCompany(company) {
-  const statement = getDatabase().prepare(`
+  const statement = getLocalDatabase().prepare(`
     INSERT INTO companies (id, name, search_name, domain, created_at, updated_at, payload_json)
     VALUES (@id, @name, @searchName, @domain, @createdAt, @updatedAt, @payloadJson)
   `);
@@ -701,9 +723,10 @@ export function insertCompany(company) {
 
 /**
  * @param {import("../schema/company.js").companySchema._type} company
+ * @returns {import("../schema/company.js").companySchema._type} the stored company
  */
 export function updateCompany(company) {
-  const statement = getDatabase().prepare(`
+  const statement = getLocalDatabase().prepare(`
     UPDATE companies
     SET name = @name,
         search_name = @searchName,
@@ -721,6 +744,10 @@ export function updateCompany(company) {
     updatedAt: company.updatedAt,
     payloadJson: JSON.stringify(company, null, 2)
   });
+
+  // Return the stored record, consistent with updateMotion — callers (e.g. the
+  // action dispatcher) rely on a returned company for confirmation messages.
+  return company;
 }
 
 /**
@@ -728,7 +755,7 @@ export function updateCompany(company) {
  * @returns {unknown | null}
  */
 export function findCompanyById(id) {
-  const row = getDatabase()
+  const row = getLocalDatabase()
     .prepare(`SELECT payload_json FROM companies WHERE id = ?`)
     .get(id);
 
@@ -745,7 +772,7 @@ export function findCompanyByIdentity(name, domain) {
   const normalizedName = name.trim().toLowerCase();
   const normalizedDomain = domain ? domain.trim().toLowerCase() : null;
 
-  const row = getDatabase()
+  const row = getLocalDatabase()
     .prepare(`
       SELECT payload_json
       FROM companies
@@ -766,7 +793,7 @@ export function findCompanyByIdentity(name, domain) {
  * @returns {unknown[]}
  */
 export function listCompanies() {
-  const rows = getDatabase()
+  const rows = getLocalDatabase()
     .prepare(`
       SELECT payload_json
       FROM companies
@@ -781,7 +808,7 @@ export function listCompanies() {
  * @param {import("../schema/motion.js").motionSchema._type} motion
  */
 function persistNormalizedMotion(motion) {
-  getDatabase()
+  getLocalDatabase()
     .prepare(`
       UPDATE motions
       SET status = @status,
@@ -861,7 +888,7 @@ function motionNameExists(name, motionId, database) {
  */
 export function searchCompanies(term) {
   const normalizedTerm = `%${term.trim().toLowerCase()}%`;
-  const rows = getDatabase()
+  const rows = getLocalDatabase()
     .prepare(`
       SELECT payload_json
       FROM companies

@@ -23,17 +23,32 @@ const CODEX_PLUGIN_CONNECTOR_MAP = {
   hubspot: ["hubspot@openai-curated"],
   netlify: ["netlify@openai-curated"],
   notion: ["notion@openai-curated"],
-  posthog: ["posthog", "posthog@posthog"],
+  posthog: ["posthog@posthog"],
   presentations: ["presentations@openai-primary-runtime"],
   slack: ["slack@openai-curated"],
   spreadsheets: ["spreadsheets@openai-primary-runtime"],
-  superpowers: ["superpowers@openai-curated"]
+  superpowers: ["superpowers@openai-curated"],
+  unipile: ["unipile"]
 };
 
 const CLAUDE_PLUGIN_CONNECTOR_MAP = {
   chrome: ["chrome-devtools-mcp@claude-plugins-official", "chrome-devtools-mcp", "chrome-devtools", "chrome"],
-  gmail: ["gmail"]
+  gmail: ["gmail"],
+  unipile: ["unipile"]
 };
+
+const EXECUTION_CONNECTOR_DISCOVERY_ALLOWLIST = new Set([
+  "browser",
+  "browser-use",
+  "chrome",
+  "gmail",
+  "hubspot",
+  "unipile"
+]);
+
+const CLAUDE_PROBE_TIMEOUT_MS = 1500;
+/** @type {Map<string, { ok: true, value: { plugins: Map<string, { pluginId: string, enabled: boolean }>, mcpServers: Map<string, { serverName: string, enabled: boolean }> } } | { ok: false, error: unknown }>} */
+const claudeRuntimeSummaryCache = new Map();
 
 /**
  * @param {unknown} rawUser
@@ -50,6 +65,10 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
   const inspectedAt = new Date().toISOString();
   const runtimeFilter = normalizeNullableString(options.runtime)?.toLowerCase() ?? null;
   const connectorFilter = normalizeNullableString(options.connector)?.toLowerCase() ?? null;
+  const probeOptions = {
+    codexHome: options.codexHome ?? null,
+    claudeCli: options.claudeCli ?? null
+  };
   const selectedConnections = user.harnessConnections.filter((connection) =>
     (!runtimeFilter || connection.runtime.toLowerCase() === runtimeFilter)
     && (!connectorFilter || connection.connector.toLowerCase() === connectorFilter)
@@ -57,10 +76,7 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
 
   let updatedUser = user;
   let probes = selectedConnections.map((connection) => {
-    const probe = probeHarnessConnection(connection, {
-      codexHome: options.codexHome ?? null,
-      claudeCli: options.claudeCli ?? null
-    });
+    const probe = probeHarnessConnection(connection, probeOptions);
 
     if (options.writeback && probe.detectedStatus !== connection.status) {
       updatedUser = upsertUserHarnessConnection(updatedUser, {
@@ -72,14 +88,21 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
       });
     }
 
-    return probe;
+    return {
+      ...probe,
+      registration: "stored"
+    };
   });
 
+  if (runtimeFilter && !connectorFilter) {
+    probes = mergeHarnessProbes(
+      probes,
+      discoverRuntimeHarnessConnections(updatedUser, runtimeFilter, probeOptions)
+    );
+  }
+
   if (!probes.length && runtimeFilter && connectorFilter) {
-    const runtimeProbe = probeRuntimeConnectorAvailability(runtimeFilter, connectorFilter, {
-      codexHome: options.codexHome ?? null,
-      claudeCli: options.claudeCli ?? null
-    });
+    const runtimeProbe = probeRuntimeConnectorAvailability(runtimeFilter, connectorFilter, probeOptions);
 
     if (options.writeback) {
       const before = updatedUser.harnessConnections.find((connection) =>
@@ -104,12 +127,19 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
               connectionId: persisted.id,
               label: persisted.label,
               storedStatus: before?.status ?? "unknown",
+              registration: "stored",
               willWriteback: true
             }
-          : runtimeProbe
+          : {
+              ...runtimeProbe,
+              registration: "runtime-discovered"
+            }
       ];
     } else {
-      probes = [runtimeProbe];
+      probes = [{
+        ...runtimeProbe,
+        registration: "runtime-discovered"
+      }];
     }
   }
 
@@ -126,10 +156,12 @@ export function probeUserHarnessConnections(rawUser, options = {}) {
     },
     counts: {
       connectionCount: probes.length,
+      storedCount: probes.filter((probe) => probe.registration === "stored").length,
+      runtimeDiscoveredCount: probes.filter((probe) => probe.registration === "runtime-discovered").length,
       availableCount: probes.filter((probe) => probe.detectedStatus === "available").length,
       unavailableCount: probes.filter((probe) => probe.detectedStatus === "unavailable").length,
       unknownCount: probes.filter((probe) => probe.detectedStatus === "unknown").length,
-      updatedCount: probes.filter((probe) => probe.willWriteback).length
+      updatedCount: options.writeback ? probes.filter((probe) => probe.willWriteback).length : 0
     },
     probes,
     updatedUser
@@ -158,6 +190,36 @@ export function probeRuntimeConnectorAvailability(runtime, connector, options = 
     },
     options
   );
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type} user
+ * @param {string} runtime
+ * @param {{ codexHome?: string | null | undefined, claudeCli?: string | null | undefined }} [options]
+ */
+function discoverRuntimeHarnessConnections(user, runtime, options = {}) {
+  const normalizedRuntime = normalizeNullableString(runtime)?.toLowerCase() ?? null;
+  if (!normalizedRuntime) {
+    return [];
+  }
+
+  const knownConnectors = new Set(
+    user.harnessConnections
+      .filter((connection) => connection.runtime.trim().toLowerCase() === normalizedRuntime)
+      .map((connection) => connection.connector.trim().toLowerCase())
+  );
+
+  return listRuntimeConnectorNames(normalizedRuntime, options)
+    .filter((connector) => !knownConnectors.has(connector))
+    .map((connector) => {
+      const probe = probeHarnessConnection(buildSyntheticHarnessConnection(normalizedRuntime, connector), options);
+      return {
+        ...probe,
+        storedStatus: "not_registered",
+        registration: "runtime-discovered",
+        willWriteback: false
+      };
+    });
 }
 
 /**
@@ -335,6 +397,88 @@ function probeClaudeHarnessConnection(connection, options = {}) {
 }
 
 /**
+ * @param {string} runtime
+ * @param {{ codexHome?: string | null | undefined, claudeCli?: string | null | undefined }} [options]
+ */
+function listRuntimeConnectorNames(runtime, options = {}) {
+  const normalizedRuntime = normalizeNullableString(runtime)?.toLowerCase() ?? null;
+  if (normalizedRuntime === "codex") {
+    return listCodexRuntimeConnectorNames(options);
+  }
+
+  if (normalizedRuntime === "claude") {
+    return listClaudeRuntimeConnectorNames(options);
+  }
+
+  return [];
+}
+
+/**
+ * @param {{ codexHome?: string | null | undefined }} [options]
+ */
+function listCodexRuntimeConnectorNames(options = {}) {
+  const codexHome = normalizeNullableString(options.codexHome)
+    ?? normalizeNullableString(process.env.CODEX_HOME)
+    ?? path.join(os.homedir(), ".codex");
+  const configPath = path.join(codexHome, "config.toml");
+  if (!fs.existsSync(configPath)) {
+    return [];
+  }
+
+  const summary = readCodexConfigSummary(configPath);
+  const connectors = new Set();
+
+  for (const plugin of summary.plugins.values()) {
+    const connector = resolveDiscoveredConnectorName(plugin.pluginId, CODEX_PLUGIN_CONNECTOR_MAP);
+    if (EXECUTION_CONNECTOR_DISCOVERY_ALLOWLIST.has(connector)) {
+      connectors.add(connector);
+    }
+  }
+
+  for (const mcpServer of summary.mcpServers.values()) {
+    const connector = resolveDiscoveredConnectorName(mcpServer.serverName, CODEX_PLUGIN_CONNECTOR_MAP);
+    if (EXECUTION_CONNECTOR_DISCOVERY_ALLOWLIST.has(connector)) {
+      connectors.add(connector);
+    }
+  }
+
+  return Array.from(connectors).sort();
+}
+
+/**
+ * @param {{ claudeCli?: string | null | undefined }} [options]
+ */
+function listClaudeRuntimeConnectorNames(options = {}) {
+  const claudeCli = normalizeNullableString(options.claudeCli)
+    ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI)
+    ?? "claude";
+
+  let summary;
+  try {
+    summary = readClaudeRuntimeSummary(claudeCli);
+  } catch (_error) {
+    return [];
+  }
+
+  const connectors = new Set();
+  for (const plugin of summary.plugins.values()) {
+    const connector = resolveDiscoveredConnectorName(plugin.pluginId, CLAUDE_PLUGIN_CONNECTOR_MAP);
+    if (EXECUTION_CONNECTOR_DISCOVERY_ALLOWLIST.has(connector)) {
+      connectors.add(connector);
+    }
+  }
+
+  for (const mcpServer of summary.mcpServers.values()) {
+    const connector = resolveDiscoveredConnectorName(mcpServer.serverName, CLAUDE_PLUGIN_CONNECTOR_MAP);
+    if (EXECUTION_CONNECTOR_DISCOVERY_ALLOWLIST.has(connector)) {
+      connectors.add(connector);
+    }
+  }
+
+  return Array.from(connectors).sort();
+}
+
+/**
  * @param {string} configPath
  */
 function readCodexConfigSummary(configPath) {
@@ -376,10 +520,15 @@ function readCodexConfigSummary(configPath) {
 
     const enabled = enabledMatch[1] === "true";
     if (currentSection.kind === "plugin") {
-      plugins.set(currentSection.name.toLowerCase(), {
+      const entry = {
         pluginId: currentSection.name,
         enabled
-      });
+      };
+      plugins.set(currentSection.name.toLowerCase(), entry);
+      const basePluginId = currentSection.name.split("@")[0]?.toLowerCase() ?? null;
+      if (basePluginId && basePluginId !== currentSection.name.toLowerCase()) {
+        plugins.set(basePluginId, entry);
+      }
       continue;
     }
 
@@ -405,7 +554,7 @@ function findCodexPluginProbe(connector, plugins) {
     }
   }
 
-  return null;
+  return plugins.get(connector.trim().toLowerCase()) ?? null;
 }
 
 /**
@@ -420,19 +569,42 @@ function findCodexMcpProbe(connector, mcpServers) {
  * @param {string} claudeCli
  */
 function readClaudeRuntimeSummary(claudeCli) {
-  const pluginOutput = execFileSync(claudeCli, ["plugins", "list"], {
-    encoding: "utf8",
-    maxBuffer: 10 * 1024 * 1024
-  });
-  const mcpOutput = execFileSync(claudeCli, ["mcp", "list"], {
-    encoding: "utf8",
-    maxBuffer: 10 * 1024 * 1024
-  });
+  const cached = claudeRuntimeSummaryCache.get(claudeCli);
+  if (cached) {
+    if (cached.ok) {
+      return cached.value;
+    }
+    throw cached.error;
+  }
 
-  return {
-    plugins: parseClaudePluginList(pluginOutput),
-    mcpServers: parseClaudeMcpList(mcpOutput)
-  };
+  try {
+    const pluginOutput = execFileSync(claudeCli, ["plugins", "list"], {
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: CLAUDE_PROBE_TIMEOUT_MS
+    });
+    const mcpOutput = execFileSync(claudeCli, ["mcp", "list"], {
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: CLAUDE_PROBE_TIMEOUT_MS
+    });
+
+    const summary = {
+      plugins: parseClaudePluginList(pluginOutput),
+      mcpServers: parseClaudeMcpList(mcpOutput)
+    };
+    claudeRuntimeSummaryCache.set(claudeCli, {
+      ok: true,
+      value: summary
+    });
+    return summary;
+  } catch (error) {
+    claudeRuntimeSummaryCache.set(claudeCli, {
+      ok: false,
+      error
+    });
+    throw error;
+  }
 }
 
 /**
@@ -513,7 +685,7 @@ function findClaudePluginProbe(connector, plugins) {
     }
   }
 
-  return null;
+  return plugins.get(connector.trim().toLowerCase()) ?? null;
 }
 
 /**
@@ -529,7 +701,67 @@ function findClaudeMcpProbe(connector, mcpServers) {
     }
   }
 
-  return null;
+  return mcpServers.get(connector.trim().toLowerCase()) ?? null;
+}
+
+/**
+ * @param {string} rawName
+ * @param {Record<string, string[]>} connectorMap
+ */
+function resolveDiscoveredConnectorName(rawName, connectorMap) {
+  const normalizedName = rawName.trim().toLowerCase();
+  for (const [connector, candidates] of Object.entries(connectorMap)) {
+    if (candidates.some((candidate) => candidate.trim().toLowerCase() === normalizedName)) {
+      return connector;
+    }
+  }
+
+  return normalizedName.split("@")[0] ?? normalizedName;
+}
+
+/**
+ * @param {string} runtime
+ * @param {string} connector
+ */
+function buildSyntheticHarnessConnection(runtime, connector) {
+  return {
+    id: `runtime-discovery:${runtime}:${connector}`,
+    createdAt: "1970-01-01T00:00:00.000Z",
+    updatedAt: "1970-01-01T00:00:00.000Z",
+    runtime,
+    connector,
+    label: null,
+    status: "unknown",
+    notes: null
+  };
+}
+
+/**
+ * @param {Array<{ runtime: string, connector: string }>} left
+ * @param {Array<{ runtime: string, connector: string }>} right
+ */
+function mergeHarnessProbes(left, right) {
+  const merged = [...left];
+  const seen = new Set(left.map((probe) => buildProbeKey(probe.runtime, probe.connector)));
+  for (const probe of right) {
+    const key = buildProbeKey(probe.runtime, probe.connector);
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    merged.push(probe);
+  }
+
+  return merged;
+}
+
+/**
+ * @param {string} runtime
+ * @param {string} connector
+ */
+function buildProbeKey(runtime, connector) {
+  return `${runtime.trim().toLowerCase()}::${connector.trim().toLowerCase()}`;
 }
 
 /**

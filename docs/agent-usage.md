@@ -80,6 +80,69 @@ When multiple agents will operate at the same time:
 
 The current concurrency model is shared-state, parallel-read, serialized-write.
 
+### Scheduled worker install
+
+If you want Exo to keep draining its queue without an attended chat, install the worker that matches the runtime and host.
+
+For macOS plus Codex, the supported unattended path is the host-local `launchd` runner:
+
+```bash
+exo agent install-routine --runtime codex --interval 15m --install
+```
+
+That now defaults to `--send-mode verify`. Verify mode is the safe first rollout, not a queue drainer. It attempts one due browser send per pass, proves `ready_to_send` when it can, stops before the final click, and leaves the Exo queue unchanged. Exo records recent verification proofs in `.exo/agent-host-state.json` so the next verify pass advances to the next due send instead of re-proving the same prospect immediately.
+
+If a routine is already installed, re-running `install-routine` without `--send-mode` preserves the current installed mode instead of silently resetting it.
+
+If you omit `--install`, `install-routine` is now a non-mutating preview by default. Use `--write-artifacts` only when you explicitly want the local runner files generated without loading the scheduler.
+
+That should resolve to a `launchd` plan, write `.exo/run-agent-host.sh`, write `.exo/agent-launchd.plist`, install `~/Library/LaunchAgents/com.<user>.exo.queue-drainer.plist`, and bootstrap it with `launchctl`.
+
+Verify it with:
+
+```bash
+launchctl print gui/$(id -u)/com.<user>.exo.queue-drainer
+launchctl kickstart -k gui/$(id -u)/com.<user>.exo.queue-drainer
+tail -n 100 .exo/agent.log
+exo agent doctor
+exo agent doctor --json
+```
+
+If you want to exercise the exact same worker path manually, use `exo agent run`. It now shells through the real host-pass runner instead of the old soft queue summary:
+
+```bash
+exo agent run --json
+exo agent run --force-retrieval --max-tasks 1 --json
+```
+
+Use `--force-retrieval` when you want to prove autonomous retrieval now instead of waiting for the next stale window. That path promotes waiting `run_inbound_sync` tasks into the same selection pipeline the host runner uses, without touching waiting sends.
+
+If you need to prove the detached send lane without sending a real message, run one verification-only pass:
+
+```bash
+exo agent run --send-mode verify --max-tasks 1 --json
+```
+
+If you want a controlled rollout after verification, install `--send-mode canary`. In canary mode, each scheduled pass will either:
+- send one previously verified browser send and write it back, or
+- prove one unverified send to `ready_to_send` and stop without clicking Send.
+
+Exo now also treats stale autonomous inbound retrieval as a rollout blocker. If enabled background-truth surfaces are stale, failed, partial, or never checked, `exo agent doctor` and `install-routine` will hold `canary` and `live` promotion until retrieval truth is healthy again.
+
+Do not jump straight to `--send-mode live`. Exo now treats `live` as a post-canary mode and expects at least one successful canary send in host state before that rollout is considered ready.
+
+Verify mode exercises the real browser send preparation and returns a completed pass only when the governed message is loaded into a real writable composer and is ready for the final click. It does not run Exo writeback and it does not mutate outbound state.
+
+Use `exo agent doctor` when the worker is waking up but not draining browser work. It reports the queue pressure, task-specific browser readiness, lane-specific browser backoff, and any conflicting Chrome app instances that make detached sends unsafe.
+
+Do not treat Codex app Automations, Playwriter approval prompts, or a shell cron job that expects `OPENAI_API_KEY` as the production Exo browser-worker path. Those are different execution environments and they fail differently.
+
+If you explicitly need a cron line instead, request it:
+
+```bash
+exo agent install-routine --runtime claude --scheduler cron --interval 30m --install
+```
+
 ### Handoff or portability
 
 When an agent needs to hand durable Exo state to another chat, machine, or alpha user:
@@ -213,11 +276,9 @@ Agents should also not silently create a new motion when the same offer URL alre
 8. `exo companies signal-matches show <company-id> --json` before writing or follow-up planning
 9. `exo companies prospects add <company-id> --name "Person Name" --title "Director Title" --email person@example.com --profile-viewed-at <iso-datetime> --live-signal-summary "Recent post shows channel activity" --why-relevant "Why this person matters now" --json` after choosing the people of record
 10. `exo companies prospects show <company-id> --json` before writing or follow-up planning
-11. `exo companies through-line set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them "Specific to them" --shared-problem "Shared problem" --why-now "Why now" --legitimate-wedge "Why they would reply" --compression-line "One sentence" --json`
-12. `exo companies opening-plan set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --why-now "Reason to talk now" --angle "Opening angle" --reply-path "Why this person would legitimately reply now" --primary-channel connection-request --fallback-channel email --fallback-trigger "Use email if LinkedIn is blocked or there is no reply." --preflight-action "View the prospect profile" --first-move "First move" --first-message-goal "Desired response" --json`
-13. `exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action "Send the first touch" --json` before execution or drafting
-14. `exo companies profile assign <company-id> --profile <profile-id> --json` when engagement starts
-15. `exo companies profile show <company-id> --json` to inspect the pinned identity
+11. `exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action "Send the first touch" --json` before execution or drafting
+12. `exo companies profile assign <company-id> --profile <profile-id> --json` when engagement starts
+13. `exo companies profile show <company-id> --json` to inspect the pinned identity
 
 If the same identity should govern the whole motion before company-level overrides exist, use:
 
@@ -261,8 +322,9 @@ Use:
 
 1. `exo actions list --json`
 2. `exo actions show <action-key> --json`
-3. `exo motion actions <motion-id> --prospect <prospect-id> --json`
-4. `exo motion action-brief <motion-id> --prospect <prospect-id> --action <action-key> --json`
+3. `exo actions result --action <action-key> --result <result-key> --company <company-id> --prospect <prospect-id> --json`
+4. `exo motion actions <motion-id> --prospect <prospect-id> --json`
+5. `exo motion action-brief <motion-id> --prospect <prospect-id> --action <action-key> --json`
 
 This is the correct execution loop:
 
@@ -273,7 +335,7 @@ This is the correct execution loop:
 5. have the chat write the copy from that stored context
 6. pull `exo companies execution show <company-id> --capability <capability> --json` and honor the resolved transport order and recovery hints
 7. perform the action in the native browser harness
-8. immediately write back what really happened with `exo companies touches add ...`
+8. immediately write back what really happened with `exo actions result ...`
 
 Important execution rule:
 

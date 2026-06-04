@@ -148,7 +148,7 @@ function buildProspectSelectionPacketBrief(motion, company, account, packet) {
       constraints: [
         `Target ${motion.targetingProfile.stakeholderTargetCount} stakeholders or fewer.`,
         "Start with the most likely primary owner, then add only the strongest adjacent operators or sponsors.",
-        "Do not do full through-line or opening-plan synthesis in this packet."
+        "Do not do full cadence planning in this packet."
       ]
     },
     inputs: {
@@ -176,17 +176,19 @@ function buildProspectSelectionPacketBrief(motion, company, account, packet) {
       "A credible primary owner is stored as a prospect.",
       "Additional stakeholders are stored only when they strengthen the committee map.",
       "Each stored prospect has why-relevant reasoning tied back to the signal or premise.",
+      "If a selected prospect was justified from a LinkedIn profile, that profile viewback is landed into Exo before the packet is completed.",
       "Signal match ids are attached where the support is concrete.",
       "The packet is completed or explicitly suppressed/exhausted with notes."
     ],
     writeback: {
       claimCommand: `exo companies queue claim ${company.id} --motion ${motion.id} --worker <worker-label> --notes "Taking prospect selection for this researched account." --json`,
       supportingCommands: [
-        `exo companies prospects add ${company.id} --motion ${motion.id} --name "Person Name" --title "Director Title" --buying-committee-role primary_business_owner --decision-authority influences --why-relevant "Why this person matters now" --signal-match <signal-match-id> --json`,
+        `exo companies prospects add ${company.id} --motion ${motion.id} --name "Person Name" --title "Director Title" --buying-committee-role primary_business_owner --decision-authority influences --why-relevant "Why this person matters now" --signal-match <signal-match-id> --linkedin-profile-url <linkedin-profile-url> --json`,
+        `exo companies prospects enrich-linkedin-profile-live ${company.id} --motion ${motion.id} --prospect <prospect-id> --runtime codex --json`,
         `exo companies prospects update ${company.id} --motion ${motion.id} --prospect <prospect-id> --why-relevant "Refined reason this person matters" --json`
       ],
       completeCommands: [
-        `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --notes "Stored the chosen stakeholder set and handed the account to prospect research." --json`,
+        `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --notes "Stored the chosen stakeholder set with the profile viewbacks already used to justify it and handed the account to prospect research." --json`,
         `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --next-status suppressed --notes "Explain why this researched account should not advance." --json`,
         `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --next-status exhausted --notes "Explain why no viable stakeholders exist here." --json`
       ]
@@ -222,13 +224,14 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
   return {
     motion: buildMotionSummary(motion),
     packet: buildPacketIdentity(packet),
-    summary: `Complete the four-layer prospect research, channel enrichment, through-line, opening plan, and cadence for ${brief.prospect.name}.`,
+    summary: `Complete the four-layer prospect research, runtime-aware contact enrichment, and cadence for ${brief.prospect.name}.`,
     scope: {
       kind: "prospect_research",
       focus: `${brief.prospect.name} at ${company.name} only.`,
       constraints: [
         "Stay on one prospect. Do not open side quests on the rest of the account.",
         "Use only defensible signals and contact points.",
+        "When contact enrichment is still open, inspect the current runtime and use whatever email-finding, phone-finding, and validation tools are actually available.",
         "The packet is not done until the branch is actually ready for a first-touch decision."
       ]
     },
@@ -253,7 +256,8 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
       execution: {
         companyExecutionCommand: `exo companies execution show ${company.id} --capability linkedin --json`,
         serialWriteRule: `Do not run parallel writes against ${company.name}. One worker should finish this company's prospect state changes before another worker touches the same account.`,
-        liveBrowserRule: "Before any browser-backed LinkedIn step, load the company execution plan and honor its preferred transport, fallback transport, and failure classes."
+        liveBrowserRule: "Before any browser-backed LinkedIn step, load the company execution plan and honor its preferred transport, fallback transport, and failure classes.",
+        runtimeEnrichmentRule: "For contact enrichment, inspect the current runtime and use whatever email-finding, phone-finding, and validation tools are actually available rather than assuming a fixed provider stack."
       },
       signalMatches: brief.signalMatches.map((match) => ({
         id: match.id,
@@ -267,17 +271,13 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
         triggerWindowStatus: brief.prospect.triggerWindow.status,
         identityTellsStatus: brief.prospect.identityTells.status,
         liveSignalStatus: brief.prospect.liveSignal.status,
-        throughLineStatus: brief.prospect.throughLine.status,
-        openingPlanStatus: brief.prospect.openingPlan.status,
         cadenceStatus: brief.prospect.cadenceState.status,
         contactEnrichmentStatus: brief.prospect.contactEnrichmentState.status
       }
     },
     doneWhen: [
       "Role truth, trigger window, identity tells, and live signal are stored or explicitly exhausted.",
-      "Contact enrichment state is updated and the best usable contact points are stored.",
-      "A prospect-specific through-line is ready in Exo.",
-      "A prospect-specific opening plan is ready in Exo.",
+      "Contact enrichment state is updated and the best usable contact points are stored, including verified direct email and verified mobile phone numbers when found.",
       "Cadence state is ready in Exo with a concrete next action.",
       "Any live browser-backed validation followed the company execution plan instead of an unqualified browser session.",
       "The packet is completed or explicitly suppressed/exhausted with notes."
@@ -288,9 +288,7 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
         `exo companies execution show ${company.id} --capability linkedin --json`,
         `exo companies prospects enrich-linkedin-profile-live ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --runtime codex --json`,
         `exo companies prospects update ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --role-truth-summary "What role this person actually owns" --trigger-window-summary "Why now is live" --identity-tells-summary "Specific identity clues" --live-signal-summary "Recent public activity or explicit no-signal finding" --source-url <source-url> --observed-at <iso-datetime> --json`,
-        `exo companies prospects update ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --contact-point '{"kind":"email","value":"person@example.com","matchStatus":"same_person_verified","verificationStatus":"verified","confidence":"high","source":"provider-or-public-web","usableForOutreach":true}' --enrichment-status complete --source-tried gmail --source-tried public-web --json`,
-        `exo companies through-line set ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --signal-match <signal-match-id> --specific-to-them "Specific to them" --shared-problem "Shared problem" --why-now "Why now" --legitimate-wedge "Legitimate wedge" --compression-line "One-sentence compression line" --json`,
-        `exo companies opening-plan set ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --signal-match <signal-match-id> --why-now "Reason to talk now" --angle "Opening angle" --reply-path "Legitimate path to reply" --primary-channel connection-request --fallback-channel email --fallback-trigger "Use email if LinkedIn is blocked or cold" --first-move "First move" --first-message-goal "Desired response" --json`,
+        `exo companies prospects update ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --contact-point '{"kind":"email","value":"person@example.com","matchStatus":"same_person_verified","verificationStatus":"verified","confidence":"high","source":"provider-or-public-web","usableForOutreach":true}' --contact-point '{"kind":"phone","value":"+1-555-0101","matchStatus":"same_person_verified","verificationStatus":"verified","confidence":"high","source":"provider-or-public-web","usableForOutreach":true}' --enrichment-status complete --source-tried gmail --source-tried public-web --best-direct-channel email --best-direct-channel phone --json`,
         `exo companies cadence set ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --current-step connection-request --next-action "Send connection request when capacity allows" --json`
       ],
       completeCommands: [
@@ -301,7 +299,7 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
     },
     reviewSignals: [
       "The prospect has a real why-now spine, not just generic ICP fit.",
-      "The opening plan and cadence can survive direct operator use without re-synthesizing the branch.",
+      "The cadence branch can survive direct operator use without re-synthesizing the branch.",
       "The worker did not bypass the company execution plan or split the same company across racing writes."
     ]
   };

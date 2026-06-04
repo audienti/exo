@@ -27,6 +27,7 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
   });
   const resolvedAccount = scoped.resolvedAccount;
   const resolvedProfile = scoped.resolvedProfile;
+  const accountResolution = scoped.accountResolution ?? null;
 
   return {
     company: {
@@ -48,7 +49,9 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
             userId: scoped.assignedUser.id,
             label: scoped.assignedUser.label,
             owner: scoped.assignedUser.owner,
-            accountRefs: scoped.assignedUser.accounts.map((account) => `${account.capability}:${account.handle}`),
+            accountRefs: scoped.userAssignmentRecord?.accountRefs?.length
+              ? scoped.userAssignmentRecord.accountRefs
+              : scoped.assignedUser.accounts.map((account) => `${account.capability}:${account.handle}`),
             assignedAt: scoped.userAssignmentRecord?.assignedAt ?? null,
             reason: scoped.userAssignmentRecord?.reason ?? null
           }
@@ -70,11 +73,19 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
           capability: resolvedAccount.capability,
           handle: resolvedAccount.handle,
           label: resolvedAccount.label,
+          providerAccountId: resolvedAccount.providerAccountId ?? null,
           sourceType: resolvedAccount.sourceType,
           status: resolvedAccount.status,
           reason: resolvedAccount.reason,
           browserProfile: resolvedAccount.browserProfile,
           harnessConnection: resolvedAccount.harnessConnection
+        }
+      : null,
+    accountResolution: accountResolution
+      ? {
+          status: accountResolution.status,
+          reason: accountResolution.reason,
+          sourceType: accountResolution.sourceType ?? null
         }
       : null,
     resolvedProfile: resolvedProfile
@@ -93,7 +104,8 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
       company,
       capability,
       resolvedAccount,
-      resolvedProfile
+      resolvedProfile,
+      accountResolution
     }),
     knowledgeRefs: [
       "docs/browser-profiles.md",
@@ -111,17 +123,19 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
  *     capability: string,
  *     handle: string,
  *     label: string | null,
+ *     providerAccountId?: string | null,
  *     sourceType: string,
  *     status: string,
  *     reason: string,
  *     browserProfile: unknown,
  *     harnessConnection: unknown
  *   } | null,
- *   resolvedProfile: import("../schema/browser-profile.js").browserProfileSchema._type | null
+ *   resolvedProfile: import("../schema/browser-profile.js").browserProfileSchema._type | null,
+ *   accountResolution: { status: string, reason: string, sourceType: string | null } | null
  * }} input
  */
 function buildTransportPlan(input) {
-  const { company, capability, resolvedAccount, resolvedProfile } = input;
+  const { company, capability, resolvedAccount, resolvedProfile, accountResolution } = input;
 
   if (resolvedAccount?.sourceType === "harness-connection" && resolvedAccount.harnessConnection) {
     return {
@@ -129,12 +143,12 @@ function buildTransportPlan(input) {
       mode: "harness-connection",
       preferredTransport: {
         tool: `${resolvedAccount.harnessConnection.runtime}:${resolvedAccount.harnessConnection.connector}`,
-        reason: `This ${capability} path resolves through a harness connection instead of a browser profile.`
+        reason: `This ${capability} path resolves through a managed connector. Exo should govern the work, not interface directly.`
       },
       fallbackTransport: null,
       runtimeChecks: [
         "Verify the named harness connector is callable in the current runtime before you act.",
-        "Do not silently fall back to a different browser identity when the harness path is missing.",
+        "Do not silently fall back to a browser identity when the connector path is missing.",
         "Write back the real outcome to Exo immediately after the action."
       ],
       failureClasses: [
@@ -150,102 +164,75 @@ function buildTransportPlan(input) {
       ],
       blocker: resolvedAccount.status === "ready"
         ? null
-        : `The resolved harness connection is not ready for ${capability}.`
+        : resolvedAccount.reason
     };
   }
 
-  if (!resolvedProfile) {
+  if (accountResolution?.sourceType === "harness-connection" && accountResolution.status !== "resolved") {
     return {
       status: "blocked",
       mode: "unresolved",
       preferredTransport: null,
       fallbackTransport: null,
       runtimeChecks: [
-        "Resolve the company user and browser profile first.",
-        `Run exo profiles resolve --capability ${capability} --company ${company.id} --json before browser-backed work.`
+        "Resolve one exact managed account before you act.",
+        "Do not let the connector identity default implicitly across multiple connected accounts.",
+        "Write back the real outcome to Exo immediately after the action."
       ],
       failureClasses: [
         {
-          key: "missing_execution_path",
-          symptom: "No resolved browser profile or harness connector exists for the requested capability.",
-          operatorRule: "Stop and resolve the company execution assignment before attempting browser-backed work."
-        }
-      ],
-      recoveryHints: [],
-      blocker: `No resolved browser profile or harness connection exists for ${company.name} on ${capability}.`
-    };
-  }
-
-  const genericChecks = [
-    "Do not switch identities mid-company. Keep the same execution user and browser profile for the whole account.",
-    "Verify the signed-in surface matches the intended account before you click anything.",
-    "Break sensitive LinkedIn sends into observed steps and verify the resulting state before you record success."
-  ];
-
-  if (resolvedProfile.browser === "chrome") {
-    return {
-      status: "ready",
-      mode: "chrome-profile",
-      preferredTransport: {
-        tool: "chrome",
-        reason: "Chrome-backed authenticated work should use the native Chrome browser-control surface first when the runtime exposes it."
-      },
-      fallbackTransport: {
-        tool: "profile-relay",
-        reason: "If native Chrome is not callable, use a lower-level relay bound explicitly to the resolved Chrome profile instead of an unqualified browser session."
-      },
-      runtimeChecks: [
-        ...genericChecks,
-        `Resolved browser profile: ${resolvedProfile.label} (${resolvedProfile.profileDirectory}).`,
-        `Resolved profile path: ${resolvedProfile.profilePath}.`
-      ],
-      failureClasses: [
-        {
-          key: "profile_selection_ambiguity",
-          symptom: "The runtime reports multiple browser attachments, multiple extensions, or lands in the wrong signed-in profile.",
-          operatorRule: "Treat this as a transport-selection failure. Rebind explicitly to the resolved profile instead of retrying the business action blindly."
-        },
-        {
-          key: "stale_transport_listener",
-          symptom: "A relay or browser-control listener exists but is stale, unbound, or attached to the wrong browser context.",
-          operatorRule: "Clear the stale listener once, retry with the same resolved profile, and stop if the listener still cannot bind correctly."
-        },
-        {
-          key: "ui_hang_without_state_change",
-          symptom: "The target UI opens but no success state appears after the action attempt.",
-          operatorRule: "Break the flow into observed steps and verify each state transition before recording success or retrying."
+          key: "managed_account_identity_unresolved",
+          symptom: "A managed connector exists, but Exo cannot yet prove which exact external account should act.",
+          operatorRule: "Treat this as an identity-resolution failure and pin one exact managed account before retrying the business action."
         }
       ],
       recoveryHints: [
-        "Treat multiple-browser or multiple-extension attachment errors as profile-selection failures, not prospect failures.",
-        "Do not open an unqualified Playwriter or relay session when more than one Chrome profile or extension is attached.",
-        `If you fall back to a relay, bind it explicitly to ${resolvedProfile.label} (${resolvedProfile.profileDirectory}) instead of the default attachment.`,
-        "If the local relay listener is stale and has no active profile binding, clear it once and retry. Do not keep looping blind.",
-        "If LinkedIn invite UI hangs, break the flow into observed steps: open profile, confirm Connect, open note, fill, send, then verify Pending or Message state before recording success."
+        "Claim the discovered managed account with its providerAccountId or mark one exact managed account preferred.",
+        "Do not silently fall back to another connected account or another transport."
       ],
-      blocker: null
+      blocker: accountResolution.reason
+    };
+  }
+
+  if (accountResolution?.sourceType === "browser-profile" || resolvedAccount?.sourceType === "browser-profile" || resolvedProfile) {
+    return {
+      status: "blocked",
+      mode: "unresolved",
+      preferredTransport: null,
+      fallbackTransport: null,
+      runtimeChecks: [
+        "Do not use browser-profile fallback for governed execution.",
+        `Map a managed ${capability} connector account for ${company.name} before launch.`
+      ],
+      failureClasses: [
+        {
+          key: "legacy_browser_profile_unsupported",
+          symptom: "A browser-profile execution path still exists in state, but browser-profile fallback has been removed.",
+          operatorRule: "Stop and replace the legacy browser-profile mapping with a managed connector account before attempting the business action."
+        }
+      ],
+      recoveryHints: [],
+      blocker: `Profile-backed ${capability} accounts are no longer supported for ${company.name}. Map a managed connector account instead.`
     };
   }
 
   return {
-    status: "ready",
-    mode: "browser-profile",
-    preferredTransport: {
-      tool: "browser-profile",
-      reason: `This ${capability} path resolves through the pinned ${resolvedProfile.browser} profile.`
-    },
+    status: "blocked",
+    mode: "unresolved",
+    preferredTransport: null,
     fallbackTransport: null,
-    runtimeChecks: genericChecks,
+    runtimeChecks: [
+      "Resolve one exact managed connector account before you act.",
+      "Do not let browser-profile state stand in for a governed execution path."
+    ],
     failureClasses: [
       {
-        key: "wrong_signed_in_account",
-        symptom: "The runtime opens the right browser binary but the wrong signed-in account or profile context.",
-        operatorRule: "Treat this as an identity failure. Stop and restore the resolved profile instead of continuing under the wrong account."
+        key: "missing_execution_path",
+        symptom: "No resolved harness connector exists for the requested capability.",
+        operatorRule: "Stop and resolve the company execution assignment before attempting the business action."
       }
     ],
-    recoveryHints: [
-      "If the runtime cannot control the resolved profile directly, stop and repair the access path instead of drifting to another browser context."
-    ],
-    blocker: null
+    recoveryHints: [],
+    blocker: `No resolved managed connector account exists for ${company.name} on ${capability}.`
   };
 }

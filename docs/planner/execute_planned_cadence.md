@@ -1,7 +1,7 @@
 ---
 principles:
   - The planner move is due now and nothing stronger displaced it.
-  - The live action should follow the stored opening plan and cadence, not improvisation.
+  - The live action should follow the stored cadence branch and prospect context, not improvisation.
 do:
   - Pull the action brief or draft brief that matches the planned move.
   - Check the live surface before acting.

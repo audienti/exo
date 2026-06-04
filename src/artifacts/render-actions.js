@@ -40,6 +40,7 @@ export function renderActionCatalog(result) {
  *     aliases: string[],
  *     activityKeys: string[],
  *     draftSurface: string | null,
+ *     supportedResults?: Array<{ key: string, label: string }>,
  *     executionHints: {
  *       affordances: string[],
  *       fallbacks: string[],
@@ -64,6 +65,7 @@ export function renderActionDetail(result) {
     `Entity Requirement: ${action.entityRequirement}`,
     `Summary: ${action.summary}`,
     `Draft Surface: ${action.draftSurface ?? "none"}`,
+    `Supported Results: ${action.supportedResults?.map((result) => result.key).join(", ") || "none"}`,
     `Fields: ${action.fields.join(", ") || "none"}`,
     `Aliases: ${action.aliases.join(", ") || "none"}`,
     `Observed Activity Keys: ${action.activityKeys.join(", ") || "none"}`,

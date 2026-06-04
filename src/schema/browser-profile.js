@@ -5,10 +5,25 @@ import { z } from "zod";
 export const browserProfileCapabilitySchema = z.enum([
   "generic-web",
   "linkedin",
+  "linkedin-premium",
   "sales-navigator",
   "gmail",
   "hubspot"
 ]);
+
+// Identity tiers that can attach a note to a LinkedIn connection request.
+// Free LinkedIn effectively cannot; Premium and Sales Navigator can (subject to
+// monthly note credits, which are a separate live observation).
+export const CONNECTION_NOTE_CAPABILITIES = ["linkedin-premium", "sales-navigator"];
+
+/**
+ * @param {string[] | null | undefined} accountRefs  e.g. ["linkedin:handle","sales-navigator:handle"]
+ * @returns {boolean}
+ */
+export function accountRefsCanAttachConnectionNote(accountRefs) {
+  if (!Array.isArray(accountRefs)) return false;
+  return accountRefs.some((ref) => CONNECTION_NOTE_CAPABILITIES.some((cap) => String(ref).startsWith(`${cap}:`)));
+}
 
 export const browserProfileStatusSchema = z.enum(["untested", "ready", "warning", "invalid"]);
 

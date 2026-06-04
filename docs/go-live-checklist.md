@@ -32,7 +32,7 @@ If the motion is live in Exo, the durable state has to be written back into Exo 
 - The motion you are actually working is `active`, not `draft`.
 - The target companies are stored in Exo.
 - The chosen prospects are stored in Exo.
-- Through-lines, opening plans, and cadence state exist for the live branches you intend to work.
+- Prospect context and cadence state exist for the live branches you intend to work.
 
 ### 4. Contact enrichment
 
@@ -52,6 +52,29 @@ If the motion is live in Exo, the durable state has to be written back into Exo 
 - The agent writes normalized observations back into Exo.
 - `exo inbox`, `exo daily`, and `exo next` are treated as the operator entrypoint after new observations land.
 - Do not wait for a future scraper or sync daemon before using the loop.
+
+### 5.5. Background worker
+
+- Install the scheduled queue drainer before you call the motion live.
+- On macOS with Codex, the supported path is the host-local `launchd` runner, not Codex app Automations and not a shell cron line that depends on `OPENAI_API_KEY`.
+- `exo agent install-routine --runtime codex --interval 15m --install` should write:
+  - `.exo/agent-routine.md`
+  - `.exo/run-agent-host.sh`
+  - `.exo/agent-launchd.plist`
+  - `~/Library/LaunchAgents/com.<user>.exo.queue-drainer.plist`
+- That default install should land in `--send-mode verify`, so the background worker proves retrieval, drafting, and send-readiness without clicking Send or writing back a send result.
+- If a routine is already installed, re-running `install-routine` without `--send-mode` should preserve the current installed mode instead of silently resetting it.
+- If you omit `--install`, treat `install-routine` as a non-mutating preview. Use `--write-artifacts` only if you explicitly need the local runner files without loading the scheduler.
+- In `--send-mode verify`, each scheduled pass attempts one due browser send, stops before the final click, and records that verification proof in host state so the next canary pass advances to the next due send instead of repeating the same one immediately.
+- After the verify passes look clean, switch to `--send-mode canary` if you want cautious live drain. In `canary`, each pass sends at most one previously verified browser send. If the next due send has no fresh proof, the pass proves it to `ready_to_send` and stops there.
+- Do not promote into `canary` or `live` while enabled autonomous inbound retrieval is stale, failed, partial, or never checked. `exo agent doctor` now blocks rollout until background truth is healthy.
+- Do not switch straight to `--send-mode live`. Exo now expects at least one successful canary send before live rollout is considered ready.
+- Verify the worker is loaded with `launchctl print gui/$(id -u)/com.<user>.exo.queue-drainer`.
+- Kick one immediate pass with `launchctl kickstart -k gui/$(id -u)/com.<user>.exo.queue-drainer`.
+- Before trusting the send lane, run one verification-only pass with `EXO_AGENT_SEND_DRY_RUN=1 EXO_AGENT_MAX_TASKS=1 node scripts/run-agent-host-pass.js` and make sure it can reach `ready_to_send` without mutating state.
+- Inspect `.exo/agent.log`, `.exo/agent-launchd.out.log`, and `.exo/agent-launchd.err.log` after the first run.
+- Run `exo agent doctor --json` and make sure its browser task readiness matches the machine state you expect.
+- If the scheduled worker cannot write Exo state or cannot bind the intended browser/session path, Exo is not live yet.
 
 ### 6. Writeback discipline
 
@@ -86,9 +109,10 @@ Do not wait for Kanban, analytics, or full inbound-motion content planning befor
 
 1. Reinitialize Exo from the shared state.
 2. Inspect the active motion with `exo report motion`.
-3. Run `exo next`.
-4. Do the governed action.
-5. Write back the touch or observation.
-6. Re-run `exo inbox`, `exo daily`, or `exo next`.
+3. Verify the background queue drainer is installed and healthy.
+4. Run `exo next`.
+5. Do the governed action.
+6. Write back the touch or observation.
+7. Re-run `exo inbox`, `exo daily`, or `exo next`.
 
 If that loop works cleanly for one real motion, Exo is operating as the replacement kernel even if the broader roadmap is not finished yet.

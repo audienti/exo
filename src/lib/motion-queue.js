@@ -132,10 +132,12 @@ export function buildMotionQueueSummary(rawMotion, rawCompanies, options = {}) {
   const allProspects = companyItems.flatMap((item) => item.prospects);
   const companyStatusCounts = buildStatusCounts(companyItems.map((item) => item.queueStatus));
   const prospectStatusCounts = buildStatusCounts(allProspects.map((prospect) => prospect.queueState?.status));
+  const availableProspectCount = allProspects.filter((prospect) => isAvailableProspect(prospect)).length;
 
   return {
     companyCount: companyItems.length,
     prospectCount: allProspects.length,
+    availableProspectCount,
     companyStatusCounts,
     prospectStatusCounts,
     readyToSendCount: companyItems.reduce((sum, item) => sum + item.readyToSendCount, 0),
@@ -152,8 +154,7 @@ export function isReadyConnectionRequestProspect(rawProspect) {
     prospect.cadenceState?.status === "ready"
     && prospect.cadenceState?.currentStep === "connection-request"
     && !prospect.cadenceState?.lastTouchOutcome
-    && prospect.throughLine?.status === "ready"
-    && prospect.openingPlan?.status === "ready"
+    && Boolean(prospect.linkedinProfileUrl)
   );
 }
 
@@ -214,6 +215,13 @@ function buildDerivedQueueState(existing, status, now) {
 }
 
 /**
+ * @param {Record<string, any>} prospect
+ */
+function isAvailableProspect(prospect) {
+  return !["suppressed", "exhausted"].includes(prospect.queueState?.status);
+}
+
+/**
  * @param {unknown} rawState
  */
 function normalizeQueueState(rawState) {
@@ -239,9 +247,7 @@ function normalizeQueueState(rawState) {
  */
 function isInventoryReadyProspect(prospect) {
   return (
-    prospect.throughLine?.status === "ready"
-    && prospect.openingPlan?.status === "ready"
-    && prospect.cadenceState?.status === "ready"
+    prospect.cadenceState?.status === "ready"
   );
 }
 

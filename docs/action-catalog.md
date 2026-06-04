@@ -19,6 +19,7 @@ Use:
 ```bash
 exo actions list --json
 exo actions show connection_request --json
+exo actions result --action connection_request --result sent --company <company-id> --prospect <prospect-id> --occurred-at <iso-datetime> --json
 exo motion actions <motion-id> --prospect <prospect-id> --json
 exo motion action-brief <motion-id> --prospect <prospect-id> --action connection_request --json
 ```
@@ -30,8 +31,8 @@ Before this, Exo knew:
 - the motion
 - the company
 - the prospect
-- the through-line
-- the opening plan
+- the stored prospect context
+- the cadence branch
 - the draft surface
 
 But it did not know the canonical action layer that sits between planning and execution.
@@ -94,7 +95,7 @@ This distinction matters because the action is what the agent performs, while th
 3. Prefer the native browser harness for the runtime.
 4. Pull the action brief before performing anything sensitive.
 5. If the action needs copy, pull the matching `motion draft-brief` and have the chat write from that context.
-6. After the action actually happens, write it back into Exo with `exo companies touches add ...`.
+6. After the action actually happens, write it back into Exo with `exo actions result ...`.
 
 ## Hints, not recipes
 
@@ -148,4 +149,4 @@ The correct split is:
 - Exo governs the action model and state
 - the chat writes the message when copy is needed
 - the browser harness performs the action
-- Exo records what actually happened
+- Exo records what actually happened through `exo actions result`, not by forcing every caller to hand-assemble low-level touch mutations

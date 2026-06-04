@@ -1,6 +1,12 @@
 // @ts-check
 
 import { buildMotionProspectView } from "./build-motion-prospect-view.js";
+import { prospectGuidanceContext } from "./prospect-steer.js";
+import {
+  hasAcceptedConnection,
+  hasPriorPrivateOutbound,
+  isFirstPrivateDirectMessagePath,
+} from "./select-next-draft-surface.js";
 
 const CARD_DEFINITIONS = [
   { key: "connection_request", stage: "Connection request", channel: "linkedin" },
@@ -58,6 +64,13 @@ export function buildMotionDraftBrief(rawMotion, options) {
   const draftView = buildMotionDraftView(rawMotion, options);
   const surface = draftView.surfaces[0];
 
+  // Operator notes + steers are binding. Pull them from the raw prospect so the
+  // agent reads them before writing a word.
+  const rawProspect = (rawMotion?.targetMap?.accounts ?? [])
+    .flatMap((account) => account.prospects ?? [])
+    .find((prospect) => prospect.id === options.prospectId) ?? null;
+  const operatorGuidance = prospectGuidanceContext(rawProspect);
+
   return {
     motion: draftView.motion,
     company: draftView.company,
@@ -70,13 +83,18 @@ export function buildMotionDraftBrief(rawMotion, options) {
       profileViewedAt: draftView.prospect.profileViewedAt
     },
     surface,
+    // Front and center: the operator's notes/steers for this prospect. Honor
+    // them over everything else. A "don't contact / works for us" steer means
+    // do not draft at all.
+    operatorGuidance,
     draftRequest: {
       doNotSend: true,
       task: `Write one unsent ${surface.stage.toLowerCase()} draft for ${draftView.prospect.name} at ${draftView.company.name}.`,
-      rules: buildDraftRules(surface.key),
+      rules: buildDraftRules(surface),
       sourceOfTruth: [
-        "Use the stored through-line as the narrative spine.",
-        "Stay inside the stored signal matches and live-signal evidence.",
+        "Honor the operatorGuidance (operator notes + steers) before anything else. If a steer says not to contact this person, do not draft.",
+        "Write from the operator stance: a market operator networking, never a salesperson pitching (see docs/writing-voice.md).",
+        "Stay inside the stored why-relevant, signal-match, cadence, and live-signal evidence.",
         "Respect prior touches so the message fits what already happened.",
         "If the surface is unavailable, explain why instead of drafting."
       ]
@@ -90,19 +108,19 @@ export function buildMotionDraftBrief(rawMotion, options) {
  */
 function buildDraftCard(brief, definition) {
   const availability = availabilityFor(brief, definition.key);
+  const stage = resolveDraftStage(brief, definition);
 
   return {
     key: definition.key,
-    stage: definition.stage,
+    stage,
     channel: definition.channel,
     available: availability.available,
     missingReason: availability.reason,
     contextSummary: {
-      compressionLine: brief.prospect.throughLine.compressionLine,
-      whyNow: brief.prospect.openingPlan.whyNow,
-      angle: brief.prospect.openingPlan.angle,
-      replyPath: brief.prospect.openingPlan.replyPath,
-      firstMessageGoal: brief.prospect.openingPlan.firstMessageGoal,
+      whyRelevant: brief.prospect.whyRelevant,
+      nextAction: brief.prospect.cadenceState.nextAction,
+      latestSignal: brief.signalMatches[0]?.summary ?? null,
+      liveSignal: brief.prospect.liveSignal.summary,
       recentPostReady: brief.recentPost.engageable
     },
     priorTouches: brief.prospect.touches.slice(-5).reverse().map((touch) => ({
@@ -121,11 +139,11 @@ function buildDraftCard(brief, definition) {
       sourceUrl: match.sourceUrl
     })),
     writingInputs: {
-      throughLine: brief.prospect.throughLine,
-      openingPlan: brief.prospect.openingPlan,
       cadenceState: brief.prospect.cadenceState,
       liveSignal: brief.prospect.liveSignal,
       recentPost: brief.recentPost,
+      whyRelevant: brief.prospect.whyRelevant,
+      signalMatches: brief.signalMatches,
       email: brief.prospect.email,
       profileViewedAt: brief.prospect.profileViewedAt
     }
@@ -136,29 +154,36 @@ function buildDraftCard(brief, definition) {
  * @param {string} surface
  */
 function buildDraftRules(surface) {
-  switch (surface) {
+  switch (surface.key) {
     case "connection_request":
       return [
-        "Keep it short and low-friction.",
-        "Do not ask for a meeting.",
-        "Anchor on the stored why-now and the strongest relevant signal."
+        "Keep it short, warm, and not salesy.",
+        "Do not ask for a meeting or pitch anything.",
+        "Give one genuine human reason to connect, grounded only in the stored signal and why-relevant context."
       ];
     case "post_accept_message":
       return [
-        "Thank them briefly for connecting.",
-        "Ask one genuine, easy-to-answer question.",
-        "Do not jump straight into a meeting ask."
+        "Relationship-first: just say it's good to connect and you're looking forward to chatting.",
+        "Do NOT pitch, ask for a meeting, introduce the product, or include a link. No setup question, no agenda.",
+        "One or two plain sentences. The real conversation happens on their reply or a later follow-up, not here."
       ];
     case "follow_up_direct_message":
+      if (isFirstPrivateDirectMessageStage(surface)) {
+        return [
+          "This is the first private LinkedIn message on an open-profile direct-message path. Do not write it like a follow-up to an accepted invite.",
+          "Lead with the actual reason to reach out, grounded in the stored signal and why-relevant context.",
+          "Keep it tight, human, and low-friction. One concrete point and one simple next step."
+        ];
+      }
       return [
-        "Assume they saw the earlier touch and stayed silent.",
-        "Add one fresh angle or useful clarification.",
-        "Keep the follow-up tighter than the first DM."
+        "This is where you engage directly: they connected and went quiet, so now bring the actual reason.",
+        "Lead with one concrete, relevant point and a single low-friction next step.",
+        "Keep it tight and human. Reference the prior note without restating it."
       ];
     case "email":
       return [
         "Write for direct inbox reading, not LinkedIn.",
-        "Use the stored through-line and why-now as the spine.",
+        "Use the stored signal and why-relevant context as the spine.",
         "Keep the ask narrow and concrete."
       ];
     case "inbound_reply":
@@ -196,21 +221,21 @@ function availabilityFor(brief, surface) {
       if (touches.some((touch) => touch.surface === "connection_request")) {
         return { available: false, reason: "A connection-request touch is already recorded for this prospect." };
       }
-      if (!brief.messageTestReady) {
-        return { available: false, reason: "Through-line, opening plan, and cadence must all be ready before testing a connection request." };
+      if (brief.prospect.cadenceState.status !== "ready" || brief.prospect.cadenceState.currentStep !== "connection-request") {
+        return { available: false, reason: "Cadence is not currently ready for a connection-request branch." };
       }
       if (!brief.prospect.linkedinProfileUrl) {
         return { available: false, reason: "No LinkedIn profile URL is stored for this prospect." };
       }
       return { available: true, reason: null };
     case "post_accept_message":
-      return hasAcceptedConnection(touches)
+      return hasAcceptedConnection(brief.prospect, touches)
         ? { available: true, reason: null }
         : { available: false, reason: "No accepted connection request is recorded for this prospect yet." };
     case "follow_up_direct_message":
-      return hasPrivateTouch(touches)
+      return hasPrivateTouch(touches) || isFirstPrivateDirectMessagePath(brief.prospect, touches)
         ? { available: true, reason: null }
-        : { available: false, reason: "No prior private message touch is recorded for this prospect yet." };
+        : { available: false, reason: "No governed direct-message branch is writable for this prospect yet." };
     case "email":
       return brief.prospect.email
         ? { available: true, reason: null }
@@ -233,15 +258,26 @@ function availabilityFor(brief, surface) {
 }
 
 /**
- * @param {Array<{ surface: string, outcome: string }>} touches
+ * @param {NonNullable<ReturnType<typeof buildMotionProspectView>["writingBrief"]>} brief
+ * @param {{ key: string, stage: string, channel: string }} definition
  */
-function hasAcceptedConnection(touches) {
-  return touches.some((touch) => touch.surface === "connection_request" && touch.outcome === "accepted");
+function resolveDraftStage(brief, definition) {
+  if (definition.key === "follow_up_direct_message" && isFirstPrivateDirectMessagePath(brief.prospect, brief.prospect.touches)) {
+    return "First private message";
+  }
+  return definition.stage;
 }
 
 /**
  * @param {Array<{ surface: string }>} touches
  */
 function hasPrivateTouch(touches) {
-  return touches.some((touch) => touch.surface === "post_accept_message" || touch.surface === "follow_up_direct_message" || touch.surface === "inbound_reply");
+  return hasPriorPrivateOutbound(touches) || touches.some((touch) => touch.surface === "inbound_reply");
+}
+
+/**
+ * @param {{ key: string, stage: string }} surface
+ */
+function isFirstPrivateDirectMessageStage(surface) {
+  return surface.key === "follow_up_direct_message" && surface.stage === "First private message";
 }

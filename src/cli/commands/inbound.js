@@ -3,6 +3,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { warmImageProxies } from "../../lib/image-proxy.js";
 import { buildInboundCueListView, buildInboundCueDedupeKey, recordInboundCue, resolveInboundCue } from "../../core/inbound-cues.js";
 import {
   inboundObservationsShareIdentity,
@@ -18,6 +19,7 @@ import { buildGmailInboundSyncPayload } from "../../core/inbound-gmail-sync.js";
 import { buildLinkedinInboundSyncPayload } from "../../core/inbound-linkedin-sync.js";
 import { buildInboundSyncRefreshSummary, prepareUserInboundSyncRun } from "../../core/inbound-sync-run.js";
 import { updateMotionProspect } from "../../core/record-prospect.js";
+import { resolveInboundObservationCompany } from "../../core/resolve-inbound-observation-company.js";
 import {
   buildUserInboundSyncPlan,
   buildUserInboundSyncView,
@@ -32,6 +34,7 @@ import {
   deleteInboundObservationById,
   findCompanyById,
   findMotionById,
+  insertCompany,
   listBrowserProfiles,
   listInboundCues,
   listUsers,
@@ -39,6 +42,7 @@ import {
   listCompanies,
   listInboundObservations,
   listMotions,
+  updateCompany,
   updateMotion,
   updateUser,
   upsertInboundCue,
@@ -57,6 +61,7 @@ import {
 } from "../../artifacts/render-inbound.js";
 import { buildInboundReviewView } from "../../core/build-inbound-review-view.js";
 import { classifyUserWorkingHours } from "../../core/working-hours.js";
+import { buildUserWorkspaceContext } from "../../core/workspace-context.js";
 import { buildLinkedinProfileUrlFromPublicId } from "../../lib/prospect-contacts.js";
 import { browserProfileCapabilitySchema } from "../../schema/browser-profile.js";
 import {
@@ -99,14 +104,14 @@ Rules:
   - Start with the canonical truth surfaces, not the LinkedIn notifications bell.
   - Notification dots and unread badges are ambient cues, not canonical truth. Record them as cues or trigger a sync; do not treat them as observations by themselves.
   - Sync policy lives on connected user accounts because that is where channel ownership already lives.
-  - Sync policy and observation storage exist now. Gmail has a first live retrieval path through supported runtime adapters, including runtime:gmail harness connections and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn's authoritative quick surfaces now support either a bounded quick pass or a full reconciliation pass through a trusted Chrome profile plus a supported runtime:chrome harness, but broader LinkedIn retrieval still does not.
-  - In Codex desktop shell mode, the live commands now return an agent-side capture contract instead of shelling out to codex exec. The agent should use native browser or Gmail tools, then land the capture through exo inbound sync gmail/linkedin or exo inbound sync run.
+  - Sync policy and observation storage exist now. Gmail and LinkedIn live work should run through managed connector paths only.
+  - In Codex desktop shell mode, the live commands now return an agent-side capture contract instead of shelling out to codex exec. The agent should use the named connector, then land the capture through exo inbound sync gmail/linkedin or exo inbound sync run.
   - Use inbound sync plan when another agent needs the actual run contract for quick, normal, or full inbound passes.
-  - Use inbound sync live when Exo itself should run one governed quick or full inbound pass across every enabled Gmail and LinkedIn account that already has live retrieval support, or when another agent needs the structured Codex handoff contract for native capture plus governed writeback.
+  - Use inbound sync live when another agent needs one governed quick or full inbound pass contract across every enabled Gmail and LinkedIn account that already has live retrieval support.
   - Use inbound sync linkedin when another agent already inspected LinkedIn surfaces and needs Exo to build or apply the governed writeback payload.
-  - Use inbound sync linkedin-live when Exo itself should inspect LinkedIn's authoritative quick surfaces through a trusted Chrome profile plus a supported runtime:chrome harness in quick or full mode, or when Codex needs the structured LinkedIn capture handoff contract.
+  - Use inbound sync linkedin-live when another agent needs the structured LinkedIn capture handoff contract for a managed connector path discovered in the current runtime.
   - Use inbound sync gmail when another agent already inspected Gmail and needs Exo to build or apply the governed writeback payload.
-  - Use inbound sync gmail-live when Exo itself should inspect Gmail through either a supported runtime:gmail harness-backed account or a trusted Chrome profile plus a supported runtime:chrome harness, or when Codex needs the structured Gmail capture handoff contract.
+  - Use inbound sync gmail-live when Exo itself should inspect Gmail through a supported runtime:gmail harness-backed account, or when Codex needs the structured Gmail capture handoff contract.
   - Use inbound sync run when another agent already inspected the live surfaces and needs one governed writeback path for the whole pass.
   - Use inbound review when you need the management surface: what was checked, what needs a decision, what is stale, and what still needs itemization.
 `
@@ -141,8 +146,11 @@ Rules:
         prospectId: options.prospect ?? null,
         limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
       });
+      const workspaceContext = buildUserWorkspaceContext(rawUser, {
+        rawObservations: observations,
+      });
 
-      const result = buildInboundReviewView(rawUser, observations, listMotions(), listCompanies(), {
+      const result = buildInboundReviewView(workspaceContext.user, workspaceContext.observations, listMotions(), listCompanies(), {
         accountId: options.account ?? null,
         capability
       });
@@ -284,7 +292,7 @@ Rules:
               reason: `Ran a quick live inbound sync for ${storedCue.capability}.`,
               nextOpenAt: workingHours.nextOpenAt
             };
-            response.applied = applyInboundSyncRunPayload(rawUser, live.payload, { refresh: Boolean(options.refresh) });
+            response.applied = await applyInboundSyncRunPayload(rawUser, live.payload, { refresh: Boolean(options.refresh) });
           } catch (error) {
             response.autoSync = {
               status: "failed",
@@ -498,7 +506,7 @@ Rules:
         }
 
         try {
-          response.applied = applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
+          response.applied = await applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -528,7 +536,7 @@ Rules:
     .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
     .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
     .option("--json", "Emit machine-readable JSON")
-    .action((userId, options) => {
+    .action(async (userId, options) => {
       const rawUser = findUserById(userId);
       if (!rawUser) {
         console.error(`User not found: ${userId}`);
@@ -556,7 +564,7 @@ Rules:
 
       if (options.apply || options.refresh) {
         try {
-          result.applied = applyInboundSyncRunPayload(rawUser, built.payload, { refresh: Boolean(options.refresh) });
+          result.applied = await applyInboundSyncRunPayload(rawUser, built.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -579,12 +587,12 @@ Rules:
 
   sync
     .command("linkedin-live")
-    .description("Inspect LinkedIn's authoritative quick surfaces through the resolved trusted Chrome profile and supported runtime:chrome harness in quick or full mode.")
+    .description("Return or run the governed LinkedIn quick-surface capture path through the resolved connector, with Chrome-profile transport kept only as a legacy fallback.")
     .argument("<user-id>", "Execution user identifier")
     .option("--account <account-id>", "Connected LinkedIn account identifier; inferred when only one LinkedIn account exists")
     .option("--mode <mode>", "quick | full")
-    .option("--runtime <runtime>", "Browser-control runtime to use when multiple supported harnesses exist, such as codex or claude")
-    .option("--connector <connector>", "Browser-control connector; currently chrome only")
+    .option("--runtime <runtime>", "Runtime to use when multiple supported harnesses exist, such as codex or claude")
+    .option("--connector <connector>", "Connector override such as the detected LinkedIn connector or chrome")
     .option("--limit <count>", "Maximum relevant items to inspect per LinkedIn surface")
     .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
     .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
@@ -628,7 +636,7 @@ Rules:
         }
 
         try {
-          response.applied = applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
+          response.applied = await applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -658,7 +666,7 @@ Rules:
     .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
     .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
     .option("--json", "Emit machine-readable JSON")
-    .action((userId, options) => {
+    .action(async (userId, options) => {
       const rawUser = findUserById(userId);
       if (!rawUser) {
         console.error(`User not found: ${userId}`);
@@ -686,7 +694,7 @@ Rules:
 
       if (options.apply || options.refresh) {
         try {
-          result.applied = applyInboundSyncRunPayload(rawUser, built.payload, { refresh: Boolean(options.refresh) });
+          result.applied = await applyInboundSyncRunPayload(rawUser, built.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -760,7 +768,7 @@ Rules:
         }
 
         try {
-          response.applied = applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
+          response.applied = await applyInboundSyncRunPayload(rawUser, result.payload, { refresh: Boolean(options.refresh) });
         } catch (error) {
           console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
@@ -788,7 +796,7 @@ Rules:
     .requiredOption("--input <path>", "Path to a JSON payload file, or - to read JSON from stdin")
     .option("--refresh", "Return a fresh inbox/daily/next summary after writeback")
     .option("--json", "Emit machine-readable JSON")
-    .action((userId, options) => {
+    .action(async (userId, options) => {
       const rawUser = findUserById(userId);
       if (!rawUser) {
         console.error(`User not found: ${userId}`);
@@ -819,7 +827,7 @@ Rules:
         return;
       }
 
-      const result = applyPreparedInboundSyncRun(userId, prepared, { refresh: Boolean(options.refresh) });
+      const result = await applyPreparedInboundSyncRun(userId, prepared, { refresh: Boolean(options.refresh) });
 
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
@@ -1060,23 +1068,41 @@ function loadJsonInput(filePath) {
   return JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
 }
 
-function applyInboundSyncRunPayload(rawUser, payload, options = {}) {
+async function applyInboundSyncRunPayload(rawUser, payload, options = {}) {
   const prepared = prepareUserInboundSyncRun(rawUser, payload, {
     rawMotions: listMotions(),
     rawExistingObservations: listInboundObservations({
       userId: rawUser.id
     })
   });
-  return applyPreparedInboundSyncRun(prepared.user.id, prepared, options);
+  return await applyPreparedInboundSyncRun(prepared.user.id, prepared, options);
 }
 
-function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
+async function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
   let createdObservationCount = 0;
   let updatedObservationCount = 0;
   let resolvedCueCount = 0;
   let clearedSupersededObservationCount = 0;
   const existingObservations = listInboundObservations({ userId });
-  const storedObservations = prepared.observations.map((observation) => {
+  const knownCompanies = listCompanies();
+  const storedObservations = prepared.observations.map((rawObservation) => {
+    const companyResolution = resolveInboundObservationCompany(rawObservation, knownCompanies, {
+      createIfMissing: true,
+    });
+    if (companyResolution.companyCreated && companyResolution.company) {
+      insertCompany(companyResolution.company);
+      knownCompanies.unshift(companyResolution.company);
+    } else if (companyResolution.companyLinkedToMotion && companyResolution.company) {
+      updateCompany(companyResolution.company);
+      const companyIndex = knownCompanies.findIndex((candidate) => candidate?.id === companyResolution.company?.id);
+      if (companyIndex >= 0) {
+        knownCompanies.splice(companyIndex, 1, companyResolution.company);
+      } else {
+        knownCompanies.unshift(companyResolution.company);
+      }
+    }
+
+    const observation = companyResolution.observation;
     const existing = findInboundObservationByDedupeKey(observation.dedupeKey)
       ?? existingObservations.find((candidate) => inboundObservationsShareIdentity(candidate, observation))
       ?? null;
@@ -1136,6 +1162,10 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
   updateUser(prepared.updatedUser);
   const enrichedProspectCount = applyInboundProspectEnrichment(storedObservations);
 
+  // Touch every freshly-captured avatar through the image proxy now, while the
+  // source URLs are still authenticated, so they remain displayable later.
+  const warmResult = await warmImageProxies(storedObservations.map((observation) => observation.actorAvatarUrl));
+
   const result = {
     user: prepared.user,
     processedAt: prepared.processedAt,
@@ -1146,7 +1176,8 @@ function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
       updatedObservationCount,
       clearedSupersededObservationCount,
       resolvedCueCount,
-      enrichedProspectCount
+      enrichedProspectCount,
+      warmedAvatarCount: warmResult.warmed
     },
     followUpCommands: prepared.followUpCommands,
     accounts: prepared.accounts,

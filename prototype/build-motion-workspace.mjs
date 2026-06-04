@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { isTransitionMotion } from "../src/core/ensure-transition-motion.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -772,6 +773,14 @@ function buildMotionSummaries(reports, daily, inboundReview) {
     const motionDailyItems = dailyItems.filter((item) => item.motion?.id === motion.id);
     const motionReviewItems = reviewItems.filter((item) => item.motion?.id === motion.id);
     const identityCounts = countBy(toArray(companyLoop.items), (item) => item.executionIdentity?.status ?? "unknown");
+    const backlogCompanies = toArray(companyLoop.items)
+      .filter((item) => item.stage === "needs-company-identity" || item.stage === "needs-company-research")
+      .map((item) => ({
+        id: item.companyId,
+        name: item.companyName,
+        stage: item.stage,
+        queueStatus: item.queueStatus ?? "discovered",
+      }));
 
     return {
       id: motion.id,
@@ -785,12 +794,14 @@ function buildMotionSummaries(reports, daily, inboundReview) {
       companyCount: companyLoop.companyCount ?? queue.companyCount ?? 0,
       prospectCount: queue.prospectCount ?? report.prospects?.counts?.prospectCount ?? 0,
       readyToSendCount: queue.readyToSendCount ?? 0,
+      inventoryTarget: targeting.inventoryTarget ?? null,
       browserGate: targeting.browserGate ?? null,
       executionIdentityCounts: identityCounts,
       dueNowCount: motionDailyItems.filter((item) => item.state === "due_now").length,
       waitingCount: motionDailyItems.filter((item) => item.state === "waiting_until").length,
       reviewCount: motionReviewItems.length,
       nextActions: toArray(targeting.nextActions).slice(0, 3),
+      backlogCompanies,
       queueCompanyStatusCounts: queue.companyStatusCounts ?? {},
       queueProspectStatusCounts: queue.prospectStatusCounts ?? {},
     };
@@ -949,7 +960,9 @@ function buildOperatorSummary({ user, daily, motionSummaries, truthAccounts, rev
   } else if (focusMotion) {
     headline = `Focus ${focusMotion.name}`;
     nextMove = focusMotion.nextActions[0] ?? "Continue the focus motion using its highest-priority governed next action.";
-    why = focusMotion.readyToEngage
+    why = (focusMotion.inventoryTarget?.shortfall ?? 0) > 0
+      ? `This motion only has ${focusMotion.inventoryTarget.availableProspectCount} available prospects against a floor of ${focusMotion.inventoryTarget.minimumAvailableProspects}, so the next move should keep feeding discovery instead of forcing weak-fit branches.`
+      : focusMotion.readyToEngage
       ? "This motion already has usable execution inventory, so the next move should come from its ready branches."
       : `This motion is still in ${focusMotion.overallStage}, so the next move should clear its top blocker instead of forcing execution.`;
   } else if (topWaitingItem) {
@@ -1075,16 +1088,23 @@ function buildMotionDetailModels(reports, motionSummaries, daily, inboundReview)
 
   return reports.map((report) => {
     const motion = report.motion;
+    const transitionMotion = isTransitionMotion(motion);
     const summary = summaryIndex.get(motion.id) ?? null;
     const rawSignals = toArray(motion.setup?.signals);
     const rawAudiences = toArray(motion.setup?.audienceHypotheses);
     const rawCompanies = toArray(report.matches?.companies);
+    const rawCompanyLoop = toArray(report.targeting?.companyLoop?.items);
     const signalCoverage = buildSignalCoverage(report);
     const companyExecutionIndex = new Map(
-      rawCompanies.map((company) => [company.companyId, company.executionIdentity ?? null]),
+      [
+        ...rawCompanies.map((company) => [company.companyId, company.executionIdentity ?? null]),
+        ...rawCompanyLoop.map((company) => [company.companyId, company.executionIdentity ?? null]),
+      ],
     );
     const companies = sortByName(
-      rawCompanies.map((company) => ({
+      rawCompanies
+        .filter((company) => (company.signalMatchCount ?? 0) > 0)
+        .map((company) => ({
         companyId: company.companyId,
         companyName: company.companyName,
         websiteUrl: company.websiteUrl,
@@ -1102,7 +1122,25 @@ function buildMotionDetailModels(reports, motionSummaries, daily, inboundReview)
         matchedSignalQuestions: uniqueValues(
           toArray(company.matchedSignals).map((match) => match.question ?? match.signalName ?? null),
         ),
-      })),
+        })),
+      "companyName",
+    );
+    const backlogCompanies = sortByName(
+      rawCompanyLoop
+        .filter((company) => company.stage === "needs-company-identity" || company.stage === "needs-company-research")
+        .map((company) => ({
+          companyId: company.companyId,
+          companyName: company.companyName,
+          websiteUrl: company.websiteUrl,
+          linkedinCompanyUrl: company.linkedinCompanyUrl,
+          logoUrl: company.logoUrl,
+          domain: extractHost(company.websiteUrl) ?? "",
+          prospectCount: company.prospectCount ?? 0,
+          signalMatchCount: company.signalMatchCount ?? 0,
+          queueStatus: company.queueStatus ?? "discovered",
+          stage: company.stage,
+          executionIdentity: company.executionIdentity ?? null,
+        })),
       "companyName",
     );
     const people = toArray(report.prospects?.prospects)
@@ -1171,6 +1209,7 @@ function buildMotionDetailModels(reports, motionSummaries, daily, inboundReview)
       motionName: motion.name,
       motionStatus: motion.status,
       overallStage: summary?.overallStage ?? report.targeting?.overallStage ?? "unknown",
+      truth: transitionMotion ? "transition" : null,
       strategyState: deriveMotionStrategyState(report),
       updatedAt: motion.updatedAt,
       offer: {
@@ -1191,10 +1230,9 @@ function buildMotionDetailModels(reports, motionSummaries, daily, inboundReview)
       signals,
       audiences,
       companies,
+      backlogCompanies,
       people,
-      blocker:
-        toArray(report.targeting?.motionPreflight?.blockers)[0]
-        ?? (report.targeting?.browserGate?.status === "blocked" ? report.targeting.browserGate.message : null),
+      blocker: deriveMotionBlocker(report),
       plan: {
         nextSteps: buildMotionPlanSteps(report, summary, reviewCountsByMotion[motion.id] ?? 0),
         dueNowCount: summary?.dueNowCount ?? 0,
@@ -1329,6 +1367,10 @@ function buildAudienceRolesLine(audience) {
 }
 
 function derivePremiseSupportNote(report) {
+  if (isTransitionMotion(report.motion)) {
+    return "This holding motion keeps inherited relationships moving until they can be understood and re-homed into real motions.";
+  }
+
   if (report.motion?.premise?.notes) {
     return report.motion.premise.notes;
   }
@@ -1346,6 +1388,10 @@ function derivePremiseSupportNote(report) {
 }
 
 function deriveMotionStrategyState(report) {
+  if (isTransitionMotion(report.motion)) {
+    return { label: "transition backlog", tone: "quiet" };
+  }
+
   const premiseDefined = report.motion?.premise?.status === "defined";
   const signals = toArray(report.motion?.setup?.signals);
   const readySignals = signals.filter((signal) => signal.status === "ready").length;
@@ -1365,12 +1411,35 @@ function deriveMotionStrategyState(report) {
   return { label: "signals draft", tone: "quiet" };
 }
 
+function deriveMotionBlocker(report) {
+  if (isTransitionMotion(report.motion)) {
+    return "Reconcile these in-flight relationships and re-home them into real motions.";
+  }
+
+  return (
+    toArray(report.targeting?.motionPreflight?.blockers)[0]
+    ?? (report.targeting?.browserGate?.status === "blocked" ? report.targeting.browserGate.message : null)
+  );
+}
+
 function buildMotionPlanSteps(report, motionSummary, reviewCount) {
+  if (isTransitionMotion(report.motion)) {
+    return buildTransitionPlanSteps(report, motionSummary, reviewCount);
+  }
+
   const steps = toArray(report.targeting?.nextActions).length > 0
     ? toArray(report.targeting?.nextActions)
     : toArray(report.motion?.setup?.nextSteps);
 
   return steps.slice(0, 5).map((text, index) => {
+    if (index === 0 && (report.targeting?.inventoryTarget?.shortfall ?? 0) > 0) {
+      return {
+        text,
+        tone: "warning",
+        tag: `${report.targeting.inventoryTarget.shortfall} short`,
+      };
+    }
+
     if (index === 0 && (motionSummary?.dueNowCount ?? 0) > 0) {
       return { text, tone: "warning", tag: `${motionSummary.dueNowCount} due now` };
     }
@@ -1397,6 +1466,55 @@ function buildMotionPlanSteps(report, motionSummary, reviewCount) {
 
     return { text, tone: "quiet", tag: null };
   });
+}
+
+function buildTransitionPlanSteps(report, motionSummary, reviewCount) {
+  const steps = [];
+  const readyToSendCount = report.execution?.readyToSendCount ?? motionSummary?.readyToSendCount ?? 0;
+  const companyCount = report.execution?.companyCount ?? motionSummary?.companyCount ?? 0;
+  const prospectCount = report.execution?.prospectCount ?? motionSummary?.prospectCount ?? 0;
+
+  if (reviewCount > 0) {
+    steps.push({
+      text: "Review inbound relationships that still need a routing decision.",
+      tone: "warning",
+      tag: `${reviewCount} to review`,
+    });
+  }
+
+  if (readyToSendCount > 0) {
+    steps.push({
+      text: "Let the agent continue live threads here while you decide where each relationship belongs.",
+      tone: "accent",
+      tag: `${readyToSendCount} agent-ready`,
+    });
+  }
+
+  if (prospectCount > 0) {
+    steps.push({
+      text: "Re-home understood relationships into real motions once the offer and owner are clear.",
+      tone: "quiet",
+      tag: `${prospectCount} prospects`,
+    });
+  }
+
+  if (companyCount > 0) {
+    steps.push({
+      text: "Keep unresolved carry-over here only until the right motion exists.",
+      tone: "quiet",
+      tag: `${companyCount} companies`,
+    });
+  }
+
+  if (steps.length === 0) {
+    steps.push({
+      text: "Hold inherited relationships here until there is enough context to re-home them.",
+      tone: "quiet",
+      tag: "holding",
+    });
+  }
+
+  return steps.slice(0, 5);
 }
 
 function reviewPriorityRank(value) {
@@ -1589,6 +1707,9 @@ function buildDecisionQueue(reviewItems) {
       kind: item.kind,
       subject: reviewSubject(item),
       summary: item.summary ?? "No summary recorded.",
+      previewLabel: item.previewLabel ?? null,
+      previewSubject: item.previewSubject ?? null,
+      previewText: item.previewText ?? null,
       why: item.whyItMatters ?? null,
       priority: item.priority ?? "low",
       state: item.state ?? "unknown",
@@ -1596,12 +1717,13 @@ function buildDecisionQueue(reviewItems) {
       surfaceKey: item.surfaceKey ?? null,
       observedAt: item.observedAt ?? null,
       recommendedAction: item.recommendedAction ?? null,
-      avatarUrl: item.actorAvatarSourceUrl ?? null,
+      avatarUrl: item.actorAvatarUrl ?? item.actorAvatarSourceUrl ?? null,
       actorTitle: item.actorTitle ?? null,
       actorCompanyName: item.actorCompanyName ?? null,
       actorProfileUrl: item.actorProfileUrl ?? null,
       sourceUrl: item.sourceUrl ?? null,
       companyName: item.company?.name ?? null,
+      prospectId: item.prospect?.id ?? null,
       motionName: item.motion?.name ?? null,
       links: buildDecisionLinks(item),
       actions: buildDecisionActions(item),
@@ -1619,10 +1741,7 @@ function buildDecisionQueue(reviewItems) {
   };
 }
 
-function buildAgentQueue(daily, stateActions = { blockedReadyCompanies: [], packetActionsByKey: new Map() }) {
-  const actionableItems = toArray(daily.items).filter((item) => !isInboundReviewDailyItem(item));
-  const dueNowItems = actionableItems.filter((item) => item.state === "due_now");
-  const waitingItems = actionableItems.filter((item) => item.state === "waiting_until");
+function buildExecutionBacklog(daily, stateActions = { blockedReadyCompanies: [], packetActionsByKey: new Map() }) {
   const capacityEntries = Object.entries(daily.capacity ?? {});
 
   const blockers = capacityEntries.flatMap(([channel, entry]) => {
@@ -1673,27 +1792,181 @@ function buildAgentQueue(daily, stateActions = { blockedReadyCompanies: [], pack
     });
   });
 
-  const mapPlannerItem = (item) => ({
-    id: plannerKey(item),
-    subject: plannerSubject(item),
-    action: item.recommendedAction ?? item.cadence?.nextAction ?? "No governed action exposed.",
-    why: item.whyItMatters ?? null,
-    motionName: item.motion?.name ?? null,
-    dueAt: item.dueAt ?? null,
-    sourceType: item.source?.type ?? null,
-    state: item.state ?? "unknown",
-  });
-
   return {
-    itemCount: dueNowItems.length,
-    waitingCount: waitingItems.length,
+    blockerCount: blockers.length,
     blockedReadyCount: blockers.reduce((total, item) => total + item.blockedReadyCount, 0),
     blockedCompanyCount: blockers.reduce((total, item) => total + item.blockedCompanyCount, 0),
     packetCount: packets.reduce((total, item) => total + item.count, 0),
-    items: dueNowItems.map(mapPlannerItem),
-    waitingItems: waitingItems.map(mapPlannerItem),
     blockers,
     packets,
+  };
+}
+
+function buildWorkspaceAgentQueue(rawAgentQueue) {
+  const tasks = toArray(rawAgentQueue?.tasks);
+  const waiting = toArray(rawAgentQueue?.waiting);
+
+  return {
+    count: Number(rawAgentQueue?.count ?? tasks.length),
+    itemCount: Number(rawAgentQueue?.itemCount ?? tasks.length),
+    waitingCount: Number(rawAgentQueue?.waitingCount ?? waiting.length),
+    tasks,
+    waiting,
+    blockers: toArray(rawAgentQueue?.blockers),
+    items: tasks.map(mapAgentQueueTask),
+    waitingItems: waiting.map(mapAgentQueueTask),
+  };
+}
+
+function mapAgentQueueTask(task) {
+  return {
+    id: workspaceAgentTaskId(task),
+    taskKind: task.kind ?? "unknown",
+    observationId: task.observationId ?? null,
+    motionId: task.motionId ?? null,
+    companyId: task.companyId ?? null,
+    prospectId: task.prospectId ?? null,
+    subject: task.prospectName ?? task.companyName ?? titleizeStatus(task.kind ?? "agent_work"),
+    action: agentQueueTaskAction(task),
+    why: agentQueueTaskWhy(task),
+    motionName: task.motionName ?? null,
+    companyName: task.companyName ?? null,
+    dueAt: task.dueAt ?? task.queuedAt ?? null,
+    sourceType: agentQueueTaskSourceType(task),
+    state: task.queueState ?? "unknown",
+    surface: task.surface ?? null,
+    waitingReason: task.waitingReason ?? null,
+  };
+}
+
+function workspaceAgentTaskId(task) {
+  return [
+    task.kind ?? "agent_work",
+    task.prospectId ?? task.observationId ?? task.companyId ?? task.motionId ?? "workspace",
+    task.surface ?? task.action ?? "task",
+  ].join("::");
+}
+
+function agentQueueTaskAction(task) {
+  const surface = humanizeQueueSurface(task.surface);
+
+  switch (task.kind) {
+    case "run_inbound_sync":
+      return "Refresh inbound truth";
+    case "company_research":
+      return "Research company";
+    case "write_draft":
+      return `Write ${surface} draft`;
+    case "send_message":
+      return task.surface === "connection_request"
+        ? "Send connection request"
+        : `Send ${surface}`;
+    case "reject_connection_request":
+      return "Decline inbound connection request";
+    case "withdraw_connection":
+      return "Withdraw stale connection request";
+    case "unfollow_profile":
+      return "Unfollow profile";
+    default:
+      return titleizeStatus(task.kind ?? "agent_work");
+  }
+}
+
+function agentQueueTaskWhy(task) {
+  switch (task.kind) {
+    case "run_inbound_sync":
+      return task.whyItMatters ?? "Inbound truth needs a governed refresh before the operator surface can be trusted.";
+    case "company_research":
+      return task.whyItMatters ?? "This company was explicitly queued for governed research.";
+    case "write_draft":
+      return task.reason === "no_draft"
+        ? "No governed draft exists on the current surface yet."
+        : titleizeStatus(task.reason ?? "draft work is due");
+    case "send_message":
+      return "This draft is already queued to send and needs no operator input.";
+    case "reject_connection_request":
+      return "The operator already chose to decline this invite.";
+    case "withdraw_connection":
+      return "The pending invite crossed the withdrawal policy window.";
+    case "unfollow_profile":
+      return "The withdrawn connection branch still has a follow to clean up.";
+    default:
+      return null;
+  }
+}
+
+function agentQueueTaskSourceType(task) {
+  if (task.kind === "reject_connection_request") {
+    return "inbound_observation";
+  }
+
+  if (task.kind === "run_inbound_sync") {
+    return "inbound_sync";
+  }
+
+  if (task.kind === "company_research") {
+    return "company_research_packet";
+  }
+
+  if (task.kind === "withdraw_connection" || task.kind === "unfollow_profile") {
+    return "maintenance";
+  }
+
+  return "cadence";
+}
+
+function humanizeQueueSurface(surface) {
+  if (!surface) {
+    return "message";
+  }
+
+  return titleizeStatus(String(surface).replaceAll("_", " "));
+}
+
+function buildBlockedQueue(agentQueue, executionBacklog) {
+  const assignmentItems = toArray(executionBacklog?.blockers).map((item, index) => ({
+    id: `assignment-blocker-${index}-${item.channel ?? "any"}`,
+    subject: item.firstProspectName ?? item.firstCompanyName ?? titleizeStatus(item.channel),
+    meta: item.accountHandle ?? titleizeStatus(item.channel),
+    reason: "Needs operator assignment",
+    detail: `${item.blockedReadyCount} ready branch${item.blockedReadyCount === 1 ? "" : "es"} across ${item.blockedCompanyCount} compan${item.blockedCompanyCount === 1 ? "y" : "ies"} cannot open until one trusted owner is pinned.`,
+    blockType: "assignment",
+    channel: item.channel ?? "",
+    resolveLabel: "Pin owner",
+    stateActions: toArray(item.stateActions),
+    actions: toArray(item.stateActions)
+      .filter((action) => action?.kind === "assign_company_user" && action.companyId && action.userId)
+      .map((action) => ({
+        writer: "assignCompanyUser",
+        label: action.companyName ? `Pin ${action.companyName}` : action.label ?? "Pin owner",
+        args: {
+          companyId: action.companyId,
+          userId: action.userId,
+          reason: action.reason ?? "Make ready outbound branches executable",
+          browserCapability: action.browserCapability ?? "linkedin",
+        },
+      })),
+  }));
+
+  const queueBlockers = toArray(agentQueue?.blockers).map((item, index) => ({
+    id: `queue-blocker-${index}-${item.prospectId ?? item.motionId ?? "draft"}`,
+    subject: item.prospectName ?? item.companyName ?? "Queued draft",
+    meta: item.companyName ?? item.motionName ?? "Agent queue",
+    reason: "Queued draft needs re-review",
+    detail: item.nextSurface
+      ? `${humanizeQueueSurface(item.sendReadySurface)} was queued, but the branch moved to ${humanizeQueueSurface(item.nextSurface)}.`
+      : `${humanizeQueueSurface(item.sendReadySurface)} was queued, but the branch no longer exposes a writeable surface.`,
+    blockType: "stale_draft",
+    channel: "linkedin",
+    resolveLabel: "Review draft",
+    stateActions: [],
+    actions: [],
+    prospectId: item.prospectId ?? null,
+  }));
+
+  return {
+    itemCount: assignmentItems.length + queueBlockers.length,
+    items: [...assignmentItems, ...queueBlockers],
   };
 }
 
@@ -2031,65 +2304,26 @@ function renderOperatorDecisionCards(items, interactive, now) {
     .join("");
 }
 
-function renderOperatorAgentCards(items) {
-  if (!items.length) {
-    return `<div class="empty-state">${renderMotionDetailIcon("cpu", 18)}Nothing is agent-ready right now.</div>`;
+function renderOperatorBlockedCards(blockedQueue, interactive) {
+  if (!blockedQueue.items.length) {
+    return `<div class="empty-state">${renderMotionDetailIcon("check", 18)}Nothing is blocked or waiting for operator re-review right now.</div>`;
   }
 
-  return items
-    .map((item) => {
-      const sourceType = titleizeStatus(item.source?.type ?? item.sourceType ?? "operator");
-      const subject = plannerSubject(item);
-      const role = item.prospect?.title ?? item.prospect?.name ?? item.company?.name ?? item.motion?.name ?? sourceType;
-      const primaryControl = item.motion?.id
-        && !String(item.motion.id).startsWith("inbound-review:")
-        && !String(item.motion.id).startsWith("inbound-gap:")
-        ? `<button class="btn btn-primary btn-sm" type="button" data-open-motion-detail="${escapeHtml(item.motion.id)}">Open motion</button>`
-        : `<button class="btn btn-ghost btn-sm" type="button" data-nav-route="connections" data-nav-label="Connections">Open truth</button>`;
-
-      return `
-        <article class="card q-card">
-          <div class="row-top">
-            ${renderAvatar(subject, null, "person")}
-            <div class="row-id">
-              <div class="row-name">${escapeHtml(subject)}</div>
-              <div class="row-role">${escapeHtml(role)}</div>
-            </div>
-            ${renderMotionStateDot(item.state === "due_now" ? "ready" : item.state, item.state === "due_now" ? "ready" : item.state)}
-          </div>
-          <p class="row-note">${escapeHtml(item.whyItMatters ?? item.action ?? item.recommendedAction ?? "No rationale stored.")}</p>
-          <div class="row-chips">
-            <span class="cap-ref">${renderMotionDetailIcon("cpu", 11)}${escapeHtml(sourceType)}</span>
-            ${item.motion?.name ? `<span class="cap-ref">${renderMotionDetailIcon("layers", 11)}${escapeHtml(item.motion.name)}</span>` : ""}
-          </div>
-          <div class="row-actions tight">
-            ${primaryControl}
-          </div>
-        </article>
-      `;
-    })
-    .join("");
-}
-
-function renderOperatorBlockedCards(agentQueue, interactive) {
-  if (!agentQueue.blockers.length) {
-    return `<div class="empty-state">${renderMotionDetailIcon("check", 18)}Nothing is blocked by assignment or capability right now.</div>`;
-  }
-
-  return agentQueue.blockers
+  return blockedQueue.items
     .map((item) => `
       <article class="card blk-card stakes-block">
         <div class="row-top">
-          ${renderAvatar(item.firstProspectName ?? item.firstCompanyName ?? item.channel, null, "person")}
+          ${renderAvatar(item.subject ?? item.channel, null, "person")}
           <div class="row-id">
-            <div class="row-name">${escapeHtml(item.firstProspectName ?? item.firstCompanyName ?? titleizeStatus(item.channel))}</div>
-            <div class="row-role">${escapeHtml(item.accountHandle ?? titleizeStatus(item.channel))}</div>
+            <div class="row-name">${escapeHtml(item.subject ?? titleizeStatus(item.channel))}</div>
+            <div class="row-role">${escapeHtml(item.meta ?? titleizeStatus(item.channel))}</div>
           </div>
-          ${renderOperatorActionTag("blocked · assignment", "danger")}
+          ${renderOperatorActionTag(
+            item.blockType === "assignment" ? "blocked · assignment" : "blocked · re-review",
+            "danger",
+          )}
         </div>
-        <p class="row-summary"><strong class="blk-reason">No operator assignment.</strong> ${escapeHtml(
-          `${item.blockedReadyCount} ready branch${item.blockedReadyCount === 1 ? "" : "es"} across ${item.blockedCompanyCount} compan${item.blockedCompanyCount === 1 ? "y" : "ies"} cannot open until one trusted owner is pinned.`,
-        )}</p>
+        <p class="row-summary"><strong class="blk-reason">${escapeHtml(item.reason)}.</strong> ${escapeHtml(item.detail)}</p>
         <div class="row-actions">
           ${toArray(item.stateActions).slice(0, 2).map((action, index) => renderOperatorActionButton({
             action,
@@ -2397,6 +2631,26 @@ function renderMotionDetailOverlay(detail, interactive, now) {
               }
             </div>
 
+            <div class="md-section">Research backlog <span>${escapeHtml(String(detail.backlogCompanies.length))}</span></div>
+            <div class="md-list">
+              ${
+                detail.backlogCompanies.length > 0
+                  ? detail.backlogCompanies.map((company) => `
+                    <article class="md-co">
+                      ${renderMotionDetailIcon("building", 15, "md-co-ic")}
+                      <div class="md-co-id">
+                        <span class="md-co-name">${escapeHtml(company.companyName)}</span>
+                        <span class="md-co-sub">${escapeHtml(extractHost(company.websiteUrl) ?? company.domain ?? "canonical identity stored")}</span>
+                      </div>
+                      <span class="match-sig">${renderMotionDetailIcon("refresh", 11)}${escapeHtml(titleizeStatus(company.stage))}</span>
+                      <span class="md-co-meta">${escapeHtml(formatCount(company.prospectCount, "person"))}</span>
+                      ${renderMotionStateDot(company.executionIdentity?.status, company.executionIdentity?.status)}
+                    </article>
+                  `).join("")
+                  : `<div class="empty-state">No research backlog is exposed right now.</div>`
+              }
+            </div>
+
             <div class="md-section">Matched people <span>${escapeHtml(String(detail.people.length))}</span></div>
             <div class="md-list">
               ${
@@ -2580,10 +2834,10 @@ function renderWorkspaceActionButtons(actions, interactive) {
   `;
 }
 
-function renderBacklogQueue(agentQueue, interactive) {
+function renderBacklogQueue(executionBacklog, interactive) {
   const cards = [];
 
-  agentQueue.blockers.forEach((item) => {
+  executionBacklog.blockers.forEach((item) => {
     cards.push(`
       <article class="mini-card">
         <div class="mini-card-head">
@@ -2598,7 +2852,7 @@ function renderBacklogQueue(agentQueue, interactive) {
     `);
   });
 
-  agentQueue.packets.forEach((item) => {
+  executionBacklog.packets.forEach((item) => {
     cards.push(`
       <article class="mini-card">
         <div class="mini-card-head">
@@ -3050,6 +3304,8 @@ function renderPage({
   operatorSummary,
   decisionQueue,
   agentQueue,
+  blockedQueue,
+  executionBacklog,
   interactive,
   artifactSummaries,
   companyPrep,
@@ -3110,17 +3366,13 @@ function renderPage({
 
   const headerStats = [
     { count: decisionQueue.itemCount, label: "need decision" },
-    { count: agentQueue.itemCount, label: "agent-ready" },
-    { count: agentQueue.blockedReadyCount, label: "blocked" },
+    { count: blockedQueue.itemCount, label: "blocked" },
     { count: staleSurfaceCount, label: "stale" },
   ];
   const operatorHeroItem = pickOperatorNextMoveItem(decisionQueue);
   const operatorDecisionItems = decisionQueue.items
     .filter((item) => item.id !== operatorHeroItem?.id)
     .slice(0, 4);
-  const operatorAgentItems = toArray(daily.items)
-    .filter((item) => !isInboundReviewDailyItem(item) && item.state === "due_now")
-    .slice(0, 7);
   const operatorStaleRows = buildOperatorStaleRows(truthAccounts);
   const operatorAgendaRows = buildOperatorAgendaRows(daily, now);
 
@@ -6470,7 +6722,7 @@ function renderPage({
             <div class="op-intro">
               <div>
                 <h1>Operator</h1>
-                <p class="op-line">What needs judgment, what the agent can run, and what is blocked.</p>
+                <p class="op-line">What needs judgment, what is blocked, and what still needs review.</p>
               </div>
               <div class="op-stat">
                 ${headerStats
@@ -6501,24 +6753,12 @@ function renderPage({
 
               <section class="op-sec">
                 <div class="sec-head">
-                  ${renderMotionDetailIcon("cpu", 16, "sec-ic")}
-                  <h2>Agent queue</h2>
-                  ${renderOperatorCountChip(agentQueue.itemCount, "blue")}
-                  <span class="sec-sub">agent can run now</span>
-                </div>
-                <div class="sec-body">
-                  ${renderOperatorAgentCards(operatorAgentItems)}
-                </div>
-              </section>
-
-              <section class="op-sec">
-                <div class="sec-head">
                   ${renderMotionDetailIcon("alert", 16, "sec-ic")}
                   <h2>Blocked</h2>
-                  ${renderOperatorCountChip(agentQueue.blockedReadyCount, "red")}
+                  ${renderOperatorCountChip(blockedQueue.itemCount, "red")}
                 </div>
                 <div class="sec-body">
-                  ${renderOperatorBlockedCards(agentQueue, interactive)}
+                  ${renderOperatorBlockedCards(blockedQueue, interactive)}
                 </div>
               </section>
 
@@ -6727,7 +6967,7 @@ function renderPage({
                         )}</span>
                       </div>
                       <p>${escapeHtml(
-                        `${readyBranchCount} ready · ${agentQueue.blockedReadyCount} blocked-ready · ${agentQueue.packetCount} packets`,
+                        `${readyBranchCount} ready branches · ${agentQueue.waitingCount} scheduled · ${blockedQueue.itemCount} blocked · ${executionBacklog.packetCount} packets`,
                       )}</p>
                     </article>
                   </div>
@@ -6951,6 +7191,7 @@ function renderPage({
  *   inboundReview: any,
  *   inbox: any,
  *   daily: any,
+ *   agentQueue?: any,
  *   reports: any[],
  *   regenerateCommand?: string,
  *   interactive?: { enabled?: boolean, actionEndpoint?: string, workerLabel?: string } | null
@@ -6962,6 +7203,7 @@ export function buildWorkspaceModel(input) {
     inboundReview,
     inbox,
     daily,
+    agentQueue: rawAgentQueue = null,
     reports,
     regenerateCommand = DEFAULT_REGENERATE_COMMAND,
     interactive = null,
@@ -6987,7 +7229,9 @@ export function buildWorkspaceModel(input) {
     workerLabel: interactive?.workerLabel ?? DEFAULT_WORKSPACE_ACTION_WORKER,
   });
   const decisionQueue = buildDecisionQueue(inboundReview.reviewItems);
-  const agentQueue = buildAgentQueue(daily, stateActions);
+  const agentQueue = buildWorkspaceAgentQueue(rawAgentQueue);
+  const executionBacklog = buildExecutionBacklog(daily, stateActions);
+  const blockedQueue = buildBlockedQueue(rawAgentQueue, executionBacklog);
 
   const companyLanes = groupIntoLanes(companyPrep, [
     { key: "needs-company-identity", label: "Needs company identity", description: "Website or LinkedIn company identity is still missing." },
@@ -7053,6 +7297,8 @@ export function buildWorkspaceModel(input) {
     operatorSummary,
     decisionQueue,
     agentQueue,
+    blockedQueue,
+    executionBacklog,
     interactive,
     artifactSummaries,
     companyPrep,
@@ -7082,6 +7328,8 @@ export function buildWorkspaceModel(input) {
       operatorSummary,
       decisionQueue,
       agentQueue,
+      blockedQueue,
+      executionBacklog,
       interactive: interactive ? { enabled: Boolean(interactive.enabled), actionEndpoint: interactive.actionEndpoint ?? null } : null,
       artifactSummaries,
       companyLanes,
@@ -7106,10 +7354,11 @@ async function main() {
     throw new Error("No execution users exist in Exo, so the workspace projection cannot resolve inbound or daily state.");
   }
 
-  const [inboundReview, inbox, daily] = await Promise.all([
+  const [inboundReview, inbox, daily, agentQueue] = await Promise.all([
     runJson(["inbound", "review", user.id, "--json"]),
     runJson(["inbox", "--user", user.id, "--json"]),
     runJson(["daily", "--user", user.id, "--json"]),
+    runJson(["agent", "queue", "--json"]),
   ]);
 
   const reports = await Promise.all(
@@ -7120,6 +7369,7 @@ async function main() {
     inboundReview,
     inbox,
     daily,
+    agentQueue,
     reports,
     regenerateCommand: DEFAULT_REGENERATE_COMMAND,
   });

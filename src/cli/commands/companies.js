@@ -15,18 +15,21 @@ import { assignCompanyUser } from "../../core/assign-company-user.js";
 import { buildCompanyExecutionView } from "../../core/build-company-execution-view.js";
 import { buildCompanyRollup } from "../../core/build-company-rollup.js";
 import { buildLiveLinkedinProfileEnrichmentView } from "../../core/build-live-linkedin-profile-enrichment.js";
+import { buildMotionDraftBrief } from "../../core/build-motion-draft-view.js";
 import { buildCompanyResearchBrief } from "../../core/build-company-research-brief.js";
 import { claimMotionProspectPacket } from "../../core/claim-motion-prospect-packet.js";
 import { claimMotionTargetAccountPacket } from "../../core/claim-target-account-packet.js";
 import { completeMotionProspectPacket } from "../../core/complete-motion-prospect-packet.js";
 import { completeMotionTargetAccountPacket } from "../../core/complete-target-account-packet.js";
+import { warmImageProxy } from "../../lib/image-proxy.js";
+import { isSendableDraftStatus } from "../../lib/draft-policy.js";
+import { approveMotionProspectDraft, markMotionProspectDraftSent, setMotionProspectDraft } from "../../core/set-prospect-draft.js";
+import { recordActionResult } from "../../core/record-action-result.js";
 import { recordMotionProspect, updateMotionProspect } from "../../core/record-prospect.js";
 import { recordMotionProspectTouch } from "../../core/record-prospect-touch.js";
 import { recordMotionSignalMatch } from "../../core/record-signal-match.js";
 import { setMotionTargetAccountQueue } from "../../core/set-target-account-queue.js";
 import { setMotionProspectCadence } from "../../core/set-prospect-cadence.js";
-import { setMotionProspectOpeningPlan } from "../../core/set-prospect-opening-plan.js";
-import { setMotionProspectThroughLine } from "../../core/set-prospect-through-line.js";
 import { updateCompanyRecord } from "../../core/update-company.js";
 import { rehydrateMotion } from "../../core/rehydrate-motion.js";
 import {
@@ -38,6 +41,7 @@ import {
   insertCompany,
   listBrowserProfiles,
   listCompanies,
+  listMotions,
   listUsers,
   searchCompanies,
   updateCompany,
@@ -46,6 +50,7 @@ import {
 import { browserProfileCapabilitySchema, browserProfileSchema } from "../../schema/browser-profile.js";
 import { normalizeRepeatedStringList, normalizeStringList } from "../../lib/collections.js";
 import { buildMotionQueueSummary, isMotionQueueStatus, withDerivedTargetAccountQueueState } from "../../lib/motion-queue.js";
+import { findActionResultForTouch } from "../../lib/action-result-catalog.js";
 import { companySchema } from "../../schema/company.js";
 import { motionSchema } from "../../schema/motion.js";
 import { linkedinProfileSnapshotSchema } from "../../schema/target-account.js";
@@ -85,10 +90,6 @@ Canonical companies interface:
   exo companies prospects enrich-linkedin-profile <company-id>
   exo companies prospects claim <company-id>
   exo companies prospects complete <company-id>
-  exo companies through-line show <company-id>
-  exo companies through-line set <company-id>
-  exo companies opening-plan show <company-id>
-  exo companies opening-plan set <company-id>
   exo companies cadence show <company-id>
   exo companies cadence set <company-id>
   exo companies touches show <company-id>
@@ -101,12 +102,12 @@ Canonical companies interface:
 Rules:
   - Keep the noun consistent. Use exo companies ..., not mixed singular/plural command paths.
   - A company is canonical identity. Motion linkage explains why it matters right now.
-  - Once outreach starts, pin one execution user or browser identity to the company so follow-up work stays consistent.
+  - Once outreach starts, pin one execution user to the company so follow-up work stays consistent and governed connector resolution stays explicit.
   - Use exo companies research-brief before live account research so the agent works from signals, recent evidence, and best-fit prospect fallback.
   - Persist signal matches on the motion-owned target account, not on the canonical company itself.
-  - Persist the chosen prospects, their through-lines, their opening plans, and their cadence state on the same motion-owned target account.
+  - Persist the chosen prospects and their cadence state on the same motion-owned target account.
   - Persist the real engagement touch history on the same prospect record so later draft cases can stay contextually grounded.
-  - Treat stored signal matches, prospect through-lines, and opening plans as the writing and engagement source of truth.
+  - Treat stored signal matches, prospect identity/enrichment, cadence state, and touch history as the writing and engagement source of truth.
   - Richer motion-account state comes later; this surface is the first real company registry.
 `
     );
@@ -291,7 +292,6 @@ Rules:
     .description("Pin one execution user to a company so each capability can resolve through the right account.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--user <user-id>", "Execution user identifier")
-    .option("--browser-capability <capability>", "Browser capability to project onto the legacy company profile pin. Defaults to linkedin.")
     .option("--by <actor>", "Who made the assignment")
     .option("--reason <reason>", "Why this user is being pinned")
     .option("--json", "Emit machine-readable JSON")
@@ -300,13 +300,16 @@ Rules:
       `
 Examples:
   exo companies user assign <company-id> --user <user-id> --reason "Use one human identity across LinkedIn and email"
+  exo companies user assign <company-id> --user <user-id> --account linkedin:williamflanagan --account gmail:william@customer-a.com --reason "Pin William plus the correct inbox"
 
 Rules:
   - The user must already exist in Exo.
-  - The user can own multiple accounts backed by different browser profiles or harness connectors.
-  - Exo will still project the chosen browser capability into the legacy sticky profile field when possible.
+  - The user can own multiple governed accounts across capabilities.
+  - Use repeated --account capability:handle refs when one user owns more than one exact account for a capability, such as multiple Gmail inboxes.
+  - Legacy browser-profile mappings are not projected into a governed execution path.
 `
     )
+    .option("--account <capability:handle>", "Pin one exact account ref for this assignment; repeat for multiple capabilities", collect, [])
     .action((companyId, options) => {
       const rawCompany = findCompanyById(companyId);
       if (!rawCompany) {
@@ -325,7 +328,7 @@ Rules:
       const updated = assignCompanyUser(rawCompany, rawUser, listBrowserProfiles(), {
         assignedBy: options.by ?? null,
         reason: options.reason ?? null,
-        browserCapability: options.browserCapability ?? "linkedin"
+        accountRefs: normalizeStringList(options.account)
       });
       updateCompany(updated);
 
@@ -976,7 +979,7 @@ Examples:
 Rules:
   - Use this when the prospect already exists and you are enriching or correcting that exact person.
   - Prefer updating by prospect id over re-adding a person when contact enrichment or live-surface checks produce new evidence.
-  - This path preserves the existing prospect record and its through-line, opening plan, cadence state, and touches.
+  - This path preserves the existing prospect record and its cadence state, enrichment, and touches.
   - Structured contact points are the place for additional socials, phones, direct emails, weak hints, and rejected candidates.
 `
     )
@@ -1063,7 +1066,7 @@ Rules:
   - Do not use this for generic note-taking. It is the governed writeback path for live LinkedIn profile context.
 `
     )
-    .action((companyId, options) => {
+    .action(async (companyId, options) => {
       const context = loadCompanyMotionContext(companyId, options.motion);
       if (!context) {
         process.exitCode = 1;
@@ -1131,6 +1134,9 @@ Rules:
         const storedMotion = updateMotion(updatedMotion);
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const storedProspect = account?.prospects.find((prospect) => prospect.id === options.prospect) ?? null;
+        // Warm the freshly-captured avatar through the proxy now, while the
+        // LinkedIn source URL is still valid, so it stays displayable later.
+        await warmImageProxy(storedProspect?.avatarUrl);
 
         if (options.json) {
           console.log(JSON.stringify({
@@ -1248,7 +1254,7 @@ Examples:
 
 Rules:
   - Claim this only after the account-level prospect-selection packet is done.
-  - This packet is for one selected prospect and should keep that person's research, enrichment, through-line, opening plan, and cadence work together.
+  - This packet is for one selected prospect and should keep that person's research, enrichment, and cadence work together.
   - Use a stable worker label so retries and completion checks stay safe.
 `
     )
@@ -1324,7 +1330,7 @@ Examples:
   exo companies prospects complete <company-id> --motion <motion-id> --prospect <prospect-id> --worker codex-prospect-1 --next-status exhausted --json
 
 Rules:
-  - Completing a prospect packet does not magically make the branch ready. The stored through-line, opening-plan, cadence, and queue state still have to support readiness.
+  - Completing a prospect packet does not magically make the branch ready. The stored cadence and queue state still have to support readiness.
   - If the packet is completed but the prospect is still selected, it should naturally return to the claimable backlog.
   - Use terminal overrides only when the prospect should be suppressed or exhausted.
 `
@@ -1390,215 +1396,145 @@ Rules:
       }
     });
 
-  const throughLine = companies
-    .command("through-line")
-    .description("Inspect or set the stored prospect through-line for one company in one motion.");
+  const draft = prospects
+    .command("draft")
+    .description("Write, review, approve, and complete one prospect message draft (agent ↔ operator compose loop).");
 
-  throughLine
-    .command("show")
-    .description("Show the stored prospect through-line for one company in one motion.")
-    .argument("<company-id>", "Company identifier")
-    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
-    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
-    .option("--json", "Emit machine-readable JSON")
-    .action((companyId, options) => {
-      const context = loadCompanyMotionContext(companyId, options.motion);
-      if (!context) {
-        process.exitCode = 1;
-        return;
-      }
-
-      const { company, motion, account } = context;
-      const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
-      const result = {
-        company,
-        motion: { id: motion.id, name: motion.name },
-        prospect,
-        throughLine: prospect?.throughLine ?? null
-      };
-
-      if (options.json) {
-        console.log(JSON.stringify(result, null, 2));
-        return;
-      }
-
-      if (!prospect || prospect.throughLine.status !== "ready") {
-        console.log(`No stored through-line for prospect ${options.prospect} on ${company.name} in motion ${motion.name}.`);
-        return;
-      }
-
-      console.log(renderThroughLineDetail(company.name, motion.name, prospect));
-    });
-
-  throughLine
+  draft
     .command("set")
-    .description("Persist the prospect-specific through-line.")
+    .description("Write (or update) a draft message for one prospect surface. This is how the core agent supplies the pre-written text.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--prospect <prospect-id>", "Prospect identifier")
-    .requiredOption("--specific-to-them <text>", "What is specific to this person")
-    .requiredOption("--shared-problem <text>", "Shared problem they likely live inside")
-    .requiredOption("--why-now <text>", "Why now for this person")
-    .requiredOption("--legitimate-wedge <text>", "Legitimate wedge that earns a reply")
-    .requiredOption("--compression-line <text>", "One-sentence compression test line")
-    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
-    .option("--signal-match <signal-match-id>", "Supporting signal-match id; repeat for multiple", collect, [])
+    .requiredOption("--surface <surface>", "Draft surface: connection_request, post_accept_message, follow_up_direct_message, email, in_mail_message, inbound_reply")
+    .requiredOption("--body <text>", "Draft body the agent wrote")
+    .option("--subject <text>", "Subject line (email / in_mail only)")
+    .option("--motion <motion-id>", "Motion identifier when the company is in more than one motion")
+    .option("--status <status>", "drafting | ready | queued (default ready)")
     .option("--json", "Emit machine-readable JSON")
     .action((companyId, options) => {
       const context = loadCompanyMotionContext(companyId, options.motion);
-      if (!context) {
-        process.exitCode = 1;
-        return;
-      }
-
-      const { company, rawMotion } = context;
-
+      if (!context) return;
       try {
-        const updatedMotion = setMotionProspectThroughLine(rawMotion, company, {
+        if (isSendableDraftStatus(options.status ?? "ready")) {
+          const brief = buildMotionDraftBrief(context.rawMotion, {
+            companyId,
+            prospectId: options.prospect,
+            surface: options.surface,
+          });
+          if (brief.surface.available === false) {
+            throw new Error(brief.surface.missingReason ?? `Surface ${options.surface} is not currently writeable for this prospect.`);
+          }
+        }
+        const updated = setMotionProspectDraft(context.rawMotion, context.company, {
           prospectId: options.prospect,
-          signalMatchIds: normalizeStringList(options.signalMatch),
-          specificToThem: options.specificToThem,
-          sharedProblem: options.sharedProblem,
-          whyNow: options.whyNow,
-          legitimateWedge: options.legitimateWedge,
-          compressionLine: options.compressionLine
+          surface: options.surface,
+          body: options.body,
+          subject: options.subject ?? null,
+          status: options.status ?? "ready",
         });
-        const storedMotion = updateMotion(updatedMotion);
-        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
-        const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
-        const result = {
-          company,
-          motion: { id: storedMotion.id, name: storedMotion.name },
-          prospect,
-          throughLine: prospect?.throughLine ?? null
-        };
-
-        if (options.json) {
-          console.log(JSON.stringify(result, null, 2));
-          return;
-        }
-
-        if (!prospect || prospect.throughLine.status !== "ready") {
-          console.log(`No through-line was stored for prospect ${options.prospect}.`);
-          return;
-        }
-
-        console.log(renderThroughLineDetail(company.name, storedMotion.name, prospect));
+        const stored = updateMotion(updated);
+        emitDraft(stored, companyId, options.prospect, options.surface, options.json, "Draft stored");
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
       }
     });
 
-  const openingPlan = companies
-    .command("opening-plan")
-    .description("Inspect or set the stored prospect opening plan for one company in one motion.");
-
-  openingPlan
-    .command("show")
-    .description("Show the stored prospect opening plan for one company in one motion.")
+  draft
+    .command("approve")
+    .description("Approve a draft (optionally with operator edits) — queues it for the agent to send.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--prospect <prospect-id>", "Prospect identifier")
-    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
+    .requiredOption("--surface <surface>", "Draft surface")
+    .requiredOption("--body <text>", "Final (possibly edited) body")
+    .option("--subject <text>", "Final subject (email / in_mail only)")
+    .option("--motion <motion-id>", "Motion identifier")
     .option("--json", "Emit machine-readable JSON")
     .action((companyId, options) => {
       const context = loadCompanyMotionContext(companyId, options.motion);
-      if (!context) {
-        process.exitCode = 1;
-        return;
-      }
-
-      const { company, motion, account } = context;
-      const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
-      const result = {
-        company,
-        motion: { id: motion.id, name: motion.name },
-        prospect,
-        openingPlan: prospect?.openingPlan ?? null
-      };
-
-      if (options.json) {
-        console.log(JSON.stringify(result, null, 2));
-        return;
-      }
-
-      if (!prospect || prospect.openingPlan.status !== "ready") {
-        console.log(`No stored opening plan for prospect ${options.prospect} on ${company.name} in motion ${motion.name}.`);
-        return;
-      }
-
-      console.log(renderOpeningPlanDetail(company.name, motion.name, prospect));
-    });
-
-  openingPlan
-    .command("set")
-    .description("Persist the first opening plan for one prospect.")
-    .argument("<company-id>", "Company identifier")
-    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
-    .requiredOption("--signal-match <signal-match-id>", "Supporting signal-match id; repeat for multiple", collect, [])
-    .requiredOption("--why-now <text>", "Why this is worth mentioning now")
-    .requiredOption("--angle <text>", "Primary opening angle")
-    .requiredOption("--reply-path <text>", "Most likely legitimate path, given the evidence, to get this person to reply")
-    .requiredOption("--primary-channel <channel>", "Primary channel: connection-request, direct-message, inmail, email, or none")
-    .requiredOption("--fallback-channel <channel>", "Fallback channel if the primary path is blocked or cold")
-    .requiredOption("--fallback-trigger <text>", "When to use the fallback path")
-    .requiredOption("--first-move <text>", "First move to engage this prospect")
-    .requiredOption("--first-message-goal <text>", "Desired response or outcome from the first touch")
-    .option("--motion <motion-id>", "Motion identifier when a company is linked to more than one motion")
-    .option("--supporting-prospect <prospect-id>", "Additional supporting prospect id; repeat for multiple", collect, [])
-    .option("--preflight-action <text>", "Action to take before first outreach", collect, [])
-    .option("--talking-point <text>", "Supporting talking point; repeat for multiple", collect, [])
-    .option("--notes <notes>", "Optional notes")
-    .option("--json", "Emit machine-readable JSON")
-    .action((companyId, options) => {
-      const context = loadCompanyMotionContext(companyId, options.motion);
-      if (!context) {
-        process.exitCode = 1;
-        return;
-      }
-
-      const { company, rawMotion } = context;
-
+      if (!context) return;
       try {
-        const updatedMotion = setMotionProspectOpeningPlan(rawMotion, company, {
+        const updated = approveMotionProspectDraft(context.rawMotion, context.company, {
           prospectId: options.prospect,
-          supportingProspectIds: normalizeStringList(options.supportingProspect),
-          signalMatchIds: normalizeStringList(options.signalMatch),
-          whyNow: options.whyNow,
-          angle: options.angle,
-          replyPath: options.replyPath,
-          primaryChannel: normalizeOutreachChannel(options.primaryChannel),
-          fallbackChannel: normalizeOutreachChannel(options.fallbackChannel),
-          fallbackTrigger: options.fallbackTrigger,
-          preflightActions: normalizeRepeatedStringList(options.preflightAction),
-          firstMove: options.firstMove,
-          firstMessageGoal: options.firstMessageGoal,
-          talkingPoints: normalizeRepeatedStringList(options.talkingPoint),
-          notes: options.notes
+          surface: options.surface,
+          body: options.body,
+          subject: options.subject ?? null,
         });
-        const storedMotion = updateMotion(updatedMotion);
-        const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
-        const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
-        const result = {
-          company,
-          motion: { id: storedMotion.id, name: storedMotion.name },
-          prospect,
-          openingPlan: prospect?.openingPlan ?? null
-        };
-
-        if (options.json) {
-          console.log(JSON.stringify(result, null, 2));
-          return;
-        }
-
-        if (!prospect || prospect.openingPlan.status !== "ready") {
-          console.log(`No opening plan was stored for prospect ${options.prospect}.`);
-          return;
-        }
-
-        console.log(renderOpeningPlanDetail(company.name, storedMotion.name, prospect));
+        const stored = updateMotion(updated);
+        emitDraft(stored, companyId, options.prospect, options.surface, options.json, "Draft approved — queued for send");
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
+      }
+    });
+
+  draft
+    .command("sent")
+    .description("Mark a send-ready draft as sent (call after the agent actually sends it).")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
+    .requiredOption("--surface <surface>", "Draft surface")
+    .option("--motion <motion-id>", "Motion identifier")
+    .option("--json", "Emit machine-readable JSON")
+    .action((companyId, options) => {
+      const context = loadCompanyMotionContext(companyId, options.motion);
+      if (!context) return;
+      try {
+        const updated = markMotionProspectDraftSent(context.rawMotion, context.company, {
+          prospectId: options.prospect,
+          surface: options.surface,
+        });
+        const stored = updateMotion(updated);
+        emitDraft(stored, companyId, options.prospect, options.surface, options.json, "Draft marked sent");
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  draft
+    .command("pending")
+    .description("List send-ready drafts queued for the agent to send across all motions.")
+    .option("--json", "Emit machine-readable JSON")
+    .action((options) => {
+      const queued = [];
+      for (const rawMotion of listMotions()) {
+        const motion = motionSchema.parse(rawMotion);
+        for (const account of motion.targetMap.accounts) {
+          for (const prospect of account.prospects) {
+            for (const d of prospect.drafts ?? []) {
+              if (d.status === "approved" || d.status === "queued") {
+                queued.push({
+                  motionId: motion.id,
+                  motionName: motion.name,
+                  companyId: account.companyId,
+                  companyName: account.companyName,
+                  prospectId: prospect.id,
+                  prospectName: prospect.name,
+                  surface: d.surface,
+                  channel: d.channel,
+                  subject: d.subject,
+                  body: d.body,
+                  status: d.status,
+                  editedByOperator: d.editedByOperator,
+                  approvedAt: d.approvedAt,
+                });
+              }
+            }
+          }
+        }
+      }
+      if (options.json) {
+        console.log(JSON.stringify({ count: queued.length, drafts: queued }, null, 2));
+        return;
+      }
+      if (!queued.length) {
+        console.log("No drafts are queued for send.");
+        return;
+      }
+        console.log(`${queued.length} draft(s) queued for send:`);
+      for (const d of queued) {
+        console.log(`  ${d.prospectName} · ${d.surface} (${d.channel})${d.subject ? ` · "${d.subject}"` : ""}${d.editedByOperator ? " · edited" : ""}${d.status === "approved" ? " · operator-approved" : " · auto-queued"}`);
       }
     });
 
@@ -1787,19 +1723,46 @@ Rules:
       const { company, rawMotion } = context;
 
       try {
-        const updatedMotion = recordMotionProspectTouch(rawMotion, company, {
-          prospectId: options.prospect,
-          surface: normalizeTouchSurface(options.surface),
-          direction: normalizeTouchDirection(options.direction),
-          outcome: normalizeCadenceOutcome(options.outcome),
-          occurredAt: options.occurredAt,
-          summary: options.summary,
-          subject: options.subject,
-          body: options.body,
-          sourceUrl: options.sourceUrl,
-          notes: options.notes
-        });
-        const storedMotion = updateMotion(updatedMotion);
+        const surface = normalizeTouchSurface(options.surface);
+        const direction = normalizeTouchDirection(options.direction);
+        const outcome = normalizeCadenceOutcome(options.outcome);
+        const mappedResult = findActionResultForTouch({ surface, direction, outcome });
+
+        let storedMotion;
+        if (mappedResult) {
+          const actionResult = recordActionResult({
+            actionKey: mappedResult.actionKey,
+            resultKey: mappedResult.resultKey,
+            motionId: rawMotion.id,
+            companyId: company.id,
+            prospectId: options.prospect,
+            surface: mappedResult.surface,
+            occurredAt: options.occurredAt,
+            summary: options.summary,
+            subject: options.subject,
+            body: options.body,
+            sourceUrl: options.sourceUrl,
+            notes: options.notes
+          });
+          storedMotion = findMotionById(actionResult.actionResult.motionId);
+          if (!storedMotion) {
+            throw new Error(`Motion not found after action-result writeback: ${actionResult.actionResult.motionId}`);
+          }
+        } else {
+          const updatedMotion = recordMotionProspectTouch(rawMotion, company, {
+            prospectId: options.prospect,
+            surface,
+            direction,
+            outcome,
+            occurredAt: options.occurredAt,
+            summary: options.summary,
+            subject: options.subject,
+            body: options.body,
+            sourceUrl: options.sourceUrl,
+            notes: options.notes
+          });
+          storedMotion = updateMotion(updatedMotion);
+        }
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
         const result = {
@@ -3003,6 +2966,27 @@ function normalizeNullableConfidence(value) {
  * @param {string} companyId
  * @param {string | undefined} selectedMotionId
  */
+/**
+ * @param {any} storedMotion
+ * @param {string} companyId
+ * @param {string} prospectId
+ * @param {string} surface
+ * @param {boolean} json
+ * @param {string} label
+ */
+function emitDraft(storedMotion, companyId, prospectId, surface, json, label) {
+  const account = storedMotion.targetMap.accounts.find((item) => item.companyId === companyId) ?? null;
+  const prospect = account?.prospects.find((item) => item.id === prospectId) ?? null;
+  const draft = (prospect?.drafts ?? []).find((item) => item.surface === surface && item.status !== "sent") ?? null;
+  if (json) {
+    console.log(JSON.stringify({ motion: { id: storedMotion.id, name: storedMotion.name }, prospect: prospect ? { id: prospect.id, name: prospect.name } : null, draft }, null, 2));
+    return;
+  }
+  console.log(`${label} for ${prospect?.name ?? prospectId} · ${surface} [${draft?.status ?? "none"}]`);
+  if (draft?.subject) console.log(`  Subject: ${draft.subject}`);
+  if (draft?.body) console.log(`  Body: ${draft.body}`);
+}
+
 function loadCompanyMotionContext(companyId, selectedMotionId) {
   const rawCompany = findCompanyById(companyId);
   if (!rawCompany) {
@@ -3091,62 +3075,10 @@ function renderProspectDetail(companyName, motionName, prospect) {
     `Live Signal: ${prospect.liveSignal.summary ?? "none"}`,
     `Contact Points: ${prospect.contactPoints.length ? prospect.contactPoints.map((point) => `${point.kind}=${point.value}`).join(" | ") : "none"}`,
     `Contact Enrichment: ${prospect.contactEnrichmentState.status}`,
-    `Through-Line: ${prospect.throughLine.status}`,
-    `Opening Plan: ${prospect.openingPlan.status}`,
     `Cadence: ${prospect.cadenceState.status}`
   ];
 
-  if (prospect.throughLine.status === "ready") {
-    lines.push(`Compression: ${prospect.throughLine.compressionLine ?? "none"}`);
-  }
-
-  if (prospect.openingPlan.status === "ready") {
-    lines.push(`Reply Path: ${prospect.openingPlan.replyPath ?? "none"}`);
-  }
-
   return lines.join("\n");
-}
-
-/**
- * @param {string} companyName
- * @param {string} motionName
- * @param {import("../../schema/target-account.js").prospectSchema._type} prospect
- */
-function renderThroughLineDetail(companyName, motionName, prospect) {
-  return [
-    `Through-Line: ${companyName}`,
-    `Motion: ${motionName}`,
-    `Prospect: ${prospect.name} (${prospect.title})`,
-    `Specific To Them: ${prospect.throughLine.specificToThem ?? "none"}`,
-    `Shared Problem: ${prospect.throughLine.sharedProblem ?? "none"}`,
-    `Why Now: ${prospect.throughLine.whyNow ?? "none"}`,
-    `Legitimate Wedge: ${prospect.throughLine.legitimateWedge ?? "none"}`,
-    `Compression Line: ${prospect.throughLine.compressionLine ?? "none"}`,
-    `Signal Match Ids: ${prospect.throughLine.signalMatchIds.join(", ") || "none"}`
-  ].join("\n");
-}
-
-/**
- * @param {string} companyName
- * @param {string} motionName
- * @param {import("../../schema/target-account.js").prospectSchema._type} prospect
- */
-function renderOpeningPlanDetail(companyName, motionName, prospect) {
-  return [
-    `Opening Plan: ${companyName}`,
-    `Motion: ${motionName}`,
-    `Prospect: ${prospect.name} (${prospect.title})`,
-    `Why Now: ${prospect.openingPlan.whyNow ?? "none"}`,
-    `Angle: ${prospect.openingPlan.angle ?? "none"}`,
-    `Reply Path: ${prospect.openingPlan.replyPath ?? "none"}`,
-    `Primary Channel: ${prospect.openingPlan.primaryChannel ?? "none"}`,
-    `Fallback Channel: ${prospect.openingPlan.fallbackChannel ?? "none"}`,
-    `Fallback Trigger: ${prospect.openingPlan.fallbackTrigger ?? "none"}`,
-    `First Move: ${prospect.openingPlan.firstMove ?? "none"}`,
-    `First Message Goal: ${prospect.openingPlan.firstMessageGoal ?? "none"}`,
-    `Preflight Actions: ${prospect.openingPlan.preflightActions.join(" | ") || "none"}`,
-    `Supporting Prospects: ${prospect.openingPlan.supportingProspectIds.join(", ") || "none"}`
-  ].join("\n");
 }
 
 /**

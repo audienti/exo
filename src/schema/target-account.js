@@ -238,6 +238,18 @@ export const linkedinProfileSnapshotSchema = z.object({
   about: nullableString.default(null),
   followerCount: z.number().int().min(0).nullable().default(null),
   connectionCount: z.number().int().min(0).nullable().default(null),
+  // Premium signals read off the profile page during enrichment:
+  // isPremium  — a LinkedIn Premium badge is visible on the profile.
+  // isOpenProfile — Open Profile is on, so any Premium member can DM them free
+  //   (no InMail credit, no Sales Navigator required).
+  isPremium: z.boolean().nullable().default(null),
+  isOpenProfile: z.boolean().nullable().default(null),
+  // Network distance badge shown next to their name: 1 = 1st-degree (you are
+  // connected — i.e. a connection request was accepted), 2 = 2nd, 3 = 3rd/3rd+.
+  // This is the AUTHORITATIVE truth for connection status: if there is ever a
+  // dispute about whether a request was accepted, the degree settles it.
+  // 1st ⇒ accepted/connected; anything else ⇒ not yet, still in the sent queue.
+  connectionDegree: z.number().int().min(1).max(3).nullable().default(null),
   recentPosts: z.array(linkedinRecentPostSchema).default([])
 });
 
@@ -291,35 +303,6 @@ export const packetStateSchema = z.object({
   notes: nullableString.default(null)
 });
 
-export const throughLineSchema = z.object({
-  status: z.enum(["pending", "ready"]).default("pending"),
-  specificToThem: nullableString.default(null),
-  sharedProblem: nullableString.default(null),
-  whyNow: nullableString.default(null),
-  legitimateWedge: nullableString.default(null),
-  compressionLine: nullableString.default(null),
-  signalMatchIds: stringArray,
-  updatedAt: z.string().datetime().nullable().default(null)
-});
-
-export const openingPlanSchema = z.object({
-  status: z.enum(["pending", "ready"]).default("pending"),
-  supportingProspectIds: stringArray,
-  signalMatchIds: stringArray,
-  whyNow: nullableString.default(null),
-  angle: nullableString.default(null),
-  replyPath: nullableString.default(null),
-  primaryChannel: channelSchema.nullable().default(null),
-  fallbackChannel: channelSchema.nullable().default(null),
-  fallbackTrigger: nullableString.default(null),
-  preflightActions: stringArray,
-  firstMove: nullableString.default(null),
-  firstMessageGoal: nullableString.default(null),
-  talkingPoints: stringArray,
-  notes: nullableString.default(null),
-  updatedAt: z.string().datetime().nullable().default(null)
-});
-
 export const cadenceStateSchema = z.object({
   status: z.enum(["pending", "ready"]).default("pending"),
   currentStep: cadenceStepSchema.nullable().default(null),
@@ -345,6 +328,40 @@ export const touchSchema = z.object({
   body: nullableString.default(null),
   sourceUrl: z.string().url().nullable().default(null),
   notes: nullableString.default(null)
+});
+
+// A message draft for one outreach surface. The core agent writes the body
+// (and subject for email/inmail). `ready` means written but not sendable yet;
+// `queued` means send-ready under agent policy; `approved` means explicitly
+// operator-reviewed and send-ready; `sent` and `discarded` are terminal.
+export const prospectDraftStatusSchema = z.enum(["drafting", "ready", "queued", "approved", "sent", "discarded"]);
+export const prospectDraftChannelSchema = z.enum(["linkedin", "email"]);
+export const prospectDraftSchema = z.object({
+  id: z.string().min(1),
+  surface: touchSurfaceSchema,
+  channel: prospectDraftChannelSchema,
+  subject: nullableString.default(null),
+  body: z.string().default(""),
+  status: prospectDraftStatusSchema.default("drafting"),
+  authoredBy: z.enum(["agent", "operator"]).default("agent"),
+  editedByOperator: z.boolean().default(false),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime(),
+  approvedAt: z.string().datetime().nullable().default(null),
+  sentAt: z.string().datetime().nullable().default(null),
+  notes: nullableString.default(null)
+});
+
+// Operator-authored timeline entries. A "note" is context/observation; a
+// "steer" is a directive for the agent (what to do or avoid on the next action).
+// Both render as timestamped entries in the engagement timeline.
+export const prospectTimelineNoteKindSchema = z.enum(["note", "steer"]);
+export const prospectTimelineNoteSchema = z.object({
+  id: z.string().min(1),
+  kind: prospectTimelineNoteKindSchema.default("note"),
+  body: z.string().trim().min(1).max(2000),
+  author: nullableString.default(null),
+  createdAt: z.string().datetime()
 });
 
 export const prospectSchema = z.object({
@@ -374,9 +391,9 @@ export const prospectSchema = z.object({
   notes: nullableString.default(null),
   signalMatchIds: stringArray,
   touches: z.array(touchSchema).default([]),
-  throughLine: throughLineSchema.default({}),
-  openingPlan: openingPlanSchema.default({}),
-  cadenceState: cadenceStateSchema.default({})
+  cadenceState: cadenceStateSchema.default({}),
+  drafts: z.array(prospectDraftSchema).default([]),
+  timelineNotes: z.array(prospectTimelineNoteSchema).default([])
 });
 
 export const targetAccountSchema = z.object({
@@ -466,8 +483,6 @@ function buildProspectsFromLegacy(source, signalMatches) {
     notes: stakeholder.notes,
     signalMatchIds: stakeholder.signalMatchIds,
     touches: [],
-    throughLine: {},
-    openingPlan: {},
     cadenceState: {}
   })));
 
@@ -475,47 +490,18 @@ function buildProspectsFromLegacy(source, signalMatches) {
     return prospects;
   }
 
-  const prospectIds = new Set(prospects.map((prospect) => prospect.id));
   const primaryIndex = prospects.findIndex((prospect) => prospect.id === legacyPlan.primaryStakeholderId);
   if (primaryIndex === -1) {
     return prospects;
   }
 
   const primary = prospects[primaryIndex];
-  const supportingProspectIds = legacyPlan.stakeholderIds.filter((id) => id !== primary.id && prospectIds.has(id));
   const mergedSignalMatchIds = [...new Set([...primary.signalMatchIds, ...legacyPlan.signalMatchIds])];
   const compressionLine = buildLegacyCompressionLine(primary, legacyPlan);
 
   prospects[primaryIndex] = prospectSchema.parse({
     ...primary,
     signalMatchIds: mergedSignalMatchIds,
-    throughLine: {
-      status: legacyPlan.whyNow || legacyPlan.angle || legacyPlan.replyPath ? "ready" : "pending",
-      specificToThem: primary.whyRelevant,
-      sharedProblem: legacyPlan.angle,
-      whyNow: legacyPlan.whyNow,
-      legitimateWedge: legacyPlan.replyPath,
-      compressionLine,
-      signalMatchIds: legacyPlan.signalMatchIds,
-      updatedAt: legacyPlan.updatedAt
-    },
-    openingPlan: {
-      status: "ready",
-      supportingProspectIds,
-      signalMatchIds: legacyPlan.signalMatchIds,
-      whyNow: legacyPlan.whyNow,
-      angle: legacyPlan.angle,
-      replyPath: legacyPlan.replyPath,
-      primaryChannel: legacyPlan.primaryChannel,
-      fallbackChannel: legacyPlan.fallbackChannel,
-      fallbackTrigger: legacyPlan.fallbackTrigger,
-      preflightActions: legacyPlan.preflightActions,
-      firstMove: legacyPlan.firstMove,
-      firstMessageGoal: legacyPlan.firstMessageGoal,
-      talkingPoints: legacyPlan.talkingPoints,
-      notes: legacyPlan.notes,
-      updatedAt: legacyPlan.updatedAt
-    },
     cadenceState: {
       status: "pending",
       currentStep: legacyPlan.primaryChannel === "connection-request" ? "connection-request" : null,
@@ -526,7 +512,7 @@ function buildProspectsFromLegacy(source, signalMatches) {
       nextActionDueAt: null,
       blockedChannels: [],
       requireNewHook: false,
-      notes: null,
+      notes: compressionLine ?? legacyPlan.replyPath ?? legacyPlan.notes,
       updatedAt: legacyPlan.updatedAt
     }
   });

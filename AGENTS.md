@@ -67,6 +67,7 @@ Use `operatorInterface.currentCall` and `agentUsage.recommendedPath` as the sour
 7. If a command starts working after opening the state store on a new version, assume a local state migration ran. That is intended behavior.
 8. Exo resolves browser identity; the session chooses the browser-control harness. In Codex, prefer the Chrome skill/native Chrome connector. In Claude, prefer the native browser-use/browser-control surface. Do not default to Playwriter.
 9. Treat Exo as the system of record. If you find a durable signal, website, stakeholder, or assignment that Exo can store, write it back before you summarize.
+10. Any user-facing copy you produce (outreach drafts, email replies, motion briefs, packet summaries, prospect notes, status lines, planner narration, docs prose) follows `docs/writing-voice.md`. No em dashes, no throat-clearing openers, no AI-jargon, no chatbot artifacts. Read that file before drafting if you have not already.
 
 ## What Exo Is Good For Right Now
 

@@ -63,6 +63,11 @@ import { describeStatePathRule } from "../db/paths.js";
  *       count: number,
  *       readyCount: number,
  *       preview: Array<{ id: string, label: string, status: string, capabilities: string[] }>
+ *     },
+ *     users: {
+ *       count: number,
+ *       executionCapableCount: number,
+ *       preview: Array<{ id: string, label: string, accountCount: number }>
  *     }
  *   },
  *   operatorInterface: {
@@ -96,19 +101,19 @@ export function describeExo() {
     name: "Exo",
     version: "0.1.0",
     identity: {
-      oneLiner: "Exo is a GTM operating kernel and system of record exposed through a local CLI and later through MCP.",
+      oneLiner: "Exo is an agentic CRM and GTM motion system of record exposed through a local CLI and later through MCP.",
       purpose:
-        "Exo turns an offer plus a premise, audience hypotheses, signals, targeting, and suppression inputs into durable GTM state, then uses that state to govern agent behavior, browser-backed execution, and GTM action.",
+        "Exo turns an offer plus a premise, audience hypotheses, signals, targeting, and suppression inputs into durable GTM state, then uses that state to govern agent behavior, connector-managed execution, and GTM action.",
       interactionModel: [
         "Claude or Codex uses the CLI with --json or the future MCP layer.",
         "The agent guides the operator; Exo is not primarily a human-first shell product.",
         "Exo is queryable, but its main purpose is to drive behavior, act as the GTM system of record, and enforce governance.",
-        "Browser-backed work is gated by an explicit registered browser profile."
+        "Connectors and external tools do the interfacing. Exo owns state, policy, and governed writeback."
       ]
     },
     notThis: [
       "a generic browser automation framework",
-      "a CRM replacement",
+      "the transport layer itself",
       "an AI SDR",
       "a sequence builder",
       "a proprietary prospect database"
@@ -118,9 +123,9 @@ export function describeExo() {
       "Prefer --json when another agent needs structured output.",
       "Treat Exo as the GTM system of record. If you learn something durable, write it back.",
       "Opening the Exo state store may apply versioned local database migrations.",
-      "Do not guess browser identity. Register and test a browser profile first.",
-      "Treat browser profile status as a gate for browser-backed work, not a hint.",
-      "In Codex, prefer the native Chrome browser harness for Chrome-backed authenticated work. Do not default to Playwriter."
+      "Prefer connected-account and harness-connector paths over browser-profile paths.",
+      "Browser profiles are legacy state only. They do not create a governed execution path.",
+      "Exo should govern connector-managed work and landed outcomes, not become the interface layer."
     ],
     currentCapabilities: [
       {
@@ -128,12 +133,12 @@ export function describeExo() {
         purpose: "Return the product identity, operating rules, capabilities, and limitations."
       },
       {
-        command: "exo actions list/show",
-        purpose: "Inspect the canonical Audienti-style GTM action catalog that Exo uses for action readiness and execution briefs."
+        command: "exo actions list/show/result",
+        purpose: "Inspect the canonical Audienti-style GTM action catalog and write back governed action outcomes so cadence, drafts, touch history, and inbound reconciliation stay in one contract."
       },
       {
         command: "exo inbound surfaces/surface/cues add/list/resolve/sync show/plan/live/linkedin/linkedin-live/gmail/gmail-live/run/set/record/observations list/show/add",
-        purpose: "Inspect the canonical inbound truth surfaces, record ambient inbound cues, manage per-account sync policy, run one governed mixed-account live inbound pass plus the first direct LinkedIn and Gmail live retrieval slices through supported runtimes, and read or write normalized inbound observations."
+        purpose: "Inspect the canonical inbound truth surfaces, record ambient inbound cues, manage per-account sync policy, emit governed connector-capture contracts, and read or write normalized inbound observations."
       },
       {
         command: "exo inbound review",
@@ -160,12 +165,20 @@ export function describeExo() {
         purpose: "Render one read-only workspace projection across inbound truth surfaces, motions, prep state, engagement state, and planner pressure."
       },
       {
+        command: "exo transition start/promote/promote-all/rehome",
+        purpose: "Absorb in-flight legacy relationships into one transition motion, carry their current invite or reply state forward, and then re-home triaged prospects into real motions without losing cadence, touches, or linked observations."
+      },
+      {
+        command: "exo ui-status/ui",
+        purpose: "Report or serve the interactive operator workspace wired to live Exo state and real writeback actions."
+      },
+      {
         command: "exo config export/import",
         purpose: "Export and import motions, companies, browser profiles, and execution users as portable Exo configuration."
       },
       {
-        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/claim/complete/through-line show/set/opening-plan show/set/cadence show/set/touches show/add/profile show/assign/user show/assign/execution show",
-        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their through-lines, their opening plans, their cadence state, their touch history, inspect one cross-motion company rollup, pin either a sticky engagement profile or a cross-capability execution user when outreach starts, and inspect the resolved execution plan with optional motion-level fallback."
+        command: "exo companies add/list/find/show/update/motions/research-brief/signal-matches show/add/prospects show/add/update/claim/complete/cadence show/set/touches show/add/profile show/assign/user show/assign/execution show",
+        purpose: "Manage canonical companies, persist website and company-page identity, generate governed company research briefs, store synthesized concise writer-ready motion-specific signal matches, persist chosen prospects, their cadence state, their touch history, inspect one cross-motion company rollup, pin the acting execution user when outreach starts, and inspect the resolved execution plan."
       },
       {
         command: "exo motion intake/start/add/seed/discover/target/packets/packet-brief/prospects/actions/action-brief/drafts/draft-brief/clone/update/pause/resume/archive/restart/refresh/list/show/profile show/assign/user show/assign/remove",
@@ -173,30 +186,27 @@ export function describeExo() {
       },
       {
         command: "exo profiles discover/add/claim/list/show/capabilities/resolve/test/auth/remove",
-        purpose: "Discover local browser profiles, claim them as business identities, store account-level weekly outreach quotas, verify claimed capabilities, probe live signed-in readiness, resolve the right browser identity, and query capability coverage for browser-backed Exo work."
+        purpose: "Inspect legacy browser-profile records that may still exist in local state during migration."
       },
       {
-        command: "exo users add/list/show/working-hours show/set/harness add/probe/accounts add/resolve",
-        purpose: "Manage human execution identities that own connected accounts across browser profiles and harness connectors, define the user's working-hours window for planner pressure, probe the current runtime for callable harness paths, and then resolve the right account for each capability."
+        command: "exo users add/list/show/working-hours show/set/harness add/probe/accounts add/map-runtime/resolve",
+        purpose: "Manage human execution identities that own connected accounts across harness connectors, define the user's working-hours window for planner pressure, probe the current runtime for callable harness paths, map discovered LinkedIn, email, and related managed accounts onto the user, and then resolve the right account for each capability."
       }
     ],
     browserProfileRules: [
-      "Browser-backed work should fail closed if no profile is attached or trusted.",
-      "A ready profile means the local browser context looks structurally usable.",
-      "Profile checks do not yet prove live LinkedIn, Sales Navigator, Gmail, or HubSpot auth.",
-      "Inbound sync policy and normalized inbound observations can now be governed per connected account. Gmail can now be retrieved live through supported runtime adapters, including runtime:gmail harness-backed accounts and trusted Chrome profiles plus runtime:chrome harnesses. LinkedIn's authoritative quick surfaces can now be retrieved through a trusted Chrome profile plus a supported runtime:chrome harness in either bounded quick mode or full reconciliation mode, but broader inbound retrieval still needs dedicated producers. In Codex desktop shell mode, Exo now returns an agent-side live-capture contract instead of shelling out to codex exec.",
-      "Configured weekly quotas on the claimed profile identity should govern outreach pacing. InMail credits are still a separate live observation, not a static config knob.",
-      "Exo resolves browser identity. The agent runtime should choose the browser-control harness.",
-      "In Codex, prefer the Chrome skill or native Chrome connector before Playwriter for Chrome-profile work."
+      "Browser-profile execution fallback has been removed. Governed work must resolve through managed connector accounts.",
+      "Legacy browser-profile records may still exist in local state during migration, but they do not authorize execution.",
+      "Profile checks do not prove live LinkedIn, Sales Navigator, Gmail, or HubSpot auth.",
+      "Inbound sync policy and normalized inbound observations are governed per connected account.",
+      "Configured weekly quotas on the governed connected account should govern outreach pacing. InMail credits are still a separate live observation, not a static config knob.",
+      "Exo resolves the governed account path. The agent runtime should choose the actual connector, MCP server, or CLI surface.",
+      "In Codex, prefer the named connector path first. Do not fall back to browser-profile state."
     ],
     agentUsage: {
       preferJson: true,
       bootstrapSequence: [
         "exo what-is-this --json",
         "exo companies list --json",
-        "exo profiles discover --json",
-        "exo profiles list --json",
-        "exo profiles capabilities --json",
         "exo users list --json",
         "exo inbound surfaces --json",
         "exo inbound sync show <user-id> --json",
@@ -207,7 +217,6 @@ export function describeExo() {
         "exo inbox --user <user-id> --json",
         "exo daily --user <user-id> --json",
         "exo next --json",
-        "exo profiles resolve --capability linkedin --json",
         "exo motion list --json"
       ],
       sharedStatePath: "EXO_STATE_DIR/exo.db or ./.exo/exo.db",
@@ -226,12 +235,38 @@ export function describeExo() {
           "Do not describe shell bootstrapping, state-path setup, sync modes, or writeback mechanics unless the operator explicitly asks or the workflow is blocked."
         ]
       },
+      writingVoice: {
+        principle:
+          "Any user-facing copy you produce (outreach drafts, email replies, motion briefs, packet summaries, prospect notes, status lines, planner narration, docs prose) follows docs/writing-voice.md. Sound like a person with a point of view, not an LLM completing a task.",
+        sourceOfTruth: "docs/writing-voice.md",
+        rules: [
+          "Lead with the point. No throat-clearing openers like \"just wanted to\", \"quick note\", \"hope you're well\", \"I wanted to reach out\".",
+          "No em dashes. Use periods or commas.",
+          "State the claim directly. No binary contrast formulas like \"not X, but Y\" or \"it's not just X\".",
+          "Use active voice and name the actor. No passive voice or false agency like \"the data tells us\".",
+          "Cut AI-jargon and hype. Avoid \"delve\", \"landscape\", \"pivotal\", \"showcase\", \"underscores\", \"unlock\", \"game-changer\", \"seamless\", \"robust\", \"leverage\", \"tapestry\", \"testament\".",
+          "No three-item slogan lists, dramatic fragments, or adverb-heavy emphasis (\"really\", \"very\", \"actually\", \"genuinely\").",
+          "Prefer one concrete fact over broad claims. If the context gives a detail, use it. If not, stay plain.",
+          "No chatbot collaboration artifacts (\"I hope this helps\", \"Of course!\", \"Certainly!\", \"Let me know if…\").",
+          "No knowledge-cutoff disclaimers, no sycophancy, no decorative emojis, no curly quotes, no title-case headings."
+        ]
+      },
       operatorGuidance: {
         principle:
           "Do not just enumerate Exo commands. First identify what the operator is trying to do, then guide them through the relevant Exo path and persist durable findings back into Exo.",
         firstQuestion:
-          "Are we continuing an existing motion, creating a new motion, preparing browser-backed work, or managing canonical company state?",
+          "Are we continuing an existing motion, creating a new motion, configuring connector-backed execution, absorbing transition backlog, or managing canonical company state?",
         modes: [
+          {
+            name: "configure-execution-user",
+            when: "Use this on a fresh state store or any half-bootstrapped store where Exo still does not know who the first managed execution user is.",
+            commands: [
+              "exo users intake --json",
+              "exo users add --label operator-main --json",
+              "exo users harness probe <user-id> --runtime codex --json",
+              "exo users accounts map-runtime <user-id> --runtime codex --apply --json",
+            ]
+          },
           {
             name: "continue-motion",
             when: "Use this when motions already exist and the operator is trying to inspect or continue one.",
@@ -265,27 +300,23 @@ export function describeExo() {
             ]
           },
           {
-            name: "prepare-browser-work",
-            when: "Use this before any LinkedIn, Sales Navigator, Gmail, or HubSpot work that depends on a real browser identity.",
+            name: "configure-execution-connectors",
+            when: "Use this before any LinkedIn, Gmail, or other live work that depends on a real managed connector path.",
             commands: [
-              "exo profiles discover --json",
-              "exo profiles claim <profile-id> --label workspace-main --workspace workspace --account linkedin:operator-linkedin --max-connection-requests 40 --max-inmail-messages 20 --json",
+              "exo users intake --json",
               "exo users add --label operator-main --owner operator --json",
               "exo users harness probe <user-id> --runtime codex --json",
               "exo users harness probe <user-id> --runtime claude --json",
-              "exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --profile <profile-id> --preferred --json",
-              "exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --preferred --json",
-              "exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime claude --connector gmail --preferred --json",
-              "exo users harness add <user-id> --runtime codex --connector chrome --status unknown --json",
-              "exo users harness add <user-id> --runtime claude --connector chrome --status unknown --json",
-              "exo profiles auth <profile-id> --runtime codex --json",
+              "exo users accounts map-runtime <user-id> --runtime codex --apply --json",
+              "exo users harness probe <user-id> --runtime codex --connector <connector-from-probe> --writeback --json",
+              "exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --runtime codex --connector <connector-from-probe> --provider-account-id <provider-account-id> --preferred --json",
+              "exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --provider-account-id <provider-account-id> --preferred --json",
+              "exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime claude --connector gmail --provider-account-id <provider-account-id> --preferred --json",
               "exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --json",
               "exo inbound sync gmail-live <user-id> --account <account-id> --json",
-              "exo profiles list --json",
-              "exo profiles capabilities --json",
               "exo users list --json",
-              "exo profiles resolve --capability linkedin --json",
-              "exo profiles test <profile-id> --json"
+              "exo users resolve <user-id> --capability linkedin --json",
+              "exo users resolve <user-id> --capability gmail --json"
             ]
           },
           {
@@ -300,11 +331,30 @@ export function describeExo() {
               "exo companies signal-matches show <company-id> --json",
               "exo companies prospects add <company-id> --name \"Person Name\" --title \"Director Title\" --email person@example.com --profile-viewed-at <iso-datetime> --live-signal-summary \"Recent post shows channel activity\" --why-relevant \"Why this person matters now\" --json",
               "exo companies prospects update <company-id> --prospect <prospect-id> --email person@example.com --source-url https://example.com/profile --observed-at <iso-datetime> --json",
-              "exo companies through-line set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them \"Specific to them\" --shared-problem \"Shared problem\" --why-now \"Why now\" --legitimate-wedge \"Why they would reply\" --compression-line \"One sentence\" --json",
-              "exo companies opening-plan set <company-id> --prospect <prospect-id> --signal-match <signal-match-id> --why-now \"Reason to talk now\" --angle \"Opening angle\" --reply-path \"Why this person would legitimately reply now\" --primary-channel connection-request --fallback-channel email --fallback-trigger \"Use email if LinkedIn is blocked or there is no reply.\" --preflight-action \"View the prospect profile\" --first-move \"First move\" --first-message-goal \"Desired response\" --json",
               "exo companies cadence set <company-id> --prospect <prospect-id> --current-step connection-request --next-action \"Send the first touch\" --json",
               "exo companies profile assign <company-id> --profile <profile-id> --reason \"Use one identity consistently\" --json",
               "exo companies user assign <company-id> --user <user-id> --reason \"Use one human identity across LinkedIn and email\" --json"
+            ]
+          },
+          {
+            name: "transition-backlog",
+            when: "Use this when real invites, replies, or warm relationships already exist outside Exo and need to be absorbed without starting cold.",
+            commands: [
+              "exo transition start --json",
+              "exo inbound review <user-id> --json",
+              "exo inbox --user <user-id> --json",
+              "exo transition promote <observation-id> --user <user-id> --json",
+              "exo transition promote-all --user <user-id> --surface linkedin-sent-invitations --json",
+              "exo transition rehome <prospect-id> --to-motion <motion-id> --json"
+            ]
+          },
+          {
+            name: "serve-operator-ui",
+            when: "Use this when the operator wants the live interactive Exo workspace rather than only JSON/terminal surfaces.",
+            commands: [
+              "exo ui-status --json",
+              "exo ui --user <user-id>",
+              "exo report workspace --user <user-id> --json"
             ]
           }
         ]
@@ -316,7 +366,7 @@ export function describeExo() {
       requirements: [
         "Point every agent shell at the same state store using EXO_STATE_DIR or the same repo root.",
         "Keep commands short and object-level. Do not hold long-running write transactions.",
-        "Treat browser profiles as shared execution identity and re-test them before unattended work."
+        "Treat managed connector accounts as the execution identity and re-check runtime availability before unattended work."
       ]
     },
     stateSummary,
@@ -324,16 +374,16 @@ export function describeExo() {
     gettingStarted: buildGettingStarted(stateSummary),
     currentLimitations: [
       "No MCP wrapper yet.",
-      "Live browser auth probes now exist for trusted Chrome profiles through supported runtime:chrome adapters, but Exo still does not do broader cross-browser auth proof or live non-browser connector auth proof by itself.",
+      "Limited live connector auth proof now exists through supported runtime adapters, but Exo still does not do full cross-runtime auth proof by itself.",
       "Limited live inbound retrieval now exists for Gmail and for LinkedIn's authoritative quick surfaces through supported runtime adapters, including full reconciliation mode for those LinkedIn quick surfaces, but Exo still does not do broader LinkedIn or other inbound retrieval by itself. In Codex desktop shell mode, native live capture still has to be performed by the outer agent and then landed through Exo's governed writeback path.",
       "Ambient inbound cues and working-hours-aware sync pressure now exist, but cues are still suspicion rather than truth and the planner still depends on governed sync runs to confirm what actually changed.",
       "Motion-level sticky execution defaults now exist, but canonical company execution still needs explicit motion context when the same company belongs to more than one motion.",
       "No automatic company population from motion retrieval yet.",
       "No real Sales Navigator retrieval yet.",
-      "No automatic target-map or stakeholder-map generation yet, even though Exo can now persist manual target-account signal matches, prospects, through-lines, opening plans, and cadence state.",
-      "No automatic prospect selection, through-line synthesis, or opening-plan generation yet. Agents still need to choose and write back the people, the reply-path hypothesis, and the first move explicitly.",
+      "No automatic target-map or stakeholder-map generation yet, even though Exo can now persist manual target-account signal matches, prospects, and cadence state.",
+      "No automatic prospect selection yet. Agents still need to choose and write back the people and their first governed cadence branch explicitly.",
       "Limited runtime auto-discovery now exists for Codex harness connectors through local Codex config inspection and for Claude through CLI plugin and MCP inspection, but Exo still does not do full cross-runtime availability inspection or live connector auth probes by itself.",
-      "No full multi-channel pacing model yet. Exo can now compute LinkedIn invitation deficit when the claimed browser profile has a stored quota, but broader channel saturation and capacity balancing are still future work.",
+      "No full multi-channel pacing model yet. Exo can now compute LinkedIn invitation deficit when the governed LinkedIn account has a stored quota, but broader channel saturation and capacity balancing are still future work.",
       "No public bug-reporting or feature-request intake yet. That is a future alpha feature, not current scope."
     ],
     docs: [
@@ -405,6 +455,7 @@ function buildStateSummary(motions, companies, browserProfiles, users) {
     },
     users: {
       count: users.length,
+      executionCapableCount: users.filter((user) => Array.isArray(user.accounts) && user.accounts.length > 0).length,
       preview: users.slice(0, 3).map((user) => ({
         id: user.id,
         label: user.label,
@@ -418,12 +469,39 @@ function buildStateSummary(motions, companies, browserProfiles, users) {
  * @param {{
  *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, activeCount: number, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
  *   companies: { count: number, preview: Array<{ id: string, name: string, domain: string | null }> },
- *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> }
+ *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> },
+ *   users: { count: number, executionCapableCount: number, preview: Array<{ id: string, label: string, accountCount: number }> }
  * }} stateSummary
  */
 function buildGettingStarted(stateSummary) {
   /** @type {Array<{ title: string, reason: string, commands: string[] }>} */
   const steps = [];
+
+  if (stateSummary.users.count === 0) {
+    steps.push({
+      title: "Register the first execution user",
+      reason:
+        "Before the live operator workspace, inbox, daily agenda, or managed-account execution can mean anything, Exo needs to know who the first governed user is and which runtime accounts may belong to them.",
+      commands: [
+        "exo users intake --json",
+        "exo users add --label operator-main --json",
+        "exo users harness probe <user-id> --runtime codex --json",
+        "exo users accounts map-runtime <user-id> --runtime codex --apply --json",
+      ]
+    });
+  } else if (stateSummary.users.executionCapableCount === 0) {
+    steps.push({
+      title: "Map the first governed account",
+      reason:
+        "Execution users already exist, but none of them owns a governed account path yet. Exo should inspect runtime coverage and ask who the discovered accounts belong to before pretending the workspace is ready.",
+      commands: [
+        "exo users intake --json",
+        "exo users list --json",
+        "exo users harness probe <user-id> --runtime codex --json",
+        "exo users accounts map-runtime <user-id> --runtime codex --apply --json",
+      ]
+    });
+  }
 
   if (stateSummary.motions.count > 0) {
     const firstMotion = stateSummary.motions.preview[0];
@@ -443,7 +521,7 @@ function buildGettingStarted(stateSummary) {
     steps.push({
       title: "Create the first motion",
       reason:
-        "Exo is motion-first. If there is no motion yet, start from the offer URL so Exo can confirm what is being promoted and check for reuse before creating state.",
+        "Once the execution identity is named, start from the offer URL so Exo can confirm what is being promoted and check for reuse before creating motion state.",
       commands: [
         "exo motion intake --json",
         "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
@@ -451,30 +529,19 @@ function buildGettingStarted(stateSummary) {
     });
   }
 
-  if (stateSummary.browserProfiles.count === 0) {
+  if (stateSummary.users.count > 0 && stateSummary.users.executionCapableCount > 0) {
     steps.push({
-      title: "Register a browser profile before browser-backed work",
+      title: "Check execution-path coverage before live work",
       reason:
-        "Profiles are empty. That means Exo currently has no trusted browser identity for LinkedIn, Sales Navigator, Gmail, or HubSpot work.",
+        "Governed live work should resolve through managed connector accounts. Check runtime coverage and exact account resolution before launch.",
       commands: [
-        "exo profiles discover --json",
-        "exo profiles add --browser chrome --label work-linkedin --profile-directory \"Profile 2\" --capability linkedin --capability sales-navigator --json",
-        "exo profiles claim <profile-id> --label workspace-main --workspace workspace --account linkedin:operator-linkedin --json",
-        "exo profiles capabilities --json",
-        "exo profiles resolve --capability linkedin --json",
-        "exo profiles test <profile-id> --json"
-      ]
-    });
-  } else {
-    steps.push({
-      title: "Check profile coverage before touching the browser",
-      reason:
-        "Profiles already exist. Verify that one of them actually covers the capabilities you need before you assume Exo can use the browser safely.",
-      commands: [
-        "exo profiles discover --json",
-        "exo profiles list --json",
-        "exo profiles capabilities --json",
-        "exo profiles resolve --capability linkedin --json"
+        "exo users add --label operator-main --owner operator --json",
+        "exo users harness probe <user-id> --runtime codex --json",
+        "exo users harness probe <user-id> --runtime claude --json",
+        "exo users accounts map-runtime <user-id> --runtime codex --apply --json",
+        "exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --runtime codex --connector <connector-from-probe> --provider-account-id <provider-account-id> --preferred --json",
+        "exo users resolve <user-id> --capability linkedin --json",
+        "exo users resolve <user-id> --capability gmail --json"
       ]
     });
   }
@@ -520,13 +587,46 @@ function buildGettingStarted(stateSummary) {
  * @param {{
  *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, activeCount: number, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
  *   companies: { count: number, preview: Array<{ id: string, name: string, domain: string | null }> },
- *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> }
+ *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> },
+ *   users: { count: number, executionCapableCount: number, preview: Array<{ id: string, label: string, accountCount: number }> }
  * }} stateSummary
  */
 function buildRecommendedPath(stateSummary) {
   /** @type {string[]} */
   const blockers = [];
   const focusMotion = stateSummary.motions.preview[0] ?? null;
+
+  if (stateSummary.users.count === 0) {
+    return {
+      mode: "configure-execution-user",
+      reason: "No execution users exist in the current Exo state store yet, so Exo still does not know who the first managed operator identity is.",
+      focusMotionId: focusMotion?.id ?? null,
+      focusMotionName: focusMotion?.name ?? null,
+      blockers: ["No execution user exists yet."],
+      commands: [
+        "exo users intake --json",
+        "exo users add --label operator-main --json",
+        "exo users harness probe <user-id> --runtime codex --json",
+        "exo users accounts map-runtime <user-id> --runtime codex --apply --json",
+      ]
+    };
+  }
+
+  if (stateSummary.users.executionCapableCount === 0) {
+    return {
+      mode: "configure-execution-connectors",
+      reason: "Execution users exist, but none of them owns a governed connected account path yet.",
+      focusMotionId: focusMotion?.id ?? null,
+      focusMotionName: focusMotion?.name ?? null,
+      blockers: ["No execution-capable user exists yet."],
+      commands: [
+        "exo users intake --json",
+        "exo users list --json",
+        "exo users harness probe <user-id> --runtime codex --json",
+        "exo users accounts map-runtime <user-id> --runtime codex --apply --json",
+      ]
+    };
+  }
 
   if (!focusMotion) {
     return {
@@ -567,10 +667,6 @@ function buildRecommendedPath(stateSummary) {
 
   if (focusMotion.signalCount === 0) {
     blockers.push("The focus motion does not yet have any motion-specific signals.");
-  }
-
-  if (stateSummary.browserProfiles.readyCount === 0) {
-    blockers.push("No ready browser profile exists yet for browser-backed work.");
   }
 
   if (stateSummary.companies.count === 0) {
@@ -618,29 +714,41 @@ function buildOperatorInterface(recommendedPath) {
     ],
     currentCall: {
       headline:
-        recommendedPath.mode === "continue-motion"
-          ? `Keep working ${recommendedPath.focusMotionName ?? "the current motion"} instead of creating a new one.`
-          : recommendedPath.mode === "activate-motion"
-            ? `Activate ${recommendedPath.focusMotionName ?? "a motion"} before trying to use cross-motion execution.`
-          : recommendedPath.mode === "create-motion"
-            ? "Create the first motion before trying to do anything downstream."
-            : "Follow the current governed path before expanding scope.",
+        recommendedPath.mode === "configure-execution-user"
+          ? "Register the first execution user before trying to use the live operator workspace."
+          : recommendedPath.mode === "configure-execution-connectors"
+            ? "Map the first governed account before trying to use the live operator workspace."
+            : recommendedPath.mode === "continue-motion"
+              ? `Keep working ${recommendedPath.focusMotionName ?? "the current motion"} instead of creating a new one.`
+              : recommendedPath.mode === "activate-motion"
+                ? `Activate ${recommendedPath.focusMotionName ?? "a motion"} before trying to use cross-motion execution.`
+                : recommendedPath.mode === "create-motion"
+                  ? "Create the first motion before trying to do anything downstream."
+                  : "Follow the current governed path before expanding scope.",
       nextMove:
-        recommendedPath.mode === "continue-motion"
-          ? `Continue ${recommendedPath.focusMotionName ?? "the focus motion"}, clear its blockers, and only then move into browser or company work.`
-          : recommendedPath.mode === "activate-motion"
-            ? `Restart or resume ${recommendedPath.focusMotionName ?? "a motion"} first. Draft, paused, and archived motions should not enter the shared execution agenda.`
-          : recommendedPath.mode === "create-motion"
-            ? "Define a new motion with premise, audience hypothesis, and first signal."
-            : "Use the recommended path as the next governed move.",
+        recommendedPath.mode === "configure-execution-user"
+          ? "Inspect discovered accounts and runtime coverage, then decide who the first managed user is."
+          : recommendedPath.mode === "configure-execution-connectors"
+            ? "Inspect discovered accounts and map the first governed account onto the existing execution user."
+            : recommendedPath.mode === "continue-motion"
+              ? `Continue ${recommendedPath.focusMotionName ?? "the focus motion"}, clear its blockers, and only then move into execution-path or company work.`
+              : recommendedPath.mode === "activate-motion"
+                ? `Restart or resume ${recommendedPath.focusMotionName ?? "a motion"} first. Draft, paused, and archived motions should not enter the shared execution agenda.`
+                : recommendedPath.mode === "create-motion"
+                  ? "Define a new motion with premise, audience hypothesis, and first signal."
+                  : "Use the recommended path as the next governed move.",
       operatorPrompt:
-        recommendedPath.mode === "continue-motion"
-          ? `Keep working ${recommendedPath.focusMotionName ?? "the current motion"}. What do you want to do next?`
-          : recommendedPath.mode === "activate-motion"
-            ? `Restart or resume ${recommendedPath.focusMotionName ?? "the motion"} first.`
-          : recommendedPath.mode === "create-motion"
-            ? "No motion exists yet. Do you want to create one now?"
-            : "What do you want to do next?",
+        recommendedPath.mode === "configure-execution-user"
+          ? "Who is the first user we're managing in Exo?"
+          : recommendedPath.mode === "configure-execution-connectors"
+            ? "Which discovered account should we map first?"
+            : recommendedPath.mode === "continue-motion"
+              ? `Keep working ${recommendedPath.focusMotionName ?? "the current motion"}. What do you want to do next?`
+              : recommendedPath.mode === "activate-motion"
+                ? `Restart or resume ${recommendedPath.focusMotionName ?? "the motion"} first.`
+                : recommendedPath.mode === "create-motion"
+                  ? "No motion exists yet. Do you want to create one now?"
+                  : "What do you want to do next?",
       blockers: recommendedPath.blockers
     }
   };

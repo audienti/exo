@@ -20,6 +20,7 @@ import { resolveInboundObservationLinks } from "./resolve-inbound-observation-li
  *   surfaceKey: string,
  *   kind: string,
  *   observedAt: string,
+ *   eventAt?: string | null,
  *   summary: string,
  *   externalId?: string | null,
  *   actorName?: string | null,
@@ -32,10 +33,19 @@ import { resolveInboundObservationLinks } from "./resolve-inbound-observation-li
  *   actorAvatarSourceUrl?: string | null,
  *   threadUrl?: string | null,
  *   sourceUrl?: string | null,
+ *   subject?: string | null,
  *   motionId?: string | null,
  *   companyId?: string | null,
  *   prospectId?: string | null,
- *   notes?: string | null
+ *   notes?: string | null,
+ *   messages?: Array<{
+ *     id?: string | null,
+ *     direction?: "inbound" | "outbound" | "unknown",
+ *     sentAt?: string | null,
+ *     fromName?: string | null,
+ *     fromHandle?: string | null,
+ *     body: string
+ *   }> | null
  * }} input
  * @param {{ rawMotions?: unknown[] | undefined }} [options]
  */
@@ -89,6 +99,7 @@ export function recordInboundObservation(rawUser, input, options = {}) {
     truthLevel: definition.truthLevel,
     observedAt: input.observedAt,
     recordedAt: now,
+    eventAt: normalizeNullableString(input.eventAt) ?? null,
     externalId: normalizedExternalId,
     actorName: normalizeNullableString(input.actorName),
     actorTitle: normalizeNullableString(input.actorTitle),
@@ -101,11 +112,13 @@ export function recordInboundObservation(rawUser, input, options = {}) {
     actorAvatarUrl: avatar.proxyUrl,
     threadUrl: normalizeNullableString(input.threadUrl),
     sourceUrl: normalizeNullableString(input.sourceUrl),
+    subject: normalizeNullableString(input.subject),
     summary: input.summary.trim(),
     motionId: resolvedLinks.motionId,
     companyId: resolvedLinks.companyId,
     prospectId: resolvedLinks.prospectId,
-    notes: normalizeNullableString(input.notes)
+    notes: normalizeNullableString(input.notes),
+    messages: normalizeInboundMessages(input.messages)
   });
 }
 
@@ -158,6 +171,11 @@ export function mergeInboundObservation(rawExisting, nextObservation) {
     ...nextObservation,
     id: existing.id,
     dedupeKey: existing.dedupeKey,
+    // Preserve the earliest eventAt we ever derived. LinkedIn's "X ago" labels
+    // round to coarser buckets as a row ages (1 day → 2 weeks → 1 month), so an
+    // eventAt computed at the first sighting sits closer to the real moment than
+    // one computed weeks later.
+    eventAt: existing.eventAt ?? nextObservation.eventAt ?? null,
     actorName: nextObservation.actorName ?? existing.actorName,
     actorTitle: nextObservation.actorTitle ?? existing.actorTitle,
     actorCompanyName: nextObservation.actorCompanyName ?? existing.actorCompanyName,
@@ -169,10 +187,12 @@ export function mergeInboundObservation(rawExisting, nextObservation) {
     actorAvatarUrl: nextObservation.actorAvatarUrl ?? existing.actorAvatarUrl,
     threadUrl: nextObservation.threadUrl ?? existing.threadUrl,
     sourceUrl: nextObservation.sourceUrl ?? existing.sourceUrl,
+    subject: nextObservation.subject ?? existing.subject,
     motionId: nextObservation.motionId ?? existing.motionId,
     companyId: nextObservation.companyId ?? existing.companyId,
     prospectId: nextObservation.prospectId ?? existing.prospectId,
-    notes: nextObservation.notes ?? existing.notes
+    notes: nextObservation.notes ?? existing.notes,
+    messages: nextObservation.messages.length ? nextObservation.messages : existing.messages
   });
 }
 
@@ -258,4 +278,31 @@ function normalizeNullableString(value) {
 
   const normalized = value.trim();
   return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {Array<{
+ *   id?: string | null,
+ *   direction?: "inbound" | "outbound" | "unknown",
+ *   sentAt?: string | null,
+ *   fromName?: string | null,
+ *   fromHandle?: string | null,
+ *   body: string
+ * }> | null | undefined} messages
+ */
+function normalizeInboundMessages(messages) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return [];
+  }
+
+  return messages
+    .map((message) => ({
+      id: normalizeNullableString(message?.id),
+      direction: message?.direction ?? "unknown",
+      sentAt: normalizeNullableString(message?.sentAt),
+      fromName: normalizeNullableString(message?.fromName),
+      fromHandle: normalizeNullableString(message?.fromHandle),
+      body: String(message?.body ?? "").trim(),
+    }))
+    .filter((message) => message.body.length > 0);
 }

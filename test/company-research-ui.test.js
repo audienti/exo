@@ -1,0 +1,202 @@
+// @ts-check
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+
+import { renderCompanyDetailPage } from "../src/artifacts/render-company-detail.js";
+import { renderCompanyResearchBriefPage } from "../src/artifacts/render-company-research-brief-page.js";
+import { renderMotionDetailPage, renderMotionSettingsPage } from "../src/artifacts/render-motions.js";
+import { buildCompanyViewModel } from "../src/core/build-company-view.js";
+import { buildCompanyResearchBrief } from "../src/core/build-company-research-brief.js";
+import { buildMotionsViewModel } from "../src/core/build-motions-view.js";
+
+const repoRoot = path.resolve(import.meta.dirname, "..");
+const cliPath = path.join(repoRoot, "src", "cli", "index.js");
+const offerHtml = [
+  "<html>",
+  "<head>",
+  "<title>Research UI Fixture</title>",
+  '<meta name="description" content="Research backlog UI test fixture." />',
+  "</head>",
+  "<body>ok</body>",
+  "</html>",
+].join("");
+const offerUrl = `data:text/html,${encodeURIComponent(offerHtml)}`;
+
+/**
+ * @param {string} stateDir
+ * @param {string[]} args
+ */
+function runCli(stateDir, args) {
+  return execFileSync("node", [cliPath, ...args], {
+    cwd: repoRoot,
+    env: { ...process.env, EXO_STATE_DIR: stateDir },
+    encoding: "utf8",
+  });
+}
+
+test("company and motion surfaces expose a start research button and research brief page", () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-company-research-ui-"));
+
+  try {
+    const motion = JSON.parse(
+      runCli(stateDir, [
+        "motion",
+        "add",
+        "--url",
+        offerUrl,
+        "--premise",
+        "This offer matters when operators need a governed place to begin company research.",
+        "--audience",
+        "Revenue leaders",
+        "--signal",
+        "company::Is there recent evidence this company is changing how pipeline is built?",
+        "--json",
+      ]),
+    );
+
+    const company = JSON.parse(
+      runCli(stateDir, [
+        "motion",
+        "discover",
+        motion.id,
+        "--name",
+        "BacklogCo",
+        "--domain",
+        "backlogco.example",
+        "--website-url",
+        "https://backlogco.example",
+        "--linkedin-company-url",
+        "https://www.linkedin.com/company/backlogco/",
+        "--queue-status",
+        "discovered",
+        "--json",
+      ]),
+    ).company;
+    const motionWithBacklog = JSON.parse(runCli(stateDir, ["motion", "show", motion.id, "--json"]));
+
+    const companyModel = buildCompanyViewModel({
+      company,
+      prospects: [],
+      motions: [motionWithBacklog],
+    });
+    const companyHtml = renderCompanyDetailPage(companyModel, { interactive: true });
+    assert.match(companyHtml, /Open queue/);
+    assert.match(companyHtml, /Open brief/);
+    assert.match(companyHtml, new RegExp(`href="\\/companies\\/${company.id}\\/research-brief\\/${motion.id}"`));
+
+    const motionsModel = buildMotionsViewModel({
+      motionSummaries: [
+        {
+          id: motion.id,
+          name: motion.name,
+          status: "active",
+          overallStage: "needs-company-research",
+          companyCount: 1,
+          prospectCount: 0,
+          dueNowCount: 0,
+        },
+      ],
+      motionDetails: [
+        {
+          motionId: motion.id,
+          motionName: motion.name,
+          motionStatus: "active",
+          overallStage: "needs-company-research",
+          offer: {
+            title: "Research UI Fixture",
+            url: offerUrl,
+            summary: "Fixture offer",
+          },
+          premise: {
+            statement: motion.premise.statement,
+            status: "defined",
+            source: "operator",
+          },
+          strategyState: { tone: "warning" },
+          signals: [
+            {
+              id: motion.signals[0].id,
+              question: "Is there recent evidence this company is changing how pipeline is built?",
+              scope: "company",
+              companyCount: 0,
+            },
+          ],
+          audiences: [
+            {
+              name: "Revenue leaders",
+              rolesLine: "VP Sales, CRO",
+              matchedCount: 1,
+            },
+          ],
+          companies: [],
+          backlogCompanies: [
+            {
+              companyId: company.id,
+              companyName: company.name,
+              domain: company.domain,
+              prospectCount: 0,
+              stage: "needs-company-research",
+              queueStatus: "discovered",
+            },
+          ],
+          people: [],
+          plan: {
+            nextSteps: [],
+            dueNowCount: 0,
+            readyToSendCount: 0,
+          },
+        },
+      ],
+    });
+    const motionHtml = renderMotionDetailPage(motionsModel.details[0], { interactive: true });
+    assert.match(motionHtml, new RegExp(`href="\\/motions\\/${motion.id}\\/settings"`));
+    assert.match(motionHtml, /Audience hypotheses/);
+    assert.match(motionHtml, /Research backlog/);
+    assert.match(motionHtml, /Open queue/);
+    assert.match(motionHtml, /Open brief/);
+    assert.match(motionHtml, new RegExp(`href="\\/companies\\/${company.id}\\/research-brief\\/${motion.id}"`));
+    assert.ok(motionHtml.indexOf("Audience hypotheses") < motionHtml.indexOf("Matched companies"));
+    assert.ok(motionHtml.indexOf("Matched companies") < motionHtml.indexOf("Matched people"));
+    assert.doesNotMatch(motionHtml, /PREMISE · WHY THIS OFFER MATTERS HERE/);
+
+    const settingsHtml = renderMotionSettingsPage(motionsModel.details[0], { interactive: true });
+    assert.match(settingsHtml, /role="tablist"/);
+    assert.match(settingsHtml, /role="tab"[^>]*data-tab-target="premise"/);
+    assert.match(settingsHtml, /role="tab"[^>]*data-tab-target="offer"/);
+    assert.match(settingsHtml, /role="tab"[^>]*data-tab-target="signals"/);
+    assert.match(settingsHtml, /role="tabpanel"[^>]*data-tab-panel="premise"/);
+    assert.match(settingsHtml, /role="tabpanel"[^>]*data-tab-panel="offer" hidden/);
+    assert.match(settingsHtml, /role="tabpanel"[^>]*data-tab-panel="signals" hidden/);
+    assert.match(settingsHtml, /WHY THIS OFFER MATTERS HERE/);
+    assert.match(settingsHtml, /what this motion is for/i);
+    assert.match(settingsHtml, /Signals <span>1<\/span>/);
+    assert.match(settingsHtml, /Add signal questions/i);
+    assert.match(settingsHtml, /data-exo-writer="addMotionSignals"/);
+    assert.match(settingsHtml, /data-exo-fields="signal:signal"/);
+    assert.match(settingsHtml, /Remove signal/i);
+    assert.match(settingsHtml, /data-exo-writer="removeMotionSignal"/);
+    assert.match(settingsHtml, new RegExp(`href="\\/motions\\/${motion.id}"`));
+
+    const brief = buildCompanyResearchBrief(company, motion);
+    const briefHtml = renderCompanyResearchBriefPage({
+      brief,
+      packet: { claimState: "claimable", queueStatus: "discovered", workerLabel: null },
+      interactive: true,
+    });
+    assert.match(briefHtml, /COMPANY RESEARCH BRIEF/);
+    assert.match(briefHtml, /Back to company/);
+    assert.match(briefHtml, /Open queue/);
+    assert.match(briefHtml, /Agent queue/);
+    assert.match(briefHtml, /View governed brief details/);
+    assert.match(briefHtml, new RegExp(`href="\\/companies\\/${company.id}"`));
+    assert.match(briefHtml, new RegExp(`href="\\/motions\\/${motion.id}"`));
+    assert.match(briefHtml, /Start on the company site at https:\/\/backlogco\.example/);
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});

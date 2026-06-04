@@ -123,7 +123,8 @@ import {
  *   queueState?: {
  *     status?: string | null | undefined,
  *     notes?: string | null | undefined
- *   }
+ *   },
+ *   ignoreStakeholderTargetLimit?: boolean | undefined
  * }} input
  */
 export function recordMotionProspect(rawMotion, rawCompany, input) {
@@ -213,7 +214,10 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
     queueState: buildProspectQueueStateInput(input.queueState)
   };
 
-  const prospects = upsertProspect(baseAccount.prospects, nextProspect, motion.targetingProfile.stakeholderTargetCount, now);
+  const prospectLimit = input.ignoreStakeholderTargetLimit
+    ? Number.MAX_SAFE_INTEGER
+    : motion.targetingProfile.stakeholderTargetCount;
+  const prospects = upsertProspect(baseAccount.prospects, nextProspect, prospectLimit, now);
   const updatedAccount = targetAccountSchema.parse({
     ...baseAccount,
     companyName: company.name,
@@ -533,8 +537,6 @@ function upsertProspect(prospects, nextProspect, limit, now) {
         packetState: null,
         notes: nextProspect.notes ?? null,
         signalMatchIds: nextProspect.signalMatchIds,
-        throughLine: {},
-        openingPlan: {},
         cadenceState: {}
       }));
 
@@ -733,6 +735,9 @@ function buildLinkedinProfileSnapshotInput(snapshot) {
     about: normalizeOptionalNullableString(snapshot.about),
     followerCount: snapshot.followerCount === undefined ? undefined : snapshot.followerCount,
     connectionCount: snapshot.connectionCount === undefined ? undefined : snapshot.connectionCount,
+    isPremium: snapshot.isPremium === undefined ? undefined : snapshot.isPremium,
+    isOpenProfile: snapshot.isOpenProfile === undefined ? undefined : snapshot.isOpenProfile,
+    connectionDegree: snapshot.connectionDegree === undefined ? undefined : snapshot.connectionDegree,
     recentPosts:
       snapshot.recentPosts === undefined
         ? undefined
@@ -765,6 +770,9 @@ function buildLinkedinProfileSnapshotUpdate(existing, patch = {}) {
     about: patch.about ?? existing.about ?? null,
     followerCount: patch.followerCount ?? existing.followerCount ?? null,
     connectionCount: patch.connectionCount ?? existing.connectionCount ?? null,
+    isPremium: patch.isPremium ?? existing.isPremium ?? null,
+    isOpenProfile: patch.isOpenProfile ?? existing.isOpenProfile ?? null,
+    connectionDegree: patch.connectionDegree ?? existing.connectionDegree ?? null,
     recentPosts:
       patch.recentPosts !== undefined
         ? patch.recentPosts.map((post) => ({

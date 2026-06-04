@@ -1,8 +1,9 @@
 // @ts-check
 
 import { z } from "zod";
-import { browserProfileCapabilitySchema } from "./browser-profile.js";
+import { browserProfileAutomationControlsSchema, browserProfileCapabilitySchema } from "./browser-profile.js";
 import { inboundSyncPolicySchema } from "./inbound.js";
+import { inboundIgnoreRuleSchema } from "./inbound-ignore.js";
 
 export const userHarnessConnectionStatusSchema = z.enum(["available", "unavailable", "unknown"]);
 
@@ -60,7 +61,15 @@ export const userConnectedAccountSchema = z
     sourceType: userAccountSourceTypeSchema,
     browserProfileId: z.string().min(1).nullable().default(null),
     harnessConnectionId: z.string().min(1).nullable().default(null),
+    providerAccountId: z.string().trim().min(1).nullable().default(null),
     preferred: z.boolean().default(false),
+    automationControls: browserProfileAutomationControlsSchema.default({
+      weeklyQuotas: {
+        profileVisits: null,
+        invitations: null,
+        messages: null
+      }
+    }),
     notes: z.string().nullable().default(null),
     inboundSync: inboundSyncPolicySchema.default({
       surfaces: []
@@ -115,5 +124,6 @@ export const userSchema = z.object({
     endLocalTime: "17:00"
   }),
   accounts: z.array(userConnectedAccountSchema).default([]),
-  harnessConnections: z.array(userHarnessConnectionSchema).default([])
+  harnessConnections: z.array(userHarnessConnectionSchema).default([]),
+  inboundIgnoreRules: z.array(inboundIgnoreRuleSchema).default([]),
 });

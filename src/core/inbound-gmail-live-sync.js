@@ -7,7 +7,7 @@ import path from "node:path";
 import { browserProfileSchema } from "../schema/browser-profile.js";
 import { gmailInboundSyncCaptureSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
-import { buildGmailInboundSyncPayload, resolveGmailAccount } from "./inbound-gmail-sync.js";
+import { buildGmailInboundSyncPayload, normalizeGmailInboundSyncCapture, resolveGmailAccount } from "./inbound-gmail-sync.js";
 import {
   buildChromeProfileSelection,
   buildCodexAgentHandoffTransport,
@@ -117,6 +117,37 @@ const gmailCaptureOutputSchema = {
           },
           notes: {
             type: ["string", "null"]
+          },
+          messages: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["direction", "sentAt", "fromName", "fromHandle", "body"],
+              properties: {
+                id: {
+                  type: ["string", "null"]
+                },
+                direction: {
+                  type: "string",
+                  enum: ["inbound", "outbound", "unknown"]
+                },
+                sentAt: {
+                  type: ["string", "null"],
+                  format: "date-time"
+                },
+                fromName: {
+                  type: ["string", "null"]
+                },
+                fromHandle: {
+                  type: ["string", "null"]
+                },
+                body: {
+                  type: "string",
+                  minLength: 1
+                }
+              }
+            }
           }
         }
       }
@@ -220,6 +251,7 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
           runtime,
           connector,
           source: liveSource.source,
+          captureTransportMode: liveSource.profile ? "browser_native_only" : "connector_native_only",
           prompt,
           outputSchema: gmailCaptureOutputSchema,
           buildPayloadCommand: `exo inbound sync gmail ${user.id} --account ${account.id} --input - --json`,
@@ -305,13 +337,7 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
  */
 function resolveGmailLiveSource(user, profiles, account, input) {
   if (account.sourceType === "browser-profile") {
-    const runtimeSource = resolveGmailRuntimeHarnessConnection(user, input);
-    return {
-      profile: resolveGmailBrowserProfile(profiles, account),
-      harnessConnection: runtimeSource.harnessConnection,
-      probe: runtimeSource.probe,
-      source: runtimeSource.source
-    };
+    throw new Error("Profile-backed Gmail accounts are no longer supported for live sync. Map a managed connector account instead.");
   }
 
   return {
@@ -475,7 +501,7 @@ async function captureGmailInboxThroughCodex(input) {
       throw new Error("Codex Gmail capture did not produce an output file.");
     }
 
-    const parsed = JSON.parse(fs.readFileSync(outputPath, "utf8"));
+    const parsed = normalizeGmailInboundSyncCapture(JSON.parse(fs.readFileSync(outputPath, "utf8")));
     return gmailInboundSyncCaptureSchema.parse(parsed);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -522,10 +548,11 @@ async function captureGmailInboxThroughClaude(input) {
       throw new Error(`Claude Gmail capture returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    const capture = parsed?.structured_output;
-    if (!capture) {
+    const structuredOutput = parsed?.structured_output;
+    if (!structuredOutput) {
       throw new Error("Claude Gmail capture did not return structured_output.");
     }
+    const capture = normalizeGmailInboundSyncCapture(structuredOutput);
 
     return gmailInboundSyncCaptureSchema.parse(capture);
   } finally {
@@ -560,6 +587,7 @@ function buildGmailLiveCapturePrompt(input) {
         "Use the structured profileSelection and captureGuide attached to this capture request as the binding, writeback, and verification contract.",
         "Do not fail on Chrome profile display-name mismatch alone. Only fail when the resolved profile directory/path or the signed-in mailbox do not match the intended Exo context.",
         "Before inspecting the inbox, verify that the active signed-in Gmail identity matches the intended profile context. If the connector is attached to another Chrome session or a different signed-in mailbox, return failed with a concrete profile_selection_mismatch error.",
+        "Do not require an already-open Gmail tab. If no live Gmail inbox tab is present in the attached Chrome session, open or navigate one tab in that same attached session to https://mail.google.com/mail/u/0/#inbox and continue there.",
         "Native-tools only applies to the live browser capture transport. Use captureGuide.writebackRules and verificationCommands for the governed Exo landing path after capture.",
         "Do not use shell commands, local files, or web search.",
         `Inspect up to ${input.limit} inbox threads, newest first.`
@@ -580,10 +608,13 @@ function buildGmailLiveCapturePrompt(input) {
     "Set checkedAt to the ISO timestamp when you finished the inspection.",
     "Set itemCount to the number of returned threads on success or warning. Use 0 when failed.",
     "Set error to null on success. Warning or failed must include a short concrete error string.",
-    "Each thread must include threadId, kind, observedAt, summary, subject, fromName, fromEmail, actorTitle, actorCompanyName, threadUrl, sourceUrl, motionId, companyId, prospectId, and notes.",
+    "Each thread must include threadId, kind, observedAt, summary, subject, fromName, fromEmail, actorTitle, actorCompanyName, threadUrl, sourceUrl, motionId, companyId, prospectId, notes, and messages.",
     "Do not invent motionId, companyId, or prospectId. Set them to null unless you truly know them from the inbox itself.",
     "Use kind email_reply_received when the newest relevant change is an external reply in an existing outreach thread. Otherwise use email_thread_updated.",
     "Prefer short operator-usable summaries under 280 characters.",
+    "For messages, include the actual visible participant-authored thread messages the operator or CRM would need later. Use chronological order, oldest to newest, and include up to 6 recent messages per thread.",
+    "Each message must include direction, sentAt, fromName, fromHandle, and body. Use direction inbound for external mail and outbound for the operator's sent mail when visible.",
+    "Do not paste the entire quoted chain into every message body. Keep each body to the visible message text itself, trimming repeated signatures or quoted history when it is clearly duplicated.",
     "Only include threads with external participants. Ignore obvious newsletters, spam, or automated internal noise unless they materially change operator action."
   ].join("\n");
 }

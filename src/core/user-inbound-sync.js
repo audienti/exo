@@ -6,6 +6,10 @@ import { inboundSyncPlanModeSchema, inboundSyncRunStatusSchema, inboundSurfaceSt
 import { findInboundSurfaceDefinition, listInboundSurfaceCatalog } from "../lib/inbound-surface-catalog.js";
 
 export const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
+export const INBOUND_SYNC_FAILED_RETRY_MS = 30 * 60 * 1000;
+const QUICK_MODE_SUPPLEMENTARY_SURFACES = new Set([
+  "linkedin-followers-list"
+]);
 
 /**
  * @param {unknown} rawUser
@@ -33,6 +37,131 @@ export function buildUserInboundSyncView(rawUser, options = {}) {
       failedSurfaceCount: accounts.reduce((sum, account) => sum + account.failedSurfaceCount, 0)
     },
     accounts
+  };
+}
+
+/**
+ * Enumerate enabled inbound surfaces that Exo knows it cannot retrieve
+ * autonomously in the background yet. This is the rollout guard for moving the
+ * detached worker from proof to action.
+ *
+ * @param {unknown[]} rawUsers
+ */
+export function buildInboundAutomationWarnings(rawUsers) {
+  const warnings = [];
+  for (const rawUser of rawUsers ?? []) {
+    const syncView = buildUserInboundSyncView(rawUser);
+    for (const account of syncView.accounts) {
+      for (const surface of account.surfaces) {
+        if (!surface.enabled || surface.autonomousBackgroundRetrieval !== false) continue;
+        warnings.push({
+          userId: syncView.user.id,
+          userLabel: syncView.user.label,
+          accountId: account.accountId,
+          capability: account.capability,
+          handle: account.handle,
+          surfaceKey: surface.key,
+          surfaceLabel: surface.label,
+          reason: surface.autonomousBackgroundReason ?? "This surface is enabled, but Exo cannot retrieve it autonomously in the background yet.",
+          disableCommand: `exo inbound sync set ${syncView.user.id} --account ${account.accountId} --disable-surface ${surface.key} --json`,
+        });
+      }
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Enumerate enabled inbound surfaces that Exo can retrieve autonomously, but
+ * whose current recorded truth is stale, failed, partial, or still never run.
+ * This is the rollout guard for promoting the detached worker into live-send
+ * modes while background truth is degraded.
+ *
+ * @param {unknown[]} rawUsers
+ * @param {string} [now]
+ */
+export function buildInboundAutomationHealthWarnings(rawUsers, now = new Date().toISOString()) {
+  const warnings = [];
+  for (const rawUser of rawUsers ?? []) {
+    const syncView = buildUserInboundSyncView(rawUser);
+    for (const account of syncView.accounts) {
+      for (const surface of account.surfaces) {
+        if (!surface.enabled || surface.autonomousBackgroundRetrieval === false) continue;
+        const healthState = classifyInboundAutomationHealthState(surface, now);
+        if (!healthState) continue;
+        warnings.push({
+          userId: syncView.user.id,
+          userLabel: syncView.user.label,
+          accountId: account.accountId,
+          capability: account.capability,
+          handle: account.handle,
+          surfaceKey: surface.key,
+          surfaceLabel: surface.label,
+          freshnessState: healthState.reason,
+          reason: describeAutomationHealthWarningReason(healthState.reason, healthState.inRetryBackoff === true),
+          inspectCommand: `exo inbound sync show ${syncView.user.id} --json`,
+        });
+      }
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Summarize the autonomous retrieval lane so the background worker can explain
+ * whether retrieval is due now, healthy, or merely waiting for the next stale
+ * threshold or failed-retry window.
+ *
+ * @param {unknown[]} rawUsers
+ * @param {string} [now]
+ */
+export function buildInboundAutomationStatus(rawUsers, now = new Date().toISOString()) {
+  let enabledAutonomousSurfaceCount = 0;
+  let dueNowCount = 0;
+  let freshCount = 0;
+  let retryBackoffCount = 0;
+  /** @type {null | { dueAt: string, userId: string, userLabel: string, accountId: string, capability: string, handle: string, surfaceKey: string, surfaceLabel: string }} */
+  let nextDueSurface = null;
+
+  for (const rawUser of rawUsers ?? []) {
+    const syncView = buildUserInboundSyncView(rawUser);
+    for (const account of syncView.accounts) {
+      for (const surface of account.surfaces) {
+        if (!surface.enabled || surface.autonomousBackgroundRetrieval === false) continue;
+        enabledAutonomousSurfaceCount += 1;
+        const freshness = classifyInboundSurfaceFreshness(surface, now);
+        if (freshness) {
+          dueNowCount += 1;
+          continue;
+        }
+        freshCount += 1;
+        if (surface.lastRunStatus === "failed" && !isAutonomousSurfaceUnsupported(surface)) {
+          retryBackoffCount += 1;
+        }
+        const dueAt = computeInboundAutomationNextDueAt(surface);
+        if (!dueAt) continue;
+        if (!nextDueSurface || Date.parse(dueAt) < Date.parse(nextDueSurface.dueAt)) {
+          nextDueSurface = {
+            dueAt,
+            userId: syncView.user.id,
+            userLabel: syncView.user.label,
+            accountId: account.accountId,
+            capability: account.capability,
+            handle: account.handle,
+            surfaceKey: surface.key,
+            surfaceLabel: surface.label,
+          };
+        }
+      }
+    }
+  }
+
+  return {
+    enabledAutonomousSurfaceCount,
+    dueNowCount,
+    freshCount,
+    retryBackoffCount,
+    nextDueSurface,
   };
 }
 
@@ -330,6 +459,14 @@ export function classifyInboundSurfaceFreshness(surface, now) {
   }
 
   if (surface.lastRunStatus === "failed") {
+    if (isAutonomousSurfaceUnsupported(surface)) {
+      return null;
+    }
+    const failedAt = surface.lastSyncedAt ? Date.parse(surface.lastSyncedAt) : Number.NaN;
+    const nowMs = Date.parse(now);
+    if (!Number.isNaN(failedAt) && !Number.isNaN(nowMs) && nowMs - failedAt < INBOUND_SYNC_FAILED_RETRY_MS) {
+      return null;
+    }
     return {
       reason: "failed",
       dueAt: surface.lastSyncedAt ?? "1970-01-01T00:00:00.000Z"
@@ -347,6 +484,14 @@ export function classifyInboundSurfaceFreshness(surface, now) {
   const freshnessMs = Date.parse(freshnessTime);
   const nowMs = Date.parse(now);
   if (Number.isNaN(freshnessMs) || Number.isNaN(nowMs)) {
+    return null;
+  }
+
+  if (
+    surface.lastRunStatus === "warning"
+    && isBoundedCaptureWarning(surface)
+    && nowMs - freshnessMs <= INBOUND_SYNC_STALE_MS
+  ) {
     return null;
   }
 
@@ -377,6 +522,8 @@ function buildAccountInboundView(account) {
       summary: definition.summary,
       truthLevel: definition.truthLevel,
       retrievalMode: definition.retrievalMode,
+      autonomousBackgroundRetrieval: definition.autonomousBackgroundRetrieval !== false,
+      autonomousBackgroundReason: definition.autonomousBackgroundReason ?? null,
       observationKinds: definition.observationKinds,
       enabled: state.enabled,
       lastRunStatus: state.lastRunStatus,
@@ -566,7 +713,9 @@ function materializeSurfaceStates(account) {
  */
 function classifySurfaceMode(surface, mode) {
   if (mode === "quick") {
-    if (!surface.enabled || surface.truthLevel !== "authoritative") {
+    const quickEligible = surface.truthLevel === "authoritative"
+      || QUICK_MODE_SUPPLEMENTARY_SURFACES.has(surface.key);
+    if (!surface.enabled || !quickEligible) {
       return null;
     }
 
@@ -630,6 +779,126 @@ function describeSurfacePassReason(surface, modePolicy, freshnessState) {
       : "Treat it as optional coverage after the enabled surfaces are done.";
 
   return `${freshnessReason} ${modeReason}`;
+}
+
+function describeAutomationHealthWarningReason(freshnessReason, inRetryBackoff = false) {
+  switch (freshnessReason) {
+    case "never":
+      return "This enabled background-truth surface has never been checked yet.";
+    case "failed":
+      return inRetryBackoff
+        ? "The last automated retrieval failed and is still in retry backoff, so truth here is currently untrusted."
+        : "The last automated retrieval failed, so truth here is currently untrusted.";
+    case "warning":
+      return "The last automated retrieval completed with a warning, so truth here may be partial.";
+    case "stale":
+      return "This enabled background-truth surface is stale and due for refresh.";
+    default:
+      return "This enabled background-truth surface needs refresh before live rollout.";
+  }
+}
+
+/**
+ * Rollout health is stricter than due scheduling. A recent failed retrieval
+ * should still block send rollout even while the worker is cooling down before
+ * its next retry.
+ *
+ * @param {{
+ *   lastRunStatus: "never" | "success" | "warning" | "failed",
+ *   lastObservedAt?: string | null,
+ *   lastSyncedAt?: string | null
+ * }} surface
+ * @param {string} now
+ */
+function classifyInboundAutomationHealthState(surface, now) {
+  if (isAutonomousSurfaceUnsupported(surface)) {
+    return null;
+  }
+
+  if (surface.lastRunStatus === "failed") {
+    const failedAt = surface.lastSyncedAt ? Date.parse(surface.lastSyncedAt) : Number.NaN;
+    const nowMs = Date.parse(now);
+    const inRetryBackoff = !Number.isNaN(failedAt) && !Number.isNaN(nowMs) && nowMs - failedAt < INBOUND_SYNC_FAILED_RETRY_MS;
+    return {
+      reason: "failed",
+      dueAt: surface.lastSyncedAt ?? "1970-01-01T00:00:00.000Z",
+      inRetryBackoff,
+    };
+  }
+
+  const freshness = classifyInboundSurfaceFreshness(surface, now);
+  if (!freshness) {
+    return null;
+  }
+  return {
+    ...freshness,
+    inRetryBackoff: false,
+  };
+}
+
+/**
+ * @param {{
+ *   lastRunStatus: "never" | "success" | "warning" | "failed",
+ *   lastObservedAt?: string | null,
+ *   lastSyncedAt?: string | null
+ * }} surface
+ */
+export function computeInboundAutomationNextDueAt(surface) {
+  if (isAutonomousSurfaceUnsupported(surface)) {
+    return null;
+  }
+
+  if (surface.lastRunStatus === "failed" && surface.lastSyncedAt) {
+    const failedAt = Date.parse(surface.lastSyncedAt);
+    if (!Number.isNaN(failedAt)) {
+      return new Date(failedAt + INBOUND_SYNC_FAILED_RETRY_MS).toISOString();
+    }
+  }
+
+  const freshnessTime = surface.lastObservedAt ?? surface.lastSyncedAt;
+  if (!freshnessTime) return null;
+  const freshnessMs = Date.parse(freshnessTime);
+  if (Number.isNaN(freshnessMs)) return null;
+  return new Date(freshnessMs + INBOUND_SYNC_STALE_MS).toISOString();
+}
+
+/**
+ * @param {{
+ *   lastRunStatus?: string | null,
+ *   lastExhaustionStatus?: string | null,
+ *   lastExhaustionReason?: string | null,
+ *   lastError?: string | null,
+ * }} surface
+ */
+function isAutonomousSurfaceUnsupported(surface) {
+  const exhaustionStatus = String(surface?.lastExhaustionStatus ?? "").trim().toLowerCase();
+  const exhaustionReason = String(surface?.lastExhaustionReason ?? "").trim().toLowerCase();
+  const lastError = String(surface?.lastError ?? "").trim().toLowerCase();
+
+  if (exhaustionStatus !== "blocked") {
+    return false;
+  }
+
+  if (exhaustionReason === "connector_surface_unsupported") {
+    return true;
+  }
+
+  return lastError.includes("feature_not_implemented");
+}
+
+/**
+ * @param {{
+ *   lastRunStatus?: string | null,
+ *   lastExhaustionStatus?: string | null,
+ *   lastExhaustionReason?: string | null,
+ *   lastReconcileRequired?: boolean | null,
+ * }} surface
+ */
+function isBoundedCaptureWarning(surface) {
+  return surface?.lastRunStatus === "warning"
+    && surface?.lastExhaustionStatus === "incomplete"
+    && surface?.lastExhaustionReason === "bounded_capture_stopped_early"
+    && surface?.lastReconcileRequired === true;
 }
 
 /**

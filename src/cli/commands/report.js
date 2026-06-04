@@ -4,7 +4,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { renderMotionReport } from "../../artifacts/render-motion.js";
+import { renderConnectionsPage } from "../../artifacts/render-connections.js";
+import { renderExecutionPage } from "../../artifacts/render-execution.js";
+import { renderMotionsPage } from "../../artifacts/render-motions.js";
+import { renderOperatorPage } from "../../artifacts/render-operator.js";
+import { renderProspectsPage } from "../../artifacts/render-prospects.js";
+import { renderWorkspaceRollupPage } from "../../artifacts/render-workspace-rollup.js";
+import { buildConnectionsViewModel } from "../../core/build-connections-view.js";
+import { buildExecutionViewModel } from "../../core/build-execution-view.js";
 import { buildMotionReport } from "../../core/build-motion-report.js";
+import { buildMotionsViewModel } from "../../core/build-motions-view.js";
+import { buildOperatorViewModel } from "../../core/build-operator-view.js";
+import { buildProspectsViewModel } from "../../core/build-prospects-view.js";
+import { buildWorkspaceRollup } from "../../core/build-workspace-rollup.js";
 import {
   findMotionById,
   findUserById,
@@ -28,6 +40,12 @@ export function registerReport(program) {
       `
 Canonical report interface:
   exo report motion <motion-id>
+  exo report operator --user <user-id> --out ./operator.html
+  exo report motions --user <user-id> --out ./motions.html
+  exo report prospects --user <user-id> --out ./prospects.html
+  exo report execution --out ./execution.html
+  exo report connections --user <user-id> --out ./connections.html
+  exo report rollup --user <user-id> --out ./workspace.html
   exo report workspace --user <user-id> --out ./motion-workspace.html
 
 Rules:
@@ -70,6 +88,404 @@ Examples:
       }
 
       console.log(renderMotionReport(result));
+    });
+
+  report
+    .command("operator")
+    .description("Render the Operator landing surface (Next move, decisions, agent queue, blocked, stale, agenda) for one user.")
+    .option("--user <user-id>", "Execution user identifier")
+    .option("--capability <capability>", "Browser capability used when deriving motion engagement readiness. Defaults to linkedin.")
+    .option("--out <path>", "Write HTML output to this path instead of stdout")
+    .option("--json", "Emit the derived operator-landing view model as machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo report operator --user <user-id> --out ./operator.html
+  exo report operator --user <user-id> --json
+
+Rules:
+  - Reads governed Exo state and the workspace projection — no mutation.
+  - HTML output follows the Exo UI Build Spec (operator-first, three-axis status).
+  - Surfaces map: next move + need decision + agent queue + blocked + stale + today.
+`
+    )
+    .action((options) => {
+      if (options.json && options.out) {
+        console.error("Use either --json or --out for report operator, not both together.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const user = resolveReportUser(options.user, "operator");
+      if (!user) {
+        return;
+      }
+
+      const regenerateCommand = `exo report operator --user ${user.id} --out ${options.out ?? "./operator.html"}`;
+      const projection = buildWorkspaceProjection({
+        userId: user.id,
+        capability: options.capability,
+        regenerateCommand,
+      });
+      const data = projection.data;
+      const model = buildOperatorViewModel({
+        user: data.user,
+        generatedAt: data.generatedAt,
+        regenerateCommand,
+        operatorSummary: data.operatorSummary,
+        decisionQueue: data.decisionQueue,
+        agentQueue: data.agentQueue,
+        blockedQueue: data.blockedQueue,
+        truthAccounts: data.truthAccounts,
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(model, null, 2));
+        return;
+      }
+
+      const html = renderOperatorPage(model);
+
+      if (options.out) {
+        const outputPath = path.resolve(process.cwd(), options.out);
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        fs.writeFileSync(outputPath, html, "utf8");
+        console.log(`Operator landing report written to ${outputPath}`);
+        return;
+      }
+
+      console.log(html);
+    });
+
+  report
+    .command("motions")
+    .description("Render the Motions surface (list + per-motion detail: offer → premise → signals → audiences → matches → plan).")
+    .option("--user <user-id>", "Execution user identifier")
+    .option("--capability <capability>", "Browser capability used when deriving motion engagement readiness. Defaults to linkedin.")
+    .option("--out <path>", "Write HTML output to this path instead of stdout")
+    .option("--json", "Emit the derived motions view model as machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo report motions --user <user-id> --out ./motions.html
+  exo report motions --user <user-id> --json
+
+Rules:
+  - Reads governed Exo state and the workspace projection — no mutation.
+  - Motion detail inverts the hierarchy: the premise leads, the codename does not.
+  - Each list card anchor-links to its full detail in the same document.
+`
+    )
+    .action((options) => {
+      if (options.json && options.out) {
+        console.error("Use either --json or --out for report motions, not both together.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const user = resolveReportUser(options.user, "motions");
+      if (!user) {
+        return;
+      }
+
+      const regenerateCommand = `exo report motions --user ${user.id} --out ${options.out ?? "./motions.html"}`;
+      const projection = buildWorkspaceProjection({
+        userId: user.id,
+        capability: options.capability,
+        regenerateCommand,
+      });
+      const data = projection.data;
+      const model = buildMotionsViewModel({
+        motionSummaries: data.motionSummaries,
+        motionDetails: data.motionDetails,
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(model, null, 2));
+        return;
+      }
+
+      const html = renderMotionsPage(model, {
+        user: data.user,
+        generatedAt: data.generatedAt,
+        regenerateCommand,
+      });
+
+      if (options.out) {
+        const outputPath = path.resolve(process.cwd(), options.out);
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        fs.writeFileSync(outputPath, html, "utf8");
+        console.log(`Motions report written to ${outputPath}`);
+        return;
+      }
+
+      console.log(html);
+    });
+
+  report
+    .command("prospects")
+    .description("Render the Prospects surface (All table + By-company groups + per-person detail) for one user.")
+    .option("--user <user-id>", "Execution user identifier")
+    .option("--capability <capability>", "Browser capability used when deriving engagement readiness. Defaults to linkedin.")
+    .option("--out <path>", "Write HTML output to this path instead of stdout")
+    .option("--json", "Emit the derived prospects view model as machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo report prospects --user <user-id> --out ./prospects.html
+  exo report prospects --user <user-id> --json
+
+Rules:
+  - Reads governed Exo state and the workspace projection — no mutation.
+  - Canonical people inventory: name, title, company, surfacing signal, fit, branch, owner.
+  - Each name anchor-links to a person detail (signal, premise, next step, colleagues).
+`
+    )
+    .action((options) => {
+      if (options.json && options.out) {
+        console.error("Use either --json or --out for report prospects, not both together.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const user = resolveReportUser(options.user, "prospects");
+      if (!user) {
+        return;
+      }
+
+      const regenerateCommand = `exo report prospects --user ${user.id} --out ${options.out ?? "./prospects.html"}`;
+      const projection = buildWorkspaceProjection({
+        userId: user.id,
+        capability: options.capability,
+        regenerateCommand,
+      });
+      const data = projection.data;
+      const model = buildProspectsViewModel({
+        prospectPrepLanes: data.prospectPrepLanes,
+        engagementLanes: data.engagementLanes,
+        motionDetails: data.motionDetails,
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(model, null, 2));
+        return;
+      }
+
+      const html = renderProspectsPage(model, {
+        user: data.user,
+        generatedAt: data.generatedAt,
+        regenerateCommand,
+      });
+
+      if (options.out) {
+        const outputPath = path.resolve(process.cwd(), options.out);
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        fs.writeFileSync(outputPath, html, "utf8");
+        console.log(`Prospects report written to ${outputPath}`);
+        return;
+      }
+
+      console.log(html);
+    });
+
+  report
+    .command("execution")
+    .description("Render the Execution surface: users → assigned motions, connected accounts, and capability coverage.")
+    .option("--out <path>", "Write HTML output to this path instead of stdout")
+    .option("--json", "Emit the derived execution view model as machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo report execution --out ./execution.html
+  exo report execution --json
+
+Rules:
+  - Reads governed Exo state (users, accounts, browser profiles, motions) — no mutation.
+  - Ownership and transport identity stay separate from GTM objects.
+  - Each user anchor-links to assigned motions, connected accounts, capability coverage.
+`
+    )
+    .action((options) => {
+      if (options.json && options.out) {
+        console.error("Use either --json or --out for report execution, not both together.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const model = buildExecutionViewModel({
+        rawUsers: listUsers(),
+        rawMotions: listMotions(),
+        rawCompanies: listCompanies(),
+        rawProfiles: listBrowserProfiles(),
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(model, null, 2));
+        return;
+      }
+
+      const regenerateCommand = `exo report execution --out ${options.out ?? "./execution.html"}`;
+      const html = renderExecutionPage(model, {
+        user: null,
+        generatedAt: new Date().toISOString(),
+        regenerateCommand,
+      });
+
+      if (options.out) {
+        const outputPath = path.resolve(process.cwd(), options.out);
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        fs.writeFileSync(outputPath, html, "utf8");
+        console.log(`Execution report written to ${outputPath}`);
+        return;
+      }
+
+      console.log(html);
+    });
+
+  report
+    .command("connections")
+    .description("Render the Connections surface (inbound truth): received/sent/following/followers/views with per-surface freshness.")
+    .option("--user <user-id>", "Execution user identifier")
+    .option("--capability <capability>", "Browser capability used when deriving engagement readiness. Defaults to linkedin.")
+    .option("--out <path>", "Write HTML output to this path instead of stdout")
+    .option("--json", "Emit the derived connections view model as machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo report connections --user <user-id> --out ./connections.html
+  exo report connections --user <user-id> --json
+
+Rules:
+  - First-class inbound truth domain — not buried in an activity log.
+  - Each tab itemizes its surface and shows freshness; Empty / Partial / Failed stay distinct.
+`
+    )
+    .action((options) => {
+      if (options.json && options.out) {
+        console.error("Use either --json or --out for report connections, not both together.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const user = resolveReportUser(options.user, "connections");
+      if (!user) {
+        return;
+      }
+
+      const regenerateCommand = `exo report connections --user ${user.id} --out ${options.out ?? "./connections.html"}`;
+      const projection = buildWorkspaceProjection({
+        userId: user.id,
+        capability: options.capability,
+        regenerateCommand,
+      });
+      const data = projection.data;
+      const model = buildConnectionsViewModel({
+        reviewItems: data.reviewItems,
+        truthAccounts: data.truthAccounts,
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(model, null, 2));
+        return;
+      }
+
+      const html = renderConnectionsPage(model, {
+        user: data.user,
+        generatedAt: data.generatedAt,
+        regenerateCommand,
+      });
+
+      if (options.out) {
+        const outputPath = path.resolve(process.cwd(), options.out);
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        fs.writeFileSync(outputPath, html, "utf8");
+        console.log(`Connections report written to ${outputPath}`);
+        return;
+      }
+
+      console.log(html);
+    });
+
+  report
+    .command("rollup")
+    .description("Render the Workspace rollup (Exo UI spec): stat strip + operator pulse, motions readiness, surface freshness, execution.")
+    .option("--user <user-id>", "Execution user identifier")
+    .option("--capability <capability>", "Browser capability used when deriving engagement readiness. Defaults to linkedin.")
+    .option("--out <path>", "Write HTML output to this path instead of stdout")
+    .option("--json", "Emit the derived rollup view model as machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+Examples:
+  exo report rollup --user <user-id> --out ./workspace.html
+  exo report rollup --user <user-id> --json
+
+Rules:
+  - Composed analytics overview — not another canonical domain.
+  - Reuses the same status language across every panel and links back to its domain.
+`
+    )
+    .action((options) => {
+      if (options.json && options.out) {
+        console.error("Use either --json or --out for report rollup, not both together.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const user = resolveReportUser(options.user, "rollup");
+      if (!user) {
+        return;
+      }
+
+      const regenerateCommand = `exo report rollup --user ${user.id} --out ${options.out ?? "./workspace.html"}`;
+      const projection = buildWorkspaceProjection({
+        userId: user.id,
+        capability: options.capability,
+        regenerateCommand,
+      });
+      const data = projection.data;
+      const executionModel = buildExecutionViewModel({
+        rawUsers: listUsers(),
+        rawMotions: listMotions(),
+        rawCompanies: listCompanies(),
+        rawProfiles: listBrowserProfiles(),
+      });
+      const model = buildWorkspaceRollup({
+        operatorSummary: data.operatorSummary,
+        decisionQueue: data.decisionQueue,
+        agentQueue: data.agentQueue,
+        blockedQueue: data.blockedQueue,
+        motionSummaries: data.motionSummaries,
+        truthAccounts: data.truthAccounts,
+        reviewItems: data.reviewItems,
+        executionUsers: executionModel.users,
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(model, null, 2));
+        return;
+      }
+
+      const html = renderWorkspaceRollupPage(model, {
+        user: data.user,
+        generatedAt: data.generatedAt,
+        regenerateCommand,
+      });
+
+      if (options.out) {
+        const outputPath = path.resolve(process.cwd(), options.out);
+        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+        fs.writeFileSync(outputPath, html, "utf8");
+        console.log(`Workspace rollup written to ${outputPath}`);
+        return;
+      }
+
+      console.log(html);
     });
 
   report
@@ -175,9 +591,9 @@ function resolveReportUser(explicitUserId, surface) {
   }
 
   if (!totalUserCount) {
-    console.error("No execution users exist yet. Add a user first or pass --user explicitly.");
+    console.error("No execution users exist yet. Start with `exo users intake --json`, then add a user or pass --user explicitly.");
   } else if (!eligibleUserCount) {
-    console.error("No execution-capable users exist yet. Add at least one connected account or pass --user explicitly.");
+    console.error("No execution-capable users exist yet. Start with `exo users intake --json`, then map at least one connected account or pass --user explicitly.");
   } else {
     console.error(`More than one execution-capable user exists. Pass --user to choose the report ${surface} owner.`);
   }

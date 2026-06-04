@@ -56,7 +56,7 @@ export function buildCompanyResearchBrief(rawCompany, rawMotion) {
       "If the exact prospect title does not exist, move to the best-fit owner at director level or above whose function matches the signal.",
       "For chosen people, check recent public activity and recent posts. Treat legitimate recent posting as positive evidence the channel is active.",
       "View the selected prospect profiles before first touch and write that viewback into Exo.",
-      "Find direct email addresses for the chosen people when possible so the motion has a fallback if LinkedIn is blocked or gets no reply."
+      "Use whatever contact-enrichment tools are actually available in the current runtime to find verified direct emails and verified mobile phone numbers for the chosen people when possible so the motion has stronger fallback paths if LinkedIn is blocked or gets no reply."
     ],
     stateWritebacks: [
       company.websiteUrl
@@ -64,8 +64,7 @@ export function buildCompanyResearchBrief(rawCompany, rawMotion) {
         : `Store the discovered website with: exo companies update ${company.id} --website-url <canonical-url> --json`,
       `Store a canonical LinkedIn company page when found with: exo companies update ${company.id} --linkedin-company-url <linkedin-company-url> --json`,
       `Persist each chosen prospect with: exo companies prospects add ${company.id} --motion ${motion.id} --name "Person Name" --title "Director Title" --email person@example.com --profile-viewed-at <iso-datetime> --active-channel linkedin --live-signal-summary "Recent post shows active merchant-risk commentary." --live-signal-url <activity-url> --live-signal-observed-at <iso-datetime> --engagement-rationale "Recent posting is positive evidence this channel is live." --why-relevant "Why this person matters now" --json`,
-      `Persist the prospect through-line with: exo companies through-line set ${company.id} --motion ${motion.id} --prospect <prospect-id> --signal-match <signal-match-id> --specific-to-them "Specific to them" --shared-problem "Shared problem" --why-now "Why now" --legitimate-wedge "Legitimate wedge" --compression-line "One-sentence compression line" --json`,
-      `Persist the initial opening plan with: exo companies opening-plan set ${company.id} --motion ${motion.id} --prospect <prospect-id> --signal-match <signal-match-id> --why-now "Reason to talk now" --angle "Opening angle" --reply-path "Why this person would legitimately reply now" --primary-channel connection-request --fallback-channel email --fallback-trigger "Use email if LinkedIn is blocked or there is no reply after the first LinkedIn touch." --preflight-action "View the prospect profile" --preflight-action "Engage one recent relevant post only if the interaction is natural" --first-move "First move" --first-message-goal "Desired response" --json`
+      `Persist the first governed branch with: exo companies cadence set ${company.id} --motion ${motion.id} --prospect <prospect-id> --current-step connection-request --next-action "Send the first touch" --json`
     ],
     signalRecency: {
       preferredWindowDays: PREFERRED_SIGNAL_WINDOW_DAYS,
@@ -115,10 +114,10 @@ export function buildCompanyResearchBrief(rawCompany, rawMotion) {
         "If exact matches are missing, push to the closest best-fit owner whose scope matches the signal and premise.",
         "Capture adjacent operator or sponsor roles when the organization splits ownership across risk, operations, product, analytics, finance, or collections.",
         "Recent post activity is positive evidence that the person is active on that channel. Use it to guide channel choice and warmup, not to justify fake engagement.",
-        "Store direct email when available so the plan can fall back cleanly if LinkedIn is unavailable or cold.",
+        "Store direct email when available and store verified mobile numbers when they are defensible, so the plan can fall back cleanly if LinkedIn is unavailable or cold.",
         "Do not leave the prospect choice in notes. Persist the chosen people back into Exo.",
-        "The through-line is prospect-specific. Do not reuse the same through-line across multiple people at the same account.",
-        "The opening plan is prospect-specific. Exo stores the plan and cadence; the agent writes the actual messages."
+        "Cadence is prospect-specific. Set the real first branch and next action on each chosen person instead of leaving the branch in notes.",
+        "Exo stores the cadence branch and the engagement history. The agent writes the actual messages."
       ],
       requiredOutputs: [
         "one likely primary owner",
@@ -127,10 +126,8 @@ export function buildCompanyResearchBrief(rawCompany, rawMotion) {
           : "no extra people unless the motion count is raised",
         "a short reason each person is relevant to the signal or premise",
         "stored recent-activity context for any person whose active channel matters to the plan",
-        "stored email fallback for any person where you can find it",
-        "a stored prospect-specific through-line tied to the best signal matches",
-        "a stored first opening plan tied to the best signal matches",
-        "an explicit legitimate reply-path hypothesis for the primary prospect"
+        "stored verified email fallback and any verified mobile number for each person where you can find them",
+        "a stored first cadence branch for the primary prospect"
       ]
     },
     completionCriteria: [
@@ -138,12 +135,10 @@ export function buildCompanyResearchBrief(rawCompany, rawMotion) {
       "At least one recent company-level signal match is captured or an explicit no-signal finding is recorded.",
       "Stored signal matches are synthesized and concise enough for the writer to reuse directly.",
       "The chosen prospect set is stored in Exo, starting with the best-fit owner.",
-      "Chosen prospects include viewed-profile evidence, recent-activity context, and direct email when those are available.",
+      "Chosen prospects include viewed-profile evidence, recent-activity context, direct email, and verified mobile numbers when those are available.",
       "The strongest signal match can be used as a real reason to talk to the primary prospect.",
-      "A prospect-specific through-line is stored in Exo for the primary prospect.",
-      "A prospect-specific opening plan is stored in Exo for the primary prospect.",
-      "The opening plan states the most likely legitimate path to a reply, given the evidence.",
-      "The opening plan names a primary channel and a fallback path for LinkedIn blocked-or-cold cases."
+      "A cadence branch is stored in Exo for the primary prospect.",
+      "That cadence branch states the real next action, not generic planning filler."
     ]
   };
 }

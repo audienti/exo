@@ -2,6 +2,17 @@
 
 import { motionSchema } from "../schema/motion.js";
 
+export const MOTION_INTAKE_PROMPTS = {
+  url: "What are we promoting? Give me the offer URL first.",
+  existingStrategy: "This URL already has a motion. Do you want to continue it, clone it, or create a new one?",
+  sourceMotion: "More than one motion already uses this URL. Which one are we continuing or cloning?",
+  premise: "What is the premise? In one sentence, why should this offer matter right now?",
+  audience: "Who should care first? Name the primary audience or ICP you want to target.",
+  signals: "What recent evidence would make this motion talkable? Add one or more signal questions.",
+  targetingSpecifics: "Do you already know any titles, role families, industries, geographies, or segment specifics worth biasing the motion toward?",
+  suppression: "Are there any accounts, domains, contacts, or DNC entries we should exclude before launch?",
+};
+
 /**
  * @param {{
  *   url?: string | null,
@@ -59,6 +70,9 @@ export function buildMotionIntake(input, storedMotions) {
     || input.suppressionPolicy?.excludedContacts?.length
     || input.suppressionPolicy?.doNotContactEntries?.length
   );
+  const reuseStrategy = input.existingStrategy === "continue" || input.existingStrategy === "clone";
+  const requiresSourceMotion = existingMotions.length > 1 && reuseStrategy && !input.sourceMotionId;
+  const requiresFreshDefinition = existingMotions.length === 0 || input.existingStrategy === "new";
 
   /** @type {Array<{ key: string, prompt: string, required: boolean }>} */
   const questions = [];
@@ -66,53 +80,64 @@ export function buildMotionIntake(input, storedMotions) {
   if (!input.url) {
     questions.push({
       key: "url",
-      prompt: "What are we promoting? Give me the offer URL first.",
+      prompt: MOTION_INTAKE_PROMPTS.url,
       required: true
     });
   } else if (existingMotions.length > 0 && !input.existingStrategy) {
     questions.push({
       key: "existing-strategy",
-      prompt: "This URL already has a motion. Do you want to continue it, clone it, or create a new one?",
+      prompt: MOTION_INTAKE_PROMPTS.existingStrategy,
       required: true
     });
-  } else if (!input.premise?.statement) {
+  } else if (requiresSourceMotion) {
+    questions.push({
+      key: "source-motion",
+      prompt: MOTION_INTAKE_PROMPTS.sourceMotion,
+      required: true,
+    });
+  } else if (requiresFreshDefinition && !input.premise?.statement) {
     questions.push({
       key: "premise",
-      prompt: "What is the premise? In one sentence, why should this offer matter right now?",
+      prompt: MOTION_INTAKE_PROMPTS.premise,
       required: true
     });
-  } else if (!input.audienceHypotheses?.length) {
+  } else if (requiresFreshDefinition && !input.audienceHypotheses?.length) {
     questions.push({
       key: "audience",
-      prompt: "Who should care first? Name the primary audience or ICP you want to target.",
+      prompt: MOTION_INTAKE_PROMPTS.audience,
       required: true
     });
-  } else if (!input.signals?.length) {
+  } else if (requiresFreshDefinition && !input.signals?.length) {
     questions.push({
       key: "signals",
-      prompt: "What recent evidence would make this motion talkable? Give me the first signal question.",
+      prompt: MOTION_INTAKE_PROMPTS.signals,
       required: true
     });
-  } else if (!hasRequiredTargetingSpecifics) {
+  } else if (requiresFreshDefinition && !hasRequiredTargetingSpecifics) {
     questions.push({
       key: "targeting-specifics",
-      prompt: "Do you already know any titles, role families, industries, geographies, or segment specifics worth biasing the motion toward?",
+      prompt: MOTION_INTAKE_PROMPTS.targetingSpecifics,
       required: false
     });
-  } else if (!hasSuppressionSpecifics) {
+  } else if (requiresFreshDefinition && !hasSuppressionSpecifics) {
     questions.push({
       key: "suppression",
-      prompt: "Are there any accounts, domains, contacts, or DNC entries we should exclude before launch?",
+      prompt: MOTION_INTAKE_PROMPTS.suppression,
       required: false
     });
   }
 
   const readyToLaunch = Boolean(
     input.url
-    && (!existingMotions.length || input.existingStrategy)
-    && input.premise?.statement
-    && input.audienceHypotheses?.length
-    && input.signals?.length
+    && (
+      reuseStrategy
+        ? !requiresSourceMotion
+        : (
+          input.premise?.statement
+          && input.audienceHypotheses?.length
+          && input.signals?.length
+        )
+    )
   );
 
   return {

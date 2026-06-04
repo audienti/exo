@@ -2,6 +2,7 @@
 
 import { buildDailyView } from "./build-daily-view.js";
 import { buildInboxView } from "./build-inbox-view.js";
+import { matchesAnyInboundIgnoreRule } from "./inbound-ignore-rules.js";
 import {
   buildInboundObservationIdentityKeys,
   mergeInboundObservation,
@@ -72,12 +73,13 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         throw new Error(`Failed inbound sync surfaces cannot include observations: ${surfaceInput.surfaceKey}`);
       }
 
-      const preparedObservations = surfaceInput.observations.map((observationInput) => {
-        const observation = recordInboundObservation(updatedUser, {
+      const rawPreparedObservations = surfaceInput.observations.map((observationInput) => {
+        return recordInboundObservation(updatedUser, {
           accountId: account.id,
           surfaceKey: surfaceInput.surfaceKey,
           kind: observationInput.kind,
           observedAt: observationInput.observedAt,
+          eventAt: observationInput.eventAt,
           summary: observationInput.summary,
           externalId: observationInput.externalId,
           actorName: observationInput.actorName,
@@ -90,17 +92,22 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
           actorAvatarSourceUrl: observationInput.actorAvatarSourceUrl,
           threadUrl: observationInput.threadUrl,
           sourceUrl: observationInput.sourceUrl,
+          subject: observationInput.subject,
           motionId: observationInput.motionId,
           companyId: observationInput.companyId,
           prospectId: observationInput.prospectId,
-          notes: observationInput.notes
+          notes: observationInput.notes,
+          messages: observationInput.messages
         }, {
           rawMotions: options.rawMotions
         });
+      });
+      const preparedObservations = rawPreparedObservations.filter((observation) => !matchesAnyInboundIgnoreRule(updatedUser, observation));
+      const ignoredObservationCount = rawPreparedObservations.length - preparedObservations.length;
+      for (const observation of preparedObservations) {
         const existingDraft = observationDraftsByDedupeKey.get(observation.dedupeKey) ?? null;
         observationDraftsByDedupeKey.set(observation.dedupeKey, mergeInboundObservation(existingDraft, observation));
-        return observation;
-      });
+      }
 
       const derivedItemCount = surfaceInput.status === "failed"
         ? surfaceInput.itemCount
@@ -172,7 +179,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         throw new Error(`Inbound sync surface ${surfaceInput.surfaceKey} needs observedAt when items were found.`);
       }
 
-      const derivedDeltaObservations = deriveReconciledSurfaceDeltaObservations({
+      const rawDerivedDeltaObservations = deriveReconciledSurfaceDeltaObservations({
         rawUser: updatedUser,
         rawMotions: options.rawMotions ?? [],
         rawExistingObservations: existingObservations,
@@ -184,6 +191,9 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         observedAt: observedAt ?? processedAt,
         currentObservations: preparedObservations
       });
+      const derivedDeltaObservations = rawDerivedDeltaObservations.filter(
+        (observation) => !matchesAnyInboundIgnoreRule(updatedUser, observation),
+      );
 
       for (const observation of derivedDeltaObservations) {
         const existingDraft = observationDraftsByDedupeKey.get(observation.dedupeKey) ?? null;
@@ -192,7 +202,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
 
       const itemizationGapCount = exhaustionStatus === "complete"
         ? 0
-        : Math.max(0, (visibleTotalCount ?? derivedItemCount ?? 0) - preparedObservations.length);
+        : Math.max(0, (visibleTotalCount ?? derivedItemCount ?? 0) - preparedObservations.length - ignoredObservationCount);
 
       updatedUser = recordUserInboundSyncRun(updatedUser, {
         accountId: account.id,
@@ -309,6 +319,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
 export function buildInboundSyncRefreshSummary(input) {
   const inbox = buildInboxView(input.rawUser, input.rawObservations, input.rawMotions, input.rawCompanies);
   const daily = buildDailyView(input.rawUser, input.rawMotions, input.rawCompanies, input.rawProfiles, input.rawObservations, {
+    rawUsers: input.rawUsers,
     rawCues: input.rawCues ?? []
   });
   const rawMotion = resolvePreferredNextMotion(input.rawMotions);
@@ -411,6 +422,7 @@ function deriveReconciledSurfaceDeltaObservations(input) {
       surfaceKey: input.surfaceKey,
       kind: deltaDefinition.nextKind,
       observedAt: input.observedAt,
+      eventAt: observation.eventAt ?? null,
       summary: deltaDefinition.buildSummary(observation),
       externalId: observation.externalId,
       actorName: observation.actorName,

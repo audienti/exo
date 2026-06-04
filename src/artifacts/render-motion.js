@@ -146,12 +146,6 @@ export function renderMotionSummary(motion) {
           if (prospect.signalMatchIds.length) {
             lines.push(`      Signal Match Ids: ${prospect.signalMatchIds.join(", ")}`);
           }
-          if (prospect.throughLine.status === "ready") {
-            lines.push(`      Through-Line: ${prospect.throughLine.compressionLine ?? "defined"}`);
-          }
-          if (prospect.openingPlan.status === "ready") {
-            lines.push(`      Opening Plan: ${prospect.openingPlan.replyPath ?? "defined"}`);
-          }
           if (prospect.cadenceState.status === "ready") {
             lines.push(`      Cadence: ${prospect.cadenceState.currentStep ?? "defined"}`);
           }
@@ -319,7 +313,7 @@ export function renderMotionTargetingSummary(result) {
     lines.push("  none");
   } else {
     for (const company of result.companyLoop.items) {
-      lines.push(`  ${company.companyName}  [${company.stage}]  [queue:${company.queueStatus}]  signals:${company.signalMatchCount}  prospects:${company.prospectCount}  through-lines:${company.readyThroughLineCount}  opening-plans:${company.readyOpeningPlanCount}  cadence:${company.readyCadenceCount}`);
+      lines.push(`  ${company.companyName}  [${company.stage}]  [queue:${company.queueStatus}]  signals:${company.signalMatchCount}  prospects:${company.prospectCount}  cadence:${company.readyCadenceCount}`);
       lines.push(`    Execution Identity: ${company.executionIdentity.status} — ${company.executionIdentity.message}`);
       if (company.missingEmailFallbackCount > 0) {
         lines.push(`    Missing Email Fallbacks: ${company.missingEmailFallbackCount}`);
@@ -674,7 +668,7 @@ export function renderMotionReport(result) {
   } else {
     for (const company of result.targeting.companyLoop.items) {
       lines.push(
-        `  ${company.companyName}  [${company.stage}]  signals:${company.signalMatchCount}  prospects:${company.prospectCount}  through-lines:${company.readyThroughLineCount}  opening-plans:${company.readyOpeningPlanCount}  cadence:${company.readyCadenceCount}`
+        `  ${company.companyName}  [${company.stage}]  signals:${company.signalMatchCount}  prospects:${company.prospectCount}  cadence:${company.readyCadenceCount}`
       );
       lines.push(`    Execution Identity: ${company.executionIdentity.status} — ${company.executionIdentity.message}`);
       if (company.missingEmailFallbackCount > 0) {
@@ -759,24 +753,7 @@ export function renderMotionReport(result) {
  *       },
  *       recentPost: { engageable: boolean, reason: string },
  *       signalMatches: Array<{ signalName: string, summary: string, sourceUrl: string | null, observedAt: string | null, confidence: string }>,
- *       throughLine: {
- *         specificToThem: string | null,
- *         sharedProblem: string | null,
- *         whyNow: string | null,
- *         legitimateWedge: string | null,
- *         compressionLine: string | null
- *       },
- *       openingPlan: {
- *         whyNow: string | null,
- *         angle: string | null,
- *         replyPath: string | null,
- *         primaryChannel: string | null,
- *         fallbackChannel: string | null,
- *         fallbackTrigger: string | null,
- *         firstMove: string | null,
- *         firstMessageGoal: string | null,
- *         preflightActions: string[]
- *       },
+ *       whyRelevant: string,
  *       cadenceState: {
  *         currentStep: string | null,
  *         nextAction: string | null,
@@ -810,10 +787,8 @@ export function renderMotionWritingBrief(result) {
     `Message-Test Ready: ${messageTestReady ? "yes" : "no"}`,
     `Recent Post Warmup: ${recentPost.engageable ? "ready" : "not-ready"}`,
     `Recent Post Reason: ${recentPost.reason}`,
-    `Primary Channel: ${prospect.openingPlan.primaryChannel ?? "none"}`,
-    `Fallback Channel: ${prospect.openingPlan.fallbackChannel ?? "none"}`,
-    `First Message Goal: ${prospect.openingPlan.firstMessageGoal ?? "none"}`,
-    `Reply Path: ${prospect.openingPlan.replyPath ?? "none"}`,
+    `Current Step: ${prospect.cadenceState.currentStep ?? "none"}`,
+    `Next Action: ${prospect.cadenceState.nextAction ?? "none"}`,
     "",
     "Prospect Context",
     `  Why Relevant: ${prospect.whyRelevant}`,
@@ -826,19 +801,6 @@ export function renderMotionWritingBrief(result) {
     `  Live Signal URL: ${prospect.liveSignal.url ?? "none"}`,
     `  Live Signal Freshness: ${prospect.liveSignal.freshnessBand ?? "unknown"}`,
     `  Live Signal Hook Strength: ${prospect.liveSignal.hookStrength ?? "unknown"}`,
-    "",
-    "Through-Line",
-    `  Specific To Them: ${prospect.throughLine.specificToThem ?? "none"}`,
-    `  Shared Problem: ${prospect.throughLine.sharedProblem ?? "none"}`,
-    `  Why Now: ${prospect.throughLine.whyNow ?? "none"}`,
-    `  Legitimate Wedge: ${prospect.throughLine.legitimateWedge ?? "none"}`,
-    `  Compression Line: ${prospect.throughLine.compressionLine ?? "none"}`,
-    "",
-    "Opening Plan",
-    `  Angle: ${prospect.openingPlan.angle ?? "none"}`,
-    `  First Move: ${prospect.openingPlan.firstMove ?? "none"}`,
-    `  Fallback Trigger: ${prospect.openingPlan.fallbackTrigger ?? "none"}`,
-    `  Preflight Actions: ${prospect.openingPlan.preflightActions.join(" | ") || "none"}`,
     "",
     "Cadence",
     `  Current Step: ${prospect.cadenceState.currentStep ?? "none"}`,
@@ -1146,7 +1108,7 @@ function renderPacketInputs(inputs) {
 
   if (inputs.currentState) {
     lines.push(
-      `Current State: role-truth=${inputs.currentState.roleTruthStatus}, trigger=${inputs.currentState.triggerWindowStatus}, identity=${inputs.currentState.identityTellsStatus}, live-signal=${inputs.currentState.liveSignalStatus}, through-line=${inputs.currentState.throughLineStatus}, opening-plan=${inputs.currentState.openingPlanStatus}, cadence=${inputs.currentState.cadenceStatus}, enrichment=${inputs.currentState.contactEnrichmentStatus}`
+      `Current State: role-truth=${inputs.currentState.roleTruthStatus}, trigger=${inputs.currentState.triggerWindowStatus}, identity=${inputs.currentState.identityTellsStatus}, live-signal=${inputs.currentState.liveSignalStatus}, cadence=${inputs.currentState.cadenceStatus}, enrichment=${inputs.currentState.contactEnrichmentStatus}`
     );
   }
 
@@ -1238,7 +1200,7 @@ export function renderMotionDraftCases(result) {
  *     priorTouches: Array<{ occurredAt: string, surface: string, outcome: string, summary: string }>,
  *     signalMatches: Array<{ signalName: string, summary: string, observedAt: string | null, sourceUrl: string | null }>,
  *     writingInputs: {
- *       openingPlan: { firstMove: string | null, preflightActions: string[], talkingPoints: string[] },
+ *       signalMatches: Array<{ summary: string | null }>,
  *       recentPost: { reason: string }
  *     }
  *   },
@@ -1275,15 +1237,12 @@ export function renderMotionDraftBrief(result) {
   lines.push(
     "Context",
     `  Compression: ${result.surface.contextSummary.compressionLine ?? "none"}`,
-    `  Why Now: ${result.surface.contextSummary.whyNow ?? "none"}`,
-    `  Angle: ${result.surface.contextSummary.angle ?? "none"}`,
-    `  Reply Path: ${result.surface.contextSummary.replyPath ?? "none"}`,
-    `  First Message Goal: ${result.surface.contextSummary.firstMessageGoal ?? "none"}`,
+    `  Why Relevant: ${result.surface.contextSummary.whyRelevant ?? "none"}`,
+    `  Next Action: ${result.surface.contextSummary.nextAction ?? "none"}`,
+    `  Latest Signal: ${result.surface.contextSummary.latestSignal ?? "none"}`,
+    `  Live Signal: ${result.surface.contextSummary.liveSignal ?? "none"}`,
     `  Recent Post Warmup: ${result.surface.contextSummary.recentPostReady ? "ready" : "not-ready"}`,
     `  Recent Post Reason: ${result.surface.writingInputs.recentPost.reason}`,
-    `  First Move: ${result.surface.writingInputs.openingPlan.firstMove ?? "none"}`,
-    `  Preflight Actions: ${result.surface.writingInputs.openingPlan.preflightActions.join(" | ") || "none"}`,
-    `  Talking Points: ${result.surface.writingInputs.openingPlan.talkingPoints.join(" | ") || "none"}`,
     "",
     "Rules"
   );

@@ -30,6 +30,7 @@ export function buildDirectLiveTransport(input) {
  *   runtime: string,
  *   connector: string,
  *   source: string,
+ *   captureTransportMode?: string | null,
  *   prompt: string,
  *   outputSchema: unknown,
  *   outputGuide?: unknown,
@@ -41,11 +42,12 @@ export function buildDirectLiveTransport(input) {
  *   profileSelection?: unknown
  * }} input
  */
-export function buildCodexAgentHandoffTransport(input) {
+export function buildAgentHandoffTransport(input) {
   const verificationCommands = Array.isArray(input.verificationCommands)
     ? input.verificationCommands.filter((command) => typeof command === "string" && command.trim().length)
     : [];
   const applyCommand = normalizeNullableString(input.applyCommand);
+  const captureTransportMode = normalizeNullableString(input.captureTransportMode) ?? "browser_native_only";
   const captureGuide = buildDefaultCaptureGuide({
     buildPayloadCommand: input.buildPayloadCommand,
     applyCommand,
@@ -61,14 +63,14 @@ export function buildCodexAgentHandoffTransport(input) {
     connector: input.connector,
     source: input.source,
     status: "capture_required",
-    reason: `Codex desktop should inspect ${input.capability} live surfaces through native agent tools instead of shelling out to codex exec.`,
+    reason: `${describeRuntime(input.runtime)} should inspect ${input.capability} live surfaces through native agent tools instead of letting Exo interface directly.`,
     captureRequest: {
       contractVersion: "exo-live-agent-handoff-v2",
       coldStartReady: true,
       noRepoRediscoveryRequired: true,
       capability: input.capability,
       executionMode: "native_tools_only",
-      captureTransportMode: "browser_native_only",
+      captureTransportMode,
       shellFallbackAllowed: false,
       exoCliWritebackRequired: true,
       disallowedFallbacks: [
@@ -102,6 +104,13 @@ export function buildCodexAgentHandoffTransport(input) {
       profileSelection: input.profileSelection ?? null
     }
   };
+}
+
+/**
+ * @param {Parameters<typeof buildAgentHandoffTransport>[0]} input
+ */
+export function buildCodexAgentHandoffTransport(input) {
+  return buildAgentHandoffTransport(input);
 }
 
 /**
@@ -244,8 +253,15 @@ function buildDefaultCaptureGuide(input) {
  * }} input
  */
 function buildDefaultExecutionChecklist(input) {
+  const contractArtifacts = [
+    "captureGuide",
+    input.hasSurfaceHints ? "surfaceHints" : null,
+    input.hasProfileSelection ? "profileSelection" : null,
+    input.hasCaptureScaffold ? "captureScaffold" : null
+  ].filter(Boolean);
+
   return [
-    "Use captureGuide, surfaceHints, profileSelection, and captureScaffold as the full cold-start contract for this handoff.",
+    `Use ${joinArtifactLabels(contractArtifacts)} as the full cold-start contract for this handoff.`,
     input.hasCaptureScaffold
       ? "If browser-side JavaScript is needed, start from captureScaffold instead of inventing a larger ad hoc extractor."
       : "No captureScaffold was attached to this handoff.",
@@ -257,6 +273,37 @@ function buildDefaultExecutionChecklist(input) {
       : "No combined applyCommand is required for this handoff. The buildPayloadCommand performs the governed writeback target for this task.",
     "After writeback, run the listed verificationCommands and report their literal outputs instead of inferring Exo state from browser inspection."
   ];
+}
+
+/**
+ * @param {string[]} labels
+ */
+function joinArtifactLabels(labels) {
+  if (labels.length <= 1) {
+    return labels[0] ?? "the attached contract artifacts";
+  }
+
+  if (labels.length === 2) {
+    return `${labels[0]} and ${labels[1]}`;
+  }
+
+  return `${labels.slice(0, -1).join(", ")}, and ${labels.at(-1)}`;
+}
+
+/**
+ * @param {string} runtime
+ */
+function describeRuntime(runtime) {
+  const normalized = normalizeNullableString(runtime)?.toLowerCase();
+  if (normalized === "codex") {
+    return "Codex";
+  }
+
+  if (normalized === "claude") {
+    return "Claude";
+  }
+
+  return "The agent runtime";
 }
 
 /**

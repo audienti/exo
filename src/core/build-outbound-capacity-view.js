@@ -9,12 +9,14 @@ import { isPlannerEligibleMotionStatus } from "../lib/motion-status.js";
 import { buildMotionQueueSummary, isReadyConnectionRequestProspect } from "../lib/motion-queue.js";
 import { buildMotionPacketSummary } from "../lib/motion-packets.js";
 import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
+import { readWorkspaceSettings, resolveWorkspaceLinkedinConnectionRequestTarget } from "../lib/workspace-settings.js";
 import { buildUserInboundSyncView } from "./user-inbound-sync.js";
 import {
   buildMotionCompanyScopeKey,
   buildUserAssignedExecutionScopeIndex,
   classifyUserExecutionScope
 } from "./user-execution-scope.js";
+import { resolveUserConnection } from "./resolve-user-connection.js";
 
 const BUSINESS_DAYS_PER_WEEK = 5;
 
@@ -25,10 +27,12 @@ const BUSINESS_DAYS_PER_WEEK = 5;
  * @param {unknown[]} rawProfiles
  * @param {{
  *   now?: string | null | undefined,
+ *   rawUsers?: unknown[] | undefined,
  *   motionId?: string | null | undefined,
  *   companyId?: string | null | undefined,
  *   prospectId?: string | null | undefined,
- *   rawObservations?: unknown[] | undefined
+ *   rawObservations?: unknown[] | undefined,
+ *   workspaceSettings?: ReturnType<typeof readWorkspaceSettings> | undefined
  * }} [options]
  */
 export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, rawProfiles, options = {}) {
@@ -39,15 +43,24 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
   const companies = rawCompanies.map((item) => companySchema.parse(item));
   const companyById = new Map(companies.map((company) => [company.id, company]));
   const profiles = rawProfiles.map((item) => browserProfileSchema.parse(item));
+  const allUsers = (options.rawUsers ?? [rawUser]).map((item) => userSchema.parse(item));
   const observations = (options.rawObservations ?? []).map((item) => inboundObservationSchema.parse(item));
+  const workspaceSettings = options.workspaceSettings ?? readWorkspaceSettings();
+  const workspaceDailyInvitationsTarget = resolveWorkspaceLinkedinConnectionRequestTarget(workspaceSettings);
   const now = new Date(options.now ?? new Date().toISOString());
-  const linkedinAccount = user.accounts.find((account) => account.capability === "linkedin" && account.preferred)
+  const linkedinResolution = resolveUserConnection(user, profiles, { capability: "linkedin" });
+  const fallbackLinkedinAccount = user.accounts.find((account) => account.capability === "linkedin" && account.preferred)
     ?? user.accounts.find((account) => account.capability === "linkedin")
     ?? null;
+  const linkedinAccount = linkedinResolution.resolved
+    ? user.accounts.find((account) => account.id === linkedinResolution.resolved?.accountId) ?? fallbackLinkedinAccount
+    : fallbackLinkedinAccount;
   const {
     assignedExecutionScopeKeys,
     assignedMotionIds
   } = buildUserAssignedExecutionScopeIndex(user, motions, companies, {
+    users: allUsers,
+    profiles,
     motionId: options.motionId ?? null,
     companyId: options.companyId ?? null
   });
@@ -162,6 +175,7 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
   const queue = queueSummaries.reduce((summary, item) => {
     summary.companyCount += item.companyCount;
     summary.prospectCount += item.prospectCount;
+    summary.availableProspectCount += item.availableProspectCount ?? 0;
     summary.readyToSendCount += item.readyToSendCount;
     for (const [status, count] of Object.entries(item.companyStatusCounts)) {
       summary.companyStatusCounts[status] = (summary.companyStatusCounts[status] ?? 0) + count;
@@ -169,13 +183,16 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     for (const [status, count] of Object.entries(item.prospectStatusCounts)) {
       summary.prospectStatusCounts[status] = (summary.prospectStatusCounts[status] ?? 0) + count;
     }
+    summary.items.push(...(item.items ?? []));
     return summary;
   }, {
     companyCount: 0,
     prospectCount: 0,
+    availableProspectCount: 0,
     readyToSendCount: 0,
     companyStatusCounts: {},
-    prospectStatusCounts: {}
+    prospectStatusCounts: {},
+    items: []
   });
   const packets = packetSummaries.reduce((summary, item) => {
     summary.packetCount += item.counts.packetCount;
@@ -231,65 +248,75 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     packets
   };
 
-  if (linkedinAccount.sourceType !== "browser-profile") {
+  if (linkedinResolution.resolutionStatus !== "resolved") {
     return {
       channel: "linkedin",
       status: "unavailable",
-      reason: "The LinkedIn account is not resolved through a claimed browser profile, so Exo has no durable quota source for connection-request pacing yet.",
+      reason: linkedinResolution.reason,
       account: {
         id: linkedinAccount.id,
         handle: linkedinAccount.handle,
+        displayLabel: linkedinAccount.label ?? linkedinAccount.handle,
         sourceType: linkedinAccount.sourceType,
-        profileId: null,
+        profileId: linkedinAccount.browserProfileId ?? null,
         profileLabel: null
       },
       quota: {
         weeklyInvitations: null,
-        dailyInvitationsTarget: null
+        dailyInvitationsTarget: null,
+        accountDailyInvitationsTarget: null,
+        workspaceDailyInvitationsTarget
       },
       execution,
       plannerItem: null
     };
   }
 
-  const profile = profiles.find((candidate) => candidate.id === linkedinAccount.browserProfileId) ?? null;
-  if (!profile) {
+  const quotaResolution = resolveLinkedinInvitationQuota({ user, linkedinAccount, profiles });
+  const accountDisplayLabel = quotaResolution.displayLabel;
+
+  if (quotaResolution.status === "unavailable") {
     return {
       channel: "linkedin",
-      status: "unavailable",
-      reason: "The LinkedIn account points at a browser profile that is missing from Exo state, so quota-driven pacing cannot be computed.",
+      status: quotaResolution.status,
+      reason: quotaResolution.reason,
       account: {
         id: linkedinAccount.id,
         handle: linkedinAccount.handle,
+        displayLabel: accountDisplayLabel,
         sourceType: linkedinAccount.sourceType,
-        profileId: linkedinAccount.browserProfileId,
-        profileLabel: null
+        profileId: quotaResolution.profile?.id ?? linkedinAccount.browserProfileId ?? null,
+        profileLabel: quotaResolution.profile?.label ?? null
       },
       quota: {
         weeklyInvitations: null,
-        dailyInvitationsTarget: null
+        dailyInvitationsTarget: null,
+        accountDailyInvitationsTarget: null,
+        workspaceDailyInvitationsTarget
       },
       execution,
       plannerItem: null
     };
   }
 
-  const weeklyInvitations = profile.automationControls.weeklyQuotas.invitations;
-  if (weeklyInvitations === null) {
+  if (quotaResolution.weeklyInvitations === null) {
     return {
       channel: "linkedin",
       status: "needs_configuration",
-      reason: "The claimed LinkedIn browser profile has no connection-request quota stored, so Exo cannot compute today's invitation deficit yet.",
+      reason: quotaResolution.reason,
       account: {
         id: linkedinAccount.id,
         handle: linkedinAccount.handle,
+        displayLabel: accountDisplayLabel,
         sourceType: linkedinAccount.sourceType,
-        profileId: profile.id,
-        profileLabel: profile.label
+        profileId: quotaResolution.profile?.id ?? linkedinAccount.browserProfileId ?? null,
+        profileLabel: quotaResolution.profile?.label ?? null
       },
       quota: {
         weeklyInvitations: null,
-        dailyInvitationsTarget: null
+        dailyInvitationsTarget: null,
+        accountDailyInvitationsTarget: null,
+        workspaceDailyInvitationsTarget
       },
       execution,
       plannerItem: {
@@ -297,20 +324,40 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
         priority: "action",
         priorityRank: 0.9,
         dueAt: now.toISOString(),
-        whyItMatters: `Exo cannot tell whether ${user.label} is filling today's LinkedIn invitation capacity because ${profile.label} has no stored connection-request quota.`,
-        recommendedAction: `Set a durable LinkedIn connection-request quota on ${profile.label}, then rerun daily and next so Exo can compute today's deficit.`,
+        whyItMatters: workspaceDailyInvitationsTarget === null
+          ? `Exo cannot tell whether ${user.label} is filling today's LinkedIn invitation capacity because ${accountDisplayLabel} has no stored connection-request quota.`
+          : `This workspace requests ${workspaceDailyInvitationsTarget} LinkedIn invitation${workspaceDailyInvitationsTarget === 1 ? "" : "s"} per day, but Exo cannot measure progress against that target because ${accountDisplayLabel} has no stored connection-request quota.`,
+        recommendedAction: workspaceDailyInvitationsTarget === null
+          ? `Set a durable LinkedIn connection-request quota on ${accountDisplayLabel}, then rerun daily and next so Exo can compute today's deficit.`
+          : `Set a durable LinkedIn connection-request quota on ${accountDisplayLabel}, then rerun daily and next so Exo can compute this workspace's ${workspaceDailyInvitationsTarget}-per-day deficit.`,
         guidanceKey: "configure_connection_request_quota",
         context: {
+          userId: user.id,
           userLabel: user.label,
-          profileId: profile.id,
-          profileLabel: profile.label,
-          accountHandle: linkedinAccount.handle
+          profileId: quotaResolution.profile?.id ?? "",
+          profileLabel: quotaResolution.profile?.label ?? "",
+          accountId: linkedinAccount.id,
+          accountHandle: linkedinAccount.handle,
+          accountLabel: linkedinAccount.label ?? "",
+          accountSourceType: linkedinAccount.sourceType,
+          accountRuntime: quotaResolution.harnessConnection?.runtime ?? "",
+          accountConnector: quotaResolution.harnessConnection?.connector ?? "",
+          workspaceDailyInvitationTarget: workspaceDailyInvitationsTarget === null ? "" : String(workspaceDailyInvitationsTarget),
+          quotaWritebackCommand: buildAccountQuotaWritebackCommand({
+            user,
+            account: linkedinAccount,
+            harnessConnection: quotaResolution.harnessConnection
+          })
         }
       }
     };
   }
 
-  const dailyInvitationsTarget = Math.ceil(weeklyInvitations / BUSINESS_DAYS_PER_WEEK);
+  const weeklyInvitations = quotaResolution.weeklyInvitations;
+  const accountDailyInvitationsTarget = Math.ceil(weeklyInvitations / BUSINESS_DAYS_PER_WEEK);
+  const dailyInvitationsTarget = workspaceDailyInvitationsTarget === null
+    ? accountDailyInvitationsTarget
+    : Math.min(workspaceDailyInvitationsTarget, accountDailyInvitationsTarget);
   const remainingInvitationsToday = Math.max(dailyInvitationsTarget - sentToday, 0);
   const inventoryShortfall = Math.max(remainingInvitationsToday - readyConnectionRequests, 0);
   const firstAssignmentBlockedReadyProspect = assignmentBlockedReadyProspects[0] ?? null;
@@ -330,13 +377,16 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     account: {
       id: linkedinAccount.id,
       handle: linkedinAccount.handle,
+      displayLabel: accountDisplayLabel,
       sourceType: linkedinAccount.sourceType,
-      profileId: profile.id,
-      profileLabel: profile.label
+      profileId: quotaResolution.profile?.id ?? linkedinAccount.browserProfileId ?? null,
+      profileLabel: quotaResolution.profile?.label ?? null
     },
     quota: {
       weeklyInvitations,
-      dailyInvitationsTarget
+      dailyInvitationsTarget,
+      accountDailyInvitationsTarget,
+      workspaceDailyInvitationsTarget
     },
     execution: {
       ...execution,
@@ -399,10 +449,12 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       guidanceKey: deficitAction.guidanceKey,
       context: {
         userLabel: user.label,
-        profileId: profile.id,
-        profileLabel: profile.label,
+        profileId: quotaResolution.profile?.id ?? "",
+        profileLabel: quotaResolution.profile?.label ?? "",
         accountHandle: linkedinAccount.handle,
         dailyInvitationTarget: String(dailyInvitationsTarget),
+        accountDailyInvitationTarget: String(accountDailyInvitationsTarget),
+        workspaceDailyInvitationTarget: workspaceDailyInvitationsTarget === null ? "" : String(workspaceDailyInvitationsTarget),
         sentTodayCount: String(sentToday),
         trackedPendingInvitationCount: String(trackedPendingInvitations),
         itemizedPendingInvitationCount: itemizedPendingInvitations === null ? "" : String(itemizedPendingInvitations),
@@ -451,6 +503,102 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       }
     }
   };
+}
+
+/**
+ * @param {{
+ *   user: import("../schema/user.js").userSchema._type,
+ *   linkedinAccount: import("../schema/user.js").userConnectedAccountSchema._type,
+ *   profiles: import("../schema/browser-profile.js").browserProfileSchema._type[]
+ * }} input
+ */
+function resolveLinkedinInvitationQuota({ user, linkedinAccount, profiles }) {
+  const profile = linkedinAccount.browserProfileId
+    ? profiles.find((candidate) => candidate.id === linkedinAccount.browserProfileId) ?? null
+    : null;
+  const harnessConnection = linkedinAccount.harnessConnectionId
+    ? user.harnessConnections.find((candidate) => candidate.id === linkedinAccount.harnessConnectionId) ?? null
+    : null;
+  const accountWeeklyInvitations = linkedinAccount.automationControls?.weeklyQuotas?.invitations ?? null;
+  const legacyProfileWeeklyInvitations = profile?.automationControls?.weeklyQuotas?.invitations ?? null;
+  const displayLabel = profile?.label ?? linkedinAccount.label ?? linkedinAccount.handle;
+
+  if (accountWeeklyInvitations !== null) {
+    return {
+      status: "configured",
+      reason: "",
+      weeklyInvitations: accountWeeklyInvitations,
+      profile,
+      harnessConnection,
+      displayLabel
+    };
+  }
+
+  if (legacyProfileWeeklyInvitations !== null) {
+    return {
+      status: "configured",
+      reason: "",
+      weeklyInvitations: legacyProfileWeeklyInvitations,
+      profile,
+      harnessConnection,
+      displayLabel
+    };
+  }
+
+  if (linkedinAccount.sourceType === "browser-profile" && !profile) {
+    return {
+      status: "unavailable",
+      reason: "The LinkedIn account points at a browser profile that is missing from Exo state, so quota-driven pacing cannot be computed.",
+      weeklyInvitations: null,
+      profile: null,
+      harnessConnection,
+      displayLabel
+    };
+  }
+
+  return {
+    status: "needs_configuration",
+    reason: "The governed LinkedIn execution account has no stored connection-request quota, so Exo cannot compute today's invitation deficit yet.",
+    weeklyInvitations: null,
+    profile,
+    harnessConnection,
+    displayLabel
+  };
+}
+
+/**
+ * @param {{
+ *   user: import("../schema/user.js").userSchema._type,
+ *   account: import("../schema/user.js").userConnectedAccountSchema._type,
+ *   harnessConnection: import("../schema/user.js").userHarnessConnectionSchema._type | null
+ * }} input
+ */
+function buildAccountQuotaWritebackCommand({ user, account, harnessConnection }) {
+  const preferredFlag = account.preferred ? " --preferred" : "";
+  const providerAccountIdFlag = account.providerAccountId
+    ? ` --provider-account-id ${account.providerAccountId}`
+    : "";
+  const profileFlags = account.browserProfileId
+    ? ` --profile ${account.browserProfileId}`
+    : "";
+  const harnessFlags = harnessConnection
+    ? ` --runtime ${harnessConnection.runtime} --connector ${harnessConnection.connector}`
+    : "";
+
+  return [
+    "exo users accounts add",
+    user.id,
+    "--capability linkedin",
+    `--handle ${account.handle}`,
+    providerAccountIdFlag,
+    profileFlags || harnessFlags,
+    preferredFlag,
+    "--max-connection-requests <weekly-count> --json"
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -610,6 +758,30 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
   const firstProspectSelectionPacket = packets.claimableItemsByKind.prospect_selection?.[0] ?? null;
   const firstCompanyResearchPacket = packets.claimableItemsByKind.company_research?.[0] ?? null;
 
+  if (queuedResearchCount > 0) {
+    return {
+      kind: "fill_connection_request_deficit",
+      guidanceKey: "fill_connection_request_deficit",
+      recommendedAction: `Research ${queuedResearchCount} discovered or queued compan${queuedResearchCount === 1 ? "y" : "ies"} already in the motion so it can manufacture ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.${formatQueueLead(queue, ["discovered", "queued_for_research"])}`
+    };
+  }
+
+  if (researchedCount > 0) {
+    return {
+      kind: "fill_connection_request_deficit",
+      guidanceKey: "fill_connection_request_deficit",
+      recommendedAction: `Select prospects from ${researchedCount} researched account${researchedCount === 1 ? "" : "s"} so the motion can refill ${inventoryShortfall} ready branch${inventoryShortfall === 1 ? "" : "es"} for today's invitation target.${formatQueueLead(queue, ["researched"])}`
+    };
+  }
+
+  if (selectedCount > 0) {
+    return {
+      kind: "fill_connection_request_deficit",
+      guidanceKey: "fill_connection_request_deficit",
+      recommendedAction: `Finish cadence on ${selectedCount} selected prospect${selectedCount === 1 ? "" : "s"} so the motion can close ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} today.${formatQueueLead(queue, ["selected", "ready"])}`
+    };
+  }
+
   if (claimableProspectResearchPacketCount > 0) {
     return {
       kind: "claim_prospect_research_packets",
@@ -631,30 +803,6 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
       kind: "claim_company_research_packets",
       guidanceKey: "claim_company_research_packets",
       recommendedAction: `Claim ${claimableCompanyResearchPacketCount} company-research packet${claimableCompanyResearchPacketCount === 1 ? "" : "s"} from discovered or queued accounts so the motion can manufacture ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.${formatPacketLead(firstCompanyResearchPacket)}`
-    };
-  }
-
-  if (selectedCount > 0) {
-    return {
-      kind: "fill_connection_request_deficit",
-      guidanceKey: "fill_connection_request_deficit",
-      recommendedAction: `Finish through-lines, opening plans, and cadence on ${selectedCount} selected prospect${selectedCount === 1 ? "" : "s"} so the motion can close ${inventoryShortfall} more ready branch${inventoryShortfall === 1 ? "" : "es"} today.`
-    };
-  }
-
-  if (researchedCount > 0) {
-    return {
-      kind: "fill_connection_request_deficit",
-      guidanceKey: "fill_connection_request_deficit",
-      recommendedAction: `Select prospects from ${researchedCount} researched account${researchedCount === 1 ? "" : "s"} so the motion can refill ${inventoryShortfall} ready branch${inventoryShortfall === 1 ? "" : "es"} for today's invitation target.`
-    };
-  }
-
-  if (queuedResearchCount > 0) {
-    return {
-      kind: "fill_connection_request_deficit",
-      guidanceKey: "fill_connection_request_deficit",
-      recommendedAction: `Research ${queuedResearchCount} discovered or queued company${queuedResearchCount === 1 ? "" : "ies"} so the motion can manufacture ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.`
     };
   }
 
@@ -726,6 +874,46 @@ function formatPacketLead(packet) {
     : packet.companyName;
 
   return ` Start with ${packet.packetId} for ${subject} via exo motion packet-brief ${packet.motionId} --packet ${packet.packetId}.`;
+}
+
+/**
+ * @param {{
+ *   items?: Array<{ companyName: string, queueStatus: string }>
+ * }} queue
+ * @param {string[]} statuses
+ */
+function formatQueueLead(queue, statuses) {
+  const leadCompanies = (queue.items ?? [])
+    .filter((item) => statuses.includes(item.queueStatus))
+    .map((item) => item.companyName)
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right))
+    .slice(0, 2);
+
+  if (leadCompanies.length === 0) {
+    return "";
+  }
+
+  return ` Start with ${joinHumanList(leadCompanies)}.`;
+}
+
+/**
+ * @param {string[]} values
+ */
+function joinHumanList(values) {
+  if (values.length === 0) {
+    return "";
+  }
+
+  if (values.length === 1) {
+    return values[0];
+  }
+
+  if (values.length === 2) {
+    return `${values[0]} and ${values[1]}`;
+  }
+
+  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
 }
 
 /**

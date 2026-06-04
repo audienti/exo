@@ -1,6 +1,7 @@
 // @ts-check
 
 import http from "node:http";
+import { buildAgentQueue } from "../core/build-agent-queue.js";
 import { buildDailyView } from "../core/build-daily-view.js";
 import { buildInboxView } from "../core/build-inbox-view.js";
 import { buildInboundReviewView } from "../core/build-inbound-review-view.js";
@@ -26,6 +27,7 @@ import {
   updateMotion,
   upsertInboundObservation,
 } from "../db/database.js";
+import { buildUserWorkspaceContext, filterWorkspaceObservationsForUser } from "../core/workspace-context.js";
 import { buildWorkspaceModel } from "../../prototype/build-motion-workspace.mjs";
 
 const DEFAULT_WORKSPACE_SERVER_HOST = "127.0.0.1";
@@ -48,27 +50,47 @@ export function buildWorkspaceProjection(input) {
   const observations = listInboundObservations({
     userId: user.id,
   });
+  const allObservations = listInboundObservations();
   const cues = listInboundCues({
     userId: user.id,
     status: "open",
   });
-
-  const inboundReview = buildInboundReviewView(user, observations, motions, companies);
-  const inbox = buildInboxView(user, observations, motions, companies);
-  const daily = buildDailyView(user, motions, companies, browserProfiles, observations, {
+  const workspaceContext = buildUserWorkspaceContext(user, {
+    rawObservations: observations,
     rawCues: cues,
+  });
+  const filteredAllObservations = filterWorkspaceObservationsForUser(
+    allObservations,
+    user,
+    workspaceContext.effectivePolicy,
+  );
+
+  const inboundReview = buildInboundReviewView(workspaceContext.user, workspaceContext.observations, motions, companies);
+  const inbox = buildInboxView(workspaceContext.user, workspaceContext.observations, motions, companies);
+  const daily = buildDailyView(workspaceContext.user, motions, companies, browserProfiles, workspaceContext.observations, {
+    rawUsers: users,
+    rawCues: workspaceContext.cues,
   });
   const reports = motions.map((motion) =>
     buildMotionReport(motion, companies, browserProfiles, users, {
       capability,
     }),
   );
+  const agentQueue = buildAgentQueue({
+    motions,
+    companies,
+    profiles: browserProfiles,
+    users,
+    observations: filteredAllObservations,
+    cues: workspaceContext.cues,
+  });
 
   return buildWorkspaceModel({
     user,
     inboundReview,
     inbox,
     daily,
+    agentQueue,
     reports,
     regenerateCommand: input.regenerateCommand,
     interactive: input.interactive ?? null,

@@ -16,8 +16,6 @@ export function buildOperatorPromptFromDailyItem(item) {
         return `${item.prospect.name} sent you an inbound LinkedIn connection request. Accept or decline?`;
       case "needs_status_reconciliation":
         return `${item.prospect.name}'s inbound connection request left the pending list. Was it accepted, declined, or resolved another way?`;
-      case "stale_withdraw_review":
-        return `${item.prospect.name}'s pending connection request is stale. Withdraw it or keep it pending?`;
       case "needs_reply":
         return `${item.prospect.name} replied on ${item.company.name}. Reply now?`;
       case "ready_for_post_accept":
@@ -68,6 +66,9 @@ export function buildOperatorPromptFromExecutionAction(action) {
  * @returns {string | null}
  */
 export function buildOperatorPromptFromInboxItem(item) {
+  if (item.status === "queued" || item.status === "resolved" || item.status === "agent-draft") {
+    return null;
+  }
   const actorName = item.prospect?.name ?? item.actorName ?? "This person";
 
   switch (item.kind) {
@@ -78,6 +79,9 @@ export function buildOperatorPromptFromInboxItem(item) {
     case "inbound_reply_received":
     case "email_reply_received":
     case "message_received":
+      if (item.messageContext === "first_inbound") {
+        return `${actorName} sent you a private message. Reply or ignore?`;
+      }
       return `${actorName} replied. Reply now?`;
     case "thread_updated":
     case "email_thread_updated":
