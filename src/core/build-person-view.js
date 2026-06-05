@@ -17,6 +17,7 @@ import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { deriveLinkedinCompanyName } from "../lib/linkedin-headline.js";
 import { classifyPrivateInboundMessage } from "./private-inbound-message-classification.js";
+import { isTransitionMotion } from "./ensure-transition-motion.js";
 
 const SURFACE_LABELS = {
   "linkedin-received-invitations": "Received invitation",
@@ -96,6 +97,7 @@ function shapePerson(seed, related, motions, companies) {
 
   const matchedProspect = resolveMatchedProspect(related, motions);
   const matchedCompany = resolveMatchedCompany(related, companies, matchedProspect);
+  const motionContext = resolveMotionContext(related, motions, companies, matchedProspect, matchedCompany);
   const timeline = buildTimeline(sorted);
   const latestMessage = timeline.find((entry) => entry.isMessage && entry.direction !== "outbound")
     ?? timeline.find((entry) => entry.isMessage)
@@ -111,10 +113,8 @@ function shapePerson(seed, related, motions, companies) {
   const suggested = suggestSurface(sorted, identity, email);
   const connection = resolveConnectionStatus(sorted);
   const composeDraft = buildComposeDraft({
-    identity,
     latestMessage,
     suggestedSurface: suggested.surface,
-    connectionKey: connection.key,
   });
 
   return {
@@ -123,6 +123,7 @@ function shapePerson(seed, related, motions, companies) {
     email,
     matchedProspect,
     matchedCompany,
+    motionContext,
     suggestedSurface: suggested.surface,
     suggestedChannel: suggested.channel,
     connection,
@@ -319,12 +320,59 @@ function resolveMatchedCompany(related, companies, matchedProspect) {
     return {
       companyId: matched.id,
       name: matched.name,
+      websiteUrl: matched.websiteUrl ?? null,
+      linkedinCompanyUrl: matched.linkedinCompanyUrl ?? null,
+      notes: matched.notes ?? null,
+      motionIds: matched.motionIds ?? [],
     };
   }
 
   return {
     companyId,
     name: matchedProspect?.companyName ?? null,
+    websiteUrl: null,
+    linkedinCompanyUrl: null,
+    notes: null,
+    motionIds: [],
+  };
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type[]} related
+ * @param {import("../schema/motion.js").motionSchema._type[]} motions
+ * @param {{ motionId: string | null } | null} matchedProspect
+ * @param {{ companyId: string | null, motionIds?: string[] | null } | null} matchedCompany
+ */
+function resolveMotionContext(related, motions, matchedProspect, matchedCompany) {
+  const candidateIds = [];
+  if (matchedProspect?.motionId) {
+    candidateIds.push(matchedProspect.motionId);
+  }
+  for (const observation of related) {
+    if (observation.motionId) {
+      candidateIds.push(observation.motionId);
+    }
+  }
+  for (const motionId of matchedCompany?.motionIds ?? []) {
+    if (motionId) {
+      candidateIds.push(motionId);
+    }
+  }
+
+  const motion = candidateIds
+    .map((motionId) => motions.find((candidate) => candidate.id === motionId) ?? null)
+    .find(Boolean);
+  if (!motion) {
+    return null;
+  }
+
+  return {
+    motionId: motion.id,
+    name: motion.name,
+    sourceUrl: motion.offer?.sourceUrl ?? null,
+    offerNotes: motion.offer?.offerNotes ?? null,
+    premise: motion.premise?.statement ?? null,
+    isTransition: isTransitionMotion(motion),
   };
 }
 
@@ -399,124 +447,19 @@ function inferMessageDirection(observation, fromHandle) {
 
 /**
  * @param {{
- *   identity: { name: string | null },
- *   latestMessage: { subject?: string | null, summary?: string | null, detail?: string | null } | null,
+ *   latestMessage: { subject?: string | null } | null,
  *   suggestedSurface: string,
- *   connectionKey?: string | null,
  * }} input
  */
 function buildComposeDraft(input) {
-  const latestMessage = input.latestMessage;
-  const firstName = (input.identity.name ?? "").trim().split(/\s+/)[0] || "there";
-  const threadSubject = normalizeReplySubject(latestMessage?.subject ?? null);
-  const context = [latestMessage?.subject, latestMessage?.summary, latestMessage?.detail]
-    .filter(Boolean)
-    .join("\n");
-  const solicitation = looksLikeSolicitation(context);
-  const acknowledgement = buildAcknowledgementLine(latestMessage);
-
   if (input.suggestedSurface === "email") {
     return {
-      subject: threadSubject,
-      body: solicitation
-        ? `${firstName},\n\nThanks for sending this over. We're going to pass on this one, so I'm going to close it out on my side.\n\nBest,`
-        : `${firstName},\n\n${acknowledgement}\n\nBest,`,
-    };
-  }
-
-  if (input.suggestedSurface === "inbound_reply") {
-    const shouldUseSolicitationFallback = solicitation && input.connectionKey !== "in-conversation";
-    return {
-      subject: null,
-      body: shouldUseSolicitationFallback
-        ? `Thanks for sending this over. We're going to pass on this one.`
-        : acknowledgement,
+      subject: normalizeReplySubject(input.latestMessage?.subject ?? null),
+      body: "",
     };
   }
 
   return { subject: null, body: "" };
-}
-
-/**
- * @param {{ subject?: string | null, summary?: string | null, detail?: string | null } | null} latestMessage
- */
-function buildAcknowledgementLine(latestMessage) {
-  const candidates = [latestMessage?.detail, latestMessage?.subject, latestMessage?.summary]
-    .map((value) => normalizeNullableString(value))
-    .filter(Boolean);
-
-  for (const candidate of candidates) {
-    const specific = buildSpecificAcknowledgement(candidate);
-    if (specific) {
-      return specific;
-    }
-  }
-
-  return "Thanks for the note.";
-}
-
-/**
- * @param {string} candidate
- */
-function buildSpecificAcknowledgement(candidate) {
-  if (looksLikeGenericInboundContext(candidate)) {
-    return null;
-  }
-
-  const compareNotesMatch = candidate.match(/\b(?:would\s+be\s+good|would\s+love|keen|happy|glad)?\s*to compare notes on\s+([^.?!\n]+)/i);
-  if (compareNotesMatch) {
-    const topic = normalizeReplyTopic(compareNotesMatch[1]);
-    return topic ? `Happy to compare notes on ${topic}.` : null;
-  }
-
-  const connectMatch = candidate.match(/\b(?:would\s+be\s+good|would\s+love|keen|happy|glad)?\s*to connect(?:\s+(?:about|around|on))?\s+([^.?!\n]+)/i);
-  if (connectMatch) {
-    const topic = normalizeReplyTopic(connectMatch[1]);
-    return topic ? `Happy to connect on ${topic}.` : "Happy to connect.";
-  }
-
-  const talkMatch = candidate.match(/\b(?:would\s+be\s+good|would\s+love|keen|happy|glad)?\s*to (?:talk|chat)(?:\s+(?:about|through|on))?\s+([^.?!\n]+)/i);
-  if (talkMatch) {
-    const topic = normalizeReplyTopic(talkMatch[1]);
-    return topic ? `Happy to talk about ${topic}.` : null;
-  }
-
-  if (/\bopen to connect\b/i.test(candidate)) {
-    return "Happy to connect.";
-  }
-
-  const aboutMatch = candidate.match(/\babout\s+([^.?!\n]+)/i);
-  if (aboutMatch) {
-    const topic = normalizeReplyTopic(aboutMatch[1]);
-    return topic ? `Thanks for the note about ${topic}.` : null;
-  }
-
-  return null;
-}
-
-/**
- * @param {string} text
- */
-function looksLikeGenericInboundContext(text) {
-  return /\b(unread linkedin message activity|unread linkedin thread activity|sent a new inbound linkedin connection request|sent a new inbound connection request|no invitation note was included with this request)\b/i.test(text);
-}
-
-/**
- * @param {string | null | undefined} topic
- */
-function normalizeReplyTopic(topic) {
-  const normalized = normalizeNullableString(topic)
-    ?.replace(/\s+/g, " ")
-    .replace(/^re:\s*/i, "")
-    .replace(/^[\"']+|[\"']+$/g, "")
-    .replace(/[.?!,:;]+$/g, "")
-    .trim();
-
-  if (!normalized) {
-    return null;
-  }
-
-  return normalized.length <= 120 ? normalized : `${normalized.slice(0, 117).trimEnd()}...`;
 }
 
 /**
@@ -539,13 +482,6 @@ function normalizeReplySubject(subject) {
     return null;
   }
   return /^re:/i.test(normalized) ? normalized : `Re: ${normalized}`;
-}
-
-/**
- * @param {string} text
- */
-function looksLikeSolicitation(text) {
-  return /\b(rfp|proposal request|proposal due|recruitment marketing|website development contract|procurement|vendor|bid|pre-proposal|solicitation)\b/i.test(text);
 }
 
 /**

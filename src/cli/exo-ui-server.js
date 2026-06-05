@@ -26,6 +26,7 @@ import { buildMotionPacketSummary } from "../lib/motion-packets.js";
 import { renderWorkspaceRollupPage } from "../artifacts/render-workspace-rollup.js";
 import { buildConnectionsViewModel } from "../core/build-connections-view.js";
 import { buildAgentQueue } from "../core/build-agent-queue.js";
+import { resolvePersonComposeDraft } from "../core/build-person-compose-draft.js";
 import { buildPersonView } from "../core/build-person-view.js";
 import { findTransitionMotion } from "../core/ensure-transition-motion.js";
 import { buildExecutionViewModel } from "../core/build-execution-view.js";
@@ -160,14 +161,20 @@ function renderRoute(route, ctx) {
   // Internal person show page (works for any inbound person, not just prospects).
   if (route.startsWith("/people/")) {
     const id = decodeURIComponent(route.slice("/people/".length));
+    const rawObservations = listInboundObservations({ userId: ctx.userId });
+    const rawMotions = listMotions();
+    const rawCompanies = listCompanies();
     const person = buildPersonView({
       observationId: id,
-      rawObservations: listInboundObservations({ userId: ctx.userId }),
-      rawMotions: listMotions(),
-      rawCompanies: listCompanies(),
+      rawObservations,
+      rawMotions,
+      rawCompanies,
     });
     if (!person) {
       return renderNotFound("Person", id, "/connections", "Connections");
+    }
+    if (!person.matchedProspect) {
+      person.composeDraft = resolvePersonComposeDraft(person);
     }
     const transition = findTransitionMotion();
     return renderPersonPage(person, {
@@ -177,7 +184,7 @@ function renderRoute(route, ctx) {
       // Transition backlog first (the default add target), then real motions.
       motions: [
         ...(transition ? [{ id: transition.id, name: transition.name }] : []),
-        ...listMotions()
+        ...rawMotions
           .filter((motion) => motion.id !== transition?.id)
           .map((motion) => ({ id: motion.id, name: motion.name })),
       ],

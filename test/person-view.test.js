@@ -77,7 +77,7 @@ test("buildPersonView lifts stored thread messages into the latest inbound messa
   assert.equal(person?.timeline[0]?.isMessage, true);
   assert.equal(person?.connection?.label, "In conversation · they replied");
   assert.equal(person?.composeDraft?.subject, "Re: Halfmoon Hillcrest Fire Dept. RFP");
-  assert.match(person?.composeDraft?.body ?? "", /We're going to pass on this one/i);
+  assert.equal(person?.composeDraft?.body, "");
 });
 
 test("renderPersonPage shows the actual inbound message context in status and timeline", () => {
@@ -101,7 +101,7 @@ test("renderPersonPage shows the actual inbound message context in status and ti
   assert.match(html, /Ignore sender/);
   assert.match(html, /data-exo-writer="ignoreInboundObservation"/);
   assert.doesNotMatch(html, /class="exo-action" data-exo-writer="ignoreInboundObservation"/);
-  assert.match(html, /Thanks for sending this over\./);
+  assert.doesNotMatch(html, /Thanks for sending this over\.|Thanks for the note\./);
 });
 
 test("renderPersonPage suppresses the duplicate status preview for one- and two-message threads", () => {
@@ -276,13 +276,13 @@ test("renderPersonPage derives company from a LinkedIn headline and avoids the s
   assert.doesNotMatch(html, /Surfaces/);
   assert.match(html, /Nassau Street Partners/);
   assert.equal(person?.connection?.label, "Inbound message · they messaged you");
-  assert.equal(person?.composeDraft?.body, "Happy to compare notes on partnerships.");
+  assert.equal(person?.composeDraft?.body, "");
   assert.match(html, /Inbound message · they messaged you/);
   assert.doesNotMatch(html, /they replied/);
   assert.doesNotMatch(html, /Saw your note\. Thanks for reaching out\./);
 });
 
-test("buildPersonView uses a short neutral fallback when LinkedIn context is generic", () => {
+test("buildPersonView leaves the inbound compose body empty until the live writer fills it", () => {
   const person = buildPersonView({
     observationId: "linkedin-reply-generic",
     rawObservations: [
@@ -312,8 +312,8 @@ test("buildPersonView uses a short neutral fallback when LinkedIn context is gen
   });
 
   assert.ok(person);
-  assert.equal(person?.composeDraft?.body, "Thanks for the note.");
-  assert.doesNotMatch(person?.composeDraft?.body ?? "", /Saw your note\. Thanks for reaching out\./);
+  assert.equal(person?.composeDraft?.body, "");
+  assert.doesNotMatch(person?.composeDraft?.body ?? "", /Saw your note\. Thanks for reaching out\.|Thanks for the note\./);
 });
 
 test("buildPersonView does not misclassify an active LinkedIn reply as a cold solicitation", () => {
@@ -362,8 +362,8 @@ test("buildPersonView does not misclassify an active LinkedIn reply as a cold so
 
   assert.ok(person);
   assert.equal(person?.connection?.label, "In conversation · they replied");
-  assert.equal(person?.composeDraft?.body, "Thanks for the note.");
-  assert.doesNotMatch(person?.composeDraft?.body ?? "", /We're going to pass on this one/i);
+  assert.equal(person?.composeDraft?.body, "");
+  assert.doesNotMatch(person?.composeDraft?.body ?? "", /We're going to pass on this one|Thanks for the note\./i);
 });
 
 test("renderPersonPage links the canonical company when the inbound person is resolved to one", () => {
