@@ -342,6 +342,66 @@ test("agent runtime surfaces an active transport backoff instead of a green queu
   assert.doesNotMatch(queueHtml, /Background agent on/i);
 });
 
+test("agent runtime spells out that verify mode will not send already-proved drafts", () => {
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-04T11:05:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "task-1",
+          subject: "Ellaine Chrisna Leynes",
+          action: "Send Direct Message",
+          why: "Queued for the agent.",
+          dueAt: "2026-06-04T11:00:00.000Z",
+          sourceType: "send_ready",
+        },
+        {
+          id: "task-2",
+          subject: "Lina Park",
+          action: "Send Email",
+          why: "Queued for the agent.",
+          dueAt: "2026-06-04T11:01:00.000Z",
+          sourceType: "send_ready",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+  });
+
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: {
+      status: "noop",
+      reason: "Verify mode had no unverified send_message tasks left to prove.",
+      endedAt: "2026-06-04T10:17:27.465Z",
+    },
+    queueCount: 2,
+    verificationSendCount: 2,
+    blockerCount: 0,
+  };
+
+  const operatorHtml = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
+  assert.match(operatorHtml, /Verify mode is holding sends/i);
+  assert.match(operatorHtml, /2 queued agent-authored sends already have fresh proof/i);
+  assert.match(operatorHtml, /will not click Send or write back/i);
+  assert.match(operatorHtml, />Run proof pass</i);
+  assert.doesNotMatch(operatorHtml, />Run agent now</i);
+
+  const queueHtml = renderQueuePage(model, { interactive: true, agentRuntime: runtime });
+  assert.match(queueHtml, /Verify mode is holding sends/i);
+  assert.match(queueHtml, /2 queued agent-authored sends already have fresh proof/i);
+  assert.match(queueHtml, /will not click Send or write back/i);
+  assert.match(queueHtml, />Run proof pass</i);
+  assert.doesNotMatch(queueHtml, />Run agent now</i);
+});
+
 test("operator does not surface stale truth as a manual run-check lane", () => {
   const model = buildOperatorViewModel({
     user: { id: "user-1", label: "william-main", owner: "William" },

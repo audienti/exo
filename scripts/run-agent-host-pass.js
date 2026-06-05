@@ -172,7 +172,8 @@ export function runAgentHostPass() {
 
     const blockedBrowserTask = result.status === "blocked" && BROWSER_TRANSPORT_TASK_KINDS.has(task.kind);
     const selectedMode = typeof task?._selectedSendMode === "string" ? task._selectedSendMode : getSendMode();
-    const liveSendAttempt = task.kind === "send_message" && (selectedMode === "live" || selectedMode === "canary_live");
+    const liveSendAttempt = task.kind === "send_message"
+      && (selectedMode === "live" || selectedMode === "canary_live" || selectedMode === "operator_live");
     if (blockedBrowserTask) {
       const unavailableUntil = new Date(Date.now() + BROWSER_TRANSPORT_BACKOFF_MS).toISOString();
       const nextState = setBrowserBackoffForTask(
@@ -344,6 +345,12 @@ export function createTaskVerificationFingerprint(task) {
   return createHostStateTaskVerificationFingerprint(task);
 }
 
+/** @param {any} task */
+function isOperatorControlledSendTask(task) {
+  if (task?.kind !== "send_message") return false;
+  return task?.authoredBy === "operator" || task?.editedByOperator === true;
+}
+
 /**
  * @param {ReturnType<typeof loadQueue>} queue
  * @param {boolean} browserReady
@@ -400,6 +407,13 @@ export function chooseNextQueueTask(
         now,
       );
       if (sendMode === "verify") {
+        if (isOperatorControlledSendTask(task)) {
+          return {
+            ...task,
+            _selectedSendMode: "operator_live",
+            _recentVerification: verification ?? null,
+          };
+        }
         if (verification) {
           continue;
         }
@@ -530,13 +544,16 @@ export function explainNoopPass(
     if (automationBlockReason) {
       return automationBlockReason;
     }
-    const verifiedSendTasks = sendTasks.filter((task) => getRecentTaskVerification(
+    const verificationRequiredSendTasks = sendTasks.filter((task) => !isOperatorControlledSendTask(task));
+    const verifiedSendTasks = verificationRequiredSendTasks.filter((task) => getRecentTaskVerification(
       hostState,
       task.kind,
       createTaskVerificationFingerprint(task),
       now,
     ));
-    if (sendMode === "verify" && verifiedSendTasks.length === sendTasks.length) {
+    if (sendMode === "verify"
+      && verificationRequiredSendTasks.length > 0
+      && verifiedSendTasks.length === verificationRequiredSendTasks.length) {
       return "Verify mode had no unverified send_message tasks left to prove.";
     }
     if (sendMode !== "verify") {

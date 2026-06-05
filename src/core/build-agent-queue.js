@@ -594,6 +594,8 @@ function buildInboundSyncTask({ user, account, mode, itemizationSurfaceCount, st
  * }} input
  */
 function buildSendMessageTask({ motion, account, prospect, draft, action, via, dueAt, waitingReason }) {
+  const authoredBy = draft.authoredBy === "operator" ? "operator" : "agent";
+  const editedByOperator = draft.editedByOperator === true;
   return {
     kind: "send_message",
     action,
@@ -611,6 +613,8 @@ function buildSendMessageTask({ motion, account, prospect, draft, action, via, d
     via,
     subject: draft.subject ?? null,
     body: extractUsableDraftBody(draft.body) ?? (draft.body ?? ""),
+    authoredBy,
+    editedByOperator,
     queuedAt: draft.approvedAt ?? null,
     dueAt,
     waitingReason,

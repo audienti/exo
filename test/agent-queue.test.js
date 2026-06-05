@@ -809,6 +809,36 @@ test("buildAgentQueue preserves email sends as send_email instead of collapsing 
   assert.equal(queue.blockers.length, 0);
 });
 
+test("buildAgentQueue preserves draft authorship on send tasks", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      linkedinProfileUrl: null,
+      email: "lpark@govpointeoffice.us",
+      sourceUrl: "https://mail.google.com/mail/#all/thread-1",
+      cadenceState: {
+        currentStep: "value-add-email",
+      },
+      drafts: [
+        {
+          surface: "email",
+          status: "approved",
+          subject: "Re: Fire department RFP",
+          body: "Operator wrote this.",
+          approvedAt: "2026-06-04T17:14:29.676Z",
+          channel: "email",
+          authoredBy: "operator",
+          editedByOperator: true,
+        },
+      ],
+    }),
+  );
+
+  const sendTask = queue.tasks.find((task) => task.kind === "send_message");
+  assert.ok(sendTask);
+  assert.equal(sendTask.authoredBy, "operator");
+  assert.equal(sendTask.editedByOperator, true);
+});
+
 test("buildAgentQueue keeps a future first-touch draft in waiting until its due checkpoint", () => {
   const queue = buildAgentQueue(
     fixture({

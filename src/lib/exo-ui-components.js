@@ -726,7 +726,7 @@ function renderAgentStatusMenu(runtime, opts = {}) {
         variant: "primary",
         size: "sm",
         icon: "cpu",
-        label: "Run agent now",
+        label: status.runLabel ?? "Run agent now",
       }),
     );
   } else {
@@ -787,12 +787,16 @@ function summarizeAgentHeaderRuntime(runtime) {
   const sendMode = typeof routine?.sendMode === "string" && routine.sendMode.trim()
     ? routine.sendMode.trim().toLowerCase()
     : null;
+  const verificationSendCount = Number.isFinite(runtime.verificationSendCount)
+    ? Number(runtime.verificationSendCount)
+    : queueCount;
   const lastStatus = typeof lastPass?.status === "string" ? lastPass.status.trim().toLowerCase() : null;
   const lastReason = typeof lastPass?.reason === "string" && lastPass.reason.trim()
     ? lastPass.reason.trim()
     : null;
   const queuedLabel = `${queueCount} queued`;
   const queuedDetail = `${queueCount} queued task${queueCount === 1 ? "" : "s"} waiting to run.`;
+  const verifyHoldingSends = isVerifyModeHoldingSends({ sendMode, lastPass, verificationSendCount });
 
   if (lock?.active) {
     return {
@@ -803,6 +807,7 @@ function summarizeAgentHeaderRuntime(runtime) {
       cadence,
       sendMode,
       canRunNow: false,
+      runLabel: null,
     };
   }
 
@@ -827,6 +832,7 @@ function summarizeAgentHeaderRuntime(runtime) {
       cadence,
       sendMode,
       canRunNow: true,
+      runLabel: "Run agent now",
     };
   }
 
@@ -839,6 +845,20 @@ function summarizeAgentHeaderRuntime(runtime) {
       cadence,
       sendMode,
       canRunNow: true,
+      runLabel: "Run agent now",
+    };
+  }
+
+  if (verifyHoldingSends) {
+    return {
+      health: "yellow",
+      label: "Verify only",
+      headline: "Verify mode is holding sends",
+      detail: `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"} already have fresh proof. Verify mode stops those at ready_to_send and will not click Send or write back.`,
+      cadence,
+      sendMode,
+      canRunNow: true,
+      runLabel: "Run proof pass",
     };
   }
 
@@ -853,6 +873,7 @@ function summarizeAgentHeaderRuntime(runtime) {
       cadence,
       sendMode,
       canRunNow: !scheduler.running,
+      runLabel: scheduler.running ? null : "Run agent now",
     };
   }
 
@@ -867,7 +888,18 @@ function summarizeAgentHeaderRuntime(runtime) {
     cadence,
     sendMode,
     canRunNow: true,
+    runLabel: "Run agent now",
   };
+}
+
+/**
+ * @param {{ sendMode: string | null, lastPass: any, verificationSendCount: number }} input
+ */
+function isVerifyModeHoldingSends(input) {
+  if (input.sendMode !== "verify" || input.verificationSendCount <= 0) return false;
+  const status = String(input.lastPass?.status ?? "").trim().toLowerCase();
+  const reason = String(input.lastPass?.reason ?? "").trim().toLowerCase();
+  return status === "noop" && /no unverified send_message tasks left to prove/.test(reason);
 }
 
 /**

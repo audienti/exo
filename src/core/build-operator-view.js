@@ -41,7 +41,9 @@ import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
  * @property {string | null} sendMode
  * @property {string | null} lastPassSummary
  * @property {number} queueCount
+ * @property {number | null | undefined} verificationSendCount
  * @property {boolean} canRunNow
+ * @property {string | null} runLabel
  *
  * @typedef {Object} OperatorNextMove
  * @property {string} title
@@ -445,7 +447,11 @@ function shapeAgentRuntime(runtime, queueCount) {
   const sendMode = typeof routine?.sendMode === "string" && routine.sendMode.trim()
     ? routine.sendMode.trim().toLowerCase()
     : null;
+  const verificationSendCount = Number.isFinite(runtime.verificationSendCount)
+    ? Number(runtime.verificationSendCount)
+    : queueCount;
   const lastPassSummary = summarizeLastPass(lastPass);
+  const verifyHoldingSends = isVerifyModeHoldingSends({ sendMode, lastPass, verificationSendCount });
 
   if (lock?.active) {
     const pidLabel = Number.isInteger(lock.pid) ? ` (pid ${lock.pid})` : "";
@@ -460,6 +466,7 @@ function shapeAgentRuntime(runtime, queueCount) {
       lastPassSummary,
       queueCount,
       canRunNow: false,
+      runLabel: null,
     };
   }
 
@@ -473,6 +480,23 @@ function shapeAgentRuntime(runtime, queueCount) {
       lastPassSummary,
       queueCount,
       canRunNow: true,
+      runLabel: "Run agent now",
+    };
+  }
+
+  if (verifyHoldingSends) {
+    const queueLabel = `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"}`;
+    return {
+      state: scheduler?.loaded ? "on" : "off",
+      headline: "Verify mode is holding sends",
+      detail: `${queueLabel} already have fresh proof. Verify mode stops those at ready_to_send and will not click Send or write back.`,
+      cadenceLabel,
+      sendMode,
+      lastPassSummary,
+      queueCount,
+      verificationSendCount,
+      canRunNow: true,
+      runLabel: "Run proof pass",
     };
   }
 
@@ -488,6 +512,7 @@ function shapeAgentRuntime(runtime, queueCount) {
       lastPassSummary,
       queueCount,
       canRunNow: !scheduler.running,
+      runLabel: scheduler.running ? null : "Run agent now",
     };
   }
 
@@ -507,6 +532,7 @@ function shapeAgentRuntime(runtime, queueCount) {
     lastPassSummary,
     queueCount,
     canRunNow: true,
+    runLabel: "Run agent now",
   };
 }
 
@@ -623,6 +649,16 @@ function summarizeLastPass(lastPass) {
   const when = relativeFromIso(lastPass.endedAt) ?? "recently";
   const status = String(lastPass.status ?? "finished").replaceAll("_", " ");
   return `Last pass ${status} ${when}`;
+}
+
+/**
+ * @param {{ sendMode: string | null, lastPass: any, verificationSendCount: number }} input
+ */
+function isVerifyModeHoldingSends(input) {
+  if (input.sendMode !== "verify" || input.verificationSendCount <= 0) return false;
+  const status = String(input.lastPass?.status ?? "").trim().toLowerCase();
+  const reason = String(input.lastPass?.reason ?? "").trim().toLowerCase();
+  return status === "noop" && /no unverified send_message tasks left to prove/.test(reason);
 }
 
 /**

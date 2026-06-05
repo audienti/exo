@@ -195,6 +195,58 @@ test("chooseNextQueueTask skips recently verified send tasks in verification mod
   );
 });
 
+test("chooseNextQueueTask runs operator-authored sends live even in verify mode", () => {
+  const operatorTask = {
+    kind: "send_message",
+    id: "send-operator",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "email",
+    recipientUrl: "https://mail.google.com/mail/#all/thread-1",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    body: "Operator wrote this.",
+    authoredBy: "operator",
+    editedByOperator: true,
+    writeback: "exo actions result ...prospect-1",
+  };
+  const agentTask = {
+    kind: "send_message",
+    id: "send-agent",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-2",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-two/",
+    queuedAt: "2026-06-03T05:01:00.000Z",
+    body: "Agent wrote this.",
+    authoredBy: "agent",
+    editedByOperator: false,
+    writeback: "exo actions result ...prospect-2",
+  };
+
+  const selected = chooseNextQueueTask(
+    { tasks: [operatorTask, agentTask] },
+    true,
+    {
+      recentTaskVerifications: [
+        {
+          taskKind: "send_message",
+          fingerprint: createTaskVerificationFingerprint(operatorTask),
+          verifiedAt: "2026-06-03T05:10:00.000Z",
+          expiresAt: "2026-06-03T11:10:00.000Z",
+        },
+      ],
+    },
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "verify",
+  );
+
+  assert.equal(selected?.id, "send-operator");
+  assert.equal(selected?._selectedSendMode, "operator_live");
+});
+
 test("chooseNextQueueTask prefers due retrieval over send work even if send tasks are listed first", () => {
   const queue = {
     tasks: [
@@ -384,6 +436,44 @@ test("explainNoopPass makes forced-retrieval empty passes explicit", () => {
       true,
     ),
     "No due tasks or waiting autonomous retrieval tasks were available.",
+  );
+});
+
+test("explainNoopPass does not claim verify-only hold for operator-authored sends", () => {
+  const provedOperatorTask = {
+    kind: "send_message",
+    id: "send-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "email",
+    recipientUrl: "https://mail.google.com/mail/#all/thread-1",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    body: "Operator wrote this.",
+    authoredBy: "operator",
+    editedByOperator: true,
+    writeback: "exo actions result ...prospect-1",
+  };
+
+  assert.notEqual(
+    explainNoopPass(
+      { tasks: [provedOperatorTask] },
+      true,
+      {
+        recentTaskVerifications: [
+          {
+            taskKind: "send_message",
+            fingerprint: createTaskVerificationFingerprint(provedOperatorTask),
+            verifiedAt: "2026-06-03T05:10:00.000Z",
+            expiresAt: "2026-06-03T11:10:00.000Z",
+          },
+        ],
+      },
+      "2026-06-03T05:15:00.000Z",
+      false,
+      "verify",
+    ),
+    "Verify mode had no unverified send_message tasks left to prove.",
   );
 });
 

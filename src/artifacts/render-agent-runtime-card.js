@@ -35,7 +35,7 @@ export function renderAgentRuntimeCard(runtime, meta = {}, options = {}) {
         variant: "primary",
         size: "md",
         icon: "cpu",
-        label: "Run agent now",
+        label: runtime.runLabel ?? "Run agent now",
       }),
     );
   } else if (runtime.state === "running") {

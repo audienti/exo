@@ -518,6 +518,12 @@ export function buildUiStateRevision(statePaths = resolveStatePaths()) {
   return parts.length ? parts.join("|") : "0";
 }
 
+/** @param {any} task */
+function isOperatorControlledQueueSendTask(task) {
+  if (task?.kind !== "send_message") return false;
+  return task?.authoredBy === "operator" || task?.editedByOperator === true;
+}
+
 function buildAgentRuntimeSnapshot(userId = null) {
   const stateDir = resolveStatePaths().homeStateDir;
   const motions = listMotions();
@@ -532,6 +538,9 @@ function buildAgentRuntimeSnapshot(userId = null) {
     observations,
     cues,
   });
+  const sendTasks = Array.isArray(queue?.tasks) ? queue.tasks.filter((task) => task?.kind === "send_message") : [];
+  const verificationSendCount = sendTasks.filter((task) => !isOperatorControlledQueueSendTask(task)).length;
+  const operatorSendCount = sendTasks.length - verificationSendCount;
   return {
     lock: inspectAgentRunLock({ stateDir }),
     scheduler: inspectAgentSchedulerState(),
@@ -539,6 +548,9 @@ function buildAgentRuntimeSnapshot(userId = null) {
     hostState: pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json"))),
     lastPass: readJsonIfExists(path.join(stateDir, "agent-last-pass.json")),
     queueCount: Number.isFinite(queue?.count) ? Number(queue.count) : Number(queue?.itemCount ?? 0),
+    sendQueueCount: sendTasks.length,
+    verificationSendCount,
+    operatorSendCount,
     waitingCount: Number.isFinite(queue?.waitingCount) ? Number(queue.waitingCount) : 0,
     blockerCount: Array.isArray(queue?.blockers) ? queue.blockers.length : 0,
   };
