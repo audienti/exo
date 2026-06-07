@@ -72,8 +72,8 @@ exo profiles claim <profile-id> \
   --owner william \
   --workspace audienti \
   --scope work \
-  --account linkedin:wflanagan@audienti.com \
-  --account gmail:wflanagan@audienti.com \
+  --account linkedin:operator-linkedin@example.com \
+  --account gmail:operator-linkedin@example.com \
   --max-connection-requests 40 \
   --max-inmail-messages 20
 ```

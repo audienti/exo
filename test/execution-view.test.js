@@ -166,7 +166,7 @@ test("buildExecutionViewModel surfaces multiple unipile accounts as separate cla
             connector: "unipile",
             capability: "gmail",
             providerAccountId: "acct-mail-1",
-            handle: "wflanagan@audienti.com",
+            handle: "operator-linkedin@example.com",
             label: "William Flanagan",
           },
           {
@@ -174,7 +174,7 @@ test("buildExecutionViewModel surfaces multiple unipile accounts as separate cla
             connector: "unipile",
             capability: "gmail",
             providerAccountId: "acct-mail-2",
-            handle: "william.flanagan@knitit.ai",
+            handle: "secondary-gmail@example.com",
             label: "William Flanagan Knit",
           },
           {
@@ -200,7 +200,7 @@ test("buildExecutionViewModel surfaces multiple unipile accounts as separate cla
       account.connector === "unipile" && account.capability === "linkedin"
     );
 
-    assert.deepEqual(gmailHandles, ["wflanagan@audienti.com", "william.flanagan@knitit.ai"]);
+    assert.deepEqual(gmailHandles, ["operator-linkedin@example.com", "secondary-gmail@example.com"]);
     assert.equal(linkedin?.handle, "williamflanagan");
     assert.equal(linkedin?.canClaim, true);
   } finally {

@@ -225,14 +225,14 @@ test("resolveScopedExecutionAssignment resolves the user first but keeps gmail a
       managedAccountFixture({
         id: "gmail-1",
         capability: "gmail",
-        handle: "william@audienti.com",
+        handle: "operator-gmail@example.com",
         providerAccountId: "acct-mail-1",
         preferred: false,
       }),
       managedAccountFixture({
         id: "gmail-2",
         capability: "gmail",
-        handle: "william@knitit.ai",
+        handle: "secondary-gmail@example.com",
         providerAccountId: "acct-mail-2",
         preferred: false,
       }),
@@ -268,13 +268,13 @@ test("resolveScopedExecutionAssignment honors a company-level pinned gmail accou
       managedAccountFixture({
         id: "gmail-1",
         capability: "gmail",
-        handle: "william@audienti.com",
+        handle: "operator-gmail@example.com",
         providerAccountId: "acct-mail-1",
       }),
       managedAccountFixture({
         id: "gmail-2",
         capability: "gmail",
-        handle: "william@knitit.ai",
+        handle: "secondary-gmail@example.com",
         providerAccountId: "acct-mail-2",
       }),
       managedAccountFixture({
@@ -293,7 +293,7 @@ test("resolveScopedExecutionAssignment honors a company-level pinned gmail accou
       userId: "user-1",
       label: "Operator",
       owner: "operator",
-      accountRefs: ["linkedin:williamflanagan", "gmail:william@knitit.ai"],
+      accountRefs: ["linkedin:williamflanagan", "gmail:secondary-gmail@example.com"],
       assignedAt: "2026-06-01T00:00:00.000Z",
       assignedBy: "test",
       reason: "Pin the right inbox",
@@ -310,7 +310,7 @@ test("resolveScopedExecutionAssignment honors a company-level pinned gmail accou
 
   assert.equal(resolution.source, "company-user");
   assert.equal(resolution.assignedUser?.id, "user-1");
-  assert.equal(resolution.resolvedAccount?.handle, "william@knitit.ai");
+  assert.equal(resolution.resolvedAccount?.handle, "secondary-gmail@example.com");
   assert.equal(resolution.resolvedAccount?.providerAccountId, "acct-mail-2");
   assert.equal(resolution.accountResolution?.status, "resolved");
 });

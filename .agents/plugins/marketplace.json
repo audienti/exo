@@ -1,0 +1,20 @@
+{
+  "name": "audienti",
+  "interface": {
+    "displayName": "Audienti"
+  },
+  "plugins": [
+    {
+      "name": "exo",
+      "source": {
+        "source": "local",
+        "path": "./plugins/exo"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Business"
+    }
+  ]
+}

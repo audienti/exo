@@ -3,7 +3,19 @@
 import os from "node:os";
 import path from "node:path";
 
-const DEFAULT_PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/Users/williamflanagan/.asdf/shims:/Users/williamflanagan/.npm-global/bin:/Users/williamflanagan/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+const HOME_DIR = os.homedir();
+const DEFAULT_PATH = [
+  "/opt/homebrew/bin",
+  "/opt/homebrew/sbin",
+  path.join(HOME_DIR, ".asdf", "shims"),
+  path.join(HOME_DIR, ".npm-global", "bin"),
+  path.join(HOME_DIR, ".local", "bin"),
+  "/usr/local/bin",
+  "/usr/bin",
+  "/bin",
+  "/usr/sbin",
+  "/sbin",
+].join(":");
 const DEFAULT_CODEX_BIN = "/Applications/Codex.app/Contents/Resources/codex";
 export const ROUTINE_ARTIFACT_VERSION = "2026-06-04-1";
 

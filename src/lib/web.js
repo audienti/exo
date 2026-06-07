@@ -36,7 +36,7 @@ export async function fetchPageSnapshot(url) {
   try {
     const response = await fetch(url, {
       headers: {
-        "user-agent": "Exo/0.1 (+https://github.com/omalab/exo)"
+        "user-agent": "Exo/0.1 (+https://github.com/audienti/exo)"
       }
     });
 
@@ -53,4 +53,3 @@ export async function fetchPageSnapshot(url) {
     return { title: null, description: null };
   }
 }
-

@@ -19,8 +19,8 @@ The operator-facing conversation contract lives inside Exo itself. Do not invent
 Run this sequence first:
 
 ```bash
-cd /Users/williamflanagan/Projects/omalab/exo
-export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
+cd <repo-root>
+export EXO_STATE_DIR=<repo-root>/.exo
 exo what-is-this --json
 ```
 
@@ -42,8 +42,8 @@ If you are told to "reinitialize", do this:
 2. Re-run:
 
 ```bash
-cd /Users/williamflanagan/Projects/omalab/exo
-export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
+cd <repo-root>
+export EXO_STATE_DIR=<repo-root>/.exo
 exo what-is-this --json
 ```
 

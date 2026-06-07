@@ -13,6 +13,7 @@ Agents should treat Exo that way in practice: if a research finding, signal matc
 - [Installation](docs/installation.md)
 - [CLI Guide](docs/cli-guide.md)
 - [Agent Usage](docs/agent-usage.md)
+- [Plugin Marketplace](docs/plugin-marketplace.md)
 - [Parallel Agent Access](docs/parallel-agent-access.md)
 - [Companies](docs/companies.md)
 - [Browser Profiles](docs/browser-profiles.md)
@@ -133,14 +134,14 @@ That gives the agent the product identity, operating rules, current capabilities
 Run the command from this repo root:
 
 ```bash
-cd /Users/williamflanagan/Projects/omalab/exo
+cd <repo-root>
 exo motion list
 ```
 
 Exo stores local state in:
 
 ```bash
-/Users/williamflanagan/Projects/omalab/exo/.exo/exo.db
+<repo-root>/.exo/exo.db
 ```
 
 So if two Claude/Codex chats run `exo` from the same repo root, they will see the same local motion state.
@@ -148,7 +149,7 @@ So if two Claude/Codex chats run `exo` from the same repo root, they will see th
 If you want to make that explicit across multiple shells, set:
 
 ```bash
-export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
+export EXO_STATE_DIR=<repo-root>/.exo
 ```
 
 Then every agent shell can point at the same Exo state store even if its working directory drifts.
@@ -348,8 +349,8 @@ exo profiles claim <profile-id> \
   --owner william \
   --workspace audienti \
   --scope work \
-  --account linkedin:wflanagan@audienti.com \
-  --account gmail:wflanagan@audienti.com \
+  --account linkedin:operator-linkedin@example.com \
+  --account gmail:operator-linkedin@example.com \
   --max-connection-requests 40 \
   --max-inmail-messages 20
 ```

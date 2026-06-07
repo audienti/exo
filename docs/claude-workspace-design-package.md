@@ -511,5 +511,5 @@ Ask Claude to return:
 ## Useful local references
 
 - Current interactive workspace: `http://127.0.0.1:4312/`
-- Current renderer: `/Users/williamflanagan/Projects/omalab/exo/prototype/build-motion-workspace.mjs`
-- Existing IA brief: `/Users/williamflanagan/Projects/omalab/exo/docs/workspace-redesign-brief.md`
+- Current renderer: `<repo-root>/prototype/build-motion-workspace.mjs`
+- Existing IA brief: `<repo-root>/docs/workspace-redesign-brief.md`

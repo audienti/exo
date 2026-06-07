@@ -73,7 +73,7 @@ test("discoverRuntimeConnectorAccounts prefers explicit runtime account hints", 
         connector: "gmail",
         capability: "gmail",
         providerAccountId: "link_gmail_live",
-        handle: "wflanagan@audienti.com",
+        handle: "operator-linkedin@example.com",
         label: "William Flanagan",
       },
     ],
@@ -81,7 +81,7 @@ test("discoverRuntimeConnectorAccounts prefers explicit runtime account hints", 
 
   assert.equal(result.length, 1);
   assert.equal(result[0].identityState, "confirmed");
-  assert.equal(result[0].handle, "wflanagan@audienti.com");
+  assert.equal(result[0].handle, "operator-linkedin@example.com");
   assert.equal(result[0].providerAccountId, "link_gmail_live");
 });
 
@@ -101,7 +101,7 @@ test("discoverRuntimeConnectorAccounts reads shared runtime account hints from t
           connector: "gmail",
           capability: "gmail",
           providerAccountId: "link_gmail_state",
-          handle: "wflanagan@audienti.com",
+          handle: "operator-linkedin@example.com",
           label: "William Flanagan",
         },
       ],
@@ -119,7 +119,7 @@ test("discoverRuntimeConnectorAccounts reads shared runtime account hints from t
 
     assert.equal(result.length, 1);
     assert.equal(result[0].identityState, "confirmed");
-    assert.equal(result[0].handle, "wflanagan@audienti.com");
+    assert.equal(result[0].handle, "operator-linkedin@example.com");
     assert.equal(result[0].providerAccountId, "link_gmail_state");
   } finally {
     if (previousStateDir === undefined) {
@@ -247,11 +247,11 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed mail accounts 
               connection_params: {
                 mail: {
                   id: "mail-1",
-                  username: "wflanagan@audienti.com",
+                  username: "operator-linkedin@example.com",
                 },
                 calendar: {
                   id: "cal-1",
-                  username: "wflanagan@audienti.com",
+                  username: "operator-linkedin@example.com",
                 },
               },
             },
@@ -262,11 +262,11 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed mail accounts 
               connection_params: {
                 mail: {
                   id: "mail-2",
-                  username: "william.flanagan@knitit.ai",
+                  username: "secondary-gmail@example.com",
                 },
                 calendar: {
                   id: "cal-2",
-                  username: "william.flanagan@knitit.ai",
+                  username: "secondary-gmail@example.com",
                 },
               },
             },
@@ -289,7 +289,7 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed mail accounts 
 
     assert.equal(result.length, 2);
     assert.ok(result.every((item) => item.identityState === "confirmed"));
-    assert.deepEqual(result.map((item) => item.handle).sort(), ["wflanagan@audienti.com", "william.flanagan@knitit.ai"]);
+    assert.deepEqual(result.map((item) => item.handle).sort(), ["operator-linkedin@example.com", "secondary-gmail@example.com"]);
     assert.deepEqual(result.map((item) => item.providerAccountId).sort(), ["acct-mail-1", "acct-mail-2"]);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

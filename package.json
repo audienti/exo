@@ -12,7 +12,9 @@
   "scripts": {
     "dev": "node --disable-warning=ExperimentalWarning ./src/cli/index.js",
     "check": "node --check ./src/cli/index.js",
-    "test": "node ./scripts/run-node-test.js"
+    "test": "node ./scripts/run-node-test.js",
+    "plugin:init": "node ./.agents/plugins/plugins/exo/scripts/init-exo-plugin.js",
+    "plugin:verify": "node ./.agents/plugins/plugins/exo/scripts/verify-fresh-init.js"
   },
   "dependencies": {
     "commander": "^14.0.1",

@@ -157,7 +157,7 @@ Examples:
 - `exo companies profile assign <company> --profile <profile-id>` <-> `exo.companies_profile_assign`
 - `exo profiles add --browser chrome --profile-directory "Profile 2" --capability linkedin --capability sales-navigator` <-> `exo.profiles_add`
 - `exo profiles discover [--browser chrome]` <-> `exo.profiles_discover`
-- `exo profiles claim <profile> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com` <-> `exo.profiles_claim`
+- `exo profiles claim <profile> --label audienti-main --workspace audienti --account linkedin:operator-linkedin@example.com` <-> `exo.profiles_claim`
 - `exo profiles list` <-> `exo.profiles_list`
 - `exo profiles show <profile>` <-> `exo.profiles_show`
 - `exo profiles capabilities [profile]` <-> `exo.profiles_capabilities`

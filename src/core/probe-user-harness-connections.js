@@ -56,6 +56,24 @@ const EXECUTION_CONNECTOR_DISCOVERY_ALLOWLIST = new Set([
   "zerobounce",
 ]);
 
+/**
+ * @param {string} runtime
+ */
+export function listSupportedRuntimeConnectors(runtime) {
+  const normalizedRuntime = normalizeNullableString(runtime)?.toLowerCase() ?? null;
+  if (normalizedRuntime === "codex") {
+    return Object.keys(CODEX_PLUGIN_CONNECTOR_MAP)
+      .filter((connector) => EXECUTION_CONNECTOR_DISCOVERY_ALLOWLIST.has(connector));
+  }
+
+  if (normalizedRuntime === "claude") {
+    return Object.keys(CLAUDE_PLUGIN_CONNECTOR_MAP)
+      .filter((connector) => EXECUTION_CONNECTOR_DISCOVERY_ALLOWLIST.has(connector));
+  }
+
+  return [];
+}
+
 const CLAUDE_PROBE_TIMEOUT_MS = 1500;
 /** @type {Map<string, { ok: true, value: { plugins: Map<string, { pluginId: string, enabled: boolean }>, mcpServers: Map<string, { serverName: string, enabled: boolean }> } } | { ok: false, error: unknown }>} */
 const claudeRuntimeSummaryCache = new Map();

@@ -1537,25 +1537,25 @@ test("profiles auth persists live signed-in readiness per capability through Cod
       {
         capability: "linkedin",
         verified: true,
-        details: "Signed in to LinkedIn as wflanagan@audienti.com.",
-        expectedHandle: "wflanagan@audienti.com",
-        detectedHandle: "wflanagan@audienti.com",
+        details: "Signed in to LinkedIn as operator-linkedin@example.com.",
+        expectedHandle: "operator-linkedin@example.com",
+        detectedHandle: "operator-linkedin@example.com",
         sourceUrl: "https://www.linkedin.com/feed/"
       },
       {
         capability: "sales-navigator",
         verified: true,
         details: "Sales Navigator is available under the same LinkedIn identity.",
-        expectedHandle: "wflanagan@audienti.com",
-        detectedHandle: "wflanagan@audienti.com",
+        expectedHandle: "operator-linkedin@example.com",
+        detectedHandle: "operator-linkedin@example.com",
         sourceUrl: "https://www.linkedin.com/sales/home"
       },
       {
         capability: "gmail",
         verified: true,
-        details: "Signed in to Gmail as william@audienti.com.",
-        expectedHandle: "william@audienti.com",
-        detectedHandle: "william@audienti.com",
+        details: "Signed in to Gmail as operator-gmail@example.com.",
+        expectedHandle: "operator-gmail@example.com",
+        detectedHandle: "operator-gmail@example.com",
         sourceUrl: "https://mail.google.com/mail/u/0/#inbox"
       },
       {
@@ -1613,11 +1613,11 @@ test("profiles auth persists live signed-in readiness per capability through Cod
           "claim",
           profile.id,
           "--account",
-          "linkedin:wflanagan@audienti.com",
+          "linkedin:operator-linkedin@example.com",
           "--account",
-          "sales-navigator:wflanagan@audienti.com",
+          "sales-navigator:operator-linkedin@example.com",
           "--account",
-          "gmail:william@audienti.com",
+          "gmail:operator-gmail@example.com",
           "--account",
           "hubspot:245546701",
           "--json"
@@ -1654,7 +1654,7 @@ test("profiles auth persists live signed-in readiness per capability through Cod
       authed.lastAuthProbeResult.capabilityChecks.every((check) => check.verified),
       true
     );
-    assert.equal(authed.lastAuthProbeResult.capabilityChecks.find((check) => check.capability === "gmail").detectedHandle, "william@audienti.com");
+    assert.equal(authed.lastAuthProbeResult.capabilityChecks.find((check) => check.capability === "gmail").detectedHandle, "operator-gmail@example.com");
 
     const shown = JSON.parse(
       execFileSync("node", [cliPath, "profiles", "show", profile.id, "--json"], {
@@ -1695,25 +1695,25 @@ test("profiles auth persists live signed-in readiness per capability through Cla
         {
           capability: "linkedin",
           verified: true,
-          details: "Signed in to LinkedIn as wflanagan@audienti.com.",
-          expectedHandle: "wflanagan@audienti.com",
-          detectedHandle: "wflanagan@audienti.com",
+          details: "Signed in to LinkedIn as operator-linkedin@example.com.",
+          expectedHandle: "operator-linkedin@example.com",
+          detectedHandle: "operator-linkedin@example.com",
           sourceUrl: "https://www.linkedin.com/feed/"
         },
         {
           capability: "sales-navigator",
           verified: true,
           details: "Sales Navigator is available under the same LinkedIn identity.",
-          expectedHandle: "wflanagan@audienti.com",
-          detectedHandle: "wflanagan@audienti.com",
+          expectedHandle: "operator-linkedin@example.com",
+          detectedHandle: "operator-linkedin@example.com",
           sourceUrl: "https://www.linkedin.com/sales/home"
         },
         {
           capability: "gmail",
           verified: true,
-          details: "Signed in to Gmail as william@audienti.com.",
-          expectedHandle: "william@audienti.com",
-          detectedHandle: "william@audienti.com",
+          details: "Signed in to Gmail as operator-gmail@example.com.",
+          expectedHandle: "operator-gmail@example.com",
+          detectedHandle: "operator-gmail@example.com",
           sourceUrl: "https://mail.google.com/mail/u/0/#inbox"
         },
         {
@@ -1772,11 +1772,11 @@ test("profiles auth persists live signed-in readiness per capability through Cla
           "claim",
           profile.id,
           "--account",
-          "linkedin:wflanagan@audienti.com",
+          "linkedin:operator-linkedin@example.com",
           "--account",
-          "sales-navigator:wflanagan@audienti.com",
+          "sales-navigator:operator-linkedin@example.com",
           "--account",
-          "gmail:william@audienti.com",
+          "gmail:operator-gmail@example.com",
           "--account",
           "hubspot:245546701",
           "--json"
@@ -1881,9 +1881,9 @@ test("profiles auth records an invalid auth result when the selected runtime chr
           "claim",
           profile.id,
           "--account",
-          "linkedin:wflanagan@audienti.com",
+          "linkedin:operator-linkedin@example.com",
           "--account",
-          "gmail:william@audienti.com",
+          "gmail:operator-gmail@example.com",
           "--json"
         ],
         {
@@ -2161,9 +2161,9 @@ test("claimed browser identities can be pinned to a company and sticky resolutio
           "--scope",
           "work",
           "--account",
-          "linkedin:wflanagan@audienti.com",
+          "linkedin:operator-linkedin@example.com",
           "--account",
-          "gmail:wflanagan@audienti.com",
+          "gmail:operator-linkedin@example.com",
           "--max-profile-visits",
           "75",
           "--max-connection-requests",
@@ -2181,8 +2181,8 @@ test("claimed browser identities can be pinned to a company and sticky resolutio
     assert.equal(claimed.identity.owner, "william");
     assert.equal(claimed.identity.scope, "work");
     assert.deepEqual(claimed.identity.accounts, [
-      { capability: "linkedin", handle: "wflanagan@audienti.com" },
-      { capability: "gmail", handle: "wflanagan@audienti.com" }
+      { capability: "linkedin", handle: "operator-linkedin@example.com" },
+      { capability: "gmail", handle: "operator-linkedin@example.com" }
     ]);
     assert.deepEqual(claimed.automationControls.weeklyQuotas, {
       profileVisits: 75,
@@ -2223,8 +2223,8 @@ test("claimed browser identities can be pinned to a company and sticky resolutio
     assert.equal(assigned.engagementProfileAssignment.label, "audienti-main");
     assert.equal(assigned.engagementProfileAssignment.workspace, "audienti");
     assert.deepEqual(assigned.engagementProfileAssignment.accountRefs, [
-      "linkedin:wflanagan@audienti.com",
-      "gmail:wflanagan@audienti.com"
+      "linkedin:operator-linkedin@example.com",
+      "gmail:operator-linkedin@example.com"
     ]);
 
     const companyProfile = JSON.parse(
@@ -2428,7 +2428,7 @@ test("execution users can still carry legacy profile-backed accounts, but compan
           "--capability",
           "gmail",
           "--handle",
-          "william@audienti.com",
+          "operator-gmail@example.com",
           "--runtime",
           "codex",
           "--connector",
@@ -3701,7 +3701,7 @@ test("inbound surfaces, per-account sync policy, and sync-state memory persist o
           "--capability",
           "gmail",
           "--handle",
-          "william@audienti.com",
+          "operator-gmail@example.com",
           "--runtime",
           "codex",
           "--connector",
@@ -13477,7 +13477,7 @@ test("report motion renders one unified view across setup, readiness, company pr
           "--workspace",
           "audienti",
           "--account",
-          "linkedin:wflanagan@audienti.com",
+          "linkedin:operator-linkedin@example.com",
           "--json"
         ],
         {

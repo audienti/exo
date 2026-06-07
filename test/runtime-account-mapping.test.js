@@ -263,7 +263,7 @@ test("mapUserRuntimeAccounts can map multiple capabilities through one unipile c
           connector: "unipile",
           capability: "gmail",
           providerAccountId: "acct-mail-1",
-          handle: "wflanagan@audienti.com",
+          handle: "operator-linkedin@example.com",
           label: "William Flanagan",
         },
         {
@@ -271,7 +271,7 @@ test("mapUserRuntimeAccounts can map multiple capabilities through one unipile c
           connector: "unipile",
           capability: "gmail",
           providerAccountId: "acct-mail-2",
-          handle: "william.flanagan@knitit.ai",
+          handle: "secondary-gmail@example.com",
           label: "William Flanagan Knit",
         },
         {
@@ -293,8 +293,8 @@ test("mapUserRuntimeAccounts can map multiple capabilities through one unipile c
 
     assert.equal(result.counts.mappedCount, 3);
     assert.deepEqual(managedHandles, [
-      "wflanagan@audienti.com",
-      "william.flanagan@knitit.ai",
+      "operator-linkedin@example.com",
+      "secondary-gmail@example.com",
       "williamflanagan",
     ]);
 

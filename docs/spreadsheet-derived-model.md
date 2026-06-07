@@ -6,9 +6,9 @@ The three trackers are not temporary working files.
 
 They are the clearest evidence of the current operating model Exo must replace:
 
-- [knitit-target-tracker.xlsx](/Users/williamflanagan/Downloads/knitit-target-tracker.xlsx)
-- [actico-target-tracker.xlsx](/Users/williamflanagan/Downloads/actico-target-tracker.xlsx)
-- [actico-bnpl-tracker.xlsx](/Users/williamflanagan/Downloads/actico-bnpl-tracker.xlsx)
+- `knitit-target-tracker.xlsx`
+- `actico-target-tracker.xlsx`
+- `actico-bnpl-tracker.xlsx`
 
 All three share the same 47-column row shape.
 

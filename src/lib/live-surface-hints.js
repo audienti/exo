@@ -1,41 +1,41 @@
 // @ts-check
 
 const LINKEDIN_MESSAGING_INBOX_SOURCE_FILES = [
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/messaging/scan_inbox.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/messaging/orchestrator.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/messaging/threads_extractor.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/messaging/messages_extractor.rb"
+  "omalab/v10/app/services/social_api/linkedin/messaging/scan_inbox.rb",
+  "omalab/v10/app/services/social_api/linkedin/messaging/orchestrator.rb",
+  "omalab/v10/app/services/social_api/linkedin/messaging/threads_extractor.rb",
+  "omalab/v10/app/services/social_api/linkedin/messaging/messages_extractor.rb"
 ];
 
 const LINKEDIN_SENT_INVITATIONS_SOURCE_FILES = [
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/invitations/capture_invitation_manager_bodies.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/invitations/ui_helpers.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/invitations/orchestrator.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/invitations/sent_extractor.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/docs/superpowers/specs/2026-03-27-sent-invitations-load-more-design.md"
+  "omalab/v10/app/services/social_api/linkedin/invitations/capture_invitation_manager_bodies.rb",
+  "omalab/v10/app/services/social_api/linkedin/invitations/ui_helpers.rb",
+  "omalab/v10/app/services/social_api/linkedin/invitations/orchestrator.rb",
+  "omalab/v10/app/services/social_api/linkedin/invitations/sent_extractor.rb",
+  "omalab/v10/docs/superpowers/specs/2026-03-27-sent-invitations-load-more-design.md"
 ];
 
 const LINKEDIN_PROFILE_VIEWS_SOURCE_FILES = [
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/profile_views/orchestrator.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/profile_views/capture_page_data.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/profile_views/extractor.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/profile_views/dom_extractor.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/docs/superpowers/specs/2026-05-01-linkedin-profile-view-reply-sync-design.md"
+  "omalab/v10/app/services/social_api/linkedin/profile_views/orchestrator.rb",
+  "omalab/v10/app/services/social_api/linkedin/profile_views/capture_page_data.rb",
+  "omalab/v10/app/services/social_api/linkedin/profile_views/extractor.rb",
+  "omalab/v10/app/services/social_api/linkedin/profile_views/dom_extractor.rb",
+  "omalab/v10/docs/superpowers/specs/2026-05-01-linkedin-profile-view-reply-sync-design.md"
 ];
 
 const LINKEDIN_FOLLOW_LIST_SOURCE_FILES = [
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/follow_lists/orchestrator.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/follow_lists/extractor.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/docs/superpowers/specs/2026-04-10-linkedin-followings-sync-design.md"
+  "omalab/v10/app/services/social_api/linkedin/follow_lists/orchestrator.rb",
+  "omalab/v10/app/services/social_api/linkedin/follow_lists/extractor.rb",
+  "omalab/v10/docs/superpowers/specs/2026-04-10-linkedin-followings-sync-design.md"
 ];
 
 const LINKEDIN_PROFILE_PAGE_SOURCE_FILES = [
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/view_profile/orchestrator.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/view_profile/extractor.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/profile_activity/orchestrator.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/app/services/social_api/linkedin/profile_activity/extractor.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/test/services/social_api/linkedin/view_profile/extractor_test.rb",
-  "/Users/williamflanagan/Projects/omalab/v10/test/services/social_api/linkedin/profile_activity/extractor_test.rb"
+  "omalab/v10/app/services/social_api/linkedin/view_profile/orchestrator.rb",
+  "omalab/v10/app/services/social_api/linkedin/view_profile/extractor.rb",
+  "omalab/v10/app/services/social_api/linkedin/profile_activity/orchestrator.rb",
+  "omalab/v10/app/services/social_api/linkedin/profile_activity/extractor.rb",
+  "omalab/v10/test/services/social_api/linkedin/view_profile/extractor_test.rb",
+  "omalab/v10/test/services/social_api/linkedin/profile_activity/extractor_test.rb"
 ];
 
 const LINKEDIN_MESSAGING_ENTRY_HINTS = {

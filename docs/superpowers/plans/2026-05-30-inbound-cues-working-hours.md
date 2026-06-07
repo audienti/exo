@@ -13,10 +13,10 @@
 ### Task 1: Add working-hours policy to execution users
 
 **Files:**
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/schema/user.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/cli/commands/users.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/artifacts/render-user.js`
-- Test: `/Users/williamflanagan/Projects/omalab/exo/test/cli.test.js`
+- Modify: `<repo-root>/src/schema/user.js`
+- Modify: `<repo-root>/src/cli/commands/users.js`
+- Modify: `<repo-root>/src/artifacts/render-user.js`
+- Test: `<repo-root>/test/cli.test.js`
 
 - [ ] **Step 1: Write failing tests for `users working-hours show|set`**
 - [ ] **Step 2: Run the focused CLI test block and verify the new expectations fail**
@@ -27,13 +27,13 @@
 ### Task 2: Add ambient inbound cue persistence and CLI
 
 **Files:**
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/schema/inbound.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/db/migrations.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/db/database.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/cli/commands/inbound.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/artifacts/render-inbound.js`
-- Create: `/Users/williamflanagan/Projects/omalab/exo/src/core/inbound-cues.js`
-- Test: `/Users/williamflanagan/Projects/omalab/exo/test/cli.test.js`
+- Modify: `<repo-root>/src/schema/inbound.js`
+- Modify: `<repo-root>/src/db/migrations.js`
+- Modify: `<repo-root>/src/db/database.js`
+- Modify: `<repo-root>/src/cli/commands/inbound.js`
+- Modify: `<repo-root>/src/artifacts/render-inbound.js`
+- Create: `<repo-root>/src/core/inbound-cues.js`
+- Test: `<repo-root>/test/cli.test.js`
 
 - [ ] **Step 1: Write failing tests for `exo inbound cues add|list|resolve`**
 - [ ] **Step 2: Run the focused tests and verify cue commands do not exist yet**
@@ -44,13 +44,13 @@
 ### Task 3: Make planner sync judgment working-hours-aware and cue-aware
 
 **Files:**
-- Create: `/Users/williamflanagan/Projects/omalab/exo/src/core/working-hours.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/core/build-daily-view.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/core/build-next-view.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/core/inbound-sync-run.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/core/user-inbound-sync.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/db/database.js`
-- Test: `/Users/williamflanagan/Projects/omalab/exo/test/cli.test.js`
+- Create: `<repo-root>/src/core/working-hours.js`
+- Modify: `<repo-root>/src/core/build-daily-view.js`
+- Modify: `<repo-root>/src/core/build-next-view.js`
+- Modify: `<repo-root>/src/core/inbound-sync-run.js`
+- Modify: `<repo-root>/src/core/user-inbound-sync.js`
+- Modify: `<repo-root>/src/db/database.js`
+- Test: `<repo-root>/test/cli.test.js`
 
 - [ ] **Step 1: Write failing tests for after-hours sync behavior and cue-driven sync prioritization**
 - [ ] **Step 2: Run the focused tests and verify the planner still treats all stale truth the old way**
@@ -61,13 +61,13 @@
 ### Task 4: Add ambient cue hooks to action briefs and optional auto-sync trigger
 
 **Files:**
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/core/build-motion-action-view.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/artifacts/render-motion.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/cli/commands/inbound.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/src/core/what-is-this.js`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/docs/inbound-sync.md`
-- Modify: `/Users/williamflanagan/Projects/omalab/exo/docs/agent-usage.md`
-- Test: `/Users/williamflanagan/Projects/omalab/exo/test/cli.test.js`
+- Modify: `<repo-root>/src/core/build-motion-action-view.js`
+- Modify: `<repo-root>/src/artifacts/render-motion.js`
+- Modify: `<repo-root>/src/cli/commands/inbound.js`
+- Modify: `<repo-root>/src/core/what-is-this.js`
+- Modify: `<repo-root>/docs/inbound-sync.md`
+- Modify: `<repo-root>/docs/agent-usage.md`
+- Test: `<repo-root>/test/cli.test.js`
 
 - [ ] **Step 1: Write failing tests asserting action briefs include the cue-capture writeback path**
 - [ ] **Step 2: Run the focused tests and verify action briefs do not yet mention ambient cue capture**
@@ -78,9 +78,9 @@
 ### Task 5: Full verification and dirty-worktree review
 
 **Files:**
-- Verify only: `/Users/williamflanagan/Projects/omalab/exo`
+- Verify only: `<repo-root>`
 
-- [ ] **Step 1: Run `node --test /Users/williamflanagan/Projects/omalab/exo/test/cli.test.js`**
+- [ ] **Step 1: Run `node --test <repo-root>/test/cli.test.js`**
 - [ ] **Step 2: Read the full output and confirm the exact pass count**
 - [ ] **Step 3: Review `git diff` carefully to ensure the new work does not trample the pre-existing `report workspace` changes**
 - [ ] **Step 4: Summarize exact implemented behavior, verification evidence, and any remaining edge gaps**

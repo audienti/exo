@@ -44,7 +44,7 @@ So if an agent runs Exo from the wrong directory, it may silently create or use 
 To prevent that, pin a shared store explicitly when multiple agent conversations should collaborate:
 
 ```bash
-export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
+export EXO_STATE_DIR=<repo-root>/.exo
 ```
 
 That is the cleanest way to let multiple agents operate in parallel without depending on identical current working directories.
@@ -161,7 +161,7 @@ Do not default to copying the SQLite file directly unless the task is explicitly
 4. `exo profiles resolve --capability <capability> --json`
 5. if the path resolves through a harness connector, run `exo users harness probe <user-id> --runtime <runtime> --connector <connector> --json`
 6. If needed, `exo profiles add ... --json`
-7. `exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:wflanagan@audienti.com --max-connection-requests 40 --max-inmail-messages 20 --json`
+7. `exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:operator-linkedin@example.com --max-connection-requests 40 --max-inmail-messages 20 --json`
 8. `exo profiles test <profile-id> --json`
 9. `exo profiles auth <profile-id> --runtime <runtime> --json`
 10. Refuse browser-backed work if the result is not trustworthy

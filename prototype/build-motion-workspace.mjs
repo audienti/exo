@@ -4,14 +4,14 @@ import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { isTransitionMotion } from "../src/core/ensure-transition-motion.js";
 
 const execFileAsync = promisify(execFile);
 
-const REPO_ROOT = "/Users/williamflanagan/Projects/omalab/exo";
-const EXO_STATE_DIR = "/Users/williamflanagan/Projects/omalab/exo/.exo";
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const EXO_STATE_DIR = path.join(REPO_ROOT, ".exo");
 const USER_ID = "00d08a04-c0b5-457c-8cb0-205c81593224";
 const CLI_PATH = path.join(REPO_ROOT, "src/cli/index.js");
 const OUTPUT_PATH = path.join(REPO_ROOT, "prototype/motion-workspace.html");

@@ -26,7 +26,7 @@ That path is resolved from the current working directory.
 If you want several shells or agent chats to share one Exo store even when their working directories differ, set:
 
 ```bash
-export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
+export EXO_STATE_DIR=<repo-root>/.exo
 ```
 
 ## First operator flow
@@ -70,7 +70,7 @@ exo profiles claim <profile-id> \
   --owner william \
   --workspace audienti \
   --scope work \
-  --account linkedin:wflanagan@audienti.com \
+  --account linkedin:operator-linkedin@example.com \
   --max-connection-requests 40 \
   --max-inmail-messages 20
 ```

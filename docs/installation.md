@@ -19,7 +19,7 @@ npm --version
 From the repo root:
 
 ```bash
-cd /Users/williamflanagan/Projects/omalab/exo
+cd <repo-root>
 npm install
 npm link
 ```
@@ -45,7 +45,39 @@ exo config export --json
 If multiple Claude/Codex conversations should operate on the same Exo state store, pin it explicitly:
 
 ```bash
-export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
+export EXO_STATE_DIR=<repo-root>/.exo
+```
+
+## Marketplace Plugin Initialization
+
+This repo now ships a marketplace plugin wrapper under:
+
+```bash
+.agents/plugins/plugins/exo
+```
+
+The plugin install contract is explicit:
+
+- adding the plugin should only add the plugin
+- initializing the plugin should install requirements if needed, inspect the real Exo onboarding state, and surface recognized runtime services
+- a true fresh workspace should still ask whether this should be a `local-folder` workspace or a `global-install`
+
+From the repo root:
+
+```bash
+npm run plugin:init -- --json
+```
+
+To apply a chosen install scope through the same wrapper:
+
+```bash
+npm run plugin:init -- --scope local-folder --apply --json
+```
+
+To prove the wrapper still supports a real cold start:
+
+```bash
+npm run plugin:verify
 ```
 
 Then all shells can run Exo against the same local state even if their working directories differ.
@@ -71,7 +103,7 @@ Exo stores workspace-local state in:
 That path is resolved from the current working directory unless `EXO_STATE_DIR` is set. So if you want multiple shells or chats to operate on the same Exo state, either run them from the same repo root or set `EXO_STATE_DIR` explicitly:
 
 ```bash
-cd /Users/williamflanagan/Projects/omalab/exo
+cd <repo-root>
 exo motion list
 ```
 
@@ -134,7 +166,7 @@ exo profiles claim <profile-id> \
   --label audienti-main \
   --owner william \
   --workspace audienti \
-  --account linkedin:wflanagan@audienti.com
+  --account linkedin:operator-linkedin@example.com
 ```
 
 Then verify it:

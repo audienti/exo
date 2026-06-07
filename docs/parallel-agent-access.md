@@ -37,7 +37,7 @@ There are two ways to do that:
 Run from the same repo root:
 
 ```bash
-cd /Users/williamflanagan/Projects/omalab/exo
+cd <repo-root>
 exo motion list
 ```
 
@@ -46,7 +46,7 @@ exo motion list
 Pin the store explicitly:
 
 ```bash
-export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
+export EXO_STATE_DIR=<repo-root>/.exo
 ```
 
 This is better for multiple agent conversations because it removes dependence on matching working directories.
@@ -93,8 +93,8 @@ Do not:
 Each agent shell should start with:
 
 ```bash
-export EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo
-cd /Users/williamflanagan/Projects/omalab/exo
+export EXO_STATE_DIR=<repo-root>/.exo
+cd <repo-root>
 exo what-is-this --json
 exo companies list --json
 exo profiles list --json

@@ -1,0 +1,26 @@
+{
+  "name": "exo",
+  "version": "0.1.0",
+  "description": "Governed GTM state, onboarding, and operator workflows for Exo.",
+  "author": {
+    "name": "Audienti"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Exo",
+    "shortDescription": "Initialize and operate governed Exo workspaces",
+    "longDescription": "Exo is an agentic CRM and GTM motion system of record. This plugin installs the local Exo CLI requirements, initializes a fresh workspace through the real Exo onboarding flow, surfaces recognized runtime services, and then helps operators continue governed motion work from live state.",
+    "developerName": "Audienti",
+    "category": "Business",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Initialize Exo in this folder.",
+      "Reinitialize Exo from the current state.",
+      "Show the governed next move in Exo."
+    ]
+  }
+}
