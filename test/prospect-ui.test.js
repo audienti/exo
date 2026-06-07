@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { renderProspectDetailPage } from "../src/artifacts/render-prospects.js";
+import { renderProspectDetailPage, renderProspectsPage } from "../src/artifacts/render-prospects.js";
 
 function buildProspect(overrides = {}) {
   return {
@@ -30,7 +30,9 @@ function buildProspect(overrides = {}) {
     premise: null,
     whyRelevant: "Transitioned from inbox threads — in-flight before Exo.",
     nextAction: "Review this inbound person and choose the next move.",
+    cadenceState: null,
     primaryChannel: "email",
+    email: null,
     hasEmailFallback: true,
     channels: ["email"],
     buyingCommitteeRole: "Other",
@@ -41,6 +43,9 @@ function buildProspect(overrides = {}) {
     sameCompany: [],
     drafts: [],
     touches: [],
+    threadMessages: [],
+    timelineObservations: [],
+    handledNotification: null,
     timelineNotes: [],
     firstSeenAt: null,
     selectedAt: null,
@@ -90,6 +95,193 @@ test("prospect detail still falls back to connection-request compose when no act
 
   assert.match(html, /Compose request/);
   assert.match(html, /Connection request note · Lina Park/);
+});
+
+test("prospect detail keeps the connection-request note editor when the assigned LinkedIn account is Sales Navigator capable", () => {
+  const html = renderProspectDetailPage(buildProspect(), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+    assignedIdentity: "william-main",
+    connectionNoteCapable: true,
+  });
+
+  assert.match(html, /Connection request note · Lina Park/);
+  assert.doesNotMatch(html, /No note available\./);
+  assert.doesNotMatch(html, /Queue note-less request/);
+});
+
+test("prospect detail chooses reply compose when the prospect has unanswered inbound", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    linkedinProfileUrl: "https://www.linkedin.com/in/lina-park/",
+    branch: "connected",
+    primaryChannel: "direct-message",
+    cadenceState: {
+      status: "ready",
+      currentStep: "direct-message",
+    },
+    touches: [
+      {
+        surface: "post_accept_message",
+        direction: "outbound",
+        outcome: "sent",
+        occurredAt: "2026-06-04T16:05:59.952Z",
+        summary: "Sent the first direct message.",
+      },
+      {
+        surface: "inbound_reply",
+        direction: "inbound",
+        outcome: "received",
+        occurredAt: "2026-06-04T20:27:55.273Z",
+        summary: "Lina replied and asked for more detail.",
+      },
+    ],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Reply · Lina Park/);
+  assert.doesNotMatch(html, /First message · Lina Park/);
+  assert.match(html, /Agent is drafting the response/);
+  assert.match(html, /Wait for the governed draft to land/);
+});
+
+test("prospect detail does not reopen a stale queued follow-up when an inbound reply arrived", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    linkedinProfileUrl: "https://www.linkedin.com/in/lina-park/",
+    branch: "waiting",
+    primaryChannel: "direct-message",
+    cadenceState: {
+      status: "ready",
+      currentStep: "direct-message",
+    },
+    drafts: [{
+      id: "draft-1",
+      surface: "follow_up_direct_message",
+      channel: "linkedin",
+      subject: null,
+      body: "Following up on this.",
+      status: "approved",
+      authoredBy: "operator",
+      editedByOperator: true,
+      createdAt: "2026-06-04T17:14:29.676Z",
+      updatedAt: "2026-06-04T17:14:29.676Z",
+      approvedAt: "2026-06-04T17:14:29.676Z",
+      sentAt: null,
+      notes: null,
+    }],
+    touches: [
+      {
+        surface: "post_accept_message",
+        direction: "outbound",
+        outcome: "sent",
+        occurredAt: "2026-06-04T16:05:59.952Z",
+        summary: "Sent the first direct message.",
+      },
+      {
+        surface: "inbound_reply",
+        direction: "inbound",
+        outcome: "received",
+        occurredAt: "2026-06-04T20:27:55.273Z",
+        summary: "Lina replied and asked for more detail.",
+      },
+    ],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Reply · Lina Park/);
+  assert.doesNotMatch(html, /Follow-up message · Lina Park/);
+  assert.match(html, /Agent is drafting the response/);
+  assert.match(html, /Wait for the governed draft to land/);
+});
+
+test("prospect detail shows a queued reply when the current inbound draft is already send-ready", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    linkedinProfileUrl: "https://www.linkedin.com/in/lina-park/",
+    branch: "connected",
+    primaryChannel: "direct-message",
+    cadenceState: {
+      status: "ready",
+      currentStep: "direct-message",
+    },
+    drafts: [{
+      id: "draft-1",
+      surface: "inbound_reply",
+      channel: "linkedin",
+      subject: null,
+      body: "Queued reply copy.",
+      status: "approved",
+      authoredBy: "operator",
+      editedByOperator: true,
+      createdAt: "2026-06-04T21:00:00.000Z",
+      updatedAt: "2026-06-04T21:00:00.000Z",
+      approvedAt: "2026-06-04T21:00:00.000Z",
+      sentAt: null,
+      notes: null,
+    }],
+    touches: [
+      {
+        surface: "post_accept_message",
+        direction: "outbound",
+        outcome: "sent",
+        occurredAt: "2026-06-04T16:05:59.952Z",
+        summary: "Sent the first direct message.",
+      },
+      {
+        surface: "inbound_reply",
+        direction: "inbound",
+        outcome: "received",
+        occurredAt: "2026-06-04T20:27:55.273Z",
+        summary: "Lina replied and asked for more detail.",
+      },
+    ],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Reply queued for send/);
+  assert.match(html, /The agent will send it on its next pass/);
+});
+
+test("prospect detail uses a compact next-move row and metadata rail", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    companyName: "6sense",
+    fit: "high",
+    owner: "william-main",
+    branch: "identified",
+    ageLabel: "today",
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /class="pd-rail"/);
+  assert.match(html, /6sense/);
+  assert.match(html, /High fit/);
+  assert.match(html, /william-main/);
+  assert.match(html, /class="next-alert"/);
+  assert.match(html, /Next move/);
+  assert.match(html, /Send the first connection request\./);
+  assert.doesNotMatch(html, /<div class="pd-meta">/);
+  assert.doesNotMatch(html, /<p class="pl-now">/);
 });
 
 test("prospect detail header does not keep showing a stale blocked agent badge after blockers clear", () => {
@@ -163,4 +355,335 @@ test("prospect timeline shows blocked outbound replies as blocked instead of sen
   assert.match(html, /Reply unavailable\./);
   assert.match(html, /read-only and reply is disabled/);
   assert.doesNotMatch(html, /Compose request/);
+});
+
+test("prospect timeline recovers the sent reply body from the matching sent draft", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    primaryChannel: "linkedin",
+    channels: ["linkedin"],
+    drafts: [{
+      id: "draft-1",
+      surface: "inbound_reply",
+      channel: "linkedin",
+      subject: null,
+      body: "Hi Marv, thanks for reaching out. I'm not currently looking to retire, move on, or sell the business, so a call probably would not be useful right now.",
+      status: "sent",
+      authoredBy: "agent",
+      editedByOperator: false,
+      approvedByOperator: false,
+      createdAt: "2026-06-06T23:11:14.056Z",
+      updatedAt: "2026-06-07T00:09:49.332Z",
+      approvedAt: "2026-06-06T23:15:40.414Z",
+      sentAt: "2026-06-07T00:09:49.332Z",
+      notes: null,
+    }],
+    touches: [
+      {
+        surface: "inbound_reply",
+        direction: "inbound",
+        outcome: "replied",
+        occurredAt: "2025-10-10T09:55:39.000Z",
+        summary: "Marv White has unread LinkedIn message activity.",
+        body: "Hi William, are you thinking about retiring?",
+      },
+      {
+        surface: "inbound_reply",
+        direction: "outbound",
+        outcome: "sent",
+        occurredAt: "2026-06-07T00:09:49.284Z",
+        summary: "Sent send direct message for Marv White.",
+      },
+    ],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /I&#39;m not currently looking to retire, move on, or sell the business/);
+  assert.match(html, /tl-status-sent/);
+  assert.doesNotMatch(html, /Sent send direct message for Marv White\./);
+});
+
+test("prospect timeline shows the full structured thread history and keeps later governed sends", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    linkedinProfileUrl: "https://www.linkedin.com/in/mpiercekc/",
+    threadMessages: [
+      {
+        id: "msg-1",
+        direction: "outbound",
+        sentAt: "2026-06-04T16:05:59.952Z",
+        fromName: "You",
+        fromHandle: null,
+        body: "Hi Matt,\n\nGiven that you are focused on RevOps, I am looking for some advice.",
+      },
+      {
+        id: "msg-2",
+        direction: "inbound",
+        sentAt: "2026-06-04T20:27:55.273Z",
+        fromName: "Matt Pierce",
+        fromHandle: null,
+        body: "Hey - at Valet Living, it would probably be the CTO, Robert Cassagrande.",
+      },
+      {
+        id: "msg-3",
+        direction: "outbound",
+        sentAt: "2026-06-05T13:43:57.399Z",
+        fromName: "You",
+        fromHandle: null,
+        body: "Appreciate the pointer. Robert Cassagrande as CTO sounds right.",
+      },
+      {
+        id: "msg-4",
+        direction: "inbound",
+        sentAt: "2026-06-05T14:25:09.250Z",
+        fromName: "Matt Pierce",
+        fromHandle: null,
+        body: "I'd say just reach out to Rob directly.",
+      },
+      {
+        id: "msg-5",
+        direction: "outbound",
+        sentAt: "2026-06-05T15:04:24.246Z",
+        fromName: "You",
+        fromHandle: null,
+        body: "Got it, I'll reach out to Rob directly. Would it be okay if I mentioned you pointed me his way?",
+      },
+      {
+        id: "msg-6",
+        direction: "inbound",
+        sentAt: "2026-06-05T15:07:07.056Z",
+        fromName: "Matt Pierce",
+        fromHandle: null,
+        body: "Yes, that's fine.",
+      },
+    ],
+    drafts: [{
+      id: "draft-1",
+      surface: "inbound_reply",
+      channel: "linkedin",
+      subject: null,
+      body: "Perfect. I'll keep it tight and mention you pointed me his way. Appreciate the steer.",
+      status: "sent",
+      authoredBy: "agent",
+      editedByOperator: false,
+      approvedByOperator: false,
+      createdAt: "2026-06-06T12:47:05.818Z",
+      updatedAt: "2026-06-07T00:10:58.581Z",
+      approvedAt: "2026-06-06T15:07:02.083Z",
+      sentAt: "2026-06-07T00:10:58.581Z",
+      notes: null,
+    }],
+    touches: [
+      {
+        surface: "inbound_reply",
+        direction: "inbound",
+        outcome: "replied",
+        occurredAt: "2026-06-05T15:07:07.000Z",
+        summary: "Matt Pierce has unread LinkedIn message activity.",
+      },
+      {
+        surface: "inbound_reply",
+        direction: "outbound",
+        outcome: "sent",
+        occurredAt: "2026-06-07T00:10:58.526Z",
+        summary: "Sent send direct message for Matt Pierce.",
+      },
+    ],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.equal((html.match(/class="tl-message"/g) ?? []).length, 7);
+  assert.match(html, /Given that you are focused on RevOps/);
+  assert.match(html, /Robert Cassagrande/);
+  assert.match(html, /Would it be okay if I mentioned you pointed me his way\?/);
+  assert.match(html, /Yes, that&#39;s fine\./);
+  assert.match(html, /Perfect\. I&#39;ll keep it tight and mention you pointed me his way\./);
+  assert.doesNotMatch(html, /Matt Pierce has unread LinkedIn message activity\./);
+  assert.doesNotMatch(html, /Sent send direct message for Matt Pierce\./);
+});
+
+test("prospect timeline surfaces connected-state evidence from linked inbound observations", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    name: "Matt Pierce",
+    linkedinProfileUrl: "https://www.linkedin.com/in/mpiercekc/",
+    branch: "connected",
+    primaryChannel: "linkedin",
+    channels: ["linkedin"],
+    cadenceState: {
+      status: "ready",
+      currentStep: "direct-message",
+    },
+    threadMessages: [
+      {
+        id: "msg-1",
+        direction: "outbound",
+        sentAt: "2026-06-04T16:05:59.952Z",
+        fromName: "You",
+        fromHandle: null,
+        body: "Hi Matt, quick question on who owns vendor relationships at Valet Living.",
+      },
+      {
+        id: "msg-2",
+        direction: "inbound",
+        sentAt: "2026-06-04T20:27:55.273Z",
+        fromName: "Matt Pierce",
+        fromHandle: null,
+        body: "That would probably be the CTO, Robert Cassagrande.",
+      },
+    ],
+    timelineObservations: [
+      {
+        id: "obs-follow-matt",
+        kind: "follower_confirmed",
+        surfaceKey: "linkedin-followers-list",
+        observedAt: "2026-06-05T16:20:00.000Z",
+        eventAt: null,
+        summary: "Matt Pierce is present in the LinkedIn follower list.",
+        sourceUrl: "https://www.linkedin.com/mynetwork/network-manager/people-follow/followers/",
+        threadUrl: null,
+        notes: null,
+      },
+    ],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Connected on LinkedIn/);
+  assert.match(html, /Already connected on LinkedIn\./);
+  assert.match(html, /Matt Pierce is present in the LinkedIn follower list\./);
+});
+
+test("prospect timeline shows a connection request note from linked pending observations when no touch was written", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    name: "Brad Rollin",
+    linkedinProfileUrl: "https://www.linkedin.com/in/bradrollin/",
+    branch: "connection-requested",
+    primaryChannel: "linkedin",
+    channels: ["linkedin"],
+    timelineObservations: [
+      {
+        id: "obs-pending-brad",
+        kind: "connection_request_pending",
+        surfaceKey: "linkedin-sent-invitations",
+        observedAt: "2026-05-15T10:43:42.626Z",
+        eventAt: "2026-05-15T10:43:42.626Z",
+        summary: "Brad Rollin is still pending on LinkedIn.",
+        sourceUrl: "https://www.linkedin.com/mynetwork/invitation-manager/sent/",
+        threadUrl: null,
+        notes: "Short note with invite.",
+      },
+    ],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Connection request/);
+  assert.match(html, /Short note with invite\./);
+  assert.match(html, /tl-status-sent/);
+});
+
+test("prospects table renders clickable channel anchors with the underlying destination on hover", () => {
+  const prospect = buildProspect({
+    channels: [
+      {
+        key: "linkedin",
+        label: "LinkedIn profile",
+        value: "https://www.linkedin.com/in/lina-park/",
+        href: "https://www.linkedin.com/in/lina-park/",
+        openInNewTab: true,
+      },
+      {
+        key: "email",
+        label: "Email address",
+        value: "lina.park@example.com",
+        href: "mailto:lina.park@example.com",
+        openInNewTab: false,
+      },
+    ],
+  });
+
+  const html = renderProspectsPage({
+    counts: { prospects: 1, companies: 1 },
+    all: [prospect],
+    groups: [{
+      companyId: prospect.companyId,
+      companyName: prospect.companyName,
+      industry: prospect.companyIndustry,
+      motionName: prospect.motionName,
+      companyLinkedinUrl: prospect.companyLinkedinUrl,
+      prospects: [prospect],
+    }],
+    details: [prospect],
+  }, {
+    interactive: true,
+  });
+
+  assert.match(
+    html,
+    /href="https:\/\/www\.linkedin\.com\/in\/lina-park\/" target="_blank" rel="noopener noreferrer" title="https:\/\/www\.linkedin\.com\/in\/lina-park\/"/,
+  );
+  assert.match(
+    html,
+    /href="mailto:lina\.park@example\.com" title="lina\.park@example\.com"/,
+  );
+});
+
+test("prospects page renders a real search form and preserves the active query in prospect links", () => {
+  const prospect = buildProspect();
+  const html = renderProspectsPage({
+    counts: { prospects: 1, companies: 1 },
+    search: {
+      query: "lina",
+      active: true,
+      totalProspects: 3,
+      totalCompanies: 2,
+    },
+    all: [prospect],
+    groups: [{
+      companyId: prospect.companyId,
+      companyName: prospect.companyName,
+      industry: prospect.companyIndustry,
+      motionName: prospect.motionName,
+      companyLinkedinUrl: prospect.companyLinkedinUrl,
+      prospects: [prospect],
+    }],
+    details: [prospect],
+  }, {
+    interactive: true,
+    searchQuery: "lina",
+  });
+
+  assert.match(html, /<form class="search-form" action="\/prospects" method="GET" role="search">/);
+  assert.match(html, /<input class="search-input" type="search" name="q" value="lina"/);
+  assert.match(html, /href="\/prospects\/prospect-1\?q=lina"/);
+  assert.match(html, /href="\/prospects">Clear<\/a>/);
+});
+
+test("prospect detail preserves the search query on the back link", () => {
+  const html = renderProspectDetailPage(buildProspect(), {
+    interactive: true,
+    searchQuery: "lina",
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /href="\/prospects\?q=lina"/);
 });

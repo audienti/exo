@@ -13,6 +13,7 @@
 // (fit, surfacing signal, branch/stage, assignee, age, same-company targets),
 // mapped onto Exo's governed schema. Pure data — no rendering.
 
+import { buildLinkedinProfileUrlFromPublicId } from "../lib/prospect-contacts.js";
 import { buildProspectActionIntents } from "./build-action-intents.js";
 
 /** engagement-lane key → record-state axis */
@@ -20,19 +21,35 @@ const BRANCH_STATE = {
   ready: "ready",
   "sent-pending": "connection-requested",
   waiting: "waiting",
-  "reply-accepted": "connected",
+  "reply-accepted": "reply-accepted",
   blocked: "blocked",
   exhausted: "archived",
 };
 
+const CONTACT_VERIFICATION_SCORE = {
+  verified: 4,
+  observed: 3,
+  inferred: 2,
+  unknown: 1,
+  rejected: 0,
+};
+
+const CONTACT_CONFIDENCE_SCORE = {
+  high: 4,
+  moderate: 3,
+  low: 2,
+  unknown: 1,
+};
+
 /**
- * @param {{ prospectPrepLanes: any[], engagementLanes: any[], motionDetails: any[], now?: string }} input
+ * @param {{ prospectPrepLanes: any[], engagementLanes: any[], motionDetails: any[], now?: string, query?: string | null }} input
  */
 export function buildProspectsViewModel(input) {
   const now = input.now ?? new Date().toISOString();
   const ownerByCompany = new Map();
   const industryByCompany = new Map();
   const premiseByMotion = new Map();
+  const signalMetaByMotion = new Map();
 
   for (const detail of input.motionDetails ?? []) {
     premiseByMotion.set(detail.motionId, {
@@ -42,6 +59,20 @@ export function buildProspectsViewModel(input) {
       statement: detail.premise?.statement ?? null,
       truth: detail.premise?.status === "defined" ? "partial" : detail.premise?.status === "checked" ? "checked" : "unchecked",
     });
+    signalMetaByMotion.set(
+      detail.motionId,
+      new Map(
+        (detail.signals ?? []).map((signal) => [
+          signal.id,
+          {
+            id: signal.id,
+            question: signal.question ?? signal.name ?? null,
+            whyItMatters: signal.whyItMatters ?? defaultSignalWhy(signal),
+            scope: signal.scope ?? "company",
+          },
+        ]),
+      ),
+    );
     for (const company of detail.companies ?? []) {
       if (company.executionIdentity?.user?.label) {
         ownerByCompany.set(company.companyId, company.executionIdentity.user.label);
@@ -73,9 +104,20 @@ export function buildProspectsViewModel(input) {
   ingest(input.prospectPrepLanes, false);
   ingest(input.engagementLanes, true);
 
-  const inventory = [...merged.values()]
-    .map((raw) => shapeProspect(raw, { ownerByCompany, industryByCompany, premiseByMotion, now }))
+  const baseInventory = [...merged.values()]
+    .map((raw) => ({
+      raw,
+      prospect: shapeProspect(raw, { ownerByCompany, industryByCompany, premiseByMotion, signalMetaByMotion, now }),
+    }))
+    .filter(({ raw, prospect }) => shouldIncludeProspect(raw, prospect))
+    .map(({ prospect }) => prospect)
     .sort((a, b) => a.companyName.localeCompare(b.companyName) || a.name.localeCompare(b.name));
+  const normalizedQuery = normalizeProspectSearchQuery(input.query);
+  const totalProspectCount = baseInventory.length;
+  const totalCompanyCount = new Set(baseInventory.map((prospect) => prospect.companyId)).size;
+  const inventory = normalizedQuery
+    ? baseInventory.filter((prospect) => matchesProspectSearchQuery(prospect, normalizedQuery))
+    : baseInventory;
 
   // By-company grouping.
   /** @type {Map<string, any>} */
@@ -114,6 +156,12 @@ export function buildProspectsViewModel(input) {
       prospects: inventory.length,
       companies: groups.length,
     },
+    search: {
+      query: normalizeDisplaySearchQuery(input.query),
+      active: Boolean(normalizedQuery),
+      totalProspects: totalProspectCount,
+      totalCompanies: totalCompanyCount,
+    },
     groups,
     all: inventory,
     details,
@@ -122,11 +170,18 @@ export function buildProspectsViewModel(input) {
 
 /**
  * @param {any} raw
- * @param {{ ownerByCompany: Map<string,string>, industryByCompany: Map<string,string>, premiseByMotion: Map<string,any>, now?: string }} ctx
+ * @param {{
+ *   ownerByCompany: Map<string,string>,
+ *   industryByCompany: Map<string,string>,
+ *   premiseByMotion: Map<string,any>,
+ *   signalMetaByMotion: Map<string, Map<string, { id: string, question: string | null, whyItMatters: string, scope: string }>>,
+ *   now?: string
+ * }} ctx
  */
 function shapeProspect(raw, ctx) {
   const branchKey = raw._engagementKey ?? raw.engagementLane?.key ?? null;
   const signal = pickSignal(raw);
+  const signalRationale = pickSignalRationale(raw, ctx);
   const signalMatchCount = raw.signalMatchCount ?? (raw.signalMatches ?? []).length;
   const branch = BRANCH_STATE[branchKey] ?? "identified";
   const intents = buildProspectActionIntents(
@@ -155,6 +210,7 @@ function shapeProspect(raw, ctx) {
     motionId: raw.motionId,
     motionName: raw.motionName ?? null,
     signal,
+    signalRationale,
     signalTruth: deriveSignalTruth(signalMatchCount, raw.fitConfidence),
     fit: raw.fitConfidence ?? null,
     branch,
@@ -165,8 +221,11 @@ function shapeProspect(raw, ctx) {
     premise: ctx.premiseByMotion.get(raw.motionId) ?? null,
     whyRelevant: raw.whyRelevant ?? null,
     nextAction: raw.nextAction ?? raw.cadenceState?.nextAction ?? null,
+    cadenceState: raw.cadenceState ?? null,
     primaryChannel: raw.primaryChannel ?? raw.cadenceState?.currentStep ?? null,
     hasEmailFallback: Boolean(raw.hasEmailFallback),
+    email: normalizeNonEmptyString(raw.email)
+      ?? normalizeNonEmptyString(raw.bestEmailContactPoint?.value ?? raw.bestEmailContactPoint ?? null),
     // At-a-glance set of channels we believe we can reach this person on.
     // Drives the row icons in the prospect list. LinkedIn comes from a profile
     // URL (the most common "we found them" signal); email/phone are derived
@@ -180,7 +239,86 @@ function shapeProspect(raw, ctx) {
     // Network distance from the profile page — the authoritative truth for
     // connection status. 1 = connected (request accepted); 2/3 = not yet.
     connectionDegree: raw.linkedinProfileSnapshot?.connectionDegree ?? null,
+    drafts: Array.isArray(raw.drafts) ? raw.drafts : [],
+    touches: Array.isArray(raw.touches) ? raw.touches : [],
+    timelineNotes: Array.isArray(raw.timelineNotes) ? raw.timelineNotes : [],
+    handledNotification: raw.handledNotification ?? null,
   };
+}
+
+/**
+ * Hide dead-end research artifacts from the prospects surface. If a branch is
+ * already archived/exhausted, has no stored reachable channel, and never
+ * recorded any touch history, it is not an actionable prospect for the
+ * operator-facing list.
+ *
+ * @param {any} raw
+ * @param {ReturnType<typeof shapeProspect>} prospect
+ */
+function shouldIncludeProspect(raw, prospect) {
+  const touchCount = Array.isArray(raw.touches) ? raw.touches.length : 0;
+  return !(prospect.branch === "archived" && prospect.channels.length === 0 && touchCount === 0);
+}
+
+/**
+ * @param {string | null | undefined} value
+ * @returns {string}
+ */
+function normalizeDisplaySearchQuery(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * @param {string | null | undefined} value
+ * @returns {string}
+ */
+function normalizeProspectSearchQuery(value) {
+  return normalizeSearchText(normalizeDisplaySearchQuery(value));
+}
+
+/**
+ * @param {ReturnType<typeof shapeProspect>} prospect
+ * @param {string} normalizedQuery
+ * @returns {boolean}
+ */
+function matchesProspectSearchQuery(prospect, normalizedQuery) {
+  if (!normalizedQuery) return true;
+  const haystack = buildProspectSearchHaystack(prospect);
+  return normalizedQuery.split(" ").every((token) => haystack.includes(token));
+}
+
+/**
+ * @param {ReturnType<typeof shapeProspect>} prospect
+ * @returns {string}
+ */
+function buildProspectSearchHaystack(prospect) {
+  return normalizeSearchText([
+    prospect.name,
+    prospect.title,
+    prospect.companyName,
+    prospect.companyIndustry,
+    prospect.motionName,
+    prospect.signal,
+    prospect.signalRationale,
+    prospect.whyRelevant,
+    prospect.owner,
+    prospect.buyingCommitteeRole,
+    prospect.decisionAuthority,
+    prospect.email,
+    prospect.premise?.statement,
+    ...(prospect.channels ?? []).flatMap((channel) => [channel.label, channel.value]),
+  ].filter(Boolean).join(" "));
+}
+
+/**
+ * @param {string | null | undefined} value
+ * @returns {string}
+ */
+function normalizeSearchText(value) {
+  return String(value ?? "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -196,17 +334,111 @@ function shapeProspect(raw, ctx) {
  * not "what's outreach-grade". The detail page is where verification status
  * gets surfaced.
  *
+ * @typedef {{
+ *   key: "linkedin" | "email" | "phone",
+ *   label: string,
+ *   value: string,
+ *   href: string,
+ *   openInNewTab: boolean
+ * }} ProspectChannel
+ */
+
+/**
  * @param {any} raw
- * @returns {Array<"linkedin" | "email" | "phone">}
+ * @returns {ProspectChannel[]}
  */
 function deriveChannels(raw) {
   const points = Array.isArray(raw.contactPoints) ? raw.contactPoints : [];
-  const hasKind = (kind) => points.some((point) => point && point.kind === kind && point.value);
+  const linkedinPoint = selectBestContactPoint(points, "linkedin_profile");
+  const linkedinPublicIdPoint = selectBestContactPoint(points, "linkedin_public_id");
+  const emailPoint = selectBestContactPoint(points, "email");
+  const phonePoint = selectBestContactPoint(points, "phone");
+  const linkedinUrl =
+    normalizeNonEmptyString(raw.linkedinProfileUrl)
+    ?? normalizeNonEmptyString(linkedinPoint?.value)
+    ?? buildLinkedinProfileUrlFromPublicId(linkedinPublicIdPoint?.value ?? null);
+  const email = normalizeNonEmptyString(raw.email) ?? normalizeNonEmptyString(emailPoint?.value);
+  const phone = normalizeNonEmptyString(phonePoint?.value);
   const out = [];
-  if (raw.linkedinProfileUrl || hasKind("linkedin_profile")) out.push("linkedin");
-  if (raw.email || hasKind("email")) out.push("email");
-  if (hasKind("phone")) out.push("phone");
+  if (linkedinUrl) out.push(buildChannel({ key: "linkedin", label: "LinkedIn profile", value: linkedinUrl, href: linkedinUrl }));
+  if (email) out.push(buildChannel({ key: "email", label: "Email address", value: email, href: `mailto:${email}` }));
+  if (phone) out.push(buildChannel({ key: "phone", label: "Phone number", value: phone, href: buildTelHref(phone) }));
   return out;
+}
+
+/**
+ * @param {Array<Record<string, any>>} points
+ * @param {string} kind
+ */
+function selectBestContactPoint(points, kind) {
+  return points
+    .filter((point) => (
+      point
+      && point.kind === kind
+      && normalizeNonEmptyString(point.value)
+      && point.matchStatus !== "rejected"
+      && point.verificationStatus !== "rejected"
+    ))
+    .sort(compareContactPoints)[0] ?? null;
+}
+
+/**
+ * Prefer the contact point that is most likely to be immediately usable, then
+ * the most directly observed one.
+ *
+ * @param {Record<string, any>} left
+ * @param {Record<string, any>} right
+ */
+function compareContactPoints(left, right) {
+  return (
+    contactPointScore(right) - contactPointScore(left)
+    || compareIsoDates(right.observedAt, left.observedAt)
+    || String(left.value).localeCompare(String(right.value))
+  );
+}
+
+/** @param {Record<string, any>} point */
+function contactPointScore(point) {
+  return (
+    (point.usableForOutreach ? 10 : 0)
+    + (CONTACT_VERIFICATION_SCORE[/** @type {keyof typeof CONTACT_VERIFICATION_SCORE} */ (point.verificationStatus)] ?? 0)
+    + (CONTACT_CONFIDENCE_SCORE[/** @type {keyof typeof CONTACT_CONFIDENCE_SCORE} */ (point.confidence)] ?? 0)
+  );
+}
+
+/**
+ * @param {string | null | undefined} left
+ * @param {string | null | undefined} right
+ */
+function compareIsoDates(left, right) {
+  const leftTime = left ? Date.parse(left) : NaN;
+  const rightTime = right ? Date.parse(right) : NaN;
+  if (Number.isNaN(leftTime) && Number.isNaN(rightTime)) return 0;
+  if (Number.isNaN(leftTime)) return 1;
+  if (Number.isNaN(rightTime)) return -1;
+  return leftTime - rightTime;
+}
+
+/**
+ * @param {ProspectChannel} channel
+ * @returns {ProspectChannel}
+ */
+function buildChannel(channel) {
+  return {
+    ...channel,
+    openInNewTab: /^https?:\/\//i.test(channel.href),
+  };
+}
+
+/** @param {string} value */
+function buildTelHref(value) {
+  return `tel:${value.replace(/[^+\d]/g, "")}`;
+}
+
+/** @param {string | null | undefined} value */
+function normalizeNonEmptyString(value) {
+  const normalized = value?.toString().trim();
+  return normalized ? normalized : null;
 }
 
 /** @param {any} raw */
@@ -217,6 +449,35 @@ function pickSignal(raw) {
   if (raw.triggerWindow?.summary) return raw.triggerWindow.summary;
   if (raw.whyRelevant) return raw.whyRelevant;
   return "No surfacing signal recorded.";
+}
+
+/**
+ * @param {any} raw
+ * @param {{
+ *   signalMetaByMotion: Map<string, Map<string, { id: string, question: string | null, whyItMatters: string, scope: string }>>
+ * }} ctx
+ */
+function pickSignalRationale(raw, ctx) {
+  if (raw.whyRelevant) return raw.whyRelevant;
+  if (raw.triggerWindow?.whyNowAnchor) return raw.triggerWindow.whyNowAnchor;
+
+  const match = (raw.signalMatches ?? [])[0];
+  const signalMeta = match?.signalId
+    ? ctx.signalMetaByMotion.get(raw.motionId)?.get(match.signalId) ?? null
+    : null;
+  if (signalMeta?.whyItMatters) return signalMeta.whyItMatters;
+
+  if (raw.roleTruth?.summary) return raw.roleTruth.summary;
+  if (raw.liveSignal?.engagementRationale) return raw.liveSignal.engagementRationale;
+  return null;
+}
+
+/** @param {{ scope?: string | null }} signal */
+function defaultSignalWhy(signal) {
+  if (signal.scope === "person") {
+    return "A recent role change or hire is concrete evidence the buying motion is live and a real why-now exists.";
+  }
+  return "Recent, externally observable movement is evidence the premise is live at this company right now.";
 }
 
 /**

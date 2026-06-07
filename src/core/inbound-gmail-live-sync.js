@@ -4,18 +4,16 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { browserProfileSchema } from "../schema/browser-profile.js";
+import { resolveCodexCliCommand } from "../lib/codex-cli.js";
 import { gmailInboundSyncCaptureSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { buildGmailInboundSyncPayload, normalizeGmailInboundSyncCapture, resolveGmailAccount } from "./inbound-gmail-sync.js";
 import {
-  buildChromeProfileSelection,
   buildCodexAgentHandoffTransport,
   buildDirectLiveTransport,
   shouldUseCodexAgentHandoff
 } from "./live-agent-handoff.js";
 import { probeUserHarnessConnections } from "./probe-user-harness-connections.js";
-import { resolveRuntimeHarnessConnection } from "./runtime-harness-resolution.js";
 
 const DEFAULT_GMAIL_THREAD_LIMIT = 20;
 
@@ -172,10 +170,9 @@ const gmailCaptureOutputSchema = {
  */
 export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, options = {}) {
   const user = userSchema.parse(rawUser);
-  const profiles = rawProfiles.map((profile) => browserProfileSchema.parse(profile));
   const account = resolveGmailAccount(user, normalizeNullableString(options.accountId));
   const mode = options.mode ?? "quick";
-  const liveSource = resolveGmailLiveSource(user, profiles, account, {
+  const liveSource = resolveGmailLiveSource(user, account, {
     runtime: options.runtime ?? null,
     connector: options.connector ?? null,
     codexHome: options.codexHome ?? null,
@@ -234,24 +231,14 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
           browserProfileId: account.browserProfileId,
           harnessConnectionId: account.harnessConnectionId
         },
-        profile: liveSource.profile
-          ? {
-              id: liveSource.profile.id,
-              label: liveSource.profile.label,
-              browser: liveSource.profile.browser,
-              profileDirectory: liveSource.profile.profileDirectory,
-              profilePath: liveSource.profile.profilePath,
-              detectedProfileName: liveSource.profile.detectedProfileName,
-              identityAccounts: liveSource.profile.identity.accounts
-            }
-          : null,
+        profile: null,
         probe,
         transport: buildCodexAgentHandoffTransport({
           capability: "gmail",
           runtime,
           connector,
           source: liveSource.source,
-          captureTransportMode: liveSource.profile ? "browser_native_only" : "connector_native_only",
+          captureTransportMode: "connector_native_only",
           prompt,
           outputSchema: gmailCaptureOutputSchema,
           buildPayloadCommand: `exo inbound sync gmail ${user.id} --account ${account.id} --input - --json`,
@@ -261,13 +248,7 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
             `exo inbox --user ${user.id} --json`,
             `exo next --user ${user.id} --json`
           ],
-          profileSelection: liveSource.profile
-            ? buildChromeProfileSelection({
-                capability: "gmail",
-                expectedHandle: account.handle,
-                profile: liveSource.profile
-              })
-            : null
+          profileSelection: null
         }),
         capture: null,
         payload: null
@@ -279,10 +260,9 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
         runtime,
         connector,
         handle: account.handle,
-        profile: liveSource.profile,
         limit,
         since,
-        codexCli: options.codexCli ?? normalizeNullableString(process.env.EXO_CODEX_CLI) ?? "codex",
+        codexCli: resolveCodexCliCommand({ codexCli: options.codexCli ?? null }),
         codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
         claudeCli: options.claudeCli ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI) ?? "claude",
         prompt
@@ -311,17 +291,7 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
       browserProfileId: account.browserProfileId,
       harnessConnectionId: account.harnessConnectionId
     },
-    profile: liveSource.profile
-      ? {
-          id: liveSource.profile.id,
-          label: liveSource.profile.label,
-          browser: liveSource.profile.browser,
-          profileDirectory: liveSource.profile.profileDirectory,
-          profilePath: liveSource.profile.profilePath,
-          detectedProfileName: liveSource.profile.detectedProfileName,
-          identityAccounts: liveSource.profile.identity.accounts
-        }
-      : null,
+    profile: null,
     probe,
     transport,
     capture: built.capture,
@@ -331,11 +301,10 @@ export async function buildLiveGmailInboundSyncPayload(rawUser, rawProfiles, opt
 
 /**
  * @param {import("../schema/user.js").userSchema._type} user
- * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
  * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
  * @param {{ runtime?: string | null, connector?: string | null }} input
  */
-function resolveGmailLiveSource(user, profiles, account, input) {
+function resolveGmailLiveSource(user, account, input) {
   if (account.sourceType === "browser-profile") {
     throw new Error("Profile-backed Gmail accounts are no longer supported for live sync. Map a managed connector account instead.");
   }
@@ -346,49 +315,6 @@ function resolveGmailLiveSource(user, profiles, account, input) {
     probe: null,
     source: "stored_harness_connection"
   };
-}
-
-/**
- * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
- * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
- */
-function resolveGmailBrowserProfile(profiles, account) {
-  const profile = profiles.find((candidate) => candidate.id === account.browserProfileId) ?? null;
-  if (!profile) {
-    throw new Error(`Browser profile not found for Gmail account ${account.id}.`);
-  }
-
-  if (profile.browser !== "chrome") {
-    throw new Error(`Gmail live sync currently supports Chrome-backed profiles only. ${profile.label} is ${profile.browser}.`);
-  }
-
-  if (profile.status !== "ready" || !profile.verifiedCapabilities.includes("gmail")) {
-    throw new Error(`Gmail live sync requires a trusted Chrome profile with verified gmail capability. ${profile.label} is ${profile.status}.`);
-  }
-
-  return profile;
-}
-
-/**
- * @param {import("../schema/user.js").userSchema._type} user
- * @param {{ runtime?: string | null, connector?: string | null }} input
- */
-function resolveGmailRuntimeHarnessConnection(user, input) {
-  const runtimeFilter = normalizeNullableString(input.runtime)?.toLowerCase() ?? null;
-  const connectorFilter = normalizeNullableString(input.connector)?.toLowerCase() ?? "chrome";
-
-  if (connectorFilter !== "chrome") {
-    throw new Error(`Profile-backed Gmail live sync currently supports runtime:chrome harness connections only. Received connector ${connectorFilter}.`);
-  }
-
-  return resolveRuntimeHarnessConnection(user, {
-    runtime: runtimeFilter,
-    connector: connectorFilter,
-    codexHome: input.codexHome ?? null,
-    claudeCli: input.claudeCli ?? null,
-    multipleMessage: (choices) =>
-      `Multiple supported Gmail browser harnesses exist for ${user.label} (${choices.join(", ")}). Pass --runtime explicitly.`
-  });
 }
 
 /**
@@ -430,7 +356,6 @@ function requireGmailHarnessConnection(user, account, input) {
  *   mode: string,
  *   connector: string,
  *   handle: string,
- *   profile: import("../schema/browser-profile.js").browserProfileSchema._type | null,
  *   limit: number,
  *   since: string | null,
  *   codexCli: string,
@@ -454,7 +379,6 @@ async function captureGmailInbox(input) {
  * @param {{
  *   connector: string,
  *   handle: string,
- *   profile: import("../schema/browser-profile.js").browserProfileSchema._type | null,
  *   limit: number,
  *   since: string | null,
  *   codexCli: string,
@@ -512,7 +436,6 @@ async function captureGmailInboxThroughCodex(input) {
  * @param {{
  *   connector: string,
  *   handle: string,
- *   profile: import("../schema/browser-profile.js").browserProfileSchema._type | null,
  *   limit: number,
  *   since: string | null,
  *   claudeCli: string
@@ -564,7 +487,6 @@ async function captureGmailInboxThroughClaude(input) {
  * @param {{
  *   connector: string,
  *   handle: string,
- *   profile: import("../schema/browser-profile.js").browserProfileSchema._type | null,
  *   limit: number,
  *   since: string | null
  * }} input
@@ -573,31 +495,14 @@ function buildGmailLiveCapturePrompt(input) {
   const sinceInstruction = input.since
     ? `Only include threads whose newest relevant message is at or after ${input.since}. If the active surface cannot filter directly, inspect recent inbox threads and exclude anything older from the final JSON.`
     : "Inspect the most recent inbox threads and include only the threads that are meaningfully relevant to GTM execution.";
-  const profileIdentityAccounts = input.profile?.identity.accounts.length
-    ? input.profile.identity.accounts.map((account) => `${account.capability}:${account.handle}`).join(", ")
-    : "none recorded in Exo";
-
-  const lines = input.connector === "chrome"
-    ? [
-        "Use the native Chrome/browser-control surface available in this runtime to inspect one live Gmail inbox for Exo.",
-        `The intended mailbox handle is ${input.handle}.`,
-        `The resolved Chrome profile is label ${input.profile?.label ?? "unknown"}, directory ${input.profile?.profileDirectory ?? "unknown"}, path ${input.profile?.profilePath ?? "unknown"}.`,
-        `The stored Chrome profile display-name metadata is ${input.profile?.detectedProfileName ?? "unknown"}. Treat Chrome display-name drift as non-authoritative.`,
-        `Recorded profile identity accounts: ${profileIdentityAccounts}.`,
-        "Use the structured profileSelection and captureGuide attached to this capture request as the binding, writeback, and verification contract.",
-        "Do not fail on Chrome profile display-name mismatch alone. Only fail when the resolved profile directory/path or the signed-in mailbox do not match the intended Exo context.",
-        "Before inspecting the inbox, verify that the active signed-in Gmail identity matches the intended profile context. If the connector is attached to another Chrome session or a different signed-in mailbox, return failed with a concrete profile_selection_mismatch error.",
-        "Do not require an already-open Gmail tab. If no live Gmail inbox tab is present in the attached Chrome session, open or navigate one tab in that same attached session to https://mail.google.com/mail/u/0/#inbox and continue there.",
-        "Native-tools only applies to the live browser capture transport. Use captureGuide.writebackRules and verificationCommands for the governed Exo landing path after capture.",
-        "Do not use shell commands, local files, or web search.",
-        `Inspect up to ${input.limit} inbox threads, newest first.`
-      ]
-    : [
-        "Use the Gmail connector available in this runtime to inspect one live Gmail inbox for Exo.",
-        `The mailbox handle is ${input.handle}.`,
-        "Do not use browser tools, web search, shell commands, or local files.",
-        `Inspect up to ${input.limit} inbox threads, newest first.`
-      ];
+  const lines = [
+    `Use the native ${input.connector} connector available in this runtime to inspect one live Gmail inbox for Exo.`,
+    `The mailbox handle is ${input.handle}.`,
+    "Use connector-native Gmail retrieval only. Do not use browser tools, web search, shell commands, or local files.",
+    "Before inspecting the inbox, verify that the connected Gmail identity matches the intended mailbox handle. If the connector is bound to another mailbox, return failed with a concrete account_selection_mismatch error.",
+    "Use the structured captureGuide and verificationCommands attached to this capture request as the governed writeback contract after capture.",
+    `Inspect up to ${input.limit} inbox threads, newest first.`
+  ];
 
   return [
     ...lines,

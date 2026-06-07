@@ -314,6 +314,10 @@ test("exo actions result lands a direct-message send through the public CLI", ()
 
   const stored = reProspect(prospect.id)?.prospect;
   assert.ok(stored?.touches.some((touch) => touch.surface === "post_accept_message" && touch.outcome === "sent"));
+  assert.equal(
+    stored?.touches.find((touch) => touch.surface === "post_accept_message" && touch.outcome === "sent")?.body,
+    "First post-accept message.",
+  );
   assert.equal(stored?.drafts.find((draft) => draft.surface === "post_accept_message")?.status, "sent");
   assert.equal(stored?.cadenceState.currentStep, "direct-message");
 });

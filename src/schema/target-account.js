@@ -345,6 +345,7 @@ export const prospectDraftSchema = z.object({
   status: prospectDraftStatusSchema.default("drafting"),
   authoredBy: z.enum(["agent", "operator"]).default("agent"),
   editedByOperator: z.boolean().default(false),
+  approvedByOperator: z.boolean().default(false),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   approvedAt: z.string().datetime().nullable().default(null),

@@ -55,8 +55,8 @@ export function ensureLinkedinToolMethodsRegistered() {
     inputSchemaRef: "src/schema/surfaces/invitations.js#canonicalInvitationSurfaceInputSchema",
     outputSchemaRef: "src/schema/surfaces/invitations.js#canonicalReceivedInvitationSurfaceResultSchema",
     runtimeRequirements: {
-      connector: "chrome",
-      browser: "chrome",
+      connector: "unipile",
+      browser: null,
       signedInIdentityRequired: true
     },
     lifecycleHooksRequired: true,
@@ -81,8 +81,8 @@ export function ensureLinkedinToolMethodsRegistered() {
     inputSchemaRef: "src/schema/surfaces/invitations.js#canonicalInvitationSurfaceInputSchema",
     outputSchemaRef: "src/schema/surfaces/invitations.js#canonicalSentInvitationSurfaceResultSchema",
     runtimeRequirements: {
-      connector: "chrome",
-      browser: "chrome",
+      connector: "unipile",
+      browser: null,
       signedInIdentityRequired: true
     },
     lifecycleHooksRequired: true,
@@ -193,11 +193,7 @@ function buildCanonicalReceivedSurfaceFromLegacyCapture(capture, mode, session) 
       sourceUrl: item.sourceUrl,
       profileUrl: item.actorProfileUrl,
       actionsSupported: mapInvitationActionsForState("received", mapLegacyReceivedKindToState(item.kind)),
-      providerDetails: item.notes
-        ? {
-            invitationNote: item.notes
-          }
-        : null
+      providerDetails: buildInvitationProviderDetails(item)
     })),
     diagnostics: {
       currentUrl: capture.items[0]?.sourceUrl ?? null,
@@ -276,11 +272,7 @@ function buildCanonicalSentSurfaceFromLegacyCapture(capture, mode, session) {
       sourceUrl: item.sourceUrl,
       profileUrl: item.actorProfileUrl,
       actionsSupported: mapInvitationActionsForState("sent", mapLegacySentKindToState(item.kind)),
-      providerDetails: item.notes
-        ? {
-            invitationNote: item.notes
-          }
-        : null
+      providerDetails: buildInvitationProviderDetails(item)
     })),
     diagnostics: {
       currentUrl: capture.items[0]?.sourceUrl ?? null,
@@ -505,6 +497,23 @@ function buildToolContractViolationSurface(input) {
       phase: "binding"
     }
   };
+}
+
+/**
+ * @param {{ notes?: string | null, actorCompanyProfile?: unknown, providerSharedSecret?: string | null }} item
+ */
+function buildInvitationProviderDetails(item) {
+  const providerDetails = {};
+  if (typeof item.notes === "string" && item.notes.trim()) {
+    providerDetails.invitationNote = item.notes.trim();
+  }
+  if (typeof item.providerSharedSecret === "string" && item.providerSharedSecret.trim()) {
+    providerDetails.sharedSecret = item.providerSharedSecret.trim();
+  }
+  if (item.actorCompanyProfile && typeof item.actorCompanyProfile === "object") {
+    providerDetails.companyProfile = item.actorCompanyProfile;
+  }
+  return Object.keys(providerDetails).length ? providerDetails : null;
 }
 
 /**

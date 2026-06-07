@@ -38,6 +38,7 @@ function runCli(stateDir, args) {
 test("motion detail surface data flows through motion and workspace reports", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-detail-"));
   const workspacePath = path.join(stateDir, "workspace.html");
+  const motionsPath = path.join(stateDir, "motions.html");
 
   try {
     const user = JSON.parse(runCli(stateDir, ["users", "add", "--label", "Workspace User", "--json"]));
@@ -145,7 +146,7 @@ test("motion detail surface data flows through motion and workspace reports", ()
       ]),
     );
 
-    JSON.parse(
+    const prospectResult = JSON.parse(
       runCli(stateDir, [
         "companies",
         "prospects",
@@ -171,6 +172,53 @@ test("motion detail surface data flows through motion and workspace reports", ()
         companyMatch.signalMatches[0].id,
         "--signal-match",
         personMatch.signalMatches[1].id,
+        "--json",
+      ]),
+    );
+    const prospect = prospectResult.prospects.find((item) => item.name === "Riley Stone");
+    assert.ok(prospect, "expected stored prospect to be returned");
+
+    JSON.parse(
+      runCli(stateDir, [
+        "companies",
+        "prospects",
+        "draft",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--surface",
+        "connection_request",
+        "--body",
+        "Saw the recent pipeline expansion signal and wanted to connect.",
+        "--status",
+        "ready",
+        "--json",
+      ]),
+    );
+
+    JSON.parse(
+      runCli(stateDir, [
+        "companies",
+        "touches",
+        "add",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--surface",
+        "profile_view",
+        "--direction",
+        "outbound",
+        "--outcome",
+        "sent",
+        "--occurred-at",
+        "2026-05-31T12:00:00.000Z",
+        "--summary",
+        "Viewed Riley Stone before deciding on the opening move.",
         "--json",
       ]),
     );
@@ -203,6 +251,19 @@ test("motion detail surface data flows through motion and workspace reports", ()
     assert.match(html, /Matched companies/);
     assert.match(html, /Research backlog/);
     assert.match(html, /BacklogCo/);
+
+    const motionsJson = JSON.parse(runCli(stateDir, ["report", "motions", "--user", user.id, "--json"]));
+    assert.equal(motionsJson.motions[0].activity.touchCount, 1);
+    assert.equal(motionsJson.motions[0].activity.outboundTouchCount, 1);
+    assert.equal(motionsJson.motions[0].activity.stagedDraftCount, 1);
+    assert.equal(motionsJson.details[0].activity.events.length, 2);
+
+    runCli(stateDir, ["report", "motions", "--user", user.id, "--out", motionsPath]);
+    const motionsHtml = fs.readFileSync(motionsPath, "utf8");
+    assert.match(motionsHtml, /Motion activity/);
+    assert.match(motionsHtml, /1 recorded touch/);
+    assert.match(motionsHtml, /1 staged draft/);
+    assert.match(motionsHtml, /Viewed Riley Stone before deciding on the opening move\./);
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }

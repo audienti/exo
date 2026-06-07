@@ -177,6 +177,7 @@ const ACTION_RESULT_CATALOG = {
       touchOutcome: "sent",
       cadenceStep: "done",
       defaultNextAction: null,
+      inboundTransitionKind: "connection_request_withdrawn",
     },
   ],
   accept_connection: [

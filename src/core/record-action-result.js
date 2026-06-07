@@ -99,6 +99,9 @@ export function recordActionResult(input) {
 
   let { rawMotion, rawCompany, prospect } = loadTargetContext(ids);
   const surface = resolveSurface({ action, result, explicitSurface: input.surface ?? null, prospect });
+  const sentDraft = surface && result.markDraftSent
+    ? findSendableDraftForSurface(prospect, surface)
+    : null;
 
   let touchRecorded = false;
   if (surface && result.touchDirection && result.touchOutcome) {
@@ -109,8 +112,8 @@ export function recordActionResult(input) {
       outcome: result.touchOutcome,
       occurredAt,
       summary: input.summary ?? buildTouchSummary(action.label, result.label, prospect.name),
-      subject: input.subject ?? null,
-      body: input.body ?? null,
+      subject: normalizeOptionalMessageField(input.subject) ?? normalizeOptionalMessageField(sentDraft?.subject),
+      body: normalizeOptionalMessageField(input.body) ?? normalizeOptionalMessageField(sentDraft?.body),
       sourceUrl: input.sourceUrl ?? null,
       notes: input.notes ?? null,
     });
@@ -225,6 +228,25 @@ function resolveTargetIds(input) {
   }
 
   return { companyId, prospectId, motionId, observationId, actorName };
+}
+
+/**
+ * @param {any} prospect
+ * @param {string} surface
+ */
+function findSendableDraftForSurface(prospect, surface) {
+  return (prospect?.drafts ?? []).find((draft) =>
+    draft.surface === surface && isSendableDraftStatus(draft.status)
+  ) ?? null;
+}
+
+/**
+ * @param {string | null | undefined} value
+ */
+function normalizeOptionalMessageField(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
 }
 
 /**

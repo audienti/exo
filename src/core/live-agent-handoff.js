@@ -47,7 +47,7 @@ export function buildAgentHandoffTransport(input) {
     ? input.verificationCommands.filter((command) => typeof command === "string" && command.trim().length)
     : [];
   const applyCommand = normalizeNullableString(input.applyCommand);
-  const captureTransportMode = normalizeNullableString(input.captureTransportMode) ?? "browser_native_only";
+  const captureTransportMode = normalizeNullableString(input.captureTransportMode) ?? "connector_native_only";
   const captureGuide = buildDefaultCaptureGuide({
     buildPayloadCommand: input.buildPayloadCommand,
     applyCommand,

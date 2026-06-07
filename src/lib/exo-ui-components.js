@@ -144,6 +144,7 @@ const STATE_META = {
   "pre-connect": ["#a78bfa", "pre-connect"],
   "connection-requested": ["#818cf8", "requested"],
   connected: ["#22c55e", "connected"],
+  "reply-accepted": ["#22c55e", "conversation"],
 };
 
 /**
@@ -244,8 +245,30 @@ export function btn(opts) {
 }
 
 /**
+ * @param {{ label?: string | null, lead: string, detail?: string | null, meta?: string | null, className?: string | null }} opts
+ */
+export function renderNextMoveAlert(opts) {
+  const label = normalizeUiText(opts.label) ?? "Next move";
+  const lead = sentenceUiText(opts.lead);
+  const detail = normalizeUiText(opts.detail);
+  const meta = normalizeUiText(opts.meta);
+  const cls = opts.className ? ` ${escapeAttr(opts.className)}` : "";
+  return (
+    `<div class="next-alert${cls}">` +
+    iconSvg("flag", 14) +
+    `<span class="next-alert-copy">` +
+    `<span class="next-alert-label">${escapeHtml(label)}</span>` +
+    `<strong>${escapeHtml(lead)}</strong>` +
+    (detail ? `<span>${escapeHtml(sentenceUiText(detail))}</span>` : "") +
+    (meta ? `<span class="next-alert-meta">${escapeHtml(meta)}</span>` : "") +
+    `</span>` +
+    `</div>`
+  );
+}
+
+/**
  * Wrap a button in a live action host the shared client dispatcher POSTs to /act.
- * @param {{ writer: string, args: Record<string, any>, variant?: "primary" | "secondary" | "ghost" | "danger", size?: "sm" | "md", label: string, icon?: string, title?: string }} opts
+ * @param {{ writer: string, args: Record<string, any>, variant?: "primary" | "secondary" | "ghost" | "danger", size?: "sm" | "md", label: string, icon?: string, title?: string, className?: string }} opts
  */
 export function liveActionBtn(opts) {
   const inner = btn({
@@ -255,7 +278,8 @@ export function liveActionBtn(opts) {
     label: opts.label,
     title: opts.title,
   });
-  return `<span class="exo-action" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}">${inner}</span>`;
+  const className = ["exo-action", "exo-action-flat", opts.className].filter(Boolean).join(" ");
+  return `<span class="${escapeAttr(className)}" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}">${inner}</span>`;
 }
 
 /**
@@ -304,6 +328,27 @@ export function ownerTag(opts) {
     }) +
     `${escapeHtml(opts.ownerName)}</span>`
   );
+}
+
+/**
+ * @param {string | null | undefined} value
+ * @returns {string | null}
+ */
+function normalizeUiText(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+/**
+ * @param {string | null | undefined} value
+ * @returns {string}
+ */
+function sentenceUiText(value) {
+  const normalized = normalizeUiText(value) ?? "";
+  return /[.!?]$/.test(normalized) ? normalized : `${normalized}.`;
 }
 
 /** @param {{ icon: string, message: string }} opts */
@@ -357,6 +402,8 @@ export const PRIMARY_NAV = [
   { id: "execution", label: "Users", icon: "cpu" },
   { id: "connections", label: "Connections", icon: "link" },
   { id: "workspace", label: "Workspace", icon: "activity" },
+  { id: "settings", label: "Settings", icon: "sliders", bottom: true },
+  { id: "cleanup", label: "Clean up", icon: "spark", bottom: true },
   // Agent queue sits at the bottom of the rail so operators can scan what the
   // agent is about to run without it crowding the decision-driven Operator view.
   { id: "queue", label: "Agent queue", icon: "queue", bottom: true },
@@ -370,6 +417,8 @@ export const NAV_ROUTES = {
   execution: "/users",
   connections: "/connections",
   workspace: "/workspace",
+  settings: "/settings",
+  cleanup: "/cleanup",
   queue: "/queue",
 };
 
@@ -380,11 +429,16 @@ export const AUDIENTI_MARK_SVG =
   `<path opacity="0.8" d="M8.37012 79.5H127.433C131.114 79.5 135.779 80.301 140.303 81.6055C144.827 82.9102 149.169 84.7065 152.213 86.6709L174.682 101.169C176.207 102.153 177.25 103.07 177.858 103.872C178.472 104.682 178.584 105.291 178.446 105.723C178.306 106.16 177.848 106.612 176.857 106.957C175.878 107.299 174.471 107.5 172.627 107.5H53.5684C49.8849 107.5 45.2198 106.699 40.6963 105.395C36.1719 104.09 31.8312 102.294 28.7871 100.329L6.31934 85.8311C4.7942 84.8468 3.75004 83.9301 3.1416 83.1279C2.52761 82.3184 2.41489 81.7088 2.55273 81.2773C2.6924 80.8403 3.15107 80.3885 4.1416 80.043C5.12068 79.7014 6.52704 79.5 8.37012 79.5Z" fill="#DB2C5D"/>` +
   `<path d="M8.65039 13.5H127.131C130.75 13.5001 134.775 14.7674 138.349 16.8418C141.922 18.9166 144.997 21.772 146.742 24.8975V24.8965L178.865 82.665V82.666C179.753 84.2564 180.254 85.5347 180.429 86.4922C180.607 87.4672 180.428 87.9767 180.157 88.2197C179.876 88.4725 179.306 88.6123 178.29 88.3867C177.296 88.1661 175.997 87.6203 174.412 86.7031L153.351 74.3105H153.352C150.084 72.2948 145.601 70.5447 141.012 69.2979C136.421 68.0507 131.684 67.2969 127.9 67.2969H127.4V67.542H39.2324C35.6136 67.5419 31.5874 66.2753 28.0146 64.2012C24.4416 62.1269 21.3689 59.2723 19.625 56.1455V56.1445L1.89062 24.4092C0.147738 21.2886 0.140808 18.5792 1.33105 16.6748C2.52624 14.7625 5.02855 13.5 8.65039 13.5Z" fill="#DB2C5D"/>` +
   `</svg>`;
+const EXO_FAVICON_SVG = AUDIENTI_MARK_SVG
+  .replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ')
+  .replace(' class="brand-svg"', "")
+  .replace(' aria-hidden="true"', "");
+const EXO_FAVICON_DATA_URL = `data:image/svg+xml,${encodeURIComponent(EXO_FAVICON_SVG)}`;
 
 /**
- * @param {{ activeId: string, interactive?: boolean }} opts
+ * @param {{ activeId: string, interactive?: boolean, nav?: { showCleanup?: boolean } | null }} opts
  */
-export function navAside({ activeId, interactive }) {
+export function navAside({ activeId, interactive, nav = null }) {
   /** @param {{ id: string, label: string, icon: string }} item */
   const renderItem = (item) => {
     const cls = item.id === activeId ? "nav-item active" : "nav-item";
@@ -394,8 +448,10 @@ export function navAside({ activeId, interactive }) {
     }
     return `<button class="${cls}" type="button" title="${escapeAttr(item.label)}">${inner}</button>`;
   };
-  const topItems = PRIMARY_NAV.filter((item) => !item.bottom).map(renderItem).join("");
-  const bottomItems = PRIMARY_NAV.filter((item) => item.bottom).map(renderItem).join("");
+  const showCleanup = nav?.showCleanup !== false;
+  const items = PRIMARY_NAV.filter((item) => showCleanup || item.id !== "cleanup");
+  const topItems = items.filter((item) => !item.bottom).map(renderItem).join("");
+  const bottomItems = items.filter((item) => item.bottom).map(renderItem).join("");
   const collapse = interactive
     ? `<button class="nav-collapse" type="button" title="Collapse sidebar" aria-label="Collapse sidebar">${iconSvg("chevronR", 15)}</button>`
     : "";
@@ -521,6 +577,9 @@ export const EXO_CLIENT_JS = `
         location.reload();
       }, 850);
     } catch(err) {
+      if (host.hasAttribute('data-exo-autostart-key')) {
+        try { sessionStorage.removeItem('exo-auto-action:' + host.getAttribute('data-exo-autostart-key')); } catch(_){}
+      }
       if(btn){ btn.classList.remove('btn-busy'); btn.disabled = false; if(span) span.textContent = prev; }
       toast(String(err && err.message ? err.message : err), false);
     }
@@ -530,6 +589,26 @@ export const EXO_CLIENT_JS = `
     var flash = sessionStorage.getItem('exo-flash');
     if(flash){ sessionStorage.removeItem('exo-flash'); toast(flash, true); }
   } catch(_){}
+
+  // One-shot auto actions let a surface queue repair work for itself once the
+  // page proves the state is non-authoritative, without forcing the operator
+  // through a dead manual sync button.
+  (function(){
+    var hosts = Array.prototype.slice.call(document.querySelectorAll('[data-exo-autostart-key]'));
+    if (!hosts.length) return;
+    hosts.forEach(function(host){
+      var key = host.getAttribute('data-exo-autostart-key');
+      if (!key) return;
+      var storageKey = 'exo-auto-action:' + key;
+      try {
+        if (sessionStorage.getItem(storageKey)) return;
+        sessionStorage.setItem(storageKey, '1');
+      } catch(_){}
+      var btn = host.querySelector('button');
+      if (!btn) return;
+      setTimeout(function(){ try { btn.click(); } catch(_){} }, 40);
+    });
+  })();
 
   // Collapsible sidebar (persisted across navigations).
   var root = document.querySelector('.exo-root');
@@ -670,12 +749,29 @@ export const EXO_CLIENT_JS = `
 `;
 
 /**
- * @param {{ sectionLabel: string, detailLabel?: string | null, interactive?: boolean, sectionId?: string, minimalChrome?: boolean, raisedCount?: number | null, agentRuntime?: any }} opts
+ * @param {{
+ *   sectionLabel: string,
+ *   detailLabel?: string | null,
+ *   interactive?: boolean,
+ *   sectionId?: string,
+ *   sectionHref?: string | null,
+ *   minimalChrome?: boolean,
+ *   raisedCount?: number | null,
+ *   agentRuntime?: any,
+ *   search?: {
+ *     action: string,
+ *     query?: string | null,
+ *     placeholder?: string | null,
+ *     paramName?: string | null,
+ *     ariaLabel?: string | null,
+ *     clearHref?: string | null,
+ *   } | null,
+ * }} opts
  */
 export function topbar(opts) {
   const { sectionLabel, detailLabel, interactive, sectionId } = opts;
   const homeHref = NAV_ROUTES.operator;
-  const sectionHref = sectionId ? NAV_ROUTES[sectionId] ?? null : null;
+  const sectionHref = opts.sectionHref ?? (sectionId ? NAV_ROUTES[sectionId] ?? null : null);
   const home = interactive
     ? `<a class="crumb-btn" href="${escapeAttr(homeHref)}" title="Home">${iconSvg("home", 15)}</a>`
     : `<button class="crumb-btn" type="button" title="Home">${iconSvg("home", 15)}</button>`;
@@ -700,7 +796,7 @@ export function topbar(opts) {
     agent +
     (opts.minimalChrome
       ? ""
-      : `<div class="search-pill">${iconSvg("search", 14)}<span>Search people…</span></div>` +
+      : renderTopbarSearch(opts.search) +
         (opts.raisedCount
           ? `<button class="chrome-btn raise-trigger" type="button" title="Surface the next decision that needs you">` +
             iconSvg("spark", 15) +
@@ -708,6 +804,36 @@ export function topbar(opts) {
           : "")) +
     `</div>`;
   return `<header class="topbar">${crumbs}${right}</header>`;
+}
+
+/**
+ * @param {{
+ *   action: string,
+ *   query?: string | null,
+ *   placeholder?: string | null,
+ *   paramName?: string | null,
+ *   ariaLabel?: string | null,
+ *   clearHref?: string | null,
+ * } | null | undefined} search
+ */
+function renderTopbarSearch(search) {
+  if (!search) {
+    return `<div class="search-pill">${iconSvg("search", 14)}<span>Search people…</span></div>`;
+  }
+  const action = search.action;
+  const query = typeof search.query === "string" ? search.query.trim() : "";
+  const placeholder = search.placeholder?.trim() || "Search prospects…";
+  const paramName = search.paramName?.trim() || "q";
+  const ariaLabel = search.ariaLabel?.trim() || placeholder;
+  const clearHref = search.clearHref?.trim() || action;
+  return (
+    `<form class="search-form" action="${escapeAttr(action)}" method="GET" role="search">` +
+    `${iconSvg("search", 14)}` +
+    `<input class="search-input" type="search" name="${escapeAttr(paramName)}" value="${escapeAttr(query)}" placeholder="${escapeAttr(placeholder)}" aria-label="${escapeAttr(ariaLabel)}" autocomplete="off" spellcheck="false">` +
+    `<button class="search-submit" type="submit">Find</button>` +
+    (query ? `<a class="search-clear" href="${escapeAttr(clearHref)}">Clear</a>` : "") +
+    `</form>`
+  );
 }
 
 /**
@@ -773,6 +899,16 @@ function humanizeCadence(seconds) {
   return `every ${seconds}s`;
 }
 
+/** @param {number | null | undefined} seconds */
+function humanizeDelay(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
 /** @param {any} runtime */
 function summarizeAgentHeaderRuntime(runtime) {
   if (!runtime || typeof runtime !== "object") return null;
@@ -780,6 +916,7 @@ function summarizeAgentHeaderRuntime(runtime) {
   const scheduler = runtime.scheduler ?? null;
   const routine = runtime.routine ?? null;
   const lastPass = runtime.lastPass ?? null;
+  const cadenceState = runtime.cadence ?? null;
   const queueCount = Number.isFinite(runtime.queueCount) ? Number(runtime.queueCount) : 0;
   const activeBackoff = findActiveAgentBackoff(runtime, queueCount);
   const blockerCount = Number.isFinite(runtime.blockerCount) ? Number(runtime.blockerCount) : 0;
@@ -791,12 +928,20 @@ function summarizeAgentHeaderRuntime(runtime) {
     ? Number(runtime.verificationSendCount)
     : queueCount;
   const lastStatus = typeof lastPass?.status === "string" ? lastPass.status.trim().toLowerCase() : null;
-  const lastReason = typeof lastPass?.reason === "string" && lastPass.reason.trim()
-    ? lastPass.reason.trim()
-    : null;
+  const lastReason = summarizeAgentFailureReason(runtime, {
+    cadence,
+    lastPass,
+    queueCount,
+  });
   const queuedLabel = `${queueCount} queued`;
   const queuedDetail = `${queueCount} queued task${queueCount === 1 ? "" : "s"} waiting to run.`;
   const verifyHoldingSends = isVerifyModeHoldingSends({ sendMode, lastPass, verificationSendCount });
+  const overdueBySeconds = Number.isFinite(cadenceState?.overdueBySeconds) ? Number(cadenceState.overdueBySeconds) : 0;
+  const schedulerBehind = Boolean(scheduler?.loaded)
+    && !scheduler?.running
+    && queueCount > 0
+    && Boolean(cadenceState?.overdue)
+    && overdueBySeconds > 0;
 
   if (lock?.active) {
     return {
@@ -811,28 +956,16 @@ function summarizeAgentHeaderRuntime(runtime) {
     };
   }
 
-  if (lastStatus === "failed") {
+  if (scheduler?.running) {
     return {
-      health: "red",
-      label: "Issue",
-      headline: "Agent needs attention",
-      detail: lastReason ?? "The last agent pass did not complete cleanly.",
+      health: "green",
+      label: "Running",
+      headline: "Background agent running",
+      detail: `Launchd is draining the queue now${cadence ? ` ${cadence}.` : "."}`,
       cadence,
       sendMode,
-      canRunNow: true,
-    };
-  }
-
-  if (lastStatus === "blocked" && blockerCount > 0) {
-    return {
-      health: "yellow",
-      label: "Blocked",
-      headline: "Agent is blocked",
-      detail: lastReason ?? "The last agent pass hit a real execution blocker.",
-      cadence,
-      sendMode,
-      canRunNow: true,
-      runLabel: "Run agent now",
+      canRunNow: false,
+      runLabel: null,
     };
   }
 
@@ -842,6 +975,32 @@ function summarizeAgentHeaderRuntime(runtime) {
       label: "Blocked",
       headline: "Agent is blocked",
       detail: buildAgentBackoffDetail(activeBackoff, cadence, Boolean(scheduler?.loaded)),
+      cadence,
+      sendMode,
+      canRunNow: true,
+      runLabel: "Run agent now",
+    };
+  }
+
+  if (lastStatus === "failed") {
+    return {
+      health: "red",
+      label: "Issue",
+      headline: "Agent needs attention",
+      detail: lastReason ?? "The last agent pass did not complete cleanly.",
+      cadence,
+      sendMode,
+      canRunNow: true,
+      runLabel: "Run agent now",
+    };
+  }
+
+  if (lastStatus === "blocked" && blockerCount > 0) {
+    return {
+      health: "yellow",
+      label: "Blocked",
+      headline: "Agent is blocked",
+      detail: lastReason ?? "The last agent pass hit a real execution blocker.",
       cadence,
       sendMode,
       canRunNow: true,
@@ -859,6 +1018,19 @@ function summarizeAgentHeaderRuntime(runtime) {
       sendMode,
       canRunNow: true,
       runLabel: "Run proof pass",
+    };
+  }
+
+  if (schedulerBehind) {
+    return {
+      health: "yellow",
+      label: "Behind",
+      headline: "Agent is behind",
+      detail: `${queuedDetail} No pass is running right now. The next scheduled pass is already ${humanizeDelay(overdueBySeconds)} late.`,
+      cadence,
+      sendMode,
+      canRunNow: true,
+      runLabel: "Run agent now",
     };
   }
 
@@ -893,6 +1065,43 @@ function summarizeAgentHeaderRuntime(runtime) {
 }
 
 /**
+ * @param {any} runtime
+ * @param {{ cadence: string | null, lastPass: any, queueCount: number }} input
+ */
+function summarizeAgentFailureReason(runtime, input) {
+  const rawReason = typeof input.lastPass?.reason === "string" && input.lastPass.reason.trim()
+    ? input.lastPass.reason.trim()
+    : null;
+  if (!rawReason) {
+    return null;
+  }
+
+  if (/Codex task failed: .*ETIMEDOUT/i.test(rawReason)) {
+    const taskLabel = normalizeRuntimeText(runtime?.hostState?.sendCircuitBreaker?.lastTaskLabel);
+    const overdueBySeconds = Number.isFinite(runtime?.cadence?.overdueBySeconds)
+      ? Number(runtime.cadence.overdueBySeconds)
+      : 0;
+    const cadenceMiss = runtime?.cadence?.overdue && overdueBySeconds > 0
+      ? ` The pass is ${humanizeDelay(overdueBySeconds)} behind${input.cadence ? ` its ${input.cadence} cadence` : " schedule"}.`
+      : "";
+    return `A bounded background Codex task timed out${taskLabel ? ` on ${taskLabel}` : ""}.${cadenceMiss}`;
+  }
+
+  if (/invalid transport in `mcp_servers\.playwriter`/i.test(rawReason)) {
+    return "A background Codex task could not start because the configured Playwriter MCP transport is invalid.";
+  }
+
+  return rawReason;
+}
+
+/** @param {unknown} value */
+function normalizeRuntimeText(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+/**
  * @param {{ sendMode: string | null, lastPass: any, verificationSendCount: number }} input
  */
 function isVerifyModeHoldingSends(input) {
@@ -921,12 +1130,17 @@ function findActiveAgentBackoff(runtime, queueCount) {
  */
 function buildAgentBackoffDetail(backoff, cadence, schedulerLoaded) {
   const laneLabel = backoff?.lane === "retrieval" ? "Inbound refresh work" : "Send work";
+  const reason = typeof backoff?.reason === "string" && backoff.reason.trim()
+    ? backoff.reason.trim()
+    : null;
   const schedulerLabel = schedulerLoaded
     ? cadence
       ? `Background draining is enabled ${cadence}.`
       : "Background draining is enabled."
     : "No pass is running right now.";
-  return `${schedulerLabel} ${laneLabel} is blocked right now.`;
+  return reason
+    ? `${schedulerLabel} ${laneLabel} is blocked right now. ${reason}`
+    : `${schedulerLabel} ${laneLabel} is blocked right now.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1244,16 @@ a{color:inherit;text-decoration:none}
 .agent-panel-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .agent-panel-actions{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
 .agent-passive{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-3);font-weight:600}
+.search-form{display:flex;align-items:center;gap:8px;background:var(--bg-2);border:1px solid var(--border);
+  color:var(--text-2);padding:0 8px 0 10px;border-radius:8px;min-width:260px;max-width:420px}
+.search-form .ic{color:var(--text-4)}
+.search-input{flex:1;min-width:120px;background:transparent;border:none;outline:none;color:var(--text);
+  font-size:12.5px;padding:7px 0}
+.search-input::placeholder{color:var(--text-4)}
+.search-submit,.search-clear{background:none;border:none;color:var(--text-3);font-size:11.5px;font-weight:700;
+  cursor:pointer;padding:0}
+.search-submit:hover,.search-clear:hover{color:var(--text)}
+.search-clear{display:inline-flex;align-items:center}
 .search-pill{display:flex;align-items:center;gap:7px;background:var(--bg-2);border:1px solid var(--border);
   color:var(--text-3);font-size:12.5px;padding:6px 12px;border-radius:8px;min-width:220px}
 .search-pill .ic{color:var(--text-4)}
@@ -1045,6 +1269,7 @@ a{color:inherit;text-decoration:none}
 .op-intro>div:first-child{flex:1;min-width:0}
 .op-intro h1{font-size:24px;letter-spacing:-.03em}
 .op-line{color:var(--text-3);font-size:13px;margin-top:3px;max-width:620px}
+.op-meta{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:8px}
 .op-intro-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 .op-stat{display:flex;align-items:center;gap:11px;font-size:12.5px;color:var(--text-3);
   background:var(--bg-1);border:1px solid var(--border);border-radius:10px;padding:9px 14px;white-space:nowrap}
@@ -1185,7 +1410,30 @@ a{color:inherit;text-decoration:none}
 .gen-footer code{color:var(--text-3);font-size:10.5px}
 
 /* ---------- domain shells ---------- */
-.dom-wrap{max-width:1240px}
+.dom-wrap{width:100%;max-width:1240px;min-width:0}
+.ws-wrap{width:100%;max-width:1240px;min-width:0}
+/* Wide routes should spend the available canvas width on desktop without
+   changing the current constrained behavior on smaller viewports. */
+body.view-motions .dom-wrap,
+body.view-prospects .dom-wrap,
+body.view-connections .dom-wrap,
+body.view-execution .dom-wrap,
+body.view-settings .dom-wrap,
+body.view-workspace .ws-wrap{max-width:none}
+body.view-motions .op-intro,
+body.view-prospects .op-intro,
+body.view-connections .op-intro,
+body.view-execution .op-intro,
+body.view-settings .op-intro,
+body.view-workspace .op-intro{max-width:none}
+body.view-prospects .pr-table,
+body.view-prospects .pr-groups,
+body.view-connections .conn-main,
+body.view-connections .conn-fresh,
+body.view-execution .user-cards,
+body.view-execution .exec-two,
+body.view-settings .settings-page,
+body.view-settings .exec-policy-card{max-width:none}
 .fit-chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--fc);
   background:color-mix(in srgb,var(--fc) 12%,transparent);border:1px solid color-mix(in srgb,var(--fc) 30%,transparent);
   padding:2px 8px;border-radius:6px;cursor:default}
@@ -1215,7 +1463,7 @@ a{color:inherit;text-decoration:none}
 .motion-intake-option strong{font-size:12.5px;line-height:1.4}
 .motion-intake-option em{font-style:normal;font-size:11.5px;line-height:1.45;color:var(--text-3)}
 .motion-intake-match strong{text-transform:none}
-.motion-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(282px,1fr));gap:14px;max-width:1120px}
+.motion-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(282px,1fr));gap:14px;max-width:none}
 .motion-card{display:block;background:var(--bg-2);border:1px solid var(--border);border-radius:13px;padding:16px;
   text-align:left;cursor:pointer;transition:border-color .14s,background .14s}
 .motion-card:hover{border-color:var(--border-3);background:var(--bg-3)}
@@ -1235,6 +1483,11 @@ a{color:inherit;text-decoration:none}
 .mc-cap-pr .truth-tag{margin-left:2px}
 .mc-premise-t{font-size:12.5px;color:var(--text);line-height:1.5;margin:0;
   overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+.mc-activity{margin-top:11px;padding:10px 11px;border:1px solid var(--border);border-radius:8px;background:var(--bg-1)}
+.mc-activity-live{background:color-mix(in srgb,var(--green) 5%,var(--bg-1));border-color:color-mix(in srgb,var(--green) 20%,var(--border))}
+.mc-activity-staged{background:color-mix(in srgb,var(--accent) 5%,var(--bg-1));border-color:color-mix(in srgb,var(--accent) 18%,var(--border))}
+.mc-activity-t{font-size:12.5px;font-weight:700;color:var(--text);margin-top:4px}
+.mc-activity-note{font-size:11px;line-height:1.45;color:var(--text-3);margin-top:4px}
 .mc-stats{display:flex;gap:15px;margin-top:13px;padding-top:12px;border-top:1px solid var(--border)}
 .mc-stats span{font-size:10.5px;color:var(--text-3)}
 .mc-stats b{display:block;font-size:16px;font-weight:800;color:var(--text);letter-spacing:-.02em}
@@ -1342,6 +1595,11 @@ a{color:inherit;text-decoration:none}
 .match-sig .ic{color:var(--text-4);flex:none}
 .rel-gap{display:flex;align-items:center;gap:8px;font-size:12px;color:#fbbf24;padding:10px 16px;
   background:rgba(245,158,11,.07);border:1px solid var(--border);border-radius:10px;margin-bottom:11px}
+.activity-note{display:flex;align-items:flex-start;gap:9px;font-size:12px;line-height:1.5;color:var(--text-2);
+  background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:12px;max-width:900px}
+.activity-note .ic{color:var(--text-4);flex:none;margin-top:1px}
+.motion-activity-timeline{background:var(--bg-1);border:1px solid var(--border);border-radius:12px;padding:14px 16px;max-width:900px}
+.motion-activity-timeline .tl{margin:0}
 .plan-list{display:flex;flex-direction:column;background:var(--bg-2);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:14px}
 .plan-row{display:flex;align-items:center;gap:11px;padding:11px 15px}
 .plan-row:not(:last-child){border-bottom:1px solid var(--border)}
@@ -1406,7 +1664,10 @@ a{color:inherit;text-decoration:none}
 .pr-grow:hover .pr-grow-go{color:var(--accent);transform:translateX(2px)}
 .pr-channels,.pr-grow-channels{display:inline-flex;align-items:center;gap:6px;flex:none}
 .pr-channel{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;
-  background:var(--bg-2);border:1px solid var(--border);color:var(--text-3)}
+  background:var(--bg-2);border:1px solid var(--border);color:var(--text-3);text-decoration:none;
+  transition:background .14s,border-color .14s,color .14s,transform .14s}
+.pr-channel:hover{background:var(--bg-3);border-color:var(--border-2);transform:translateY(-1px)}
+.pr-channel:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 58%,transparent);outline-offset:2px}
 .pr-channel .ic{color:inherit}
 .pr-channel-linkedin{color:#60a5fa}
 .pr-channel-email{color:#a78bfa}
@@ -1438,6 +1699,7 @@ a{color:inherit;text-decoration:none}
 .tl-bad .tl-outcome{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,transparent)}
 .tl-time{margin-left:auto;font-size:11px;color:var(--text-4);white-space:nowrap}
 .tl-detail{font-size:12.5px;color:var(--text-2);margin:3px 0 0;line-height:1.45}
+.tl-rationale strong{color:var(--text)}
 .tl-link{display:inline-flex;align-items:center;gap:4px;margin-top:5px;font-size:11px;color:var(--accent)}
 .tl-link:hover{text-decoration:underline}
 /* message timeline entries — the message body with a lifecycle status chip */
@@ -1446,6 +1708,9 @@ a{color:inherit;text-decoration:none}
   border-radius:5px;padding:1px 7px;border:1px solid var(--border-2);color:var(--text-3);background:var(--bg-2)}
 .tl-status-queued{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 38%,transparent);
   background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.tl-status-ready{color:#60a5fa;border-color:color-mix(in srgb,#60a5fa 38%,transparent);
+  background:color-mix(in srgb,#60a5fa 12%,transparent)}
+.tl-status-drafting{color:var(--text-2);border-color:var(--border-2);background:var(--bg-1)}
 .tl-status-sent{color:var(--green);border-color:color-mix(in srgb,var(--green) 38%,transparent);
   background:color-mix(in srgb,var(--green) 12%,transparent)}
 .tl-status-blocked{color:var(--red);border-color:color-mix(in srgb,var(--red) 38%,transparent);
@@ -1467,6 +1732,7 @@ a{color:inherit;text-decoration:none}
 .tl-add:hover{text-decoration:underline}
 .tl-add .ic{width:12px;height:12px}
 /* context slide-over premise */
+.sig-meta{font-size:11.5px;color:var(--text-4);line-height:1.45;margin:0}
 .ctx-premise{font-size:14px;line-height:1.5;font-weight:600;color:var(--text);margin:2px 0 0}
 
 /* ---------- company detail ---------- */
@@ -1488,14 +1754,16 @@ a{color:inherit;text-decoration:none}
 /* ---------- person detail ---------- */
 .person-detail{max-width:920px;scroll-margin-top:18px}
 .person-detail+.person-detail{margin-top:34px;padding-top:30px;border-top:1px solid var(--border)}
-.pd-head{display:flex;align-items:flex-start;gap:16px;margin-bottom:calc(20px * var(--space-scale))}
-.pd-id{flex:1;min-width:0}
+.pd-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:start;column-gap:16px;row-gap:11px;margin-bottom:calc(18px * var(--space-scale))}
+.pd-id{min-width:0}
 .pd-back{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-4);
   display:inline-flex;align-items:center;gap:5px;margin-bottom:9px}
 .pd-back:hover{color:var(--text-2)}
 .pd-name{font-size:22px;font-weight:700;letter-spacing:-.02em;color:var(--text)}
 .pd-title{font-size:13.5px;color:var(--text-2);margin-top:3px}
-.pd-meta{display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin-top:11px}
+.pd-rail{grid-column:2 / -1;display:flex;align-items:center;gap:11px;flex-wrap:wrap}
+.pd-rail .surface-ref{font-size:11px;color:var(--text-3)}
+.pd-rail .surface-ref .ic{color:var(--text-4)}
 .pd-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:0 0 18px}
 .pd-fact{display:flex;flex-direction:column;gap:6px;background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:13px 14px}
 .pd-fact-k{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3)}
@@ -1504,9 +1772,20 @@ a{color:inherit;text-decoration:none}
   padding:4px 11px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;transition:border-color .14s,color .14s}
 .pd-co-link .ic{color:var(--accent)}
 .pd-co-link:hover{border-color:var(--border-3);color:var(--text)}
+.pd-meta-link{color:var(--text-2)}
+.pd-meta-link:hover{color:var(--text)}
 .pd-div{width:1px;height:14px;background:var(--border-2)}
-.pd-actions{display:flex;align-items:center;gap:9px;flex:none}
+.pd-actions{display:flex;align-items:center;gap:9px;flex:none;justify-self:end}
+.next-alert{display:flex;align-items:flex-start;gap:9px;background:var(--bg-2);border:1px solid var(--border);
+  border-radius:12px;padding:11px 14px;margin:4px 0 18px}
+.next-alert>.ic{color:var(--accent);flex:none;margin-top:2px}
+.next-alert-copy{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 8px;min-width:0;font-size:13px;line-height:1.45;color:var(--text-2)}
+.next-alert-label{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-4);flex:none}
+.next-alert-copy strong{color:var(--text);font-weight:700}
+.next-alert-meta{font-size:11px;color:var(--text-4)}
 .pd-signal{max-width:none}
+.pd-next-card{padding:15px 18px}
+.pd-next-title{font-size:14px;font-weight:700;color:var(--text);margin:0 0 4px}
 .pd-premise{position:relative;overflow:hidden;
   background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 6%,var(--bg-2)),var(--bg-2));
   border:1px solid color-mix(in srgb,var(--accent) 26%,transparent);border-radius:var(--r-card);padding:17px 19px}
@@ -1531,6 +1810,7 @@ a{color:inherit;text-decoration:none}
 .exo-actions{display:flex;flex-direction:column;gap:8px;max-width:900px}
 .exo-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--bg-1);
   border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.exo-action-flat{background:transparent;border:none;border-radius:0;padding:0}
 .exo-cmd{font-family:var(--mono);font-size:11px;color:var(--text-3);background:var(--bg);border:1px solid var(--border);
   border-radius:6px;padding:5px 8px;overflow-x:auto;white-space:nowrap;flex:1;min-width:0}
 .exo-cmd::selection{background:color-mix(in srgb,var(--accent) 35%,transparent)}
@@ -1563,10 +1843,16 @@ a{color:inherit;text-decoration:none}
 .compose-actions{display:flex;align-items:center;gap:9px;margin-top:auto;padding-top:8px;border-top:1px solid var(--border)}
 .compose-empty{font-size:12px;color:var(--text-4);font-style:italic}
 .rehome-list{display:flex;flex-direction:column;gap:6px}
-.rehome-opt{display:flex;align-items:center;gap:10px;background:var(--bg-2);border:1px solid var(--border-2);
+.rehome-opt{display:flex;align-items:flex-start;gap:10px;background:var(--bg-2);border:1px solid var(--border-2);
   border-radius:9px;padding:10px 12px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-2)}
 .rehome-opt:hover{border-color:var(--border-3);color:var(--text)}
-.rehome-opt input{accent-color:var(--accent)}
+.rehome-opt input{accent-color:var(--accent);margin-top:2px;flex:none}
+.rehome-copy{display:flex;flex-direction:column;gap:7px;min-width:0}
+.rehome-detail{display:flex;flex-direction:column;gap:2px;min-width:0}
+.rehome-cap{font-family:var(--mono);font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-4)}
+.rehome-offer{font-size:13px;line-height:1.45;font-weight:700;color:var(--text)}
+.rehome-text{font-size:12px;line-height:1.45;font-weight:500;color:var(--text-2)}
+.rehome-code{font-family:var(--mono);font-size:11.5px;color:var(--text-3)}
 .cap-note{display:flex;align-items:flex-start;gap:9px;font-size:12px;line-height:1.5;color:var(--text-2);
   background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:9px;padding:11px 13px}
 .cap-note .ic{color:var(--amber);flex:none;margin-top:1px}
@@ -1580,7 +1866,7 @@ a{color:inherit;text-decoration:none}
   color:var(--text-2);background:var(--bg-2);border:1px solid var(--border-2);border-radius:6px;padding:2px 8px;cursor:default}
 .deg-chip.deg-1{color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent);border-color:color-mix(in srgb,var(--green) 32%,transparent)}
 .deg-chip.deg-1 .ic{color:var(--green)}
-.pl-degree{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--text-2);margin:-8px 0 16px;
+.pl-degree{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--text-2);margin:0 0 16px;
   padding:8px 11px;background:color-mix(in srgb,var(--green) 6%,var(--bg-2));border:1px solid var(--border);
   border-left:2px solid color-mix(in srgb,var(--green) 45%,transparent);border-radius:8px}
 .pl-degree .ic{color:var(--green);flex:none;margin-top:2px}
@@ -1588,9 +1874,11 @@ a{color:inherit;text-decoration:none}
 
 /* full-width detail pages */
 .canvas.is-detail .dom-wrap,
+.canvas.is-detail .company-detail,
 .canvas.is-detail .person-detail,
 .canvas.is-detail .motion-detail,
 .canvas.is-detail .exec-detail,
+.canvas.is-detail .exec-two,
 .canvas.is-detail .md-list,
 .canvas.is-detail .signal-card,
 .canvas.is-detail .pr-table{max-width:none}
@@ -1603,7 +1891,7 @@ a{color:inherit;text-decoration:none}
 .pd-assign .ic{color:var(--accent)}
 
 /* pipeline stepper */
-.pipeline{display:flex;align-items:flex-start;margin:6px 0 18px;max-width:820px}
+.pipeline{display:flex;align-items:flex-start;margin:6px 0 12px;max-width:820px}
 .pl-step{flex:1;display:flex;flex-direction:column;align-items:center;gap:7px;position:relative}
 .pl-step::before{content:"";position:absolute;top:10px;right:50%;width:100%;height:2px;background:var(--border-2)}
 .pl-step:first-child::before{display:none}
@@ -1651,7 +1939,7 @@ body.exo-server-down .exo-action button{cursor:not-allowed;opacity:.55}
 .ws-panel-head .ic{color:var(--text-3)}
 .ws-panel-head h3{font-size:13.5px;font-weight:700;flex:1}
 .ws-head-right{display:flex;gap:6px;margin-left:auto}
-.user-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;max-width:1000px}
+.user-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;max-width:1000px}
 .user-card{display:flex;align-items:center;gap:13px;background:var(--bg-2);border:1px solid var(--border);border-radius:13px;
   padding:15px;cursor:pointer;text-align:left;transition:border-color .14s,background .14s}
 .user-card:hover{border-color:var(--border-3);background:var(--bg-3)}
@@ -1694,6 +1982,23 @@ body.exo-server-down .exo-action button{cursor:not-allowed;opacity:.55}
   border-radius:8px;padding:5px 10px;font-size:11.5px;font-weight:600;color:var(--text-2)}
 .cap-pill .truth-tag{margin-left:2px}
 .exec-working{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-3);font-family:var(--mono)}
+.settings-page{max-width:1120px}
+.exec-policy-card{margin-bottom:16px;max-width:1120px}
+.exec-policy-lead{font-size:12px;line-height:1.5;color:var(--text-2);margin:0 0 14px;max-width:760px}
+.exec-policy-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.exec-policy-lane{background:var(--bg-2);border:1px solid var(--border);border-radius:11px;padding:12px}
+.exec-policy-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.exec-policy-head h4{font-size:12px;font-weight:700;color:var(--text)}
+.exec-policy-head span{font-size:10.5px;color:var(--text-4);font-family:var(--mono);text-transform:uppercase;letter-spacing:.08em}
+.exec-policy-rows{display:flex;flex-direction:column;gap:0}
+.exec-policy-row,.exec-policy-toggle{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid var(--border)}
+.exec-policy-row:first-child,.exec-policy-toggle:first-child{border-top:none;padding-top:0}
+.exec-policy-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.exec-policy-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;font-weight:700;color:var(--text)}
+.exec-policy-sub{font-size:10px;line-height:1.35;color:var(--text-4);font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase}
+.exec-policy-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:nowrap}
+.exec-policy-rules{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+.exec-policy-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px;font-size:10.5px;color:var(--text-4);font-family:var(--mono)}
 
 /* ---------- connections / inbound truth ---------- */
 .conn-main{background:var(--bg-1);border:1px solid var(--border);border-radius:13px;overflow:hidden;max-width:1060px}
@@ -1720,6 +2025,11 @@ body.exo-server-down .exo-action button{cursor:not-allowed;opacity:.55}
   border-bottom:1px solid var(--border);background:var(--bg-2)}
 .rel-fresh-l{display:flex;align-items:center;gap:13px}
 .rel-fresh-title{font-size:13px;font-weight:700}
+.sent-filter-bar{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--border);background:var(--bg-1);flex-wrap:wrap}
+.sent-filter{display:inline-flex;align-items:center;gap:7px;background:var(--bg-2);border:1px solid var(--border);border-radius:999px;
+  padding:6px 11px;font-size:11.5px;font-weight:600;color:var(--text-3);cursor:pointer}
+.sent-filter:hover{background:var(--bg-3);color:var(--text-2)}
+.sent-filter span{font-family:var(--mono);font-size:10.5px;color:var(--text-4)}
 .rel-list{display:flex;flex-direction:column}
 .rel-panel{display:none}
 .person-row{display:flex;align-items:center;gap:13px;padding:13px 16px;border-bottom:1px solid var(--border)}
@@ -1736,6 +2046,12 @@ a.person-link:hover{color:var(--accent)}
 .person-co.dim{color:var(--text-4)}
 .person-when{font-family:var(--mono);font-size:11px;color:var(--text-3);flex:none;width:64px;text-align:right}
 .person-actions{display:flex;align-items:center;gap:7px;flex:none}
+.row-status{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;border-radius:7px;padding:4px 10px;
+  border:1px solid transparent;white-space:nowrap}
+.row-status-stale{color:var(--amber);background:color-mix(in srgb,var(--amber) 11%,transparent);
+  border-color:color-mix(in srgb,var(--amber) 28%,transparent)}
+.row-status-queued{color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent);
+  border-color:color-mix(in srgb,var(--accent) 25%,transparent)}
 .row-accepted{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:var(--green);
   background:color-mix(in srgb,var(--green) 12%,transparent);border:1px solid color-mix(in srgb,var(--green) 32%,transparent);
   border-radius:7px;padding:4px 10px}
@@ -1761,10 +2077,18 @@ a.person-link:hover{color:var(--accent)}
 #cn-following:checked~.dom-wrap label.rel-tab[for=cn-following] .rel-tab-n,
 #cn-followers:checked~.dom-wrap label.rel-tab[for=cn-followers] .rel-tab-n,
 #cn-views:checked~.dom-wrap label.rel-tab[for=cn-views] .rel-tab-n{color:var(--text);background:color-mix(in srgb,var(--accent) 22%,transparent)}
+#cn-sent-filter-all:checked~.dom-wrap .sent-filter[for=cn-sent-filter-all],
+#cn-sent-filter-stale:checked~.dom-wrap .sent-filter[for=cn-sent-filter-stale],
+#cn-sent-filter-fresh:checked~.dom-wrap .sent-filter[for=cn-sent-filter-fresh]{color:var(--text);border-color:color-mix(in srgb,var(--accent) 35%,transparent);
+  background:color-mix(in srgb,var(--accent) 12%,var(--bg-2))}
+#cn-sent-filter-all:checked~.dom-wrap .sent-filter[for=cn-sent-filter-all] span,
+#cn-sent-filter-stale:checked~.dom-wrap .sent-filter[for=cn-sent-filter-stale] span,
+#cn-sent-filter-fresh:checked~.dom-wrap .sent-filter[for=cn-sent-filter-fresh] span{color:var(--text-2)}
+#cn-sent-filter-stale:checked~.dom-wrap .rp-sent .person-row[data-sent-group="fresh"],
+#cn-sent-filter-fresh:checked~.dom-wrap .rp-sent .person-row[data-sent-group="stale"]{display:none}
 .fresh-chip.tgt-on{border-color:color-mix(in srgb,var(--accent) 45%,transparent);background:color-mix(in srgb,var(--accent) 9%,var(--bg-2))}
 
 /* ---------- workspace rollup ---------- */
-.ws-wrap{max-width:1240px}
 .ws-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
 .stat-tile{background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:14px 15px}
 .stat-label{font-size:13px;font-weight:700}
@@ -1800,41 +2124,74 @@ a.person-link:hover{color:var(--accent)}
 .ws-surface:last-child{border-bottom:none}
 .wsf-name{font-size:12.5px;font-weight:600;color:var(--text)}
 .wsf-note{grid-column:1/-1;font-size:11px;color:var(--text-3)}
+.ws-gaps{display:flex;flex-direction:column}
+.ws-gap{padding:11px 0;border-bottom:1px solid var(--border)}
+.ws-gap:last-child{border-bottom:none;padding-bottom:0}
+.ws-gap-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.ws-gap-stats{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
+.ws-gap-note,.ws-gap-action{font-size:11.5px;line-height:1.45;color:var(--text-3);margin-top:8px}
+.ws-gap-action{color:var(--text-2)}
 .ws-accounts{display:flex;flex-direction:column}
 .ws-account{display:flex;align-items:center;gap:11px;padding:9px 0;border-bottom:1px solid var(--border)}
 .ws-account:last-child{border-bottom:none}
 .ws-cap-note{display:flex;align-items:center;gap:7px;font-size:11.5px;color:#fbbf24;margin-top:11px;
   padding-top:11px;border-top:1px solid var(--border)}
 @media (max-width:1100px){.ws-grid{grid-template-columns:1fr 1fr}.ws-stats{grid-template-columns:1fr 1fr}.ws-panel.span-2{grid-column:span 2}}
+@media (max-width:980px){.pd-head{grid-template-columns:auto minmax(0,1fr)}.pd-actions{grid-column:2/-1;justify-self:start;flex-wrap:wrap}.pd-rail{grid-column:1/-1}.exec-policy-grid,.exec-policy-rules{grid-template-columns:1fr}.exec-policy-row,.exec-policy-toggle{align-items:flex-start;flex-direction:column}.exec-policy-actions{justify-content:flex-start;flex-wrap:wrap}}
 `;
 
 /**
  * Render a complete <html>…</html> shell.
  *
- * @param {{ title: string, activeId: string, sectionLabel: string, detailLabel?: string | null, body: string, extraCss?: string | null, extraJs?: string | null, interactive?: boolean, detail?: boolean, agentRuntime?: any }} opts
+ * @param {{
+ *   title: string,
+ *   activeId: string,
+ *   sectionLabel: string,
+ *   detailLabel?: string | null,
+ *   body: string,
+ *   extraCss?: string | null,
+ *   extraJs?: string | null,
+ *   interactive?: boolean,
+ *   detail?: boolean,
+ *   agentRuntime?: any,
+ *   sectionHref?: string | null,
+ *   search?: {
+ *     action: string,
+ *     query?: string | null,
+ *     placeholder?: string | null,
+ *     paramName?: string | null,
+ *     ariaLabel?: string | null,
+ *     clearHref?: string | null,
+ *   } | null,
+ * }} opts
  */
 export function renderShell(opts) {
   // A detail page (single record) drops the search/raised chrome and uses the
   // full canvas width.
   const canvasClass = opts.detail ? "canvas is-detail" : "canvas";
+  const bodyClass = `view-${opts.activeId} ${opts.detail ? "is-detail-route" : "is-index-route"}`;
   return (
     `<!DOCTYPE html><html lang="en"><head>` +
     `<meta charset="UTF-8">` +
     `<meta name="viewport" content="width=device-width, initial-scale=1.0">` +
+    `<meta name="theme-color" content="#0f172a">` +
     `<title>${escapeHtml(opts.title)}</title>` +
+    `<link rel="icon" type="image/svg+xml" href="${EXO_FAVICON_DATA_URL}">` +
     FONTS_LINK +
     `<style>${EXO_UI_CSS}${opts.extraCss ?? ""}</style>` +
-    `</head><body>` +
+    `</head><body class="${bodyClass}">` +
     `<div class="exo-root">` +
-    navAside({ activeId: opts.activeId, interactive: opts.interactive }) +
+    navAside({ activeId: opts.activeId, interactive: opts.interactive, nav: opts.agentRuntime?.nav ?? null }) +
     `<div class="main">` +
     topbar({
       sectionLabel: opts.sectionLabel,
       detailLabel: opts.detailLabel ?? null,
       interactive: opts.interactive,
       sectionId: opts.activeId,
+      sectionHref: opts.sectionHref ?? null,
       minimalChrome: Boolean(opts.detail),
       agentRuntime: opts.agentRuntime ?? null,
+      search: opts.search ?? null,
     }) +
     `<main class="${canvasClass}">${opts.body}</main>` +
     `</div></div>` +

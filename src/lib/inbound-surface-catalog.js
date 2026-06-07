@@ -23,10 +23,14 @@ import {
  *   defaultEnabled: boolean,
  *   autonomousBackgroundRetrieval: boolean,
  *   autonomousBackgroundReason: string | null,
+ *   automationCadenceMs: number | null,
  *   observationKinds: string[],
  *   toolMethodId: string | null
  * }} InboundSurfaceDefinition
  */
+
+const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /** @type {InboundSurfaceDefinition[]} */
 const catalog = [
@@ -37,15 +41,17 @@ const catalog = [
     label: "Sent Invitations",
     summary: "Outgoing connection requests plus their pending, accepted, or withdrawn outcomes.",
     truthLevel: "authoritative",
-    retrievalMode: "browser-capture",
+    retrievalMode: "connector",
     defaultEnabled: true,
     autonomousBackgroundRetrieval: true,
     autonomousBackgroundReason: null,
+    automationCadenceMs: SIX_HOURS_MS,
     toolMethodId: LINKEDIN_SYNC_SENT_INVITATIONS_METHOD,
     observationKinds: [
       "connection_request_pending",
       "connection_request_no_longer_pending",
       "connection_request_accepted",
+      "connection_request_withdraw_requested",
       "connection_request_withdrawn"
     ]
   },
@@ -56,10 +62,11 @@ const catalog = [
     label: "Received Invitations",
     summary: "Inbound connection requests waiting for accept or decline handling.",
     truthLevel: "authoritative",
-    retrievalMode: "browser-capture",
+    retrievalMode: "connector",
     defaultEnabled: true,
     autonomousBackgroundRetrieval: true,
     autonomousBackgroundReason: null,
+    automationCadenceMs: SIX_HOURS_MS,
     toolMethodId: LINKEDIN_SYNC_RECEIVED_INVITATIONS_METHOD,
     observationKinds: [
       "connection_request_received",
@@ -76,10 +83,11 @@ const catalog = [
     label: "Messaging Inbox",
     summary: "Inbox threads and direct-message changes tied to governed prospects.",
     truthLevel: "authoritative",
-    retrievalMode: "browser-capture",
+    retrievalMode: "connector",
     defaultEnabled: true,
     autonomousBackgroundRetrieval: true,
     autonomousBackgroundReason: null,
+    automationCadenceMs: SIX_HOURS_MS,
     toolMethodId: null,
     observationKinds: ["message_received", "thread_updated", "inbound_reply_received"]
   },
@@ -90,10 +98,11 @@ const catalog = [
     label: "Profile Views",
     summary: "Profile viewers after touches, used as a signal that attention happened even without acceptance.",
     truthLevel: "authoritative",
-    retrievalMode: "browser-capture",
+    retrievalMode: "connector",
     defaultEnabled: true,
     autonomousBackgroundRetrieval: true,
     autonomousBackgroundReason: null,
+    automationCadenceMs: ONE_DAY_MS,
     toolMethodId: null,
     observationKinds: ["profile_view_after_touch", "profile_view_received"]
   },
@@ -104,10 +113,11 @@ const catalog = [
     label: "Followers",
     summary: "Who follows us, used as an inbound attention signal without pretending it proves connection state.",
     truthLevel: "supplementary",
-    retrievalMode: "browser-capture",
+    retrievalMode: "connector",
     defaultEnabled: true,
     autonomousBackgroundRetrieval: true,
     autonomousBackgroundReason: null,
+    automationCadenceMs: ONE_DAY_MS,
     toolMethodId: null,
     observationKinds: ["follower_added", "follower_removed", "follower_confirmed"]
   },
@@ -118,10 +128,11 @@ const catalog = [
     label: "Following List",
     summary: "Follow-state truth for warmup actions and clean reversals.",
     truthLevel: "authoritative",
-    retrievalMode: "browser-capture",
+    retrievalMode: "connector",
     defaultEnabled: true,
     autonomousBackgroundRetrieval: true,
     autonomousBackgroundReason: null,
+    automationCadenceMs: ONE_DAY_MS,
     toolMethodId: null,
     observationKinds: ["follow_state_changed", "follow_state_removed", "follow_state_confirmed"]
   },
@@ -136,6 +147,7 @@ const catalog = [
     defaultEnabled: false,
     autonomousBackgroundRetrieval: false,
     autonomousBackgroundReason: "This surface is not yet wired through Exo's autonomous LinkedIn live-capture path.",
+    automationCadenceMs: null,
     toolMethodId: null,
     observationKinds: ["public_reply_received", "comment_thread_updated"]
   },
@@ -150,6 +162,7 @@ const catalog = [
     defaultEnabled: false,
     autonomousBackgroundRetrieval: false,
     autonomousBackgroundReason: "This surface is not yet wired through Exo's autonomous LinkedIn live-capture path.",
+    automationCadenceMs: null,
     toolMethodId: null,
     observationKinds: ["catch_up_update_detected", "public_engagement_opportunity"]
   },
@@ -164,6 +177,7 @@ const catalog = [
     defaultEnabled: true,
     autonomousBackgroundRetrieval: true,
     autonomousBackgroundReason: null,
+    automationCadenceMs: SIX_HOURS_MS,
     toolMethodId: null,
     observationKinds: ["email_reply_received", "email_thread_updated"]
   }
@@ -172,6 +186,9 @@ const catalog = [
   autonomousBackgroundRetrieval: surface.autonomousBackgroundRetrieval !== false,
   autonomousBackgroundReason: typeof surface.autonomousBackgroundReason === "string" && surface.autonomousBackgroundReason.trim().length
     ? surface.autonomousBackgroundReason.trim()
+    : null,
+  automationCadenceMs: Number.isInteger(surface.automationCadenceMs) && surface.automationCadenceMs > 0
+    ? surface.automationCadenceMs
     : null,
   toolMethodId: typeof surface.toolMethodId === "string" && surface.toolMethodId.trim().length
     ? surface.toolMethodId.trim()

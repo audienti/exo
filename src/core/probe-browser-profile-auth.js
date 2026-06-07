@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveCodexCliCommand } from "../lib/codex-cli.js";
 import {
   browserProfileAuthProbeResultSchema,
   browserProfileCapabilitySchema,
@@ -114,7 +115,7 @@ export async function probeBrowserProfileAuth(rawProfile, input) {
         runtime,
         profile,
         capabilities,
-        codexCli: input.codexCli ?? normalizeNullableString(process.env.EXO_CODEX_CLI) ?? "codex",
+        codexCli: resolveCodexCliCommand({ codexCli: input.codexCli ?? null }),
         codexHome: input.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
         claudeCli: input.claudeCli ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI) ?? "claude"
       });

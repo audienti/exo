@@ -5,6 +5,7 @@ import { buildInboxView } from "./build-inbox-view.js";
 import { matchesAnyInboundIgnoreRule } from "./inbound-ignore-rules.js";
 import {
   buildInboundObservationIdentityKeys,
+  inboundObservationsShareIdentity,
   mergeInboundObservation,
   recordInboundObservation
 } from "./inbound-observations.js";
@@ -27,6 +28,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
   const processedAt = new Date().toISOString();
   const seenAccountIds = new Set();
   const observationDraftsByDedupeKey = new Map();
+  const companyEnrichmentDraftsByDedupeKey = new Map();
   const existingObservations = (options.rawExistingObservations ?? []).map((item) => inboundObservationSchema.parse(item));
   let updatedUser = user;
 
@@ -73,8 +75,13 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         throw new Error(`Failed inbound sync surfaces cannot include observations: ${surfaceInput.surfaceKey}`);
       }
 
+      const priorSurfaceState = account.inboundSync?.surfaces?.find(
+        (surface) => surface.surfaceKey === surfaceInput.surfaceKey
+      ) ?? null;
+      const visibleTotalCount = surfaceInput.visibleTotalCount ?? null;
+      const exhaustionStatus = normalizeExhaustionStatus(surfaceInput);
       const rawPreparedObservations = surfaceInput.observations.map((observationInput) => {
-        return recordInboundObservation(updatedUser, {
+        const observation = recordInboundObservation(updatedUser, {
           accountId: account.id,
           surfaceKey: surfaceInput.surfaceKey,
           kind: observationInput.kind,
@@ -96,30 +103,56 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
           motionId: observationInput.motionId,
           companyId: observationInput.companyId,
           prospectId: observationInput.prospectId,
+          providerSharedSecret: observationInput.providerSharedSecret,
           notes: observationInput.notes,
           messages: observationInput.messages
         }, {
           rawMotions: options.rawMotions
         });
+        const existingCompanyEnrichment = companyEnrichmentDraftsByDedupeKey.get(observation.dedupeKey) ?? null;
+        companyEnrichmentDraftsByDedupeKey.set(
+          observation.dedupeKey,
+          mergeInboundObservationCompanyProfile(existingCompanyEnrichment, observationInput.actorCompanyProfile),
+        );
+        return observation;
       });
-      const preparedObservations = rawPreparedObservations.filter((observation) => !matchesAnyInboundIgnoreRule(updatedUser, observation));
-      const ignoredObservationCount = rawPreparedObservations.length - preparedObservations.length;
-      for (const observation of preparedObservations) {
+      const candidateCurrentObservations = buildContinuationAwareCurrentObservations({
+        accountId: account.id,
+        surfaceKey: surfaceInput.surfaceKey,
+        surfaceStatus: surfaceInput.status,
+        captureCompleteness: surfaceInput.captureCompleteness ?? null,
+        exhaustionStatus,
+        priorSurfaceState,
+        currentObservations: rawPreparedObservations,
+        rawExistingObservations: existingObservations,
+      });
+      const currentObservations = promoteCurrentSurfaceDeltaObservations({
+        rawUser: updatedUser,
+        rawMotions: options.rawMotions ?? [],
+        rawExistingObservations: existingObservations,
+        accountId: account.id,
+        surfaceKey: surfaceInput.surfaceKey,
+        surfaceStatus: surfaceInput.status,
+        captureCompleteness: surfaceInput.captureCompleteness ?? null,
+        exhaustionStatus,
+        priorSurfaceState,
+        currentObservations: candidateCurrentObservations.filter((observation) => !matchesAnyInboundIgnoreRule(updatedUser, observation))
+      });
+      const ignoredObservationCount = Math.max(0, candidateCurrentObservations.length - currentObservations.length);
+      for (const observation of currentObservations) {
         const existingDraft = observationDraftsByDedupeKey.get(observation.dedupeKey) ?? null;
         observationDraftsByDedupeKey.set(observation.dedupeKey, mergeInboundObservation(existingDraft, observation));
       }
 
       const derivedItemCount = surfaceInput.status === "failed"
         ? surfaceInput.itemCount
-        : surfaceInput.itemCount ?? preparedObservations.length;
-      const visibleTotalCount = surfaceInput.visibleTotalCount ?? null;
-      const exhaustionStatus = normalizeExhaustionStatus(surfaceInput);
+        : Math.max(surfaceInput.itemCount ?? 0, currentObservations.length);
       const countDiscrepancyCount = Math.max((visibleTotalCount ?? derivedItemCount ?? 0) - (derivedItemCount ?? 0), 0);
       const surfaceDefinition = findInboundSurfaceDefinition(surfaceInput.surfaceKey);
       const isAuthoritative = surfaceDefinition?.truthLevel === "authoritative";
-      if (derivedItemCount !== null && derivedItemCount < preparedObservations.length) {
+      if (derivedItemCount !== null && derivedItemCount < currentObservations.length) {
         throw new Error(
-          `Inbound sync surface ${surfaceInput.surfaceKey} reported ${derivedItemCount} items but included ${preparedObservations.length} observations.`
+          `Inbound sync surface ${surfaceInput.surfaceKey} reported ${derivedItemCount} items but included ${currentObservations.length} observations.`
         );
       }
 
@@ -172,7 +205,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         }
       }
 
-      const newestObservationAt = newestObservedAt(preparedObservations);
+      const newestObservationAt = newestObservedAt(currentObservations);
       const observedAt = newestIsoDatetime(surfaceInput.observedAt, newestObservationAt);
       const reportedCount = visibleTotalCount ?? derivedItemCount;
       if (surfaceInput.status !== "failed" && reportedCount && reportedCount > 0 && !observedAt) {
@@ -189,7 +222,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         captureCompleteness: surfaceInput.captureCompleteness ?? null,
         exhaustionStatus,
         observedAt: observedAt ?? processedAt,
-        currentObservations: preparedObservations
+        currentObservations
       });
       const derivedDeltaObservations = rawDerivedDeltaObservations.filter(
         (observation) => !matchesAnyInboundIgnoreRule(updatedUser, observation),
@@ -202,7 +235,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
 
       const itemizationGapCount = exhaustionStatus === "complete"
         ? 0
-        : Math.max(0, (visibleTotalCount ?? derivedItemCount ?? 0) - preparedObservations.length - ignoredObservationCount);
+        : Math.max(0, (visibleTotalCount ?? derivedItemCount ?? 0) - currentObservations.length - ignoredObservationCount);
 
       updatedUser = recordUserInboundSyncRun(updatedUser, {
         accountId: account.id,
@@ -221,7 +254,10 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         paginationAttempted: surfaceInput.paginationAttempted,
         terminalSignalSeen: surfaceInput.terminalSignalSeen,
         stalledPassCount: surfaceInput.stalledPassCount,
-        observationCount: preparedObservations.length,
+        continuationStartedAt: surfaceInput.continuationStartedAt,
+        nextCursor: surfaceInput.nextCursor,
+        nextStartOffset: surfaceInput.nextStartOffset,
+        observationCount: currentObservations.length,
         itemizationGapCount,
         countDiscrepancyCount,
         error: surfaceInput.error
@@ -243,8 +279,11 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
         paginationAttempted: surfaceInput.paginationAttempted,
         terminalSignalSeen: surfaceInput.terminalSignalSeen,
         stalledPassCount: surfaceInput.stalledPassCount,
+        continuationStartedAt: surfaceInput.continuationStartedAt,
+        nextCursor: surfaceInput.nextCursor,
+        nextStartOffset: surfaceInput.nextStartOffset,
         error: surfaceInput.error,
-        observationCount: preparedObservations.length,
+        observationCount: currentObservations.length,
         itemizationGapCount,
         countDiscrepancyCount
       };
@@ -264,6 +303,12 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
   });
 
   const observationDrafts = [...observationDraftsByDedupeKey.values()];
+  const companyEnrichments = [...companyEnrichmentDraftsByDedupeKey.entries()]
+    .filter(([, companyProfile]) => companyProfile)
+    .map(([dedupeKey, companyProfile]) => ({
+      dedupeKey,
+      companyProfile
+    }));
 
   return {
     user: {
@@ -300,8 +345,32 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
       `exo next --user ${updatedUser.id} --json`
     ],
     accounts,
+    companyEnrichments,
     observations: observationDrafts,
     updatedUser
+  };
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationCompanyProfileSchema._type | null | undefined} left
+ * @param {import("../schema/inbound.js").inboundObservationCompanyProfileSchema._type | null | undefined} right
+ */
+function mergeInboundObservationCompanyProfile(left, right) {
+  if (!left && !right) {
+    return null;
+  }
+  if (!left) {
+    return right ?? null;
+  }
+  if (!right) {
+    return left;
+  }
+  return {
+    name: right.name ?? left.name,
+    domain: right.domain ?? left.domain,
+    websiteUrl: right.websiteUrl ?? left.websiteUrl,
+    linkedinCompanyUrl: right.linkedinCompanyUrl ?? left.linkedinCompanyUrl,
+    logoSourceUrl: right.logoSourceUrl ?? left.logoSourceUrl,
   };
 }
 
@@ -369,6 +438,126 @@ export function buildInboundSyncRefreshSummary(input) {
       status: next.status
     }
   };
+}
+
+/**
+ * @param {{
+ *   accountId: string,
+ *   surfaceKey: string,
+ *   surfaceStatus: "success" | "warning" | "failed",
+ *   captureCompleteness: import("../schema/inbound.js").inboundCaptureCompletenessSchema._type | null,
+ *   exhaustionStatus: import("../schema/inbound.js").inboundSurfaceExhaustionStatusSchema._type,
+ *   priorSurfaceState: import("../schema/inbound.js").inboundSurfaceStateSchema._type | null,
+ *   currentObservations: import("../schema/inbound.js").inboundObservationSchema._type[],
+ *   rawExistingObservations: import("../schema/inbound.js").inboundObservationSchema._type[],
+ * }} input
+ */
+function buildContinuationAwareCurrentObservations(input) {
+  const continuationStartedAt = normalizeNullableString(input.priorSurfaceState?.continuationStartedAt);
+  if (
+    input.surfaceStatus === "failed"
+    || !continuationStartedAt
+    || !surfaceHasPendingContinuation(input.priorSurfaceState)
+  ) {
+    return input.currentObservations;
+  }
+
+  const carryforwardKinds = resolveContinuationCarryforwardKinds(input.surfaceKey);
+  if (!carryforwardKinds.length) {
+    return input.currentObservations;
+  }
+
+  const mergedByDedupeKey = new Map();
+  for (const observation of input.rawExistingObservations) {
+    if (
+      observation.accountId !== input.accountId
+      || observation.surfaceKey !== input.surfaceKey
+      || !carryforwardKinds.includes(observation.kind)
+      || observation.observedAt < continuationStartedAt
+    ) {
+      continue;
+    }
+    mergedByDedupeKey.set(observation.dedupeKey, mergeInboundObservation(mergedByDedupeKey.get(observation.dedupeKey) ?? null, observation));
+  }
+
+  for (const observation of input.currentObservations) {
+    mergedByDedupeKey.set(observation.dedupeKey, mergeInboundObservation(mergedByDedupeKey.get(observation.dedupeKey) ?? null, observation));
+  }
+
+  return [...mergedByDedupeKey.values()];
+}
+
+/**
+ * @param {{
+ *   rawUser: unknown,
+ *   rawMotions: unknown[],
+ *   rawExistingObservations: import("../schema/inbound.js").inboundObservationSchema._type[],
+ *   accountId: string,
+ *   surfaceKey: string,
+ *   surfaceStatus: "success" | "warning" | "failed",
+ *   captureCompleteness: import("../schema/inbound.js").inboundCaptureCompletenessSchema._type | null,
+ *   exhaustionStatus: import("../schema/inbound.js").inboundSurfaceExhaustionStatusSchema._type,
+ *   priorSurfaceState: import("../schema/inbound.js").inboundSurfaceStateSchema._type | null,
+ *   currentObservations: import("../schema/inbound.js").inboundObservationSchema._type[]
+ * }} input
+ */
+function promoteCurrentSurfaceDeltaObservations(input) {
+  if (input.surfaceStatus === "failed" || input.captureCompleteness !== "complete" || input.exhaustionStatus !== "complete") {
+    return input.currentObservations;
+  }
+
+  const promotionDefinition = additiveObservationDefinitionBySurfaceKey[input.surfaceKey] ?? null;
+  if (!promotionDefinition || !surfaceStateHasCompleteBaseline(input.priorSurfaceState)) {
+    return input.currentObservations;
+  }
+
+  return input.currentObservations.map((observation) => {
+    if (observation.kind !== promotionDefinition.steadyKind || !buildObservationHasReconcilableIdentity(observation)) {
+      return observation;
+    }
+
+    const latestMatchingObservation = input.rawExistingObservations
+      .filter((candidate) =>
+        candidate.accountId === input.accountId
+        && candidate.surfaceKey === input.surfaceKey
+        && promotionDefinition.relevantKinds.includes(candidate.kind)
+        && buildObservationHasReconcilableIdentity(candidate)
+        && inboundObservationsShareIdentity(candidate, observation)
+      )
+      .reduce(chooseMoreRecentObservation, null);
+
+    if (latestMatchingObservation && promotionDefinition.presentKinds.includes(latestMatchingObservation.kind)) {
+      return observation;
+    }
+
+    return recordInboundObservation(input.rawUser, {
+      accountId: observation.accountId,
+      surfaceKey: observation.surfaceKey,
+      kind: promotionDefinition.deltaKind,
+      observedAt: observation.observedAt,
+      eventAt: observation.eventAt,
+      summary: promotionDefinition.buildSummary(observation),
+      externalId: observation.externalId,
+      actorName: observation.actorName,
+      actorTitle: observation.actorTitle,
+      actorCompanyName: observation.actorCompanyName,
+      actorHandle: observation.actorHandle,
+      actorProfileUrl: observation.actorProfileUrl,
+      actorLinkedinPublicId: observation.actorLinkedinPublicId,
+      actorLinkedinMemberId: observation.actorLinkedinMemberId,
+      actorAvatarSourceUrl: observation.actorAvatarSourceUrl,
+      threadUrl: observation.threadUrl,
+      sourceUrl: observation.sourceUrl,
+      subject: observation.subject,
+      motionId: observation.motionId,
+      companyId: observation.companyId,
+      prospectId: observation.prospectId,
+      notes: promotionDefinition.notes,
+      messages: observation.messages
+    }, {
+      rawMotions: input.rawMotions
+    });
+  });
 }
 
 /**
@@ -444,6 +633,31 @@ function deriveReconciledSurfaceDeltaObservations(input) {
 }
 
 /**
+ * @param {import("../schema/inbound.js").inboundSurfaceStateSchema._type | null} surfaceState
+ */
+function surfaceHasPendingContinuation(surfaceState) {
+  if (!surfaceState) {
+    return false;
+  }
+
+  return normalizeNullableString(surfaceState.nextCursor) !== null
+    || (Number.isInteger(surfaceState.nextStartOffset) && surfaceState.nextStartOffset >= 0);
+}
+
+/**
+ * @param {string} surfaceKey
+ */
+function resolveContinuationCarryforwardKinds(surfaceKey) {
+  const additiveDefinition = additiveObservationDefinitionBySurfaceKey[surfaceKey] ?? null;
+  if (Array.isArray(additiveDefinition?.presentKinds) && additiveDefinition.presentKinds.length) {
+    return additiveDefinition.presentKinds;
+  }
+
+  const deltaDefinition = deltaObservationDefinitionBySurfaceKey[surfaceKey] ?? null;
+  return Array.isArray(deltaDefinition?.previousKinds) ? deltaDefinition.previousKinds : [];
+}
+
+/**
  * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
  */
 function buildObservationHasReconcilableIdentity(observation) {
@@ -500,6 +714,62 @@ const deltaObservationDefinitionBySurfaceKey = {
   }
 };
 
+const additiveObservationDefinitionBySurfaceKey = {
+  "linkedin-followers-list": {
+    steadyKind: "follower_confirmed",
+    deltaKind: "follower_added",
+    presentKinds: ["follower_added", "follower_confirmed"],
+    relevantKinds: ["follower_added", "follower_confirmed", "follower_removed"],
+    notes: "Derived from a complete followers reconciliation pass against the prior complete snapshot.",
+    buildSummary: (observation) => `${observation.actorName ?? "A follower"} newly appeared in the live followers list.`
+  },
+  "linkedin-following-list": {
+    steadyKind: "follow_state_confirmed",
+    deltaKind: "follow_state_changed",
+    presentKinds: ["follow_state_changed", "follow_state_confirmed"],
+    relevantKinds: ["follow_state_changed", "follow_state_confirmed", "follow_state_removed"],
+    notes: "Derived from a complete following-list reconciliation pass against the prior complete snapshot.",
+    buildSummary: (observation) => `${observation.actorName ?? "A followed profile"} newly appeared in the live following list.`
+  }
+};
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type | null} left
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} right
+ */
+function chooseMoreRecentObservation(left, right) {
+  if (!left) {
+    return right;
+  }
+
+  const leftObservedAt = left.observedAt ?? "";
+  const rightObservedAt = right.observedAt ?? "";
+  if (rightObservedAt > leftObservedAt) {
+    return right;
+  }
+
+  if (rightObservedAt < leftObservedAt) {
+    return left;
+  }
+
+  return (right.recordedAt ?? "") > (left.recordedAt ?? "")
+    ? right
+    : left;
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundSurfaceStateSchema._type | null} surfaceState
+ */
+function surfaceStateHasCompleteBaseline(surfaceState) {
+  if (!surfaceState) {
+    return false;
+  }
+
+  return surfaceState.lastCaptureCompleteness === "complete"
+    && surfaceState.lastExhaustionStatus === "complete"
+    && surfaceState.lastRunStatus !== "never";
+}
+
 /**
  * @param {string | null} left
  * @param {string | null} right
@@ -514,6 +784,18 @@ function newestIsoDatetime(left, right) {
   }
 
   return left >= right ? left : right;
+}
+
+/**
+ * @param {string | null | undefined} value
+ */
+function normalizeNullableString(value) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
 }
 
 /**

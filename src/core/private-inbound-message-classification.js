@@ -1,6 +1,6 @@
 // @ts-check
 
-import { isSendableDraftStatus } from "../lib/draft-policy.js";
+import { isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
 
 const PRIVATE_INBOUND_MESSAGE_KINDS = new Set([
   "inbound_reply_received",
@@ -61,7 +61,7 @@ export function classifyPrivateInboundMessage(input) {
  *
  * @param {any} observation
  * @param {any | null | undefined} prospect
- * @returns {"open" | "queued" | "sent" | "blocked" | "not_private_inbound"}
+ * @returns {"open" | "ready" | "queued" | "sent" | "blocked" | "not_private_inbound"}
  */
 export function classifyPrivateInboundResponseState(observation, prospect) {
   return describePrivateInboundResponse(observation, prospect).state;
@@ -71,7 +71,7 @@ export function classifyPrivateInboundResponseState(observation, prospect) {
  * @param {any} observation
  * @param {any | null | undefined} prospect
  * @returns {{
- *   state: "open" | "queued" | "sent" | "blocked" | "not_private_inbound",
+ *   state: "open" | "ready" | "queued" | "sent" | "blocked" | "not_private_inbound",
  *   draft?: any,
  *   touch?: any,
  *   surface?: "email" | "inbound_reply",
@@ -112,11 +112,20 @@ export function describePrivateInboundResponse(observation, prospect) {
 
   const queuedDraft = drafts.find((draft) =>
     draft?.surface === surface
-    && isSendableDraftStatus(draft?.status)
+    && isAutonomousSendReadyDraft(draft)
     && occurredAtOrAfter(draft?.approvedAt ?? draft?.updatedAt ?? draft?.createdAt, observedAtMs),
   ) ?? null;
   if (queuedDraft) {
     return { state: "queued", draft: queuedDraft, surface };
+  }
+
+  const readyDraft = drafts.find((draft) =>
+    draft?.surface === surface
+    && draft?.status === "ready"
+    && occurredAtOrAfter(draft?.updatedAt ?? draft?.createdAt, observedAtMs),
+  ) ?? null;
+  if (readyDraft) {
+    return { state: "ready", draft: readyDraft, surface };
   }
 
   return { state: "open", surface };

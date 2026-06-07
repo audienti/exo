@@ -3,7 +3,6 @@
 import { buildCompanyExecutionView } from "./build-company-execution-view.js";
 import { buildMotionProspectView } from "./build-motion-prospect-view.js";
 import {
-  buildChromeProfileSelection,
   buildCodexAgentHandoffTransport,
   shouldUseCodexAgentHandoff
 } from "./live-agent-handoff.js";
@@ -14,7 +13,6 @@ import {
   buildLinkedinProfileUrlFromPublicId,
   selectBestLinkedinContactPoint
 } from "../lib/prospect-contacts.js";
-import { browserProfileSchema } from "../schema/browser-profile.js";
 import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 
@@ -90,7 +88,6 @@ const LINKEDIN_PROFILE_ENRICHMENT_OUTPUT_SCHEMA = {
 export function buildLiveLinkedinProfileEnrichmentView(rawCompany, rawMotion, rawProfiles, rawUsers, input) {
   const company = companySchema.parse(rawCompany);
   const motion = motionSchema.parse(rawMotion);
-  const profiles = rawProfiles.map((profile) => browserProfileSchema.parse(profile));
   const prospectView = buildMotionProspectView(motion, {
     companyId: company.id,
     prospectId: input.prospectId
@@ -127,13 +124,28 @@ export function buildLiveLinkedinProfileEnrichmentView(rawCompany, rawMotion, ra
   }
 
   const runtime = normalizeNullableString(input.runtime) ?? "codex";
+  const connector = normalizeConnectorKey(execution.transport.preferredTransport?.tool);
+  if (connector !== "unipile") {
+    return {
+      company: execution.company,
+      motion: execution.motion,
+      prospect: normalizeProspectView(prospectView.prospect),
+      execution,
+      transport: {
+        kind: "blocked",
+        status: "blocked",
+        reason: `LinkedIn profile enrichment now requires a governed Unipile account. Resolved connector ${execution.transport.preferredTransport?.tool ?? "unknown"} is not supported.`,
+        captureRequest: null
+      }
+    };
+  }
   const prompt = buildLinkedinProfileEnrichmentPrompt({
     companyName: execution.company.name,
     motionName: execution.motion?.name ?? motion.name,
     prospectName: prospectView.prospect.name,
     prospectTitle: prospectView.prospect.title,
     targetProfileUrl,
-    preferredTransport: execution.transport.preferredTransport?.tool ?? "chrome"
+    preferredTransport: execution.transport.preferredTransport?.tool ?? "unipile"
   });
   const surfaceHints = {
     profilePage: buildLinkedinProfilePageSurfaceHint({
@@ -141,9 +153,6 @@ export function buildLiveLinkedinProfileEnrichmentView(rawCompany, rawMotion, ra
       recentPostLimit: 3
     })
   };
-  const resolvedProfile = execution.resolvedProfile
-    ? profiles.find((candidate) => candidate.id === execution.resolvedProfile.id) ?? null
-    : null;
 
   if (shouldUseCodexAgentHandoff({
     runtime,
@@ -157,8 +166,9 @@ export function buildLiveLinkedinProfileEnrichmentView(rawCompany, rawMotion, ra
       transport: buildCodexAgentHandoffTransport({
         capability: "linkedin",
         runtime,
-        connector: "chrome",
+        connector: execution.transport.preferredTransport?.tool ?? "unipile",
         source: "company_execution",
+        captureTransportMode: "connector_native_only",
         prompt,
         outputSchema: LINKEDIN_PROFILE_ENRICHMENT_OUTPUT_SCHEMA,
         buildPayloadCommand: `exo companies prospects enrich-linkedin-profile ${company.id} --motion ${motion.id} --prospect ${input.prospectId} --input - --json`,
@@ -167,13 +177,7 @@ export function buildLiveLinkedinProfileEnrichmentView(rawCompany, rawMotion, ra
           `exo companies prospects show ${company.id} --motion ${motion.id} --prospect ${input.prospectId} --json`
         ],
         surfaceHints,
-        profileSelection: resolvedProfile
-          ? buildChromeProfileSelection({
-              capability: "linkedin",
-              expectedHandle: execution.resolvedAccount?.handle ?? null,
-              profile: resolvedProfile
-            })
-          : null
+        profileSelection: null
       })
     };
   }
@@ -186,12 +190,13 @@ export function buildLiveLinkedinProfileEnrichmentView(rawCompany, rawMotion, ra
     transport: {
       kind: "capture_plan",
       runtime,
-      connector: "chrome",
+      connector: execution.transport.preferredTransport?.tool ?? "unipile",
       source: "company_execution",
       status: "capture_required",
       reason: "The outer agent should inspect the live LinkedIn profile page and land the governed payload through Exo.",
       captureRequest: {
         capability: "linkedin",
+        captureTransportMode: "connector_native_only",
         prompt,
         outputSchema: LINKEDIN_PROFILE_ENRICHMENT_OUTPUT_SCHEMA,
         buildPayloadCommand: `exo companies prospects enrich-linkedin-profile ${company.id} --motion ${motion.id} --prospect ${input.prospectId} --input - --json`,
@@ -240,9 +245,9 @@ function buildLinkedinProfileEnrichmentPrompt(input) {
     `Inspect the real LinkedIn profile page for ${input.prospectName} (${input.prospectTitle}) at ${input.companyName}.`,
     `Use the governed target URL first: ${input.targetProfileUrl}`,
     `This work is part of motion ${input.motionName}.`,
-    "Use the structured surfaceHints, profileSelection, and captureGuide attached to this capture request as the retrieval, binding, writeback, and verification contract.",
-    "Chrome profile display-name drift alone is not a mismatch. If the connector is attached to another Chrome session or signed-in LinkedIn identity, stop with profile_selection_mismatch.",
-    "Native-tools only applies to the live browser capture transport. Use captureGuide.writebackRules and verificationCommands for the governed Exo landing path after capture.",
+    "Use the structured surfaceHints and captureGuide attached to this capture request as the retrieval, writeback, and verification contract.",
+    "Use the governed connector-native LinkedIn path only. Do not drift to another identity or another transport.",
+    "Use captureGuide.writebackRules and verificationCommands for the governed Exo landing path after capture.",
     `Honor the execution plan. Preferred transport is ${input.preferredTransport}. Do not drift to another LinkedIn identity.`,
     "Capture one unified profile payload: stable identity fields, avatar source URL, and the strongest recent posts visible on the page.",
     "Record isPremium=true when a LinkedIn Premium badge is visible on the profile, and isOpenProfile=true when the profile shows Open Profile / Free to message (any Premium member can message them without an InMail credit). Use null when you cannot tell.",
@@ -264,6 +269,14 @@ function normalizeNullableString(value) {
 
   const trimmed = value.trim();
   return trimmed.length ? trimmed : null;
+}
+
+/** @param {string | null | undefined} connector */
+function normalizeConnectorKey(connector) {
+  const normalized = normalizeNullableString(connector)?.toLowerCase() ?? null;
+  if (!normalized) return null;
+  const parts = normalized.split(":").filter(Boolean);
+  return parts[parts.length - 1] ?? normalized;
 }
 
 /**

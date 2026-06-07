@@ -49,6 +49,7 @@ export const inboundObservationKindSchema = z.enum([
   "connection_request_pending",
   "connection_request_no_longer_pending",
   "connection_request_accepted",
+  "connection_request_withdraw_requested",
   "connection_request_withdrawn",
   "connection_request_received",
   "connection_request_received_no_longer_pending",
@@ -91,6 +92,9 @@ export const inboundSurfaceStateSchema = z.object({
   lastPaginationAttempted: z.boolean().nullable().default(null),
   lastTerminalSignalSeen: z.boolean().nullable().default(null),
   lastStalledPassCount: z.coerce.number().int().min(0).nullable().default(null),
+  continuationStartedAt: z.string().datetime().nullable().default(null),
+  nextCursor: z.string().trim().min(1).nullable().default(null),
+  nextStartOffset: z.coerce.number().int().min(0).nullable().default(null),
   lastObservationCount: z.coerce.number().int().min(0).nullable().default(null),
   lastItemizationGapCount: z.coerce.number().int().min(0).nullable().default(null),
   lastCountDiscrepancyCount: z.coerce.number().int().min(0).nullable().default(null),
@@ -135,6 +139,7 @@ export const inboundObservationSchema = z.object({
   motionId: z.string().min(1).nullable().default(null),
   companyId: z.string().min(1).nullable().default(null),
   prospectId: z.string().min(1).nullable().default(null),
+  providerSharedSecret: z.string().trim().min(1).nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null),
   messages: z.array(inboundThreadMessageSchema).default([])
 });
@@ -160,6 +165,14 @@ export const inboundCueSchema = z.object({
   notes: z.string().trim().min(1).nullable().default(null)
 });
 
+export const inboundObservationCompanyProfileSchema = z.object({
+  name: z.string().trim().min(1).nullable().default(null),
+  domain: z.string().trim().min(1).nullable().default(null),
+  websiteUrl: z.string().url().nullable().default(null),
+  linkedinCompanyUrl: z.string().url().nullable().default(null),
+  logoSourceUrl: z.string().url().nullable().default(null),
+});
+
 export const inboundSyncRunObservationInputSchema = z.object({
   kind: inboundObservationKindSchema,
   observedAt: z.string().datetime(),
@@ -180,6 +193,8 @@ export const inboundSyncRunObservationInputSchema = z.object({
   motionId: z.string().min(1).nullable().default(null),
   companyId: z.string().min(1).nullable().default(null),
   prospectId: z.string().min(1).nullable().default(null),
+  providerSharedSecret: z.string().trim().min(1).nullable().default(null),
+  actorCompanyProfile: inboundObservationCompanyProfileSchema.nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null),
   messages: z.array(inboundThreadMessageSchema).default([])
 });
@@ -200,6 +215,9 @@ export const inboundSyncRunSurfaceInputSchema = z.object({
   paginationAttempted: z.boolean().nullable().default(null),
   terminalSignalSeen: z.boolean().nullable().default(null),
   stalledPassCount: z.coerce.number().int().min(0).nullable().default(null),
+  continuationStartedAt: z.string().datetime().nullable().default(null),
+  nextCursor: z.string().trim().min(1).nullable().default(null),
+  nextStartOffset: z.coerce.number().int().min(0).nullable().default(null),
   error: z.string().trim().min(1).nullable().default(null),
   observations: z.array(inboundSyncRunObservationInputSchema).default([])
 });

@@ -1,14 +1,22 @@
 // @ts-check
 
-import {
-  extractLinkedinPublicId,
-  normalizeContactValue
-} from "../lib/prospect-contacts.js";
 import { motionSchema } from "../schema/motion.js";
+import {
+  buildLinkedinProfileUrlFromPublicId,
+  extractLinkedinPublicId,
+  normalizeContactValue,
+  withDerivedProspectContacts
+} from "../lib/prospect-contacts.js";
 
 /**
+ * Explicit links are allowed. Only conversation surfaces that are already
+ * defined as prospect-scoped may inherit a unique exact identity match from
+ * current motion state. Invite and attention surfaces stay global until the
+ * operator explicitly claims them into the local transition backlog.
+ *
  * @param {unknown[]} rawMotions
  * @param {{
+ *   surfaceKey?: string | null | undefined,
  *   motionId?: string | null | undefined,
  *   companyId?: string | null | undefined,
  *   prospectId?: string | null | undefined,
@@ -20,22 +28,23 @@ import { motionSchema } from "../schema/motion.js";
  */
 export function resolveInboundObservationLinks(rawMotions, input) {
   const motions = rawMotions.map((item) => motionSchema.parse(item));
-  const prospectContexts = [];
   const companyContexts = [];
+  const prospectContexts = [];
 
   for (const motion of motions) {
     for (const account of motion.targetMap.accounts) {
       companyContexts.push({
         motionId: motion.id,
-        companyId: account.companyId
+        companyId: account.companyId,
       });
 
-      for (const prospect of account.prospects) {
+      for (const rawProspect of account.prospects) {
+        const prospect = withDerivedProspectContacts(rawProspect);
         prospectContexts.push({
           motionId: motion.id,
           companyId: account.companyId,
           prospectId: prospect.id,
-          prospect
+          identityKeys: buildProspectIdentityKeys(prospect),
         });
       }
     }
@@ -44,7 +53,7 @@ export function resolveInboundObservationLinks(rawMotions, input) {
   const resolved = {
     motionId: normalizeNullableString(input.motionId),
     companyId: normalizeNullableString(input.companyId),
-    prospectId: normalizeNullableString(input.prospectId)
+    prospectId: normalizeNullableString(input.prospectId),
   };
 
   if (resolved.prospectId) {
@@ -56,34 +65,18 @@ export function resolveInboundObservationLinks(rawMotions, input) {
     return mergeResolvedLinks(resolved, explicitProspect);
   }
 
-  const filteredProspects = prospectContexts.filter((context) =>
-    (!resolved.motionId || context.motionId === resolved.motionId)
-    && (!resolved.companyId || context.companyId === resolved.companyId)
-  );
-
-  const matchedByProfile = findMatchingProspectsByProfile(filteredProspects, input.actorProfileUrl ?? null);
-  const matchedByPublicId = findMatchingProspectsByLinkedinPublicId(
-    filteredProspects,
-    input.actorLinkedinPublicId ?? extractLinkedinPublicId(input.actorProfileUrl)
-  );
-  const matchedByMemberId = findMatchingProspectsByLinkedinMemberId(filteredProspects, input.actorLinkedinMemberId ?? null);
-  const matchedByEmail = findMatchingProspectsByEmail(filteredProspects, input.actorHandle ?? null);
-  const resolvedProspect = chooseResolvedProspect(
-    matchedByProfile,
-    matchedByPublicId,
-    matchedByMemberId,
-    matchedByEmail
-  );
-
-  if (resolvedProspect) {
-    return mergeResolvedLinks(resolved, resolvedProspect);
-  }
-
   if (resolved.companyId && !resolved.motionId) {
     const companyMatches = companyContexts.filter((context) => context.companyId === resolved.companyId);
     if (companyMatches.length === 1) {
       resolved.motionId = companyMatches[0].motionId;
     }
+  }
+
+  const identityMatchedProspect = supportsDeterministicIdentityBinding(input.surfaceKey)
+    ? resolveProspectContextByIdentity(prospectContexts, resolved, input)
+    : null;
+  if (identityMatchedProspect) {
+    return mergeResolvedLinks(resolved, identityMatchedProspect);
   }
 
   return resolved;
@@ -94,152 +87,196 @@ export function resolveInboundObservationLinks(rawMotions, input) {
  *   motionId: string,
  *   companyId: string,
  *   prospectId: string,
- *   prospect: {
- *     email?: string | null,
- *     linkedinProfileUrl?: string | null,
- *     contactPoints?: Array<{ kind: string, value: string }>
- *   }
+ *   identityKeys: Set<string>
  * }>} prospectContexts
- * @param {string | null} actorProfileUrl
+ * @param {{ motionId: string | null, companyId: string | null, prospectId: string | null }} resolved
+ * @param {{
+ *   surfaceKey?: string | null | undefined,
+ *   actorHandle?: string | null | undefined,
+ *   actorProfileUrl?: string | null | undefined,
+ *   actorLinkedinPublicId?: string | null | undefined,
+ *   actorLinkedinMemberId?: string | null | undefined
+ * }} input
  */
-function findMatchingProspectsByProfile(prospectContexts, actorProfileUrl) {
-  const normalizedProfileUrl = normalizeNullableString(actorProfileUrl);
-  if (!normalizedProfileUrl) {
-    return [];
+function resolveProspectContextByIdentity(prospectContexts, resolved, input) {
+  const identityKeys = buildInputIdentityKeys(input);
+  if (!identityKeys.size) {
+    return null;
   }
 
-  const normalizedValue = normalizeContactValue("linkedin_profile", normalizedProfileUrl);
-  return prospectContexts.filter((context) => hasMatchingContactPoint(context.prospect, "linkedin_profile", normalizedValue));
+  const matches = prospectContexts.filter((context) => {
+    if (resolved.motionId && context.motionId !== resolved.motionId) {
+      return false;
+    }
+
+    if (resolved.companyId && context.companyId !== resolved.companyId) {
+      return false;
+    }
+
+    for (const key of context.identityKeys) {
+      if (identityKeys.has(key)) {
+        return true;
+      }
+    }
+
+    return false;
+  });
+
+  return matches.length === 1 ? matches[0] : null;
 }
 
 /**
- * @param {Array<{
- *   motionId: string,
- *   companyId: string,
- *   prospectId: string,
- *   prospect: {
- *     email?: string | null,
- *     linkedinProfileUrl?: string | null,
- *     contactPoints?: Array<{ kind: string, value: string }>
- *   }
- * }>} prospectContexts
- * @param {string | null} actorLinkedinPublicId
+ * @param {string | null | undefined} surfaceKey
  */
-function findMatchingProspectsByLinkedinPublicId(prospectContexts, actorLinkedinPublicId) {
-  const normalizedPublicId = normalizeNullableString(actorLinkedinPublicId);
-  if (!normalizedPublicId) {
-    return [];
-  }
-
-  const normalizedValue = normalizeContactValue("linkedin_public_id", normalizedPublicId);
-  return prospectContexts.filter((context) => hasMatchingContactPoint(context.prospect, "linkedin_public_id", normalizedValue));
-}
-
-/**
- * @param {Array<{
- *   motionId: string,
- *   companyId: string,
- *   prospectId: string,
- *   prospect: {
- *     email?: string | null,
- *     linkedinProfileUrl?: string | null,
- *     contactPoints?: Array<{ kind: string, value: string }>
- *   }
- * }>} prospectContexts
- * @param {string | null} actorLinkedinMemberId
- */
-function findMatchingProspectsByLinkedinMemberId(prospectContexts, actorLinkedinMemberId) {
-  const normalizedMemberId = normalizeNullableString(actorLinkedinMemberId);
-  if (!normalizedMemberId) {
-    return [];
-  }
-
-  const normalizedValue = normalizeContactValue("linkedin_member_id", normalizedMemberId);
-  return prospectContexts.filter((context) => hasMatchingContactPoint(context.prospect, "linkedin_member_id", normalizedValue));
-}
-
-/**
- * @param {Array<{
- *   motionId: string,
- *   companyId: string,
- *   prospectId: string,
- *   prospect: {
- *     email?: string | null,
- *     linkedinProfileUrl?: string | null,
- *     contactPoints?: Array<{ kind: string, value: string }>
- *   }
- * }>} prospectContexts
- * @param {string | null} actorHandle
- */
-function findMatchingProspectsByEmail(prospectContexts, actorHandle) {
-  const normalizedHandle = normalizeNullableString(actorHandle);
-  if (!normalizedHandle || !normalizedHandle.includes("@")) {
-    return [];
-  }
-
-  const normalizedValue = normalizeContactValue("email", normalizedHandle);
-  return prospectContexts.filter((context) => hasMatchingContactPoint(context.prospect, "email", normalizedValue));
+function supportsDeterministicIdentityBinding(surfaceKey) {
+  const normalized = normalizeNullableString(surfaceKey)?.toLowerCase() ?? null;
+  return normalized === "linkedin-sent-invitations"
+    || normalized === "linkedin-messaging-inbox"
+    || normalized === "gmail-inbox-threads";
 }
 
 /**
  * @param {{
  *   email?: string | null,
  *   linkedinProfileUrl?: string | null,
- *   contactPoints?: Array<{ kind: string, value: string }>
+ *   linkedinProfileSnapshot?: {
+ *     profileUrl?: string | null,
+ *     publicId?: string | null,
+ *     memberId?: string | null
+ *   } | null,
+ *   contactPoints?: Array<Record<string, any>>
  * }} prospect
- * @param {"email" | "linkedin_profile" | "linkedin_public_id" | "linkedin_member_id"} kind
- * @param {string} normalizedValue
  */
-function hasMatchingContactPoint(prospect, kind, normalizedValue) {
-  if (!normalizedValue) {
-    return false;
+function buildProspectIdentityKeys(prospect) {
+  const keys = new Set();
+
+  addEmailKey(keys, prospect.email);
+  addLinkedinProfileKey(keys, prospect.linkedinProfileUrl);
+  addLinkedinPublicIdKey(keys, prospect.linkedinProfileSnapshot?.publicId);
+  addLinkedinMemberIdKey(keys, prospect.linkedinProfileSnapshot?.memberId);
+  addLinkedinProfileKey(keys, prospect.linkedinProfileSnapshot?.profileUrl);
+
+  for (const point of prospect.contactPoints ?? []) {
+    if (!point || typeof point !== "object") {
+      continue;
+    }
+
+    if (point.matchStatus === "rejected" || point.verificationStatus === "rejected") {
+      continue;
+    }
+
+    switch (point.kind) {
+      case "email":
+        addEmailKey(keys, point.value);
+        break;
+      case "linkedin_profile":
+        addLinkedinProfileKey(keys, point.value);
+        break;
+      case "linkedin_public_id":
+        addLinkedinPublicIdKey(keys, point.value);
+        break;
+      case "linkedin_member_id":
+        addLinkedinMemberIdKey(keys, point.value);
+        break;
+      default:
+        break;
+    }
   }
 
-  if (kind === "email") {
-    if (prospect.email && normalizeContactValue(kind, prospect.email) === normalizedValue) {
-      return true;
-    }
-  } else if (kind === "linkedin_profile") {
-    if (prospect.linkedinProfileUrl && normalizeContactValue(kind, prospect.linkedinProfileUrl) === normalizedValue) {
-      return true;
-    }
-
-    const derivedPublicId = extractLinkedinPublicId(normalizedValue);
-    if (derivedPublicId && hasMatchingContactPoint(prospect, "linkedin_public_id", derivedPublicId)) {
-      return true;
-    }
-  } else if (kind === "linkedin_public_id") {
-    const directPublicId = extractLinkedinPublicId(prospect.linkedinProfileUrl);
-    if (directPublicId && normalizeContactValue(kind, directPublicId) === normalizedValue) {
-      return true;
-    }
-  }
-
-  return (prospect.contactPoints ?? []).some((point) =>
-    point.kind === kind && normalizeContactValue(point.kind, point.value) === normalizedValue
-  );
+  return keys;
 }
 
 /**
- * @param {...Array<{ motionId: string, companyId: string, prospectId: string }>} matchGroups
+ * @param {{
+ *   actorHandle?: string | null | undefined,
+ *   actorProfileUrl?: string | null | undefined,
+ *   actorLinkedinPublicId?: string | null | undefined,
+ *   actorLinkedinMemberId?: string | null | undefined
+ * }} input
  */
-function chooseResolvedProspect(...matchGroups) {
-  const uniqueMatches = matchGroups
-    .map((matches) => matches.length === 1 ? matches[0] : null)
-    .filter(Boolean);
+function buildInputIdentityKeys(input) {
+  const keys = new Set();
+  const actorHandle = normalizeNullableString(input.actorHandle);
+  const emailHandle = actorHandle?.includes("@") ? actorHandle : null;
+  const linkedinPublicId = normalizeNullableString(input.actorLinkedinPublicId)
+    ?? extractLinkedinPublicId(input.actorProfileUrl)
+    ?? (actorHandle && !actorHandle.includes("@") ? actorHandle : null);
 
-  if (!uniqueMatches.length) {
+  addEmailKey(keys, emailHandle);
+  addLinkedinProfileKey(keys, input.actorProfileUrl);
+  addLinkedinPublicIdKey(keys, linkedinPublicId);
+  addLinkedinMemberIdKey(keys, input.actorLinkedinMemberId);
+
+  return keys;
+}
+
+/**
+ * @param {Set<string>} keys
+ * @param {string | null | undefined} value
+ */
+function addEmailKey(keys, value) {
+  const normalized = normalizeContactKeyValue("email", value);
+  if (normalized) {
+    keys.add(`email:${normalized}`);
+  }
+}
+
+/**
+ * @param {Set<string>} keys
+ * @param {string | null | undefined} value
+ */
+function addLinkedinProfileKey(keys, value) {
+  const normalized = normalizeContactKeyValue("linkedin_profile", value);
+  if (!normalized) {
+    return;
+  }
+
+  keys.add(`linkedin_profile:${normalized}`);
+  const publicId = extractLinkedinPublicId(normalized);
+  if (publicId) {
+    keys.add(`linkedin_public_id:${publicId}`);
+  }
+}
+
+/**
+ * @param {Set<string>} keys
+ * @param {string | null | undefined} value
+ */
+function addLinkedinPublicIdKey(keys, value) {
+  const normalized = normalizeContactKeyValue("linkedin_public_id", value);
+  if (!normalized) {
+    return;
+  }
+
+  keys.add(`linkedin_public_id:${normalized}`);
+  const profileUrl = buildLinkedinProfileUrlFromPublicId(normalized);
+  if (profileUrl) {
+    keys.add(`linkedin_profile:${normalizeContactValue("linkedin_profile", profileUrl)}`);
+  }
+}
+
+/**
+ * @param {Set<string>} keys
+ * @param {string | null | undefined} value
+ */
+function addLinkedinMemberIdKey(keys, value) {
+  const normalized = normalizeContactKeyValue("linkedin_member_id", value);
+  if (normalized) {
+    keys.add(`linkedin_member_id:${normalized}`);
+  }
+}
+
+/**
+ * @param {string} kind
+ * @param {string | null | undefined} value
+ */
+function normalizeContactKeyValue(kind, value) {
+  const normalized = normalizeNullableString(value);
+  if (!normalized) {
     return null;
   }
 
-  const first = uniqueMatches[0];
-  for (const match of uniqueMatches.slice(1)) {
-    if (!sameResolvedProspect(first, match)) {
-      return null;
-    }
-  }
-
-  return first;
+  return normalizeContactValue(kind, normalized);
 }
 
 /**
@@ -262,16 +299,8 @@ function mergeResolvedLinks(existing, resolved) {
   return {
     motionId: existing.motionId ?? resolved.motionId,
     companyId: existing.companyId ?? resolved.companyId,
-    prospectId: existing.prospectId ?? resolved.prospectId
+    prospectId: existing.prospectId ?? resolved.prospectId,
   };
-}
-
-/**
- * @param {{ motionId: string, companyId: string, prospectId: string }} left
- * @param {{ motionId: string, companyId: string, prospectId: string }} right
- */
-function sameResolvedProspect(left, right) {
-  return left.motionId === right.motionId && left.companyId === right.companyId && left.prospectId === right.prospectId;
 }
 
 /**

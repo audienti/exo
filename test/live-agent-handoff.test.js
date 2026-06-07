@@ -16,7 +16,7 @@ async function buildCodexLinkedinHandoffResult(options = {}) {
   fs.writeFileSync(
     path.join(codexHome, "config.toml"),
     [
-      '[plugins."chrome@openai-bundled"]',
+      "[mcp_servers.unipile]",
       "enabled = true",
       ""
     ].join("\n")
@@ -48,47 +48,27 @@ async function buildCodexLinkedinHandoffResult(options = {}) {
             updatedAt: timestamp,
             capability: "linkedin",
             handle: "hint-contract-user",
-            sourceType: "browser-profile",
-            browserProfileId: "profile-1",
+            sourceType: "harness-connection",
+            browserProfileId: null,
+            harnessConnectionId: "harness-1",
+            providerAccountId: "acct-linkedin-1",
             preferred: true
           }
         ],
-        harnessConnections: []
-      },
-      [
-        {
-          id: "profile-1",
-          createdAt: timestamp,
-          updatedAt: timestamp,
-          label: "hint-contract-profile",
-          browser: "chrome",
-          browserCommand: null,
-          userDataDir: path.join(tempDir, "Chrome"),
-          profileDirectory: "Profile 4",
-          profilePath: path.join(tempDir, "Chrome", "Profile 4"),
-          detectedProfileName: "LinkedIn Main",
-          capabilities: ["linkedin"],
-          verifiedCapabilities: ["linkedin"],
-          identity: {
-            owner: "william",
-            workspace: "omalab",
-            scope: "work",
-            accounts: [
-              { capability: "linkedin", handle: "hint-contract-user" }
-            ]
-          },
-          notes: null,
-          status: "ready",
-          lastTestedAt: timestamp,
-          lastTestResult: {
-            status: "ready",
-            summary: "LinkedIn capability verified.",
-            checks: [],
-            capabilityChecks: [],
-            warnings: []
+        harnessConnections: [
+          {
+            id: "harness-1",
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            runtime: "codex",
+            connector: "unipile",
+            label: "codex:unipile",
+            status: "available",
+            notes: null,
           }
-        }
-      ],
+        ]
+      },
+      [],
       {
         runtime: "codex"
       }
@@ -193,11 +173,10 @@ test("codex live handoff includes structured LinkedIn messaging inbox hints dist
   const result = await buildCodexLinkedinHandoffResult();
   const messagingInbox = result.transport.captureRequest.surfaceHints.messagingInbox;
   const followersList = result.transport.captureRequest.surfaceHints.followersList;
-  const profileSelection = result.transport.captureRequest.profileSelection;
 
   assert.equal(result.transport.kind, "agent_handoff");
   assert.equal(result.transport.captureRequest.executionMode, "native_tools_only");
-  assert.equal(result.transport.captureRequest.captureTransportMode, "browser_native_only");
+  assert.equal(result.transport.captureRequest.captureTransportMode, "connector_native_only");
   assert.equal(result.transport.captureRequest.shellFallbackAllowed, false);
   assert.equal(result.transport.captureRequest.exoCliWritebackRequired, true);
   assert.equal(result.transport.captureRequest.contractVersion, "exo-live-agent-handoff-v2");
@@ -207,19 +186,19 @@ test("codex live handoff includes structured LinkedIn messaging inbox hints dist
   assert.match(result.transport.captureRequest.prompt, /structured surfaceHints/i);
   assert.match(result.transport.captureRequest.prompt, /captureGuide/i);
   assert.match(result.transport.captureRequest.prompt, /captureScaffold/i);
-  assert.match(result.transport.captureRequest.prompt, /profileSelection/i);
+  assert.doesNotMatch(result.transport.captureRequest.prompt, /profileSelection/i);
   assert.match(result.transport.captureRequest.prompt, /Use captureGuide\.writebackRules and verificationCommands/i);
   assert.match(result.transport.captureRequest.prompt, /start from captureScaffold/i);
   assert.match(result.transport.captureRequest.prompt, /Do not look for an Exo website, Exo app route, admin surface, browser-history breadcrumb, or sync UI/i);
-  assert.match(result.transport.captureRequest.prompt, /There is no browser-side Exo control surface to discover/i);
-  assert.match(result.transport.captureRequest.prompt, /Do not infer exo next, inbox, daily, or review from browser inspection alone/i);
+  assert.match(result.transport.captureRequest.prompt, /Do not open or rely on a browser session for this path/i);
+  assert.match(result.transport.captureRequest.prompt, /Do not infer exo next, inbox, daily, or review from connector inspection alone/i);
   assert.equal(result.transport.captureRequest.captureGuide.purpose, "Use native browser or connector tools for live capture, then land the governed result through Exo CLI.");
   assert.equal(result.transport.captureRequest.captureGuide.selfContained.coldStartReady, true);
   assert.equal(result.transport.captureRequest.captureGuide.selfContained.noRepoRediscoveryRequired, true);
   assert.equal(result.transport.captureRequest.captureGuide.selfContained.rawNetworkBodiesRequired, false);
   assert.equal(result.transport.captureRequest.captureGuide.contractInputs.captureScaffold, "If browser-side JavaScript is needed, use captureScaffold before inventing a larger ad hoc extractor.");
   assert.equal(result.transport.captureRequest.captureGuide.contractInputs.surfaceHints, "Use surfaceHints as the canonical retrieval playbook.");
-  assert.equal(result.transport.captureRequest.captureGuide.contractInputs.profileSelection, "Use profileSelection as the binding contract.");
+  assert.equal(result.transport.captureRequest.captureGuide.contractInputs.profileSelection, null);
   assert.ok(result.transport.captureRequest.captureGuide.captureRules.some((line) => /Do not shell out through codex exec, EXO_CODEX_CLI/i.test(line)));
   assert.ok(result.transport.captureRequest.captureGuide.captureRules.some((line) => /Do not preserve raw HTML, DOM dumps, screenshots, or network bodies/i.test(line)));
   assert.ok(result.transport.captureRequest.captureGuide.writebackRules.some((line) => /buildPayloadCommand via stdin/i.test(line)));
@@ -256,22 +235,13 @@ test("codex live handoff includes structured LinkedIn messaging inbox hints dist
   assert.match(result.transport.captureRequest.applyStdinContract, /merge the returned payload\.accounts arrays/i);
   assert.match(result.transport.captureRequest.applyCommand, /exo inbound sync run user-1 --input <combined-inbound-sync\.json> --refresh --json/);
   assert.ok(Array.isArray(result.transport.captureRequest.executionChecklist));
-  assert.ok(result.transport.captureRequest.executionChecklist.some((line) => /captureGuide, surfaceHints, profileSelection, and captureScaffold/i.test(line)));
+  assert.ok(result.transport.captureRequest.executionChecklist.some((line) => /captureGuide, surfaceHints, and captureScaffold/i.test(line)));
   assert.ok(result.transport.captureRequest.executionChecklist.some((line) => /buildPayloadCommand via stdin/i.test(line)));
   assert.ok(Array.isArray(result.transport.captureRequest.verificationCommands));
   assert.ok(result.transport.captureRequest.verificationCommands.some((command) => /exo inbound sync show user-1 --json/.test(command)));
   assert.ok(result.transport.captureRequest.verificationCommands.some((command) => /linkedin-sent-invitations/.test(command)));
   assert.ok(result.transport.captureRequest.verificationCommands.some((command) => /exo next --user user-1 --json/.test(command)));
-  assert.equal(profileSelection.strategy, "resolved_browser_profile_only");
-  assert.equal(profileSelection.expectedHandle, "hint-contract-user");
-  assert.equal(profileSelection.displayNameMismatchAllowed, true);
-  assert.equal(profileSelection.expectedProfile.profileDirectory, "Profile 4");
-  assert.equal(profileSelection.expectedProfile.detectedProfileName, "LinkedIn Main");
-  assert.ok(profileSelection.expectedProfile.acceptableSessionLabels.includes("hint-contract-profile"));
-  assert.ok(profileSelection.expectedProfile.acceptableSessionLabels.includes("Profile 4"));
-  assert.ok(!profileSelection.expectedProfile.acceptableSessionLabels.includes("LinkedIn Main"));
-  assert.ok(profileSelection.rules.some((rule) => /display-name drift/i.test(rule)));
-  assert.ok(profileSelection.rules.some((rule) => /connector session label/i.test(rule) || /display name/i.test(rule)));
+  assert.equal(result.transport.captureRequest.profileSelection, null);
   assert.equal(messagingInbox.surface, "linkedin-messaging-inbox");
   assert.deepEqual(messagingInbox.entryHints.startUrls, [
     "https://www.linkedin.com/feed/",
@@ -307,7 +277,7 @@ test("codex shell handoff ignores EXO_CODEX_CLI and stays on the native capture 
 
   assert.equal(result.transport.kind, "agent_handoff");
   assert.equal(result.transport.captureRequest.executionMode, "native_tools_only");
-  assert.equal(result.transport.captureRequest.captureTransportMode, "browser_native_only");
+  assert.equal(result.transport.captureRequest.captureTransportMode, "connector_native_only");
   assert.equal(result.transport.captureRequest.shellFallbackAllowed, false);
   assert.equal(result.transport.captureRequest.exoCliWritebackRequired, true);
   assert.equal(result.transport.captureRequest.coldStartReady, true);

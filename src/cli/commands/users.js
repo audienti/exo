@@ -41,7 +41,7 @@ export function registerUsers(program) {
 Examples:
   exo users intake --json
   exo users add --label operator-main --owner operator
-  exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 09:00 --end 17:00
+  exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 07:00 --end 18:00
   exo users harness add <user-id> --runtime codex --connector chrome --status available
   exo users harness probe <user-id> --runtime codex --json
   exo users harness probe <user-id> --runtime codex --connector gmail --writeback --json
@@ -446,7 +446,7 @@ Rules:
 
         const assignedUserId = company.engagementUserAssignment?.userId ?? null;
         if (!assignedUserId) {
-          console.error(`Company ${company.name} is not pinned to an execution user.`);
+          console.error(`Company ${company.name} is not assigned to an execution user.`);
           process.exitCode = 1;
           return;
         }

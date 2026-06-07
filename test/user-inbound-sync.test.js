@@ -322,7 +322,7 @@ test("buildInboundAutomationStatus does not keep unsupported or bounded surfaces
                   lastSyncedAt: "2026-06-03T11:45:00.000Z",
                   lastExhaustionStatus: "blocked",
                   lastExhaustionReason: "connector_surface_unsupported",
-                  lastError: "Unipile does not expose a direct LinkedIn profile views route for Exo live sync.",
+                  lastError: "Exo does not yet wire Unipile's raw LinkedIn route for profile views into live sync.",
                 };
               }
               return surface;
@@ -380,7 +380,7 @@ test("buildInboundAutomationHealthWarnings ignores connector-unsupported surface
                     lastSyncedAt: "2026-06-03T11:45:00.000Z",
                     lastExhaustionStatus: "blocked",
                     lastExhaustionReason: "connector_surface_unsupported",
-                    lastError: "Unipile does not expose a direct LinkedIn profile views route for Exo live sync.",
+                    lastError: "Exo does not yet wire Unipile's raw LinkedIn route for profile views into live sync.",
                   }
                 : surface
             ),

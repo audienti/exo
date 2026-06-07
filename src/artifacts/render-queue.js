@@ -12,11 +12,12 @@ import {
   emptyState,
   escapeHtml,
   iconSvg,
+  liveActionBtn,
   renderShell,
   sectionHead,
   stateDot,
 } from "../lib/exo-ui-components.js";
-import { renderAgentRuntimeCard } from "./render-agent-runtime-card.js";
+import { renderAgentRuntimeCard, renderAgentRuntimeMeta } from "./render-agent-runtime-card.js";
 
 /**
  * @param {import("../core/build-operator-view.js").OperatorViewModel} model
@@ -24,11 +25,12 @@ import { renderAgentRuntimeCard } from "./render-agent-runtime-card.js";
  * @returns {string}
  */
 export function renderQueuePage(model, meta = {}) {
+  const runtime = model.agentRuntime ?? meta.agentRuntime ?? null;
   const oldestWait = oldestWaitingLabel(model.queue);
   const body =
     `<div class="op-wrap feed">` +
-    renderIntro(model, oldestWait) +
-    renderAgentRuntimeCard(model.agentRuntime, meta, { surface: "queue" }) +
+    renderIntro(model, oldestWait, runtime) +
+    renderAgentRuntimeCard(runtime, meta, { surface: "queue", showMeta: false, showActions: false }) +
     `<section class="op-sec" data-sec="queue">` +
     sectionHead({
       icon: "queue",
@@ -49,28 +51,40 @@ export function renderQueuePage(model, meta = {}) {
     detailLabel: null,
     body,
     interactive: meta.interactive,
-    agentRuntime: model.agentRuntime
-      ? { ...(meta.agentRuntime ?? {}), queueCount: model.agentRuntime.queueCount }
-      : meta.agentRuntime ?? null,
+    agentRuntime: runtime ? { ...(meta.agentRuntime ?? {}), ...runtime } : null,
   });
 }
 
 /**
  * @param {import("../core/build-operator-view.js").OperatorViewModel} model
  * @param {string | null} oldestWait
+ * @param {import("../core/build-operator-view.js").OperatorAgentRuntime | null | undefined} runtime
  */
-function renderIntro(model, oldestWait) {
+function renderIntro(model, oldestWait, runtime) {
   const c = model.counts;
+  const introAction = runtime?.canRunNow
+    ? liveActionBtn({
+        writer: "runAgentQueuePass",
+        args: {},
+        variant: "primary",
+        size: "md",
+        icon: "cpu",
+        label: runtime.runLabel ?? "Run agent now",
+      })
+    : "";
   return (
     `<div class="op-intro">` +
     `<div>` +
     `<h1>Agent queue</h1>` +
-    `<p class="op-line">Work the agent will run autonomously. Oldest first.</p>` +
+    renderAgentRuntimeMeta(runtime, { className: "op-meta", iconSize: 11 }) +
     `</div>` +
+    `<div class="op-intro-actions">` +
     `<div class="op-stat">` +
     `<span><b>${c.queue}</b> queued</span><i></i>` +
     `<span><b>${oldestWait ?? "—"}</b> oldest wait</span><i></i>` +
     `<span><b>${c.blocked}</b> blocked</span>` +
+    `</div>` +
+    introAction +
     `</div>` +
     `</div>`
   );
@@ -91,17 +105,26 @@ function renderQueueItem(q) {
   const waitChip = q.waitingFor
     ? `<span class="surface-ref">${iconSvg("clock", 11)}${escapeHtml(q.waitingFor)}</span>`
     : null;
+  const checkoutChip = q.checkoutState === "checked_out"
+    ? `<span class="surface-ref">${iconSvg("cpu", 11)}Checked out${q.checkedOutBy ? ` · ${escapeHtml(q.checkedOutBy)}` : ""}</span>`
+    : null;
   const chips = [
     `<span class="cap-ref">${iconSvg("cpu", 11)}${escapeHtml(q.capability)}</span>`,
     q.motionName ? stateDot("active", q.motionName) : null,
     waitChip,
+    checkoutChip,
   ]
     .filter(Boolean)
     .join("");
   const review = q.href
     ? btn({ variant: "secondary", size: "sm", icon: "arrowR", label: "Review", href: q.href })
     : "";
-  const agentTag = `<span class="q-agent">${iconSvg("cpu", 11)}Queued for agent</span>`;
+  const agentTag = q.checkoutState === "checked_out"
+    ? `<span class="q-agent">${iconSvg("cpu", 11)}Checked out</span>`
+    : `<span class="q-agent">${iconSvg("cpu", 11)}Queued for agent</span>`;
+  const state = q.checkoutState === "checked_out"
+    ? stateDot("waiting", "Checked out")
+    : stateDot("ready");
 
   return card({
     className: "q-card",
@@ -112,7 +135,7 @@ function renderQueueItem(q) {
       `<div class="row-name">${escapeHtml(q.subject)}</div>` +
       `<div class="row-role">${escapeHtml(q.motionName ?? "Inbound itemization")}</div>` +
       `</div>` +
-      stateDot("ready") +
+      state +
       `</div>` +
       `<p class="row-note">${escapeHtml(q.action)}</p>` +
       `<div class="row-chips">${chips}</div>` +

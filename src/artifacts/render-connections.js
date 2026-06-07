@@ -13,30 +13,46 @@ import {
   escapeHtml,
   iconSvg,
   renderShell,
+  stateDot,
   truthTag,
 } from "../lib/exo-ui-components.js";
 
 /**
  * @param {ReturnType<import("../core/build-connections-view.js").buildConnectionsViewModel>} model
- * @param {{ user?: { label?: string } | null, generatedAt?: string, regenerateCommand?: string }} [meta]
+ * @param {{
+ *   user?: { label?: string } | null,
+ *   generatedAt?: string,
+ *   regenerateCommand?: string,
+ *   interactive?: boolean,
+ *   userId?: string | null,
+ *   claimMotions?: Array<{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }>,
+ * }} [meta]
  * @returns {string}
  */
 export function renderConnectionsPage(model, meta = {}) {
+  const agentPassActive = isAgentPassActive(meta.agentRuntime ?? null);
   const radios = model.tabs
     .map((tab, i) => `<input type="radio" name="cn-tab" id="cn-${escapeAttr(tab.key)}" class="conn-toggle"${i === 0 ? " checked" : ""}>`)
     .join("");
+  const sentFilters =
+    `<input type="radio" name="cn-sent-filter" id="cn-sent-filter-all" class="conn-toggle" checked>` +
+    `<input type="radio" name="cn-sent-filter" id="cn-sent-filter-stale" class="conn-toggle">` +
+    `<input type="radio" name="cn-sent-filter" id="cn-sent-filter-fresh" class="conn-toggle">`;
+  const claimPanels = renderClaimPanels(model.tabs, meta);
 
   const body =
     radios +
+    sentFilters +
     `<div class="dom-wrap">` +
     renderIntro(model) +
     `<div class="conn-main">` +
     renderTabs(model.tabs) +
-    model.tabs.map((tab) => renderPanel(tab, meta)).join("") +
+    model.tabs.map((tab) => renderPanel(tab, meta, { agentPassActive })).join("") +
     `</div>` +
     renderFreshness(model.freshness) +
     renderFooter(meta) +
-    `</div>`;
+    `</div>` +
+    claimPanels;
 
   return renderShell({
     title: `Exo — Connections${meta.user?.label ? ` · ${meta.user.label}` : ""}`,
@@ -78,22 +94,91 @@ function renderTabs(tabs) {
 
 /**
  * @param {any} tab
- * @param {{ interactive?: boolean }} meta
+ * @param {{ interactive?: boolean, agentRuntime?: any }} meta
+ * @param {{ agentPassActive: boolean }} runtime
  */
-function renderPanel(tab, meta) {
+function renderPanel(tab, meta, runtime) {
+  const repairStatus = deriveRepairStatus(tab, meta, runtime);
   const freshHead =
     `<div class="rel-fresh">` +
     `<div class="rel-fresh-l"><span class="rel-fresh-title">${escapeHtml(tab.title)}</span>${truthTag(tab.truth, tab.lastChecked)}</div>` +
-    // Syncing a LinkedIn surface is an agent/capture operation, not a UI write —
-    // shown disabled (honest) rather than as a button that does nothing.
-    btn({ variant: "secondary", size: "sm", icon: "refresh", label: "Sync via agent", disabled: true, title: "This surface is refreshed by the capture agent, not from the UI." }) +
+    renderPanelStatus(repairStatus) +
     `</div>`;
-  const gap = tab.gap ? `<div class="rel-gap">${iconSvg("alert", 13)}${escapeHtml(tab.gap)}</div>` : "";
+  const gap = tab.gap ? `<div class="rel-gap">${iconSvg("alert", 13)}${escapeHtml(repairStatus.message ?? tab.gap)}</div>` : "";
+  const filterBar = tab.key === "sent" ? renderSentFilterBar(tab.filters) : "";
   const list = tab.people.length
-    ? `<div class="rel-list">${tab.people.map((p) => renderPersonRow(p, tab.action, meta)).join("")}</div>`
+    ? `${filterBar}<div class="rel-list">${tab.people.map((p) => renderPersonRow(p, tab.action, meta)).join("")}</div>`
     : emptyState({ icon: "check", message: `Nothing in ${tab.label.toLowerCase()} right now.` });
 
-  return `<div class="rel-panel rp-${escapeAttr(tab.key)}">${freshHead}${gap}${list}</div>`;
+  return `<div class="rel-panel rp-${escapeAttr(tab.key)}">${freshHead}${gap}${repairStatus.autoHost}${list}</div>`;
+}
+
+/**
+ * @param {any} tab
+ * @param {{ interactive?: boolean }} meta
+ * @param {{ agentPassActive: boolean }} runtime
+ */
+function deriveRepairStatus(tab, meta, runtime) {
+  if (!tab.gap) {
+    return { label: null, message: null, autoHost: "" };
+  }
+  if (tab.autoRepairable && tab.repairTask) {
+    const active = runtime.agentPassActive;
+    const queuedForWindow = tab.repairTask.waitingReason === "outside_working_hours";
+    return {
+      label: active ? "Resyncing" : "Resync queued",
+      message: active
+        ? "Exo is running a full resync for this surface so the missing individual observations land back in the workspace."
+        : queuedForWindow
+          ? "Exo already queued a full resync for this surface and will run it in the next allowed working window."
+          : "Exo already queued a full resync for this surface so the missing individual observations land back in the workspace.",
+      autoHost: !active && !queuedForWindow && meta.interactive ? renderAutoRepairHost(tab) : "",
+    };
+  }
+  return { label: null, message: null, autoHost: "" };
+}
+
+/** @param {{ label: string | null }} repairStatus */
+function renderPanelStatus(repairStatus) {
+  if (!repairStatus.label) {
+    return `<span class="surface-ref">${iconSvg("refresh", 11)}Agent-managed</span>`;
+  }
+  return `<span class="surface-ref">${iconSvg("refresh", 11)}${escapeHtml(repairStatus.label)}</span>`;
+}
+
+/** @param {any} tab */
+function renderAutoRepairHost(tab) {
+  const onceKey = [
+    "connections-auto-repair",
+    tab.surfaceKey ?? tab.key,
+    tab.gapKind ?? "gap",
+    String(tab.count ?? 0),
+    tab.repairTask?.mode ?? "full",
+    tab.lastChecked ?? "never",
+  ].join(":");
+  return (
+    `<span class="exo-action conn-auto-repair" hidden data-exo-writer="runAgentQueuePass"` +
+    ` data-exo-args="${escapeAttr(JSON.stringify({}))}" data-exo-autostart-key="${escapeAttr(onceKey)}">` +
+    `<button class="btn btn-secondary btn-sm" type="button" aria-hidden="true" tabindex="-1"><span>Auto repair</span></button>` +
+    `</span>`
+  );
+}
+
+/** @param {any} runtime */
+function isAgentPassActive(runtime) {
+  return Boolean(runtime?.lock?.active || runtime?.scheduler?.running);
+}
+
+/** @param {{ all: number, stale: number, fresh: number } | null} filters */
+function renderSentFilterBar(filters) {
+  if (!filters) return "";
+  return (
+    `<div class="sent-filter-bar">` +
+    `<label class="sent-filter" for="cn-sent-filter-all">All<span>${filters.all}</span></label>` +
+    `<label class="sent-filter" for="cn-sent-filter-stale">Stale<span>${filters.stale}</span></label>` +
+    `<label class="sent-filter" for="cn-sent-filter-fresh">Fresh<span>${filters.fresh}</span></label>` +
+    `</div>`
+  );
 }
 
 /**
@@ -120,11 +205,12 @@ function renderPersonRow(p, action, meta = {}) {
     nameEl +
     (p.sub ? `<div class="person-sub">${escapeHtml(p.sub)}</div>` : "") +
     `<div class="person-foot">` +
-    (p.company ? `<span class="person-co">${escapeHtml(p.company)}</span>` : `<span class="person-co dim">Not available yet</span>`) +
+    renderPersonMetaLine(p) +
+    (p.attention ? `<span class="person-co">${iconSvg("eye", 11)}${escapeHtml(p.attention.label)}${p.attention.when ? ` · ${escapeHtml(p.attention.when)}` : ""}</span>` : "") +
     `</div>` +
     `</div>`;
   return (
-    `<div class="person-row">` +
+    `<div class="person-row"${p.sentGroup ? ` data-sent-group="${escapeAttr(p.sentGroup)}"` : ""}>` +
     avatar({ src: p.avatarUrl, initials: p.initials, name: p.name, size: 40 }) +
     id +
     `<span class="person-when">${escapeHtml(p.when ?? "")}</span>` +
@@ -133,16 +219,31 @@ function renderPersonRow(p, action, meta = {}) {
   );
 }
 
+/** @param {{ company?: string | null, note?: string | null }} p */
+function renderPersonMetaLine(p) {
+  const parts = [];
+  if (p.company) {
+    parts.push(`<span class="person-co">${escapeHtml(p.company)}</span>`);
+  } else if (!p.note) {
+    parts.push(`<span class="person-co dim">Not available yet</span>`);
+  }
+  if (p.note) {
+    parts.push(`<span class="person-co">${escapeHtml(p.note)}</span>`);
+  }
+  return parts.join("");
+}
+
 /**
  * Wrap a button in a live action host the client dispatcher POSTs to /act.
- * @param {{ writer: string, args: Record<string, any>, variant: string, label: string, icon?: string }} opts
+ * @param {{ writer: string, args: Record<string, any>, variant: string, label: string, icon?: string, className?: string }} opts
  */
 function actionBtn(opts) {
   const inner =
     `<button class="btn btn-${opts.variant} btn-sm" type="button">` +
     (opts.icon ? iconSvg(opts.icon, 14) : "") +
     `<span>${escapeHtml(opts.label)}</span></button>`;
-  return `<span class="exo-action" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}">${inner}</span>`;
+  const className = opts.className ? ` ${escapeAttr(opts.className)}` : "";
+  return `<span class="exo-action${className}" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}">${inner}</span>`;
 }
 
 /**
@@ -193,20 +294,161 @@ function rowActions(p, action, meta = {}) {
       // Sent request — if the captured degree says 1st, it was accepted: show
       // that. Otherwise it's still pending and stays in the sent queue.
       if (p.resolution === "accepted") return acceptedRow(p);
-      return profileBtn(p);
+      return [
+        rowStatusPill(p),
+        claimBtn(p, meta),
+        withdrawBtn(p, meta),
+        fallbackRowAction(p, meta),
+      ].filter(Boolean).join("");
     case "unfollow":
     case "follow-back":
     case "connect":
     default:
-      // These surfaces have no governed UI writer yet — link to the profile
-      // (a real action) rather than render a button that does nothing.
-      return profileBtn(p);
+      return [claimBtn(p, meta), fallbackRowAction(p, meta)].filter(Boolean).join("");
   }
 }
 
 /** @param {any} p */
 function profileBtn(p) {
   return p.profileUrl ? btn({ variant: "ghost", size: "sm", icon: "link", label: "Profile", href: p.profileUrl }) : "";
+}
+
+/**
+ * @param {any} p
+ * @param {{ interactive?: boolean }} meta
+ */
+function fallbackRowAction(p, meta = {}) {
+  if (p.canClaim || p.canWithdraw || p.withdrawQueued) {
+    return "";
+  }
+  if (meta.interactive && p.prospectId) {
+    return btn({ variant: "secondary", size: "sm", icon: "arrowR", label: "Open prospect", href: `/prospects/${encodeURIComponent(p.prospectId)}` });
+  }
+  return profileBtn(p);
+}
+
+/**
+ * @param {any} p
+ * @param {{
+ *   interactive?: boolean,
+ *   claimMotions?: Array<{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }>
+ * }} meta
+ */
+function claimBtn(p, meta = {}) {
+  if (!p.canClaim) {
+    return "";
+  }
+  const inner = `<button class="btn btn-secondary btn-sm" type="button">${iconSvg("layers", 14)}<span>Claim</span></button>`;
+  if (!meta.interactive || !(meta.claimMotions ?? []).length) {
+    return inner;
+  }
+  return `<a class="btn btn-secondary btn-sm" href="#claim-${escapeAttr(p.id)}">${iconSvg("layers", 14)}<span>Claim</span></a>`;
+}
+
+/**
+ * @param {any} p
+ * @param {{ interactive?: boolean }} meta
+ */
+function withdrawBtn(p, meta = {}) {
+  if (!p.canWithdraw) {
+    return "";
+  }
+  if (meta.interactive && p.id) {
+    return actionBtn({
+      writer: "recordInboundObservation",
+      args: { observationId: p.id, nextKind: "connection_request_withdraw_requested" },
+      variant: "danger",
+      label: "Withdraw",
+      className: "exo-action-flat",
+    });
+  }
+  return btn({ variant: "danger", size: "sm", label: "Withdraw" });
+}
+
+/** @param {any} p */
+function rowStatusPill(p) {
+  if (!p.statusLabel || !p.statusTone) {
+    return "";
+  }
+  return `<span class="row-status row-status-${escapeAttr(p.statusTone)}">${escapeHtml(p.statusLabel)}</span>`;
+}
+
+/**
+ * @param {ReturnType<import("../core/build-connections-view.js").buildConnectionsViewModel>["tabs"]} tabs
+ * @param {{
+ *   interactive?: boolean,
+ *   userId?: string | null,
+ *   claimMotions?: Array<{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }>
+ * }} meta
+ */
+function renderClaimPanels(tabs, meta = {}) {
+  if (!meta.interactive || !(meta.claimMotions ?? []).length) {
+    return "";
+  }
+  const people = tabs.flatMap((tab) => tab.people).filter((person) => person.canClaim);
+  if (!people.length) {
+    return "";
+  }
+  return people.map((person) => renderClaimPanel(person, meta)).join("");
+}
+
+/**
+ * @param {any} person
+ * @param {{ userId?: string | null, claimMotions?: Array<{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }> }} meta
+ */
+function renderClaimPanel(person, meta = {}) {
+  const panelId = `claim-${person.id}`;
+  const options = (meta.claimMotions ?? [])
+    .map(
+      (motion, index) =>
+        renderClaimMotionOption(person.id, motion, index === 0),
+    )
+    .join("");
+  const args = JSON.stringify({ observationId: person.id, userId: meta.userId ?? null });
+  return (
+    `<div class="compose-panel" id="${escapeAttr(panelId)}">` +
+    `<a class="compose-backdrop" href="#cn-${escapeAttr("sent")}" aria-label="Close"></a>` +
+    `<div class="compose-sheet">` +
+    `<div class="compose-head">${iconSvg("layers", 18)}` +
+    `<div><div class="compose-title">Claim ${escapeHtml(person.name)}</div>` +
+    `<div class="compose-sub">Attach this relationship to the motion that should govern it.</div></div>` +
+    `<a class="compose-close" href="#cn-${escapeAttr("sent")}" aria-label="Close">${iconSvg("x", 14)}</a>` +
+    `</div>` +
+    `<div class="compose-field"><span class="compose-label">Destination motion</span><div class="rehome-list">${options}</div></div>` +
+    `<div class="compose-actions">` +
+    `<div class="exo-action" data-exo-writer="claimInboundPersonToMotion" data-exo-args="${escapeAttr(args)}" data-exo-radio="claim-motion-${escapeAttr(person.id)}:toMotionId">` +
+    `<button class="btn btn-primary btn-sm" type="button">${iconSvg("arrowR", 14)}<span>Claim</span></button></div>` +
+    `<a class="btn btn-ghost btn-sm" href="#cn-sent">Cancel</a>` +
+    `</div></div></div>`
+  );
+}
+
+/**
+ * @param {string} personId
+ * @param {{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }} motion
+ * @param {boolean} checked
+ * @returns {string}
+ */
+function renderClaimMotionOption(personId, motion, checked) {
+  const offerLabel = motion.offerLabel?.trim() || motion.name;
+  const premise = motion.premise?.trim() || "No premise authored yet.";
+  const showMotionName = motion.name.trim() && motion.name.trim() !== offerLabel;
+  const statusLine = motion.status
+    ? `<span class="rehome-detail"><span class="rehome-cap">Status</span>${stateDot(motion.status, motion.statusLabel ?? undefined)}</span>`
+    : "";
+  return (
+    `<label class="rehome-opt">` +
+    `<input type="radio" name="claim-motion-${escapeAttr(personId)}" value="${escapeAttr(motion.id)}"${checked ? " checked" : ""}>` +
+    `<span class="rehome-copy">` +
+    statusLine +
+    `<span class="rehome-detail"><span class="rehome-cap">Offer</span><span class="rehome-offer">${escapeHtml(offerLabel)}</span></span>` +
+    (showMotionName
+      ? `<span class="rehome-detail"><span class="rehome-cap">Motion</span><span class="rehome-text rehome-code">${escapeHtml(motion.name)}</span></span>`
+      : "") +
+    `<span class="rehome-detail"><span class="rehome-cap">Premise</span><span class="rehome-text">${escapeHtml(premise)}</span></span>` +
+    `</span>` +
+    `</label>`
+  );
 }
 
 /** @param {any[]} freshness */

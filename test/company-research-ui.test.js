@@ -43,6 +43,7 @@ test("company and motion surfaces expose a start research button and research br
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-company-research-ui-"));
 
   try {
+    const user = JSON.parse(runCli(stateDir, ["users", "add", "--label", "Research UI User", "--json"]));
     const motion = JSON.parse(
       runCli(stateDir, [
         "motion",
@@ -94,7 +95,7 @@ test("company and motion surfaces expose a start research button and research br
         {
           id: motion.id,
           name: motion.name,
-          status: "active",
+          status: motion.status,
           overallStage: "needs-company-research",
           companyCount: 1,
           prospectCount: 0,
@@ -105,7 +106,7 @@ test("company and motion surfaces expose a start research button and research br
         {
           motionId: motion.id,
           motionName: motion.name,
-          motionStatus: "active",
+          motionStatus: motion.status,
           overallStage: "needs-company-research",
           offer: {
             title: "Research UI Fixture",
@@ -163,15 +164,22 @@ test("company and motion surfaces expose a start research button and research br
     assert.ok(motionHtml.indexOf("Audience hypotheses") < motionHtml.indexOf("Matched companies"));
     assert.ok(motionHtml.indexOf("Matched companies") < motionHtml.indexOf("Matched people"));
     assert.doesNotMatch(motionHtml, /PREMISE · WHY THIS OFFER MATTERS HERE/);
+    assert.match(motionHtml, /Set live/i);
+    assert.match(motionHtml, /data-exo-writer="restartMotion"/);
 
-    const settingsHtml = renderMotionSettingsPage(motionsModel.details[0], { interactive: true });
+    const settingsHtml = renderMotionSettingsPage(motionsModel.details[0], {
+      interactive: true,
+      user: { id: user.id, label: user.label },
+    });
     assert.match(settingsHtml, /role="tablist"/);
     assert.match(settingsHtml, /role="tab"[^>]*data-tab-target="premise"/);
     assert.match(settingsHtml, /role="tab"[^>]*data-tab-target="offer"/);
     assert.match(settingsHtml, /role="tab"[^>]*data-tab-target="signals"/);
+    assert.match(settingsHtml, /role="tab"[^>]*data-tab-target="execution"/);
     assert.match(settingsHtml, /role="tabpanel"[^>]*data-tab-panel="premise"/);
     assert.match(settingsHtml, /role="tabpanel"[^>]*data-tab-panel="offer" hidden/);
     assert.match(settingsHtml, /role="tabpanel"[^>]*data-tab-panel="signals" hidden/);
+    assert.match(settingsHtml, /role="tabpanel"[^>]*data-tab-panel="execution" hidden/);
     assert.match(settingsHtml, /WHY THIS OFFER MATTERS HERE/);
     assert.match(settingsHtml, /what this motion is for/i);
     assert.match(settingsHtml, /Signals <span>1<\/span>/);
@@ -180,6 +188,11 @@ test("company and motion surfaces expose a start research button and research br
     assert.match(settingsHtml, /data-exo-fields="signal:signal"/);
     assert.match(settingsHtml, /Remove signal/i);
     assert.match(settingsHtml, /data-exo-writer="removeMotionSignal"/);
+    assert.match(settingsHtml, /who can launch this motion/i);
+    assert.match(settingsHtml, /No acting user is pinned for this motion yet\./);
+    assert.match(settingsHtml, /data-exo-writer="assignMotionUser"/);
+    assert.match(settingsHtml, /Set live/i);
+    assert.match(settingsHtml, /data-exo-writer="restartMotion"/);
     assert.match(settingsHtml, new RegExp(`href="\\/motions\\/${motion.id}"`));
 
     const brief = buildCompanyResearchBrief(company, motion);

@@ -8,6 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { buildAgentQueue } from "../src/core/build-agent-queue.js";
+import { checkoutTaskLease, createTaskLeaseFingerprint } from "../src/lib/agent-host-state.js";
 import {
   classifyDraftStaleness,
   isDraftActive,
@@ -71,7 +72,7 @@ function fixture(prospectFields) {
         },
       },
     ],
-    companies: [{ id: "company-1", engagementUserAssignment: { accountRefs: [] } }],
+    companies: [{ id: "company-1", motionIds: ["motion-1"], engagementUserAssignment: { accountRefs: [] } }],
     profiles: prospectFields.profiles,
     users: prospectFields.users ?? [],
     observations: prospectFields.observations ?? [],
@@ -79,7 +80,30 @@ function fixture(prospectFields) {
   };
 }
 
-function inboundUserFixture({ capability = "linkedin", surfaceKey, surfaceStateOverrides = {} } = {}) {
+function inboundUserFixture({ capability = "linkedin", surfaceKey, surfaceStateOverrides = {}, surfaces = null } = {}) {
+  const baseSurface = {
+    enabled: true,
+    lastSyncedAt: "2026-05-01T00:00:00.000Z",
+    lastObservedAt: "2026-05-01T00:00:00.000Z",
+    lastRunStatus: "success",
+    lastItemCount: 0,
+    lastVisibleTotalCount: 0,
+    lastCaptureCompleteness: null,
+    lastRequestedMode: null,
+    lastActualMode: null,
+    lastReconcileRequired: null,
+    lastReconcileReason: null,
+    lastExhaustionStatus: null,
+    lastExhaustionReason: null,
+    lastPaginationAttempted: null,
+    lastTerminalSignalSeen: null,
+    lastStalledPassCount: null,
+    lastObservationCount: 0,
+    lastItemizationGapCount: 0,
+    lastCountDiscrepancyCount: 0,
+    lastError: null,
+  };
+
   return {
     id: "user-1",
     createdAt: "2026-06-01T00:00:00.000Z",
@@ -108,32 +132,10 @@ function inboundUserFixture({ capability = "linkedin", surfaceKey, surfaceStateO
         preferred: true,
         notes: null,
         inboundSync: {
-          surfaces: [
-            {
-              surfaceKey,
-              enabled: true,
-              lastSyncedAt: "2026-05-01T00:00:00.000Z",
-              lastObservedAt: "2026-05-01T00:00:00.000Z",
-              lastRunStatus: "success",
-              lastItemCount: 0,
-              lastVisibleTotalCount: 0,
-              lastCaptureCompleteness: null,
-              lastRequestedMode: null,
-              lastActualMode: null,
-              lastReconcileRequired: null,
-              lastReconcileReason: null,
-              lastExhaustionStatus: null,
-              lastExhaustionReason: null,
-              lastPaginationAttempted: null,
-              lastTerminalSignalSeen: null,
-              lastStalledPassCount: null,
-              lastObservationCount: 0,
-              lastItemizationGapCount: 0,
-              lastCountDiscrepancyCount: 0,
-              lastError: null,
-              ...surfaceStateOverrides,
-            },
-          ],
+          surfaces: (surfaces ?? [{ surfaceKey, ...surfaceStateOverrides }]).map((surface) => ({
+            ...baseSurface,
+            ...surface,
+          })),
         },
       },
     ],
@@ -221,6 +223,62 @@ test("selectNextDraftSurface reuses the direct-message surface for a first priva
   assert.equal(surface, "follow_up_direct_message");
 });
 
+test("buildAgentQueue annotates checked-out send work from host state", () => {
+  const initialQueue = buildAgentQueue({
+    ...fixture({
+      drafts: [
+        {
+          surface: "connection_request",
+          channel: "linkedin",
+          status: "approved",
+          approvedAt: "2026-06-03T05:00:00.000Z",
+          body: "Send this",
+        },
+      ],
+      touches: [],
+    }),
+    now: "2026-06-03T05:15:00.000Z",
+  });
+  const sendTask = initialQueue.tasks.find((task) => task.kind === "send_message");
+  assert.ok(sendTask, "expected a send_message task");
+
+  const hostState = checkoutTaskLease(null, {
+    taskKind: sendTask.kind,
+    fingerprint: createTaskLeaseFingerprint(sendTask),
+    workerLabel: "worker-1",
+    acquiredAt: "2026-06-03T05:10:00.000Z",
+    expiresAt: "2026-06-03T06:10:00.000Z",
+    motionId: sendTask.motionId,
+    companyId: sendTask.companyId,
+    prospectId: sendTask.prospectId,
+    surface: sendTask.surface,
+    subject: sendTask.prospectName,
+    action: sendTask.action,
+  }).state;
+
+  const queue = buildAgentQueue({
+    ...fixture({
+      drafts: [
+        {
+          surface: "connection_request",
+          channel: "linkedin",
+          status: "approved",
+          approvedAt: "2026-06-03T05:00:00.000Z",
+          body: "Send this",
+        },
+      ],
+      touches: [],
+    }),
+    hostState,
+    now: "2026-06-03T05:15:00.000Z",
+  });
+
+  const checkedOutTask = queue.tasks.find((task) => task.kind === "send_message");
+  assert.equal(checkedOutTask?.checkoutState, "checked_out");
+  assert.equal(checkedOutTask?.checkedOutBy, "worker-1");
+  assert.equal(checkedOutTask?.checkedOutAt, "2026-06-03T05:10:00.000Z");
+});
+
 test("classifyDraftStaleness flags a ready follow_up draft as stale once an inbound touch arrives", () => {
   const draft = { surface: "follow_up_direct_message", status: "ready" };
   const nextSurface = "inbound_reply";
@@ -261,13 +319,70 @@ test("buildAgentQueue emits a full inbound sync task when an itemization gap exi
     cues: [],
   });
 
-  const task = queue.tasks.find((item) => item.kind === "run_inbound_sync");
+  const task = queue.tasks.find((item) =>
+    item.kind === "run_inbound_sync"
+    && item.surfaceKeys.includes("linkedin-sent-invitations")
+  );
   assert.ok(task);
   assert.equal(task.mode, "full");
   assert.equal(task.reason, "itemization_gap");
   assert.ok(task.surfaceKeys.includes("linkedin-sent-invitations"));
-  assert.match(task.contractCommand, /exo inbound sync linkedin-live user-1 --account account-1 --mode full --json/);
+  assert.match(task.contractCommand, /exo inbound sync linkedin-live user-1 --account account-1 .*--surface linkedin-sent-invitations .*--mode full --json/);
   assert.match(task.applyCommand, /exo inbound sync run user-1 --input <combined-inbound-sync\.json> --refresh --json/);
+});
+
+test("buildAgentQueue splits inbound sync work into one task per surface", () => {
+  const queue = buildAgentQueue({
+    motions: [],
+    companies: [],
+    users: [
+      inboundUserFixture({
+        capability: "linkedin",
+        surfaces: [
+          {
+            surfaceKey: "linkedin-sent-invitations",
+            lastRunStatus: "success",
+            lastItemCount: 2,
+            lastVisibleTotalCount: 5,
+            lastObservationCount: 2,
+            lastItemizationGapCount: 3,
+            lastRequestedMode: "quick",
+            lastActualMode: "quick",
+          },
+          {
+            surfaceKey: "linkedin-messaging-inbox",
+            lastRunStatus: "success",
+            lastObservedAt: "2026-05-01T00:00:00.000Z",
+            lastSyncedAt: "2026-05-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    ],
+    observations: [],
+    cues: [],
+    now: "2026-06-03T09:00:00.000Z",
+  });
+
+  const syncTasks = queue.tasks.filter((item) =>
+    item.kind === "run_inbound_sync"
+    && (
+      item.surfaceKeys.includes("linkedin-sent-invitations")
+      || item.surfaceKeys.includes("linkedin-messaging-inbox")
+    )
+  );
+  assert.equal(syncTasks.length, 2);
+
+  const fullTask = syncTasks.find((task) => task.surfaceKeys.includes("linkedin-sent-invitations"));
+  const quickTask = syncTasks.find((task) => task.surfaceKeys.includes("linkedin-messaging-inbox"));
+
+  assert.ok(fullTask);
+  assert.ok(quickTask);
+  assert.equal(fullTask.mode, "full");
+  assert.equal(fullTask.reason, "itemization_gap");
+  assert.deepEqual(fullTask.surfaceKeys, ["linkedin-sent-invitations"]);
+  assert.equal(quickTask.mode, "quick");
+  assert.equal(quickTask.reason, "stale_surface");
+  assert.deepEqual(quickTask.surfaceKeys, ["linkedin-messaging-inbox"]);
 });
 
 test("buildAgentQueue emits a due company_research task for a claimed account packet", () => {
@@ -320,6 +435,253 @@ test("buildAgentQueue emits a due company_research task for a claimable backlog 
   assert.equal(task.reason, "claimable_company_packet");
   assert.match(task.claimCommand, /exo companies queue claim company-1 --motion motion-1 --worker <worker-label> --json/);
   assert.match(task.briefCommand, /exo motion packet-brief motion-1 --packet company_research:company-1 --json/);
+});
+
+test("buildAgentQueue emits a company_discovery task when the motion cannot project enough available prospects from current backlog", () => {
+  const queue = buildAgentQueue({
+    motions: [
+      {
+        id: "motion-1",
+        name: "Motion One",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-03T05:00:00.000Z",
+        status: "active",
+        offer: {
+          sourceUrl: "https://example.com/motion-one",
+          offerNotes: null,
+        },
+        premise: {
+          status: "defined",
+          statement: "This offer matters when the motion needs more upstream company discovery.",
+          notes: null,
+          source: "operator",
+        },
+        targetingProfile: {
+          geolocations: [],
+          icpTypes: [],
+          industries: [],
+          companyTypes: [],
+          companyShapes: [],
+          companySizes: [],
+          targetTitles: ["VP Revenue Operations"],
+          roleFamilies: ["Revenue Operations"],
+          segmentVariants: [],
+          stakeholderTargetCount: 3,
+        },
+        suppressionPolicy: {
+          excludedAccounts: [],
+          excludedDomains: [],
+          excludedContacts: [],
+          doNotContactEntries: [],
+          doNotContactSources: [],
+          crmCustomerSuppressionEnabled: false,
+          crmOpportunitySuppressionEnabled: false,
+        },
+        offerThesis: {
+          sourceUrl: "https://example.com/motion-one",
+          sourceTitle: null,
+          sourceDescription: null,
+          sourceSummary: "Example offer summary.",
+          offerNotes: null,
+          problemThesis: null,
+          buyerImpactThesis: null,
+          likelyTriggerThesis: null,
+          likelyRoleThesis: null,
+          likelySegmentThesis: null,
+          status: "seeded",
+        },
+        audienceHypotheses: [
+          {
+            id: "audience-1",
+            name: "Revenue operators",
+            companyCriteria: [],
+            roleCriteria: ["VP Revenue Operations"],
+            notes: null,
+            confidence: "high",
+          },
+        ],
+        signals: [
+          {
+            id: "signal-1",
+            name: "Outbound execution pressure",
+            question: "Is there current evidence this company needs more disciplined outbound execution?",
+            scope: "company",
+            whyItMatters: "Strong-fit companies should show active execution pressure.",
+            matchRule: null,
+            audienceIds: ["audience-1"],
+            observationMethods: [],
+            status: "ready",
+          },
+        ],
+        targetMap: {
+          status: "ready",
+          segments: [],
+          accounts: [
+            {
+              companyId: "company-1",
+              companyName: "Acme",
+              domain: "acme.example",
+              websiteUrl: "https://acme.example",
+              linkedinCompanyUrl: null,
+              signalMatches: [],
+              queueState: {
+                status: "selected",
+                source: "derived",
+                updatedAt: "2026-06-03T05:00:00.000Z",
+                notes: null,
+              },
+              packetState: null,
+              lastResearchAt: "2026-06-02T05:00:00.000Z",
+              notes: null,
+              prospects: [
+                {
+                  id: "prospect-1",
+                  name: "Princess",
+                  title: "VP Revenue Operations",
+                  linkedinProfileUrl: "https://linkedin.com/in/princess",
+                  avatarSourceUrl: null,
+                  avatarUrl: null,
+                  email: null,
+                  buyingCommitteeRole: "primary_business_owner",
+                  decisionAuthority: "influences",
+                  fitConfidence: "high",
+                  whyRelevant: "Likely owner of outbound process quality.",
+                  sourceUrl: "https://linkedin.com/in/princess",
+                  observedAt: "2026-06-03T05:00:00.000Z",
+                  profileViewedAt: null,
+                  roleTruth: {},
+                  triggerWindow: {},
+                  identityTells: {},
+                  linkedinProfileSnapshot: {},
+                  liveSignal: {},
+                  contactPoints: [],
+                  contactEnrichmentState: {},
+                  queueState: {
+                    status: "selected",
+                    source: "derived",
+                    updatedAt: "2026-06-03T05:00:00.000Z",
+                    notes: null,
+                  },
+                  packetState: null,
+                  notes: null,
+                  signalMatchIds: [],
+                  touches: [],
+                  cadenceState: {
+                    status: "pending",
+                    currentStep: null,
+                    lastTouchChannel: null,
+                    lastTouchOutcome: null,
+                    lastTouchAt: null,
+                    nextAction: null,
+                    nextActionDueAt: null,
+                    blockedChannels: [],
+                    requireNewHook: false,
+                    notes: null,
+                    updatedAt: "2026-06-03T05:00:00.000Z",
+                  },
+                  drafts: [],
+                  timelineNotes: [],
+                },
+              ],
+            },
+          ],
+        },
+        stakeholderMap: {
+          status: "ready",
+          stakeholders: [],
+        },
+        motionPlan: {
+          status: "pending",
+          variants: [],
+        },
+        nextSteps: [],
+        engagementProfileAssignment: null,
+        engagementUserAssignment: null,
+      },
+    ],
+    companies: [
+      {
+        id: "company-1",
+        name: "Acme",
+        searchName: "acme",
+        domain: "acme.example",
+        websiteUrl: "https://acme.example",
+        linkedinCompanyUrl: null,
+        logoSourceUrl: null,
+        logoUrl: null,
+        notes: null,
+        tags: [],
+        motionIds: ["motion-1"],
+        engagementProfileAssignment: null,
+        engagementUserAssignment: null,
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+      },
+    ],
+    profiles: [],
+    users: [],
+    observations: [],
+    cues: [],
+  });
+
+  const task = queue.tasks.find((item) => item.kind === "company_discovery");
+  assert.ok(task);
+  assert.equal(task.motionId, "motion-1");
+  assert.equal(task.claimState, "claimable");
+  assert.equal(task.reason, "inventory_shortfall");
+  assert.equal(task.targetCompanyCount, 11);
+  assert.equal(task.prospectName, "Discover at least 11 companies");
+  assert.equal(task.availableProspectCount, 1);
+  assert.equal(task.projectedAvailableProspectCount, 3);
+  assert.equal(task.deficitAfterBacklog, 22);
+  assert.match(task.whyItMatters, /Find at least 11 more companies now/i);
+  assert.match(task.briefCommand, /exo motion discovery-brief motion-1 --companies 11 --json/);
+});
+
+test("buildAgentQueue emits a due prospect_selection task for a researched account packet", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      accountQueueState: {
+        status: "researched",
+        source: "manual",
+        updatedAt: "2026-06-03T05:00:00.000Z",
+      },
+      accountPacketState: null,
+    }),
+  );
+
+  const task = queue.tasks.find((item) => item.kind === "prospect_selection");
+  assert.ok(task);
+  assert.equal(task.companyId, "company-1");
+  assert.equal(task.packetId, "prospect_selection:company-1");
+  assert.equal(task.claimState, "claimable");
+  assert.equal(task.workerLabel, null);
+  assert.equal(task.reason, "claimable_prospect_selection_packet");
+  assert.match(task.claimCommand, /exo companies queue claim company-1 --motion motion-1 --worker <worker-label> --json/);
+  assert.match(task.briefCommand, /exo motion packet-brief motion-1 --packet prospect_selection:company-1 --json/);
+});
+
+test("buildAgentQueue emits a due prospect_research task for a selected prospect packet", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      cadenceState: {
+        status: "pending",
+        currentStep: null,
+        updatedAt: "2026-06-03T05:00:00.000Z",
+      },
+    }),
+  );
+
+  const task = queue.tasks.find((item) => item.kind === "prospect_research");
+  assert.ok(task);
+  assert.equal(task.companyId, "company-1");
+  assert.equal(task.prospectId, "prospect-1");
+  assert.equal(task.packetId, "prospect_research:company-1:prospect-1");
+  assert.equal(task.claimState, "claimable");
+  assert.equal(task.workerLabel, null);
+  assert.equal(task.reason, "claimable_prospect_research_packet");
+  assert.match(task.claimCommand, /exo companies prospects claim company-1 --motion motion-1 --prospect prospect-1 --worker <worker-label> --json/);
+  assert.match(task.briefCommand, /exo motion packet-brief motion-1 --packet prospect_research:company-1:prospect-1 --json/);
 });
 
 test("buildAgentQueue can surface a waiting autonomous retrieval task when forced", () => {
@@ -399,7 +761,7 @@ test("buildAgentQueue emits a quick inbound sync task when open cues point at st
   assert.match(task.contractCommand, /exo inbound sync gmail-live user-1 --account account-1 --mode quick --json/);
 });
 
-test("buildAgentQueue does not immediately requeue a bounded linkedin quick-pass warning", () => {
+test("buildAgentQueue requeues a bounded linkedin quick-pass warning when the surface still needs reconciliation", () => {
   const queue = buildAgentQueue({
     motions: [],
     companies: [],
@@ -475,7 +837,113 @@ test("buildAgentQueue does not immediately requeue a bounded linkedin quick-pass
     now: "2026-06-03T09:00:00.000Z",
   });
 
-  assert.equal(queue.tasks.some((item) => item.kind === "run_inbound_sync"), false);
+  const task = queue.tasks.find((item) => item.kind === "run_inbound_sync");
+  assert.ok(task);
+  assert.equal(task.mode, "full");
+  assert.equal(task.reason, "itemization_gap");
+  assert.deepEqual(task.surfaceKeys, ["linkedin-sent-invitations"]);
+});
+
+test("buildAgentQueue carries paginated full-sync continuation metadata for LinkedIn following-list", () => {
+  const queue = buildAgentQueue({
+    motions: [],
+    companies: [],
+    users: [
+      {
+        id: "user-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        label: "Operator",
+        owner: "operator",
+        notes: null,
+        workingHours: {
+          mode: "always",
+          timezone: "America/New_York",
+          weekdays: ["mon", "tue", "wed", "thu", "fri"],
+          startLocalTime: "09:00",
+          endLocalTime: "17:00",
+        },
+        accounts: [
+          {
+            id: "account-1",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            capability: "linkedin",
+            handle: "operator-linkedin",
+            label: null,
+            sourceType: "harness-connection",
+            browserProfileId: null,
+            harnessConnectionId: "harness-1",
+            providerAccountId: "provider-1",
+            preferred: true,
+            notes: null,
+            inboundSync: {
+              surfaces: [
+                { surfaceKey: "linkedin-sent-invitations", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-received-invitations", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-messaging-inbox", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-profile-views", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-followers-list", enabled: false, lastRunStatus: "never" },
+                {
+                  surfaceKey: "linkedin-following-list",
+                  enabled: true,
+                  lastSyncedAt: "2026-06-03T08:30:00.000Z",
+                  lastObservedAt: "2026-06-03T08:30:00.000Z",
+                  lastRunStatus: "warning",
+                  lastItemCount: 10,
+                  lastVisibleTotalCount: 25,
+                  lastCaptureCompleteness: "partial_visible_slice",
+                  lastRequestedMode: "full",
+                  lastActualMode: "full",
+                  lastReconcileRequired: true,
+                  lastReconcileReason: "page_budget_stopped_early",
+                  lastExhaustionStatus: "incomplete",
+                  lastExhaustionReason: "page_budget_stopped_early",
+                  lastPaginationAttempted: true,
+                  lastTerminalSignalSeen: false,
+                  lastStalledPassCount: 0,
+                  continuationStartedAt: "2026-06-03T08:30:00.000Z",
+                  nextCursor: null,
+                  nextStartOffset: 10,
+                  lastObservationCount: 10,
+                  lastItemizationGapCount: 0,
+                  lastCountDiscrepancyCount: 15,
+                  lastError: "Full reconciliation stopped at the configured page budget and should resume from the next offset.",
+                },
+                { surfaceKey: "linkedin-comment-replies", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-catch-up-updates", enabled: false, lastRunStatus: "never" },
+              ],
+            },
+          },
+        ],
+        harnessConnections: [
+          {
+            id: "harness-1",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            runtime: "codex",
+            connector: "unipile",
+            label: "codex:unipile",
+            status: "available",
+            notes: null,
+          },
+        ],
+      },
+    ],
+    observations: [],
+    cues: [],
+    now: "2026-06-03T09:00:00.000Z",
+  });
+
+  const task = queue.tasks.find((item) => item.kind === "run_inbound_sync");
+  assert.ok(task);
+  assert.equal(task.mode, "full");
+  assert.equal(task.resumeStartOffset, 10);
+  assert.equal(task.maxPages, 1);
+  assert.equal(task.pageSize, 10);
+  assert.match(task.contractCommand, /--resume-start-offset 10/);
+  assert.match(task.contractCommand, /--max-pages 1/);
+  assert.match(task.contractCommand, /--page-size 10/);
 });
 
 test("buildAgentQueue skips unsupported Gmail live-sync accounts and keeps the runnable Gmail connector task", () => {
@@ -590,8 +1058,8 @@ test("buildAgentQueue emits a write_draft task for a prospect with no draft yet"
   assert.equal(writes[0].reason, "no_draft");
   assert.match(writes[0].briefCommand, /exo motion draft-brief motion-1 --prospect prospect-1 --surface connection_request --json/);
   assert.match(writes[0].writeback, /exo companies prospects draft set company-1/);
-  assert.match(writes[0].writeback, /--status queued/);
-  assert.equal(writes[0].postWriteStatus, "queued");
+  assert.match(writes[0].writeback, /--status ready/);
+  assert.equal(writes[0].postWriteStatus, "ready");
   assert.equal(writes[0].queueState, "due_now");
 });
 
@@ -749,7 +1217,81 @@ test("buildAgentQueue still emits send_message for an approved draft on the curr
   assert.equal(queue.blockers.length, 0);
 });
 
-test("buildAgentQueue still emits send_message for a queued draft on the current surface", () => {
+test("buildAgentQueue drops stale draft blockers once the current reply surface already has an active draft", () => {
+  const touches = [
+    { surface: "connection_request", direction: "outbound", outcome: "accepted", occurredAt: "2026-05-01T00:00:00Z" },
+    { surface: "post_accept_message", direction: "outbound", outcome: "sent", occurredAt: "2026-05-02T00:00:00Z" },
+    { surface: "inbound_reply", direction: "inbound", outcome: "received", occurredAt: "2026-05-03T00:00:00Z" },
+  ];
+  const queue = buildAgentQueue(
+    fixture({
+      touches,
+      drafts: [
+        {
+          surface: "post_accept_message",
+          status: "approved",
+          body: "Thanks for connecting.",
+          approvedAt: "2026-05-02T12:00:00Z",
+          channel: "linkedin",
+        },
+        {
+          surface: "inbound_reply",
+          status: "approved",
+          body: "Hey Peter, checking in.",
+          approvedAt: "2026-05-03T12:00:00Z",
+          channel: "linkedin",
+        },
+      ],
+    }),
+  );
+
+  const sends = queue.tasks.filter((task) => task.kind === "send_message");
+  assert.equal(queue.blockers.length, 0);
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].surface, "inbound_reply");
+});
+
+test("buildAgentQueue drops stale dead-surface blockers once the inbound was already answered", () => {
+  const touches = [
+    { surface: "inbound_reply", direction: "inbound", outcome: "received", occurredAt: "2026-05-03T00:00:00Z" },
+    { surface: "inbound_reply", direction: "outbound", outcome: "sent", occurredAt: "2026-05-04T00:00:00Z" },
+  ];
+  const queue = buildAgentQueue(
+    fixture({
+      touches,
+      cadenceState: {
+        currentStep: "direct-message",
+      },
+      drafts: [
+        {
+          surface: "post_accept_message",
+          status: "approved",
+          body: "Obsolete draft.",
+          approvedAt: "2026-05-05T00:00:00Z",
+          channel: "linkedin",
+          authoredBy: "operator",
+          editedByOperator: true,
+        },
+        {
+          surface: "inbound_reply",
+          status: "sent",
+          body: "Reply already sent.",
+          approvedAt: "2026-05-04T00:00:00Z",
+          sentAt: "2026-05-04T00:00:00Z",
+          channel: "linkedin",
+          authoredBy: "operator",
+          editedByOperator: true,
+        },
+      ],
+    }),
+  );
+
+  assert.equal(queue.blockers.length, 0);
+  assert.equal(queue.tasks.filter((t) => t.kind === "send_message").length, 0);
+  assert.equal(queue.tasks.filter((t) => t.kind === "write_draft").length, 0);
+});
+
+test("buildAgentQueue still emits send_message for an operator-queued draft on the current surface", () => {
   const touches = [
     { surface: "connection_request", direction: "outbound", outcome: "accepted", occurredAt: "2026-05-01T00:00:00Z" },
   ];
@@ -766,6 +1308,8 @@ test("buildAgentQueue still emits send_message for a queued draft on the current
           body: "Thanks for connecting.",
           approvedAt: "2026-05-02T00:00:00Z",
           channel: "linkedin",
+          authoredBy: "operator",
+          editedByOperator: true,
         },
       ],
     }),
@@ -774,6 +1318,34 @@ test("buildAgentQueue still emits send_message for a queued draft on the current
   assert.equal(sends.length, 1);
   assert.equal(sends[0].surface, "post_accept_message");
   assert.equal(queue.blockers.length, 0);
+});
+
+test("buildAgentQueue does not emit send_message for an agent-authored queued draft on the current surface", () => {
+  const touches = [
+    { surface: "connection_request", direction: "outbound", outcome: "accepted", occurredAt: "2026-05-01T00:00:00Z" },
+  ];
+  const queue = buildAgentQueue(
+    fixture({
+      touches,
+      cadenceState: {
+        currentStep: "direct-message",
+      },
+      drafts: [
+        {
+          surface: "post_accept_message",
+          status: "queued",
+          body: "Thanks for connecting.",
+          approvedAt: "2026-05-02T00:00:00Z",
+          channel: "linkedin",
+          authoredBy: "agent",
+          editedByOperator: false,
+        },
+      ],
+    }),
+  );
+
+  assert.equal(queue.tasks.filter((t) => t.kind === "send_message").length, 0);
+  assert.equal(queue.waiting.filter((t) => t.kind === "send_message").length, 0);
 });
 
 test("buildAgentQueue preserves email sends as send_email instead of collapsing them into LinkedIn direct messages", () => {
@@ -837,6 +1409,36 @@ test("buildAgentQueue preserves draft authorship on send tasks", () => {
   assert.ok(sendTask);
   assert.equal(sendTask.authoredBy, "operator");
   assert.equal(sendTask.editedByOperator, true);
+});
+
+test("buildAgentQueue marks approved agent drafts as operator-approved send work", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      email: "lpark@govpointeoffice.us",
+      sourceUrl: "https://mail.google.com/mail/#all/thread-1",
+      cadenceState: {
+        currentStep: "value-add-email",
+      },
+      drafts: [
+        {
+          surface: "email",
+          status: "approved",
+          subject: "Re: Fire department RFP",
+          body: "Agent wrote this.",
+          approvedAt: "2026-06-04T17:14:29.676Z",
+          channel: "email",
+          authoredBy: "agent",
+          editedByOperator: false,
+        },
+      ],
+    }),
+  );
+
+  const sendTask = queue.tasks.find((task) => task.kind === "send_message");
+  assert.ok(sendTask);
+  assert.equal(sendTask.authoredBy, "agent");
+  assert.equal(sendTask.editedByOperator, false);
+  assert.equal(sendTask.approvedByOperator, true);
 });
 
 test("buildAgentQueue keeps a future first-touch draft in waiting until its due checkpoint", () => {
@@ -914,6 +1516,8 @@ test("buildAgentQueue does not emit a connection-request send when cadence has a
           body: "This should never send.",
           approvedAt: "2026-05-02T00:00:00Z",
           channel: "linkedin",
+          authoredBy: "operator",
+          editedByOperator: true,
         },
       ],
       cadenceState: {
@@ -940,6 +1544,8 @@ test("buildAgentQueue keeps a send-ready draft in waiting until the cadence due 
           body: "Queued request.",
           approvedAt: "2026-05-02T00:00:00Z",
           channel: "linkedin",
+          authoredBy: "operator",
+          editedByOperator: true,
         },
       ],
       cadenceState: {
@@ -987,7 +1593,35 @@ test("buildAgentQueue queues stale pending connection requests for autonomous wi
   );
 });
 
-test("buildAgentQueue queues an unfollow after a withdrawn followed branch needs cleanup", () => {
+test("buildAgentQueue queues an operator-requested withdraw from the sent-invitations surface immediately", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      drafts: [],
+      touches: [],
+      observations: [
+        {
+          id: "obs-withdraw-requested",
+          kind: "connection_request_withdraw_requested",
+          observedAt: "2026-06-05T00:00:00.000Z",
+          actorName: "Wendy Withdraw",
+          actorProfileUrl: "https://linkedin.com/in/wendy-withdraw",
+        },
+      ],
+    }),
+  );
+
+  const task = queue.tasks.find((item) => item.kind === "withdraw_connection");
+  assert.ok(task);
+  assert.equal(task.action, "withdraw_connection");
+  assert.equal(task.reason, "operator_requested_withdraw");
+  assert.equal(task.prospectName, "Wendy Withdraw");
+  assert.match(
+    task.writeback,
+    /exo actions result --action withdraw_connection --result sent --observation obs-withdraw-requested --surface withdraw_connection/,
+  );
+});
+
+test("buildAgentQueue does not synthesize unfollow cleanup after a withdrawn branch", () => {
   const queue = buildAgentQueue(
     fixture({
       drafts: [],
@@ -999,11 +1633,5 @@ test("buildAgentQueue queues an unfollow after a withdrawn followed branch needs
   );
 
   const task = queue.tasks.find((item) => item.kind === "unfollow_profile");
-  assert.ok(task);
-  assert.equal(task.action, "unfollow");
-  assert.equal(task.prospectName, "Princess");
-  assert.match(
-    task.writeback,
-    /exo actions result --action unfollow --result sent --company company-1 --prospect prospect-1 --motion motion-1 --surface unfollow/,
-  );
+  assert.equal(task, undefined);
 });

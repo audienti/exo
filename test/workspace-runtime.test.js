@@ -8,6 +8,10 @@ import path from "node:path";
 
 import { offerUrl, runCliJson } from "./support/live-runtime.js";
 
+function flattenLaneItems(lanes) {
+  return (lanes ?? []).flatMap((lane) => lane.items ?? []);
+}
+
 test("report workspace exposes the unified agent queue separately from blockers and backlog", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-workspace-runtime-"));
 
@@ -130,9 +134,9 @@ test("report workspace exposes the unified agent queue separately from blockers 
     assert.equal(report.agentQueue.items.length, 1);
     assert.equal(report.agentQueue.waitingItems.length, 1);
 
-    assert.equal(report.agentQueue.tasks[0].kind, "write_draft");
+    assert.equal(report.agentQueue.tasks[0].kind, "prospect_research");
     assert.equal(report.agentQueue.tasks[0].prospectName, dueProspect.name);
-    assert.equal(report.agentQueue.items[0].taskKind, "write_draft");
+    assert.equal(report.agentQueue.items[0].taskKind, "prospect_research");
 
     assert.equal(report.agentQueue.waiting[0].kind, "write_draft");
     assert.equal(report.agentQueue.waiting[0].prospectName, waitingProspect.name);
@@ -141,6 +145,305 @@ test("report workspace exposes the unified agent queue separately from blockers 
 
     assert.equal(report.blockedQueue.itemCount, 0);
     assert.equal(report.executionBacklog.packetCount, 0);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("report workspace keeps a replied prospect in reply-accepted after the outbound reply is sent", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-workspace-reply-lane-"));
+
+  try {
+    const user = runCliJson(tempDir, [
+      "users",
+      "add",
+      "--label",
+      "workspace-reply-user",
+      "--owner",
+      "william",
+      "--json",
+    ]);
+
+    const motion = runCliJson(tempDir, [
+      "motion",
+      "add",
+      "--url",
+      offerUrl,
+      "--premise",
+      "This offer matters when an inbound conversation should stay out of the sent-pending lane after we reply.",
+      "--audience",
+      "Owners",
+      "--signal",
+      "company::Did the relationship already move into a live conversation?",
+      "--json",
+    ]);
+
+    const company = runCliJson(tempDir, [
+      "companies",
+      "add",
+      "--name",
+      "Reply Lane Co",
+      "--domain",
+      "reply-lane.example",
+      "--motion",
+      motion.id,
+      "--json",
+    ]);
+
+    const prospect = runCliJson(tempDir, [
+      "companies",
+      "prospects",
+      "add",
+      company.id,
+      "--motion",
+      motion.id,
+      "--name",
+      "Marv White",
+      "--title",
+      "Director of Procurement",
+      "--buying-committee-role",
+      "primary_business_owner",
+      "--decision-authority",
+      "influences",
+      "--fit-confidence",
+      "high",
+      "--why-relevant",
+      "Transitioned from messaging inbox and already replied in-thread.",
+      "--linkedin-profile-url",
+      "https://www.linkedin.com/in/marv-white/",
+      "--json",
+    ]).prospects[0];
+
+    runCliJson(tempDir, [
+      "companies",
+      "touches",
+      "add",
+      company.id,
+      "--motion",
+      motion.id,
+      "--prospect",
+      prospect.id,
+      "--surface",
+      "inbound_reply",
+      "--direction",
+      "inbound",
+      "--outcome",
+      "replied",
+      "--occurred-at",
+      "2025-10-10T09:55:39.000Z",
+      "--summary",
+      "Marv White replied on LinkedIn.",
+      "--json",
+    ]);
+
+    runCliJson(tempDir, [
+      "companies",
+      "touches",
+      "add",
+      company.id,
+      "--motion",
+      motion.id,
+      "--prospect",
+      prospect.id,
+      "--surface",
+      "inbound_reply",
+      "--direction",
+      "outbound",
+      "--outcome",
+      "sent",
+      "--occurred-at",
+      "2026-06-07T00:09:49.284Z",
+      "--summary",
+      "Sent the governed LinkedIn reply.",
+      "--json",
+    ]);
+
+    const report = runCliJson(tempDir, [
+      "report",
+      "workspace",
+      "--user",
+      user.id,
+      "--json",
+    ]);
+
+    const item = flattenLaneItems(report.engagementLanes).find((candidate) => candidate.prospectId === prospect.id);
+    assert.ok(item, "expected the replied prospect in the workspace engagement lanes");
+    assert.equal(item.engagementLane?.key, "reply-accepted");
+    assert.equal(
+      report.engagementLanes.find((lane) => lane.key === "reply-accepted")?.items.some((candidate) => candidate.prospectId === prospect.id),
+      true,
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("report workspace does not fabricate a pin-owner blocker when a singleton managed user auto-resolves", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-workspace-blocked-assignment-"));
+  const codexHome = path.join(tempDir, ".codex");
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      "",
+    ].join("\n"),
+  );
+
+  try {
+    const user = runCliJson(tempDir, [
+      "users",
+      "add",
+      "--label",
+      "workspace-managed-user",
+      "--owner",
+      "william",
+      "--json",
+    ]);
+
+    runCliJson(
+      tempDir,
+      [
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "linkedin",
+        "--handle",
+        "workspace-managed-linkedin",
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--provider-account-id",
+        "acct-linkedin-1",
+        "--preferred",
+        "--max-connection-requests",
+        "125",
+        "--json",
+      ],
+      {
+        CODEX_HOME: codexHome,
+      },
+    );
+
+    const motion = runCliJson(
+      tempDir,
+      [
+        "motion",
+        "add",
+        "--url",
+        offerUrl,
+        "--premise",
+        "This offer matters when a ready outbound branch is blocked only by missing explicit execution assignment.",
+        "--audience",
+        "Revenue leaders",
+        "--signal",
+        "company::Is there recent evidence this company widened product or GTM scope?",
+        "--json",
+      ],
+      {
+        CODEX_HOME: codexHome,
+      },
+    );
+
+    runCliJson(tempDir, ["motion", "restart", motion.id, "--json"], {
+      CODEX_HOME: codexHome,
+    });
+
+    const company = runCliJson(tempDir, [
+      "companies",
+      "add",
+      "--name",
+      "Ready But Unassigned",
+      "--domain",
+      "ready-unassigned.example",
+      "--website-url",
+      "https://ready-unassigned.example",
+      "--linkedin-company-url",
+      "https://www.linkedin.com/company/ready-unassigned",
+      "--motion",
+      motion.id,
+      "--json",
+    ]);
+
+    const signalMatch = runCliJson(tempDir, [
+      "companies",
+      "signal-matches",
+      "add",
+      company.id,
+      "--motion",
+      motion.id,
+      "--signal",
+      motion.signals[0].id,
+      "--summary",
+      "The company just widened its GTM scope and needs a live vendor-accountability branch now.",
+      "--confidence",
+      "high",
+      "--json",
+    ]);
+
+    const prospect = runCliJson(tempDir, [
+      "companies",
+      "prospects",
+      "add",
+      company.id,
+      "--motion",
+      motion.id,
+      "--name",
+      "Terry Ready",
+      "--title",
+      "Chief Revenue Officer",
+      "--buying-committee-role",
+      "primary_business_owner",
+      "--decision-authority",
+      "buys",
+      "--fit-confidence",
+      "high",
+      "--signal-match",
+      signalMatch.signalMatches[0].id,
+      "--why-relevant",
+      "Best owner for the already-ready executive branch.",
+      "--linkedin-profile-url",
+      "https://www.linkedin.com/in/terry-ready",
+      "--json",
+    ]).prospects[0];
+
+    runCliJson(tempDir, [
+      "companies",
+      "cadence",
+      "set",
+      company.id,
+      "--motion",
+      motion.id,
+      "--prospect",
+      prospect.id,
+      "--current-step",
+      "connection-request",
+      "--next-action",
+      "Send the first connection request now.",
+      "--json",
+    ]);
+
+    const report = runCliJson(tempDir, [
+      "report",
+      "workspace",
+      "--user",
+      user.id,
+      "--json",
+    ], {
+      CODEX_HOME: codexHome,
+    });
+
+    const reportedCompany = report.motionDetails
+      .flatMap((detail) => detail.companies ?? [])
+      .find((item) => item.companyId === company.id);
+    assert.equal(reportedCompany?.executionIdentity?.status, "pinned-ready");
+    assert.equal(reportedCompany?.executionIdentity?.resolutionSource, "auto-singleton-user");
+    assert.equal(report.blockedQueue.itemCount, 0);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

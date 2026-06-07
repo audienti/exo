@@ -8,6 +8,7 @@ import { assignMotionProfile } from "../../core/assign-motion-profile.js";
 import { assignMotionUser } from "../../core/assign-motion-user.js";
 import { cloneMotionDefinition } from "../../core/clone-motion.js";
 import { buildMotionActionBrief, buildMotionActionView } from "../../core/build-motion-action-view.js";
+import { buildMotionDiscoveryBrief } from "../../core/build-motion-discovery-brief.js";
 import { buildMotionIntake } from "../../core/build-motion-intake.js";
 import { buildMotionPacketBrief } from "../../core/build-motion-packet-brief.js";
 import { defineMotion } from "../../core/define-motion.js";
@@ -32,6 +33,7 @@ import {
   insertMotion,
   listBrowserProfiles,
   listCompanies,
+  listInboundObservations,
   listMotions,
   listUsers,
   updateCompany,
@@ -57,6 +59,18 @@ import { buildMotionPacketSummary } from "../../lib/motion-packets.js";
 import { browserProfileSchema } from "../../schema/browser-profile.js";
 import { companySchema } from "../../schema/company.js";
 import { motionSchema } from "../../schema/motion.js";
+
+/**
+ * @param {string} motionId
+ * @param {{ company?: string | null | undefined, prospect?: string | null | undefined }} options
+ */
+function loadMotionWritingObservations(motionId, options) {
+  return listInboundObservations({
+    motionId,
+    companyId: options.company ?? undefined,
+    prospectId: options.prospect ?? undefined,
+  });
+}
 
 /**
  * @param {import("commander").Command} program
@@ -649,6 +663,61 @@ Examples:
     });
 
   motion
+    .command("discovery-brief")
+    .description("Build the governed brief for autonomous company discovery on one motion.")
+    .argument("<motion-id>", "Motion identifier")
+    .option("--companies <count>", "Minimum company count for this discovery pass")
+    .option("--json", "Emit machine-readable JSON")
+    .addHelpText(
+      "after",
+      `
+What this command does:
+  - Explains why the motion does or does not need more upstream company discovery.
+  - Packages the motion premise, targeting profile, signal questions, and current inventory pressure into one bounded brief.
+  - Gives the governed writeback path for landing newly discovered companies into backlog.
+
+Examples:
+  exo motion discovery-brief <motion-id> --json
+  exo motion discovery-brief <motion-id> --companies 12 --json
+`
+    )
+    .action((motionId, options) => {
+      const rawMotion = findMotionById(motionId);
+      if (!rawMotion) {
+        console.error(`Motion not found: ${motionId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const parsedCount = parsePositiveInteger(options.companies);
+      if (options.companies && parsedCount == null) {
+        console.error(`Invalid company count: ${options.companies}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const brief = buildMotionDiscoveryBrief(rawMotion, listCompanies(), {
+        companyCount: parsedCount,
+      });
+
+      if (options.json) {
+        console.log(JSON.stringify(brief, null, 2));
+        return;
+      }
+
+      console.log(
+        [
+          `Motion Discovery Brief: ${brief.motion.name}`,
+          `Summary: ${brief.summary}`,
+          `Minimum Companies: ${brief.inputs.inventory.targetCompanyCount}`,
+          `Available Prospects: ${brief.inputs.inventory.availableProspectCount}/${brief.inputs.inventory.minimumAvailableProspects}`,
+          `Projected Prospects After Current Backlog: ${brief.inputs.inventory.projectedAvailableProspectCount}`,
+          `Needs Discovery: ${brief.inputs.inventory.needsDiscovery ? "yes" : "no"}`,
+        ].join("\n")
+      );
+    });
+
+  motion
     .command("target")
     .description("Evaluate one motion's targeting loop from preflight through company and prospect readiness.")
     .argument("<motion-id>", "Motion identifier")
@@ -830,9 +899,11 @@ Examples:
 
       let result;
       try {
+        const rawObservations = loadMotionWritingObservations(motionId, options);
         result = buildMotionProspectView(raw, {
           companyId: options.company ?? null,
-          prospectId: options.prospect ?? null
+          prospectId: options.prospect ?? null,
+          rawObservations,
         });
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -885,9 +956,11 @@ Examples:
       }
 
       try {
+        const rawObservations = loadMotionWritingObservations(motionId, options);
         const prospectView = buildMotionProspectView(raw, {
           companyId: options.company ?? null,
-          prospectId: options.prospect
+          prospectId: options.prospect,
+          rawObservations,
         });
         const rawCompany = prospectView.writingBrief
           ? findCompanyById(prospectView.writingBrief.company.id)
@@ -897,6 +970,7 @@ Examples:
           {
             companyId: options.company ?? null,
             prospectId: options.prospect,
+            rawObservations,
             includeUnavailable: !options.availableOnly
           },
           rawCompany
@@ -945,9 +1019,11 @@ Examples:
       }
 
       try {
+        const rawObservations = loadMotionWritingObservations(motionId, options);
         const prospectView = buildMotionProspectView(raw, {
           companyId: options.company ?? null,
-          prospectId: options.prospect
+          prospectId: options.prospect,
+          rawObservations,
         });
         const rawCompany = prospectView.writingBrief
           ? findCompanyById(prospectView.writingBrief.company.id)
@@ -957,6 +1033,7 @@ Examples:
           {
             companyId: options.company ?? null,
             prospectId: options.prospect,
+            rawObservations,
             action: options.action
           },
           rawCompany
@@ -1007,9 +1084,11 @@ Examples:
 
       let result;
       try {
+        const rawObservations = loadMotionWritingObservations(motionId, options);
         result = buildMotionDraftView(raw, {
           companyId: options.company ?? null,
           prospectId: options.prospect,
+          rawObservations,
           surface: options.surface ?? null
         });
       } catch (error) {
@@ -1063,9 +1142,11 @@ Examples:
 
       let result;
       try {
+        const rawObservations = loadMotionWritingObservations(motionId, options);
         result = buildMotionDraftBrief(raw, {
           companyId: options.company ?? null,
           prospectId: options.prospect,
+          rawObservations,
           surface: options.surface
         });
       } catch (error) {
@@ -1392,11 +1473,11 @@ Examples:
 
   motionProfile
     .command("assign")
-    .description("Pin one registered browser profile to a motion as the default execution identity.")
+    .description("Assign one registered browser profile to a motion as the default execution identity.")
     .argument("<motion-id>", "Motion identifier")
     .requiredOption("--profile <profile-id>", "Browser profile identifier")
     .option("--by <actor>", "Who made the assignment")
-    .option("--reason <reason>", "Why this profile is being pinned")
+    .option("--reason <reason>", "Why this profile is being assigned")
     .option("--json", "Emit machine-readable JSON")
     .action((motionId, options) => {
       const rawMotion = findMotionById(motionId);
@@ -1438,7 +1519,7 @@ Examples:
         return;
       }
 
-      console.log(`Motion ${updated.name} is now pinned to profile ${updated.engagementProfileAssignment?.label ?? profile.label}.`);
+      console.log(`Motion ${updated.name} is now assigned to profile ${updated.engagementProfileAssignment?.label ?? profile.label}.`);
     });
 
   motionProfile
@@ -1478,17 +1559,17 @@ Examples:
         return;
       }
 
-      console.log(`Motion ${motionRecord.name} is pinned to ${result.assignment.label} (${result.assignment.browser} / ${result.assignment.profileDirectory}).`);
+      console.log(`Motion ${motionRecord.name} is assigned to ${result.assignment.label} (${result.assignment.browser} / ${result.assignment.profileDirectory}).`);
     });
 
   motionUser
     .command("assign")
-    .description("Pin one execution user to a motion so linked companies inherit the same default identity.")
+    .description("Assign one execution user to a motion so linked companies inherit the same default identity.")
     .argument("<motion-id>", "Motion identifier")
     .requiredOption("--user <user-id>", "Execution user identifier")
-    .option("--account <capability:handle>", "Pin one exact account ref for this motion assignment; repeat for multiple capabilities", collect, [])
+    .option("--account <capability:handle>", "Assign one exact account ref for this motion assignment; repeat for multiple capabilities", collect, [])
     .option("--by <actor>", "Who made the assignment")
-    .option("--reason <reason>", "Why this user is being pinned")
+    .option("--reason <reason>", "Why this user is being assigned")
     .option("--json", "Emit machine-readable JSON")
     .action((motionId, options) => {
       const rawMotion = findMotionById(motionId);
@@ -1524,7 +1605,7 @@ Examples:
         return;
       }
 
-      console.log(`Motion ${updated.name} is now pinned to user ${updated.engagementUserAssignment?.label ?? options.user}.`);
+      console.log(`Motion ${updated.name} is now assigned to user ${updated.engagementUserAssignment?.label ?? options.user}.`);
     });
 
   motionUser
@@ -1564,7 +1645,7 @@ Examples:
         return;
       }
 
-      console.log(`Motion ${motionRecord.name} is pinned to user ${result.assignment.label}.`);
+      console.log(`Motion ${motionRecord.name} is assigned to user ${result.assignment.label}.`);
     });
 
   motion
@@ -2020,6 +2101,18 @@ function normalizeNullableCliString(value) {
 
   const normalized = value.trim();
   return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {unknown} value
+ */
+function parsePositiveInteger(value) {
+  if (typeof value !== "string" || !value.trim().length) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 /**

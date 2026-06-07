@@ -22,7 +22,7 @@ export const toolDevelopmentContractSchema = z.object({
 
 export const toolRuntimeRequirementsSchema = z.object({
   connector: z.string().trim().min(1),
-  browser: z.string().trim().min(1),
+  browser: z.string().trim().min(1).nullable().default(null),
   signedInIdentityRequired: z.boolean()
 });
 

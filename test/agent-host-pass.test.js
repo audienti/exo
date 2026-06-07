@@ -2,15 +2,25 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
-  buildBrowserAttachProbePrompt,
-  buildBrowserActionPrompt,
+  buildInboundContractArgs,
+  buildBlockedCodexTaskResult,
+  buildCodexTaskArgs,
+  buildCodexTaskExecOptions,
+  buildCodexTaskEnv,
+  buildCompanyDiscoveryPrompt,
   buildCompanyResearchPrompt,
+  buildProspectResearchPrompt,
+  buildProspectSelectionPrompt,
   createTaskVerificationFingerprint,
   buildDraftPrompt,
   buildInboundCapturePrompt,
   buildSendPrompt,
+  canRunTaskInCurrentPass,
   chooseNextQueueTask,
   explainNoopPass,
   extractDraftBodyFromCodexResponse,
@@ -21,15 +31,24 @@ import {
   summarizePassStatus,
   summarizeVerificationOutput,
   shouldStopAfterTaskResult,
-  shouldRetryChromeAttachWithProfileWindow,
+  terminalPacketCompletionMatchesQueueState,
+  isBrowserMaintenanceTaskKind,
   getInboundAutomationRolloutBlockReason,
+  isAutonomousPacketRunSuccessful,
   classifyHandledLinkedinReplyUnavailable,
   normalizeInboundCaptureFailureReason,
+  resolveResearchTaskTimeoutMs,
   resolveCodexConnectorRuntimeConfig,
+  resolveInboundExoCommandTimeoutMs,
+  shouldAbortPassAfterTaskProblem,
   shouldIgnoreCodexUserConfig,
 } from "../scripts/run-agent-host-pass.js";
+import {
+  checkoutTaskLease,
+  createTaskLeaseFingerprint,
+} from "../src/lib/agent-host-state.js";
 
-test("chooseNextQueueTask prefers draft work when browser is not ready", () => {
+test("chooseNextQueueTask prefers connector-native send work before retrieval and draft work even when browser preflight is down", () => {
   const queue = {
     tasks: [
       { kind: "run_inbound_sync", id: "sync-1" },
@@ -38,8 +57,8 @@ test("chooseNextQueueTask prefers draft work when browser is not ready", () => {
     ],
   };
 
-  assert.equal(chooseNextQueueTask(queue, false)?.id, "draft-1");
-  assert.equal(chooseNextQueueTask(queue, true)?.id, "sync-1");
+  assert.equal(chooseNextQueueTask(queue, false)?.id, "send-1");
+  assert.equal(chooseNextQueueTask(queue, true)?.id, "send-1");
   assert.equal(
     chooseNextQueueTask(
       queue,
@@ -54,11 +73,11 @@ test("chooseNextQueueTask prefers draft work when browser is not ready", () => {
       },
       "2026-06-03T02:00:00.000Z",
     )?.id,
-    "sync-1",
+    "send-1",
   );
 });
 
-test("chooseNextQueueTask skips only the blocked browser lane", () => {
+test("chooseNextQueueTask ignores browser-lane backoff for connector-native execution and retrieval work", () => {
   const queue = {
     tasks: [
       { kind: "send_message", id: "send-1" },
@@ -81,7 +100,7 @@ test("chooseNextQueueTask skips only the blocked browser lane", () => {
       },
       "2026-06-03T02:00:00.000Z",
     )?.id,
-    "sync-1",
+    "send-1",
   );
 
   assert.equal(
@@ -116,11 +135,11 @@ test("chooseNextQueueTask skips only the blocked browser lane", () => {
       "2026-06-03T02:00:00.000Z",
       true,
     )?.id,
-    "sync-1",
+    "send-1",
   );
 });
 
-test("legacy global browser backoff migrates to the execution lane when the error is send-specific", () => {
+test("legacy global browser backoff does not suppress connector-native send work", () => {
   const queue = {
     tasks: [
       { kind: "send_message", id: "send-1" },
@@ -138,7 +157,7 @@ test("legacy global browser backoff migrates to the execution lane when the erro
       },
       "2026-06-03T02:00:00.000Z",
     )?.id,
-    "sync-1",
+    "send-1",
   );
 });
 
@@ -247,7 +266,37 @@ test("chooseNextQueueTask runs operator-authored sends live even in verify mode"
   assert.equal(selected?._selectedSendMode, "operator_live");
 });
 
-test("chooseNextQueueTask prefers due retrieval over send work even if send tasks are listed first", () => {
+test("chooseNextQueueTask runs operator-approved sends live even in verify mode", () => {
+  const approvedTask = {
+    kind: "send_message",
+    id: "send-approved",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-approved/",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    body: "Agent wrote this.",
+    authoredBy: "agent",
+    editedByOperator: false,
+    approvedByOperator: true,
+    writeback: "exo actions result ...prospect-1",
+  };
+
+  const selected = chooseNextQueueTask(
+    { tasks: [approvedTask] },
+    true,
+    { recentTaskVerifications: [] },
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "verify",
+  );
+
+  assert.equal(selected?.id, "send-approved");
+  assert.equal(selected?._selectedSendMode, "operator_live");
+});
+
+test("chooseNextQueueTask prefers send work over due retrieval even if retrieval is older", () => {
   const queue = {
     tasks: [
       {
@@ -267,6 +316,56 @@ test("chooseNextQueueTask prefers due retrieval over send work even if send task
 
   assert.equal(
     chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "verify")?.id,
+    "send-1",
+  );
+});
+
+test("chooseNextQueueTask skips work already checked out by another worker", () => {
+  const sendTask = {
+    kind: "send_message",
+    id: "send-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-one/",
+    dueAt: "2026-06-03T05:01:00.000Z",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+  };
+  const syncTask = {
+    kind: "run_inbound_sync",
+    id: "sync-1",
+    userId: "user-1",
+    accountId: "account-1",
+    surface: "linkedin-following-list",
+    surfaceKeys: ["linkedin-following-list"],
+    mode: "full",
+    dueAt: "2026-06-03T04:00:00.000Z",
+    queuedAt: "2026-06-03T04:00:00.000Z",
+  };
+  const hostState = checkoutTaskLease(null, {
+    taskKind: sendTask.kind,
+    fingerprint: createTaskLeaseFingerprint(sendTask),
+    workerLabel: "worker-2",
+    acquiredAt: "2026-06-03T05:10:00.000Z",
+    expiresAt: "2026-06-03T06:10:00.000Z",
+    motionId: sendTask.motionId,
+    companyId: sendTask.companyId,
+    prospectId: sendTask.prospectId,
+    surface: sendTask.surface,
+    subject: "Prospect One",
+    action: "Send Direct Message",
+  }).state;
+
+  assert.equal(
+    chooseNextQueueTask(
+      { tasks: [sendTask, syncTask] },
+      true,
+      hostState,
+      "2026-06-03T05:15:00.000Z",
+      false,
+      "verify",
+    )?.id,
     "sync-1",
   );
 });
@@ -297,7 +396,31 @@ test("chooseNextQueueTask can force a waiting retrieval task ahead of due sends"
   );
 });
 
-test("chooseNextQueueTask prefers cleanup over send work even if send tasks are listed first", () => {
+test("chooseNextQueueTask prefers draft work over due retrieval when no send is queued", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "run_inbound_sync",
+        id: "sync-1",
+        dueAt: "2026-06-03T04:00:00.000Z",
+        queuedAt: "2026-06-03T04:00:00.000Z",
+      },
+      {
+        kind: "write_draft",
+        id: "draft-1",
+        dueAt: "2026-06-03T05:01:00.000Z",
+        queuedAt: "2026-06-03T05:00:00.000Z",
+      },
+    ],
+  };
+
+  assert.equal(
+    chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "live")?.id,
+    "draft-1",
+  );
+});
+
+test("chooseNextQueueTask prefers send work over cleanup even if cleanup is older", () => {
   const queue = {
     tasks: [
       {
@@ -317,11 +440,160 @@ test("chooseNextQueueTask prefers cleanup over send work even if send tasks are 
 
   assert.equal(
     chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "live")?.id,
-    "withdraw-1",
+    "send-1",
   );
 });
 
-test("chooseNextQueueTask prefers claimed company research before send work", () => {
+test("maintenance bursts stay separate from standard task passes", () => {
+  assert.equal(isBrowserMaintenanceTaskKind("withdraw_connection"), true);
+  assert.equal(isBrowserMaintenanceTaskKind("write_draft"), false);
+
+  assert.equal(canRunTaskInCurrentPass("withdraw_connection", [], 0, 0), true);
+  assert.equal(canRunTaskInCurrentPass("write_draft", [], 0, 0), true);
+
+  assert.equal(
+    canRunTaskInCurrentPass(
+      "withdraw_connection",
+      [{ kind: "write_draft", status: "completed" }],
+      1,
+      0,
+    ),
+    false,
+  );
+
+  assert.equal(
+    canRunTaskInCurrentPass(
+      "write_draft",
+      [{ kind: "withdraw_connection", status: "completed" }],
+      0,
+      1,
+    ),
+    false,
+  );
+
+  assert.equal(
+    canRunTaskInCurrentPass(
+      "withdraw_connection",
+      [{ kind: "withdraw_connection", status: "completed" }],
+      0,
+      24,
+    ),
+    true,
+  );
+
+  assert.equal(
+    canRunTaskInCurrentPass(
+      "withdraw_connection",
+      [{ kind: "withdraw_connection", status: "completed" }],
+      0,
+      25,
+    ),
+    false,
+  );
+});
+
+test("standard passes keep draining within the time budget even after the old 8-task mark", () => {
+  assert.equal(
+    canRunTaskInCurrentPass(
+      "write_draft",
+      Array.from({ length: 8 }, () => ({ kind: "write_draft", status: "completed" })),
+      8,
+      0,
+      {
+        elapsedMs: 4 * 60 * 1000,
+        standardPassBudgetMs: 14 * 60 * 1000,
+      },
+    ),
+    true,
+  );
+});
+
+test("standard passes stop once their time budget is exhausted", () => {
+  assert.equal(
+    canRunTaskInCurrentPass(
+      "write_draft",
+      Array.from({ length: 8 }, () => ({ kind: "write_draft", status: "completed" })),
+      8,
+      0,
+      {
+        elapsedMs: 14 * 60 * 1000,
+        standardPassBudgetMs: 14 * 60 * 1000,
+      },
+    ),
+    false,
+  );
+});
+
+test("buildInboundContractArgs preserves queued surface scoping for live sync tasks", () => {
+  const args = buildInboundContractArgs({
+    capability: "linkedin",
+    userId: "user-1",
+    accountId: "account-1",
+    surfaceKeys: ["linkedin-sent-invitations", "linkedin-messaging-inbox", "linkedin-sent-invitations"],
+    mode: "full",
+  });
+
+  assert.deepEqual(args, [
+    "inbound",
+    "sync",
+    "linkedin-live",
+    "user-1",
+    "--account",
+    "account-1",
+    "--surface",
+    "linkedin-sent-invitations",
+    "--surface",
+    "linkedin-messaging-inbox",
+    "--mode",
+    "full",
+    "--json",
+  ]);
+});
+
+test("resolveInboundExoCommandTimeoutMs gives full sync tasks the capture budget", () => {
+  assert.equal(resolveInboundExoCommandTimeoutMs({ mode: "quick" }), 180000);
+  assert.equal(resolveInboundExoCommandTimeoutMs({ mode: "full" }), 360000);
+});
+
+test("chooseNextQueueTask can keep draining standard work after maintenance tasks appear later in the queue", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "withdraw_connection",
+        id: "withdraw-1",
+        dueAt: "2026-06-03T04:30:00.000Z",
+        queuedAt: "2026-06-03T04:30:00.000Z",
+      },
+      {
+        kind: "write_draft",
+        id: "draft-1",
+        dueAt: "2026-06-03T04:31:00.000Z",
+        queuedAt: "2026-06-03T04:31:00.000Z",
+      },
+    ],
+  };
+
+  const selected = chooseNextQueueTask(
+    queue,
+    true,
+    {},
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "live",
+    [],
+    [],
+    false,
+    {
+      passLane: "standard",
+      standardTaskCount: 1,
+      maintenanceTaskCount: 0,
+    },
+  );
+
+  assert.equal(selected?.id, "draft-1");
+});
+
+test("chooseNextQueueTask prefers send work before claimed company research", () => {
   const queue = {
     tasks: [
       {
@@ -341,7 +613,49 @@ test("chooseNextQueueTask prefers claimed company research before send work", ()
 
   assert.equal(
     chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "live")?.id,
-    "company-research-1",
+    "send-1",
+  );
+});
+
+test("chooseNextQueueTask prefers send work before prospect selection", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "send_message",
+        id: "send-1",
+        dueAt: "2026-06-03T05:01:00.000Z",
+        queuedAt: "2026-06-03T05:00:00.000Z",
+      },
+      {
+        kind: "prospect_selection",
+        id: "prospect-selection-1",
+        dueAt: "2026-06-03T04:30:00.000Z",
+        queuedAt: "2026-06-03T04:30:00.000Z",
+      },
+    ],
+  };
+
+  assert.equal(
+    chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "live")?.id,
+    "send-1",
+  );
+});
+
+test("chooseNextQueueTask can still run prospect research when browser preflight is down", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "prospect_research",
+        id: "prospect-research-1",
+        dueAt: "2026-06-03T04:30:00.000Z",
+        queuedAt: "2026-06-03T04:30:00.000Z",
+      },
+    ],
+  };
+
+  assert.equal(
+    chooseNextQueueTask(queue, false)?.id,
+    "prospect-research-1",
   );
 });
 
@@ -354,18 +668,31 @@ test("chooseNextQueueTask can still run company research when browser preflight 
         dueAt: "2026-06-03T04:30:00.000Z",
         queuedAt: "2026-06-03T04:30:00.000Z",
       },
-      {
-        kind: "send_message",
-        id: "send-1",
-        dueAt: "2026-06-03T05:01:00.000Z",
-        queuedAt: "2026-06-03T05:00:00.000Z",
-      },
     ],
   };
 
   assert.equal(
     chooseNextQueueTask(queue, false)?.id,
     "company-research-1",
+  );
+});
+
+test("chooseNextQueueTask can still run company discovery when browser preflight is down", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "company_discovery",
+        id: "company-discovery-1",
+        motionId: "motion-1",
+        dueAt: "2026-06-03T04:20:00.000Z",
+        queuedAt: "2026-06-03T04:20:00.000Z",
+      },
+    ],
+  };
+
+  assert.equal(
+    chooseNextQueueTask(queue, false)?.id,
+    "company-discovery-1",
   );
 });
 
@@ -383,6 +710,48 @@ test("normalizeInboundCaptureFailureReason classifies plugin-loader startup fail
   error.stderr = "WARN codex_core_plugins::loader: failed to load plugin: invalid plugin key `posthog`";
 
   assert.equal(normalizeInboundCaptureFailureReason(error), "codex_capture_startup_failed");
+});
+
+test("autonomous Codex subprocess failures demote into blocked packet results", () => {
+  const error = new Error("Codex task failed: spawnSync /Applications/Codex.app/Contents/Resources/codex ETIMEDOUT");
+
+  assert.deepEqual(
+    buildBlockedCodexTaskResult(error, { summary: null }),
+    {
+      status: "blocked",
+      detail: {
+        summary: null,
+        reason: "Codex task failed: spawnSync /Applications/Codex.app/Contents/Resources/codex ETIMEDOUT",
+      },
+    },
+  );
+});
+
+test("prospect research gets a longer autonomous timeout budget than company research", () => {
+  assert.equal(resolveResearchTaskTimeoutMs("company_discovery"), 10 * 60 * 1000);
+  assert.equal(resolveResearchTaskTimeoutMs("company_research"), 10 * 60 * 1000);
+  assert.equal(resolveResearchTaskTimeoutMs("prospect_selection"), 10 * 60 * 1000);
+  assert.equal(resolveResearchTaskTimeoutMs("prospect_research"), 15 * 60 * 1000);
+});
+
+test("terminal packet completion matcher accepts generic completed shorthand", () => {
+  assert.equal(terminalPacketCompletionMatchesQueueState("completed", "ready"), true);
+  assert.equal(terminalPacketCompletionMatchesQueueState("ready_for_first_touch_decision", "ready"), true);
+  assert.equal(terminalPacketCompletionMatchesQueueState("Ready for first touch decision", "ready"), true);
+  assert.equal(terminalPacketCompletionMatchesQueueState("ready-for-first-touch-decision", "ready"), true);
+  assert.equal(terminalPacketCompletionMatchesQueueState("complete", "ready"), true);
+  assert.equal(terminalPacketCompletionMatchesQueueState("completed", "researched"), true);
+  assert.equal(terminalPacketCompletionMatchesQueueState("suppressed", "suppressed"), true);
+  assert.equal(terminalPacketCompletionMatchesQueueState("suppressed", "ready"), false);
+});
+
+test("autonomous packet runs accept success variants as a completed terminal result", () => {
+  assert.equal(isAutonomousPacketRunSuccessful("completed"), true);
+  assert.equal(isAutonomousPacketRunSuccessful("success"), true);
+  assert.equal(isAutonomousPacketRunSuccessful("Success"), true);
+  assert.equal(isAutonomousPacketRunSuccessful("ok"), true);
+  assert.equal(isAutonomousPacketRunSuccessful("OK"), true);
+  assert.equal(isAutonomousPacketRunSuccessful("blocked"), false);
 });
 
 test("explainNoopPass makes verify-mode no-op passes explicit once all due sends are proved", () => {
@@ -420,6 +789,23 @@ test("explainNoopPass makes verify-mode no-op passes explicit once all due sends
     "Verify mode had no unverified send_message tasks left to prove.",
   );
   assert.equal(summarizePassStatus([]), "noop");
+});
+
+test("summarizePassStatus marks completed results with remaining due work as partial", () => {
+  assert.equal(
+    summarizePassStatus(
+      [{ kind: "run_inbound_sync", status: "completed" }],
+      { tasks: [{ kind: "write_draft", id: "draft-1" }], waiting: [], blockers: [] },
+    ),
+    "partial",
+  );
+  assert.equal(
+    summarizePassStatus(
+      [{ kind: "run_inbound_sync", status: "completed" }],
+      { tasks: [], waiting: [], blockers: [] },
+    ),
+    "completed",
+  );
 });
 
 test("explainNoopPass makes forced-retrieval empty passes explicit", () => {
@@ -879,11 +1265,70 @@ test("task prompts are bounded and fail-fast", () => {
   assert.match(companyResearchPrompt, /native web retrieval capabilities/i);
   assert.match(companyResearchPrompt, /Start with the company site/i);
   assert.match(companyResearchPrompt, /Use shell commands only for the governed Exo writeback commands/i);
+  assert.match(companyResearchPrompt, /Do not hunt people or direct contact data here/i);
+  assert.match(companyResearchPrompt, /Do not use completed there/i);
 
-  const sendPrompt = buildSendPrompt({ recipient: { profileUrl: "https://www.linkedin.com/in/example" } });
-  assert.match(sendPrompt, /^@chrome\b/m);
-  assert.match(sendPrompt, /one bounded Exo browser send task/i);
-  assert.match(sendPrompt, /Do not run Exo writeback yourself/i);
+  const companyDiscoveryPrompt = buildCompanyDiscoveryPrompt(
+    {
+      motion: { id: "motion-1", name: "test-motion" },
+      summary: "Find 10 new companies for the motion backlog.",
+      inputs: {
+        inventory: {
+          targetCompanyCount: 10,
+          deficitAfterBacklog: 20,
+        },
+      },
+    },
+    {
+      motionId: "motion-1",
+      targetCompanyCount: 10,
+    },
+  );
+  assert.doesNotMatch(companyDiscoveryPrompt, /^@chrome\b/m);
+  assert.match(companyDiscoveryPrompt, /one bounded Exo company discovery task/i);
+  assert.match(companyDiscoveryPrompt, /native web retrieval capabilities/i);
+  assert.match(companyDiscoveryPrompt, /Add companies, not prospects/i);
+  assert.match(companyDiscoveryPrompt, /fresh signal-qualified account discovery only/i);
+  assert.match(companyDiscoveryPrompt, /count as a floor, not a ceiling/i);
+  assert.match(companyDiscoveryPrompt, /instead of stopping exactly at the minimum/i);
+  assert.match(companyDiscoveryPrompt, /run the governed Exo writeback commands needed to queue the discovered companies/i);
+  assert.match(companyDiscoveryPrompt, /Do not use completed there/i);
+
+  const prospectSelectionPrompt = buildProspectSelectionPrompt(
+    {
+      packet: { id: "prospect_selection:company-1" },
+      company: { id: "company-1", name: "Acme" },
+    },
+    {
+      companyId: "company-1",
+      motionId: "motion-1",
+      packetId: "prospect_selection:company-1",
+    },
+  );
+  assert.doesNotMatch(prospectSelectionPrompt, /^@chrome\b/m);
+  assert.match(prospectSelectionPrompt, /one bounded Exo prospect selection packet/i);
+  assert.match(prospectSelectionPrompt, /for finding the right people, not full contact enrichment/i);
+  assert.match(prospectSelectionPrompt, /Do not use completed there/i);
+
+  const prospectResearchPrompt = buildProspectResearchPrompt(
+    {
+      packet: { id: "prospect_research:company-1:prospect-1" },
+      company: { id: "company-1", name: "Acme" },
+      prospect: { id: "prospect-1", name: "Jordan Example" },
+    },
+    {
+      companyId: "company-1",
+      motionId: "motion-1",
+      prospectId: "prospect-1",
+      packetId: "prospect_research:company-1:prospect-1",
+    },
+  );
+  assert.doesNotMatch(prospectResearchPrompt, /^@chrome\b/m);
+  assert.match(prospectResearchPrompt, /one bounded Exo prospect research packet/i);
+  assert.match(prospectResearchPrompt, /for enriching the selected person and landing their governed profile\/contact surface/i);
+  assert.match(prospectResearchPrompt, /Do not draft outreach, do not pick a touch sequence/i);
+  assert.match(prospectResearchPrompt, /set completionStatus to ready, suppressed, or exhausted/i);
+  assert.match(prospectResearchPrompt, /Do not use completed there/i);
 
   const connectorSendPrompt = buildSendPrompt({
     channel: "email",
@@ -896,18 +1341,42 @@ test("task prompts are bounded and fail-fast", () => {
   assert.match(connectorSendPrompt, /native gmail tools already available in this runtime/i);
   assert.match(connectorSendPrompt, /Do not use Chrome browser tools/i);
 
-  const sendDryRunPrompt = buildSendPrompt(
-    { recipient: { profileUrl: "https://www.linkedin.com/in/example" } },
-    { dryRun: true },
-  );
-  assert.match(sendDryRunPrompt, /Prepare the governed send and stop before the final click/i);
-  assert.match(sendDryRunPrompt, /Do not click Send/i);
-  assert.match(sendDryRunPrompt, /"status":"ready_to_send"/i);
+  const tempCodexDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-unipile-send-prompt-"));
+  const tempCodexHome = path.join(tempCodexDir, ".codex");
+  const originalCodexHome = process.env.CODEX_HOME;
+  fs.mkdirSync(tempCodexHome, { recursive: true });
+  fs.writeFileSync(path.join(tempCodexHome, "config.toml"), [
+    '[mcp_servers.unipile.env]',
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    "",
+  ].join("\n"));
 
-  const actionPrompt = buildBrowserActionPrompt({ kind: "withdraw_connection", prospectName: "Jordan Example" });
-  assert.match(actionPrompt, /^@chrome\b/m);
-  assert.match(actionPrompt, /withdraw the stale outbound linkedin invitation/i);
-  assert.match(actionPrompt, /Do not run Exo writeback yourself/i);
+  try {
+    process.env.CODEX_HOME = tempCodexHome;
+    const sendDryRunPrompt = buildSendPrompt(
+      {
+        channel: "linkedin",
+        connector: "codex:unipile",
+        executionPolicy: { mode: "native_connector_tools_only" },
+        recipient: { profileUrl: "https://www.linkedin.com/in/example" },
+      },
+      { dryRun: true },
+    );
+    assert.match(sendDryRunPrompt, /Prepare the governed send and stop before the final send action/i);
+    assert.doesNotMatch(sendDryRunPrompt, /Do not click Send/i);
+    assert.match(sendDryRunPrompt, /"status":"ready_to_send"/i);
+    assert.match(sendDryRunPrompt, /https:\/\/api14\.unipile\.com:14465\/api\/v1\/accounts/i);
+    assert.match(sendDryRunPrompt, /Do not substitute api1\.unipile\.com/i);
+    assert.match(sendDryRunPrompt, /direct POST with no native draft\/composer state/i);
+  } finally {
+    if (originalCodexHome === undefined) {
+      delete process.env.CODEX_HOME;
+    } else {
+      process.env.CODEX_HOME = originalCodexHome;
+    }
+    fs.rmSync(tempCodexDir, { recursive: true, force: true });
+  }
 });
 
 test("connector runtime config keeps managed MCP servers available in detached codex passes", () => {
@@ -921,6 +1390,92 @@ test("connector runtime config keeps managed MCP servers available in detached c
   });
   assert.equal(shouldIgnoreCodexUserConfig({ connectorRequired: true }), false);
   assert.equal(shouldIgnoreCodexUserConfig({ connectorRequired: false }), true);
+});
+
+test("browser codex args avoid synthetic MCP server tables when user config is ignored", () => {
+  const browserArgs = buildCodexTaskArgs({
+    prompt: "Do browser work",
+    schema: null,
+    outputName: "browser.json",
+    browserRequired: true,
+    useOutputSchema: false,
+    timeoutMs: 1000,
+  }, "/tmp/browser.json");
+  const browserJoined = browserArgs.join(" ");
+  assert.match(browserJoined, /--ignore-user-config/);
+  assert.match(browserJoined, /plugins\."chrome@openai-bundled"\.enabled=true/);
+  assert.doesNotMatch(browserJoined, /mcp_servers\.playwriter\.enabled=false/);
+  assert.doesNotMatch(browserJoined, /mcp_servers\.icypeas\.enabled=false/);
+  assert.doesNotMatch(browserJoined, /mcp_servers\.leadmagic\.enabled=false/);
+  assert.doesNotMatch(browserJoined, /mcp_servers\.prospeo\.enabled=false/);
+
+  const connectorArgs = buildCodexTaskArgs({
+    prompt: "Do connector work",
+    schema: null,
+    outputName: "connector.json",
+    browserRequired: false,
+    connectorRequired: true,
+    enabledPlugins: ["gmail@openai-curated"],
+    enabledMcpServers: ["unipile"],
+    useOutputSchema: false,
+    timeoutMs: 1000,
+  }, "/tmp/connector.json");
+  const connectorJoined = connectorArgs.join(" ");
+  assert.doesNotMatch(connectorJoined, /--ignore-user-config/);
+  assert.match(connectorJoined, /plugins\."gmail@openai-curated"\.enabled=true/);
+  assert.match(connectorJoined, /mcp_servers\.unipile\.enabled=true/);
+});
+
+test("Codex task exec options hard-kill timed-out background subprocesses", () => {
+  const options = buildCodexTaskExecOptions({
+    prompt: "Do connector work",
+    schema: null,
+    outputName: "connector.json",
+    browserRequired: false,
+    connectorRequired: true,
+    enabledPlugins: [],
+    enabledMcpServers: ["unipile"],
+    useOutputSchema: false,
+    timeoutMs: 12345,
+  });
+
+  assert.equal(options.timeout, 12345);
+  assert.equal(options.killSignal, "SIGKILL");
+  assert.equal(options.cwd, process.cwd());
+});
+
+test("buildCodexTaskEnv derives HOME from CODEX_HOME and forwards Unipile config", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-codex-task-env-"));
+  const codexHome = path.join(tempDir, ".codex");
+
+  try {
+    fs.mkdirSync(codexHome, { recursive: true });
+    fs.writeFileSync(path.join(codexHome, "config.toml"), [
+      '[mcp_servers.unipile.env]',
+      'UNIPILE_API_KEY = "test-key"',
+      'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+      'UNIPILE_V2_API_KEY = "test-v2-key"',
+      'UNIPILE_V2_BASE_URL = "https://api.unipile.com/v2"',
+      "",
+    ].join("\n"));
+
+    const env = buildCodexTaskEnv({
+      PATH: "/usr/bin:/bin",
+      CODEX_HOME: codexHome,
+    });
+
+    assert.equal(env.CODEX_HOME, codexHome);
+    assert.equal(env.HOME, tempDir);
+    assert.equal(env.USER, path.basename(tempDir));
+    assert.equal(env.LOGNAME, path.basename(tempDir));
+    assert.equal(env.UNIPILE_API_KEY, "test-key");
+    assert.equal(env.UNIPILE_DSN, "https://api14.unipile.com:14465");
+    assert.equal(env.UNIPILE_BASE_URL, "https://api14.unipile.com:14465");
+    assert.equal(env.UNIPILE_V2_API_KEY, "test-v2-key");
+    assert.equal(env.UNIPILE_V2_BASE_URL, "https://api.unipile.com/v2");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("summarizeVerificationOutput compacts inbox, daily, and next verification payloads", () => {
@@ -1060,18 +1615,36 @@ test("verification-only send passes stop after the first proved task", () => {
   );
 });
 
-test("chrome attach probe prompt and recovery matcher stay specific", () => {
-  const prompt = buildBrowserAttachProbePrompt();
-  assert.match(prompt, /^@chrome\b/m);
-  assert.match(prompt, /lightweight browser-client call such as listing open tabs/i);
-  assert.match(prompt, /Do not use shell commands, npm packages, or repo inspection/i);
-  assert.match(prompt, /Do not import or require playwright/i);
+test("failed retrieval tasks do not abort the host pass, but other failed work still does", () => {
   assert.equal(
-    shouldRetryChromeAttachWithProfileWindow('Browser is not available: extension'),
+    shouldAbortPassAfterTaskProblem(
+      { kind: "run_inbound_sync", id: "sync-1" },
+      { status: "failed", detail: { reason: "connector timeout" } },
+    ),
+    false,
+  );
+
+  assert.equal(
+    shouldAbortPassAfterTaskProblem(
+      { kind: "run_inbound_sync", id: "sync-1" },
+      { status: "blocked", detail: { reason: "connector blocked" } },
+    ),
+    false,
+  );
+
+  assert.equal(
+    shouldAbortPassAfterTaskProblem(
+      { kind: "send_message", id: "send-1" },
+      { status: "failed", detail: { reason: "send failed" } },
+    ),
     true,
   );
+
   assert.equal(
-    shouldRetryChromeAttachWithProfileWindow('Could not resolve Chrome plugin root'),
+    shouldAbortPassAfterTaskProblem(
+      { kind: "write_draft", id: "draft-1" },
+      { status: "completed", detail: {} },
+    ),
     false,
   );
 });

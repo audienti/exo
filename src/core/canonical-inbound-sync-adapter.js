@@ -104,6 +104,8 @@ function buildInvitationInboundSurface(surfaceKey, result) {
       motionId: null,
       companyId: null,
       prospectId: null,
+      providerSharedSecret: normalizeInvitationObservationSharedSecret(item.providerDetails),
+      actorCompanyProfile: normalizeInvitationObservationCompanyProfile(item.providerDetails),
       notes: normalizeInvitationObservationNotes(item.providerDetails)
     }))
   };
@@ -182,6 +184,48 @@ function normalizeInvitationObservationNotes(providerDetails) {
     return null;
   }
   const normalized = invitationNote.trim();
+  return normalized ? normalized : null;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} providerDetails
+ */
+function normalizeInvitationObservationCompanyProfile(providerDetails) {
+  if (!providerDetails || typeof providerDetails !== "object") {
+    return null;
+  }
+  const companyProfile = providerDetails.companyProfile;
+  if (!companyProfile || typeof companyProfile !== "object") {
+    return null;
+  }
+
+  return {
+    name: normalizeNullableString(companyProfile.name),
+    domain: normalizeNullableString(companyProfile.domain),
+    websiteUrl: normalizeNullableString(companyProfile.websiteUrl),
+    linkedinCompanyUrl: normalizeNullableString(companyProfile.linkedinCompanyUrl),
+    logoSourceUrl: normalizeNullableString(companyProfile.logoSourceUrl),
+  };
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} providerDetails
+ */
+function normalizeInvitationObservationSharedSecret(providerDetails) {
+  if (!providerDetails || typeof providerDetails !== "object") {
+    return null;
+  }
+  return normalizeNullableString(providerDetails.sharedSecret);
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeNullableString(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
   return normalized ? normalized : null;
 }
 

@@ -163,10 +163,6 @@ function buildBrowserTaskReadiness(input) {
       ready: maintenanceBlockedReasons.length === 0,
       blockedReasons: maintenanceBlockedReasons,
     },
-    unfollow_profile: {
-      ready: maintenanceBlockedReasons.length === 0,
-      blockedReasons: maintenanceBlockedReasons,
-    },
   };
 }
 

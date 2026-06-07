@@ -60,6 +60,7 @@ export function upsertUserHarnessConnection(rawUser, input) {
  *       messages?: number | null
  *     }
  *   } | null,
+ *   metadata?: Record<string, unknown> | null,
  *   notes?: string | null
  * }} input
  */
@@ -115,6 +116,9 @@ export function upsertUserConnectedAccount(rawUser, input) {
         ...(input.automationControls?.weeklyQuotas ?? {})
       }
     }),
+    metadata: input.metadata && typeof input.metadata === "object"
+      ? input.metadata
+      : match?.metadata ?? null,
     notes: normalizeNullableString(input.notes) ?? match?.notes ?? null,
     inboundSync: match?.inboundSync ?? {
       surfaces: listInboundSurfaceCatalog({ capability: input.capability })

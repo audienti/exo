@@ -30,13 +30,20 @@ import {
  * @returns {string}
  */
 export function renderOperatorPage(model, meta = {}) {
+  const sections = [
+    renderSection("dec", "flag", "Need decision", model.counts.decisions, "amber", null, renderDecisions(model.decisions, meta)),
+  ];
+  if (model.counts.blocked > 0) {
+    sections.push(renderSection("blk", "alert", "Blocked", model.counts.blocked, "red", null, renderBlocked(model.blocked, meta)));
+  }
+  if (model.counts.stale > 0) {
+    sections.push(renderSection("stale", "eye", "Stale or incomplete", model.counts.stale, "amber", null, renderStale(model.stale)));
+  }
   const body =
     `<div class="op-wrap feed">` +
     renderIntro(model) +
     renderNextMove(model.nextMove, meta) +
-    renderSection("dec", "flag", "Need decision", model.counts.decisions, "amber", null, renderDecisions(model.decisions, meta)) +
-    renderSection("blk", "alert", "Blocked", model.counts.blocked, "red", null, renderBlocked(model.blocked)) +
-    renderSection("stale", "eye", "Stale or incomplete", model.counts.stale, "amber", null, renderStale(model.stale)) +
+    sections.join("") +
     renderFooter(model) +
     `</div>`;
 
@@ -56,16 +63,26 @@ export function renderOperatorPage(model, meta = {}) {
 /** @param {import("../core/build-operator-view.js").OperatorViewModel} model */
 function renderIntro(model) {
   const c = model.counts;
+  const summaryLine = c.blocked > 0
+    ? c.stale > 0
+      ? "What needs judgment, what is blocked, and what still needs review."
+      : "What needs judgment and what is blocked."
+    : c.stale > 0
+      ? "What needs judgment and what still needs review."
+      : "What needs judgment right now.";
+  const stats = [
+    `<span><b>${c.decisions}</b> need decision</span>`,
+    c.blocked > 0 ? `<span><b>${c.blocked}</b> blocked</span>` : "",
+    c.stale > 0 ? `<span><b>${c.stale}</b> stale</span>` : "",
+  ].filter(Boolean);
   return (
     `<div class="op-intro">` +
     `<div>` +
     `<h1>Operator</h1>` +
-    `<p class="op-line">What needs judgment, what is blocked, and what still needs review.</p>` +
+    `<p class="op-line">${summaryLine}</p>` +
     `</div>` +
     `<div class="op-stat">` +
-    `<span><b>${c.decisions}</b> need decision</span><i></i>` +
-    `<span><b>${c.blocked}</b> blocked</span><i></i>` +
-    `<span><b>${c.stale}</b> stale</span>` +
+    stats.join("<i></i>") +
     `</div>` +
     `</div>`
   );
@@ -162,6 +179,17 @@ function composeHref(prospectId, personId, fallbackHref, meta) {
 }
 
 /**
+ * @param {string | null | undefined} prospectId
+ * @param {string | null | undefined} personId
+ * @param {string | null | undefined} fallbackHref
+ * @param {{ interactive?: boolean }} meta
+ * @returns {string | undefined}
+ */
+function detailHref(prospectId, personId, fallbackHref, meta) {
+  return personHref(prospectId, personId, meta) ?? fallbackHref ?? undefined;
+}
+
+/**
  * @param {import("../core/build-operator-view.js").OperatorNextMove | null} nm
  * @param {{ interactive?: boolean }} [meta]
  */
@@ -185,21 +213,24 @@ function renderNextMove(nm, meta = {}) {
     .filter(Boolean)
     .join("");
 
-  const action = nm.actionWriter
-    ? liveActionBtn({
-        writer: nm.actionWriter,
-        args: nm.actionArgs ?? {},
-        variant: "primary",
-        size: "md",
-        icon: "arrowR",
-        label: nm.action,
-      })
-    : btn({
-        variant: "primary",
-        icon: "arrowR",
-        label: nm.action,
-        href: composeHref(nm.prospectId, nm.personId, nm.actionHref, meta),
-      });
+  const action = renderOperatorActionSet(
+    nm.actions ?? [],
+    {
+      label: nm.action,
+      mode: nm.actionMode,
+      href: nm.actionHref,
+      writer: nm.actionWriter,
+      args: nm.actionArgs ?? null,
+      variant: "primary",
+      icon: nm.actionMode === "compose" ? "arrowR" : "check",
+    },
+    {
+      prospectId: nm.prospectId,
+      personId: nm.personId,
+      size: "md",
+      meta,
+    },
+  );
 
   const subjectLine = nm.subject
     ? personName(nm.subject, nm.prospectId, nm.personId, meta, "nm-title") +
@@ -302,12 +333,24 @@ function renderDecisionCard(d, meta = {}) {
   ]
     .filter(Boolean)
     .join("");
-  const primary = btn({
-    variant: "primary",
-    icon: d.actionStatus === "due now" ? "arrowR" : "check",
-    label: d.primaryActionLabel,
-    href: composeHref(d.prospectId, d.id, d.primaryHref, meta),
-  });
+  const actions = renderOperatorActionSet(
+    d.actions ?? [],
+    {
+      label: d.primaryActionLabel,
+      mode: d.primaryActionMode,
+      href: d.primaryHref,
+      writer: null,
+      args: null,
+      variant: "primary",
+      icon: d.actionStatus === "due now" ? "arrowR" : "check",
+    },
+    {
+      prospectId: d.prospectId,
+      personId: d.id,
+      size: "sm",
+      meta,
+    },
+  );
 
   return card({
     stakes: d.stakes ?? null,
@@ -324,20 +367,26 @@ function renderDecisionCard(d, meta = {}) {
       `<p class="row-summary">${escapeHtml(d.summary)}</p>` +
       renderPreview(d.previewLabel, d.previewSubject, d.previewText) +
       `<div class="row-chips">${chips}</div>` +
-      `<div class="row-actions">${primary}</div>`,
+      `<div class="row-actions">${actions}</div>`,
   });
 }
 
-/** @param {import("../core/build-operator-view.js").OperatorBlockedCard[]} blocked */
-function renderBlocked(blocked) {
+/**
+ * @param {import("../core/build-operator-view.js").OperatorBlockedCard[]} blocked
+ * @param {{ interactive?: boolean, returnTo?: string | null }} [meta]
+ */
+function renderBlocked(blocked, meta = {}) {
   if (!blocked.length) {
     return emptyState({ icon: "check", message: "Nothing blocked." });
   }
-  return blocked.map(renderBlockedCard).join("");
+  return blocked.map((item) => renderBlockedCard(item, meta)).join("");
 }
 
-/** @param {import("../core/build-operator-view.js").OperatorBlockedCard} b */
-function renderBlockedCard(b) {
+/**
+ * @param {import("../core/build-operator-view.js").OperatorBlockedCard} b
+ * @param {{ interactive?: boolean, returnTo?: string | null }} [meta]
+ */
+function renderBlockedCard(b, meta = {}) {
   const status =
     b.blockType === "assignment"
       ? "blocked · assignment"
@@ -345,11 +394,16 @@ function renderBlockedCard(b) {
         ? "blocked · capability"
         : "failed";
   const iconName = b.blockType === "failed" ? "refresh" : b.blockType === "assignment" ? "userPlus" : "mail";
+  const href = b.resolveMode === "compose"
+    ? composeHref(b.prospectId, b.personId, b.resolveHref, meta)
+    : b.resolveMode === "detail"
+      ? detailHref(b.prospectId, b.personId, b.resolveHref, meta)
+      : undefined;
   // When the blocker carries typed actions (one per company that needs an owner
   // pinned), render them as live exo-writer buttons so the client dispatcher
   // can POST to /act and update governed state. Without typed actions, fall
-  // back to a disabled placeholder labeled with the resolve hint so the
-  // surface doesn't pretend a button is wired.
+  // back to a real link when the blocker already knows where review happens.
+  // Otherwise render a disabled placeholder so the surface does not lie.
   const resolve = (b.actions ?? []).length
     ? b.actions
         .slice(0, 3)
@@ -363,7 +417,9 @@ function renderBlockedCard(b) {
           }),
         )
         .join("")
-    : btn({ variant: "secondary", size: "sm", icon: iconName, label: b.resolveLabel, disabled: true });
+    : href
+      ? btn({ variant: "secondary", size: "sm", icon: iconName, label: b.resolveLabel, href })
+      : btn({ variant: "secondary", size: "sm", icon: iconName, label: b.resolveLabel, disabled: true });
 
   return card({
     stakes: "block",
@@ -432,7 +488,81 @@ function actionBtn(opts) {
     `<button class="btn btn-${opts.variant} btn-sm" type="button">` +
     (opts.icon ? iconSvg(opts.icon, 14) : "") +
     `<span>${escapeHtml(opts.label)}</span></button>`;
-  return `<span class="exo-action" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}">${inner}</span>`;
+  return `<span class="exo-action exo-action-flat" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}">${inner}</span>`;
+}
+
+/**
+ * @param {Array<{
+ *   label: string,
+ *   mode: "compose" | "detail",
+ *   href: string | null,
+ *   writer: string | null,
+ *   args: Record<string, any> | null,
+ *   variant: "primary" | "secondary" | "ghost" | "danger",
+ *   icon: string | null
+ * }>} actions
+ * @param {{
+ *   label: string,
+ *   mode: "compose" | "detail",
+ *   href: string | null,
+ *   writer: string | null,
+ *   args: Record<string, any> | null,
+ *   variant: "primary" | "secondary" | "ghost" | "danger",
+ *   icon: string | null
+ * }} fallback
+ * @param {{
+ *   prospectId: string | null | undefined,
+ *   personId: string | null | undefined,
+ *   size: "sm" | "md",
+ *   meta: { interactive?: boolean, returnTo?: string | null }
+ * }} context
+ */
+function renderOperatorActionSet(actions, fallback, context) {
+  const usable = Array.isArray(actions) ? actions.filter(Boolean) : [];
+  if (usable.length > 0) {
+    return usable.map((action) => renderOperatorAction(action, context)).join("");
+  }
+  return renderOperatorAction(fallback, context);
+}
+
+/**
+ * @param {{
+ *   label: string,
+ *   mode: "compose" | "detail",
+ *   href: string | null,
+ *   writer: string | null,
+ *   args: Record<string, any> | null,
+ *   variant: "primary" | "secondary" | "ghost" | "danger",
+ *   icon: string | null
+ * }} action
+ * @param {{
+ *   prospectId: string | null | undefined,
+ *   personId: string | null | undefined,
+ *   size: "sm" | "md",
+ *   meta: { interactive?: boolean, returnTo?: string | null }
+ * }} context
+ */
+function renderOperatorAction(action, context) {
+  if (action.writer) {
+    return liveActionBtn({
+      writer: action.writer,
+      args: action.args ?? {},
+      variant: action.variant,
+      size: context.size,
+      icon: action.icon ?? undefined,
+      label: action.label,
+    });
+  }
+  const href = action.mode === "compose"
+    ? composeHref(context.prospectId, context.personId, action.href, context.meta)
+    : detailHref(context.prospectId, context.personId, action.href, context.meta);
+  return btn({
+    variant: action.variant,
+    size: context.size,
+    icon: action.icon ?? undefined,
+    label: action.label,
+    href,
+  });
 }
 
 /** @param {string | null | undefined} value */

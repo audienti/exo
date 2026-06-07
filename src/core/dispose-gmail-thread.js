@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { findUserById } from "../db/database.js";
+import { resolveCodexCliCommand } from "../lib/codex-cli.js";
 import { inboundObservationSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 
@@ -77,7 +78,7 @@ export async function disposeGmailThread(input) {
   if (runtime === "codex") {
     return runDisposeThroughCodex({
       prompt,
-      codexCli: input.codexCli ?? normalizeNullableString(process.env.EXO_CODEX_CLI) ?? "codex",
+      codexCli: resolveCodexCliCommand({ codexCli: input.codexCli ?? null }),
       codexHome: input.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
     });
   }

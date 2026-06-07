@@ -129,7 +129,7 @@ test("executeActionIntent drives every operator writer against governed state", 
   ]).prospects[0];
 
   // Two pending received invitations not yet linked to a prospect (for promote).
-  for (const actor of ["Percy Promote", "Dana Draft"]) {
+  for (const actor of ["Percy Promote", "Dana Draft", "Mona Motion"]) {
     cli([
       "inbound", "observations", "add", user.id,
       "--account", linkedinAccount.id,
@@ -143,6 +143,18 @@ test("executeActionIntent drives every operator writer against governed state", 
       "--json",
     ]);
   }
+  cli([
+    "inbound", "observations", "add", user.id,
+    "--account", linkedinAccount.id,
+    "--surface", "linkedin-sent-invitations",
+    "--kind", "connection_request_pending",
+    "--observed-at", "2026-05-01T10:00:00.000Z",
+    "--summary", "Wendy Withdraw is still pending",
+    "--actor-name", "Wendy Withdraw",
+    "--actor-company", "Withdraw Co",
+    "--actor-profile-url", "https://www.linkedin.com/in/wendy-withdraw/",
+    "--json",
+  ]);
   // One invitation already linked to the tracked prospect, so accepting it can
   // reconcile that prospect to 1st-degree.
   cli([
@@ -191,6 +203,27 @@ test("executeActionIntent drives every operator writer against governed state", 
     assert.equal(findCompanyById(company.id).engagementUserAssignment?.userId, user.id);
   });
 
+  await t.test("assignMotionUser pins the motion and confirms by name", async () => {
+    const res = await executeActionIntent({ writer: "assignMotionUser", args: { motionId: motion.id, userId: user.id } });
+    assert.equal(res.ok, true);
+    assert.match(res.message, new RegExp(motion.name));
+    assert.equal(findMotionById(motion.id).engagementUserAssignment?.userId, user.id);
+  });
+
+  await t.test("restartMotion marks a draft motion active", async () => {
+    const draftMotion = cliJson([
+      "motion", "add",
+      "--url", "https://example.com/draft-only",
+      "--premise", "This offer matters when a draft needs to become the live working motion.",
+      "--audience", "Operators",
+      "--signal", "company::Is there recent evidence this team is actively evaluating workflow changes?",
+    ]);
+    const res = await executeActionIntent({ writer: "restartMotion", args: { motionId: draftMotion.id } });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /Set .* live\./);
+    assert.equal(findMotionById(draftMotion.id).status, "active");
+  });
+
   await t.test("claimRuntimeAccount persists a managed account onto the user", async () => {
     const res = await executeActionIntent({
       writer: "claimRuntimeAccount",
@@ -200,6 +233,9 @@ test("executeActionIntent drives every operator writer against governed state", 
         runtime: "codex",
         connector: "unipile",
         handle: "test-user-managed",
+        metadata: {
+          premiumFeatures: ["sales_navigator"],
+        },
       },
     });
     assert.equal(res.ok, true);
@@ -214,6 +250,7 @@ test("executeActionIntent drives every operator writer against governed state", 
     );
     assert.ok(managed, "managed linkedin account was written");
     assert.equal(managed?.handle, "test-user-managed");
+    assert.deepEqual(managed?.metadata?.premiumFeatures, ["sales_navigator"]);
   });
 
   await t.test("claimTargetAccountPacket claims company research idempotently", async () => {
@@ -370,6 +407,7 @@ test("executeActionIntent drives every operator writer against governed state", 
     const draft = (reProspect(prospect.id)?.prospect.drafts ?? []).find((d) => d.surface === "follow_up_direct_message");
     assert.ok(draft, "draft was written");
     assert.ok(["approved", "ready", "sent"].includes(draft.status), `draft status ${draft.status}`);
+    assert.equal(draft.approvedByOperator, true);
   });
 
   // --- 4b. addProspectTimelineNote — operator note + agent steer ---
@@ -435,6 +473,67 @@ test("executeActionIntent drives every operator writer against governed state", 
     assert.ok(count >= 1, "transition motion has a promoted prospect");
   });
 
+  await t.test("claimInboundPersonToMotion promotes into the backlog and re-homes into the chosen motion", async () => {
+    const res = await executeActionIntent({
+      writer: "claimInboundPersonToMotion",
+      args: {
+        observationId: observationIdByActor("Mona Motion"),
+        userId: user.id,
+        toMotionId: destMotion.id,
+      },
+    });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /Re-homed Mona Motion/i);
+    assert.match(res.message, new RegExp(destMotion.name));
+
+    const destinationHasProspect = (findMotionById(destMotion.id).targetMap?.accounts ?? []).some((account) =>
+      (account.prospects ?? []).some((candidate) => candidate.name === "Mona Motion"),
+    );
+    assert.equal(destinationHasProspect, true);
+
+    const otherMotionsStillHaveMona = listMotions()
+      .filter((candidate) => candidate.id !== destMotion.id)
+      .some((candidate) =>
+        (candidate.targetMap?.accounts ?? []).some((account) =>
+          (account.prospects ?? []).some((prospect) => prospect.name === "Mona Motion"),
+        ),
+      );
+    assert.equal(otherMotionsStillHaveMona, false);
+  });
+
+  await t.test("recordInboundObservation can queue a stale sent invite for withdraw and writeback lands it as withdrawn", async () => {
+    const observationId = observationIdByActor("Wendy Withdraw");
+
+    const queued = await executeActionIntent({
+      writer: "recordInboundObservation",
+      args: {
+        observationId,
+        nextKind: "connection_request_withdraw_requested",
+      },
+    });
+    assert.equal(queued.ok, true);
+    assert.match(queued.message, /Queued the agent to withdraw Wendy Withdraw/i);
+    assert.equal(
+      listInboundObservations().find((observation) => observation.id === observationId)?.kind,
+      "connection_request_withdraw_requested",
+    );
+
+    const withdrawn = await executeActionIntent({
+      writer: "recordActionResult",
+      args: {
+        actionKey: "withdraw_connection",
+        resultKey: "sent",
+        observationId,
+      },
+    });
+    assert.equal(withdrawn.ok, true);
+    assert.match(withdrawn.message, /Withdrew withdraw connection/i);
+    assert.equal(
+      listInboundObservations().find((observation) => observation.id === observationId)?.kind,
+      "connection_request_withdrawn",
+    );
+  });
+
   // --- 7. promoteAndApproveDraft ---
   await t.test("promoteAndApproveDraft promotes and queues the first message", async () => {
     const res = await executeActionIntent({
@@ -481,6 +580,33 @@ console.log(JSON.stringify({
       assert.equal(res.ok, true);
       assert.equal(res.writer, "runAgentQueuePass");
       assert.match(res.message, /Agent ran 1 task/i);
+      assert.match(res.message, /Queue now 2 due, 0 waiting, 0 blockers/i);
+    } finally {
+      if (previousRunner == null) {
+        delete process.env.EXO_AGENT_RUNNER_SCRIPT;
+      } else {
+        process.env.EXO_AGENT_RUNNER_SCRIPT = previousRunner;
+      }
+    }
+  });
+
+  await t.test("runAgentQueuePass surfaces partial passes as progress with backlog remaining", async () => {
+    const fakeRunnerPath = path.join(stateDir, "fake-agent-runner-partial.js");
+    fs.writeFileSync(fakeRunnerPath, `#!/usr/bin/env node
+console.log(JSON.stringify({
+  status: "partial",
+  results: [{ kind: "run_inbound_sync", status: "completed", detail: { summary: "Refreshed truth." } }],
+  finalQueueCounts: { dueTaskCount: 2, waitingTaskCount: 0, blockerCount: 0 }
+}));\n`, "utf8");
+    fs.chmodSync(fakeRunnerPath, 0o755);
+
+    const previousRunner = process.env.EXO_AGENT_RUNNER_SCRIPT;
+    process.env.EXO_AGENT_RUNNER_SCRIPT = fakeRunnerPath;
+    try {
+      const res = await executeActionIntent({ writer: "runAgentQueuePass", args: { background: false } });
+      assert.equal(res.ok, true);
+      assert.equal(res.writer, "runAgentQueuePass");
+      assert.match(res.message, /Agent made progress on 1 task/i);
       assert.match(res.message, /Queue now 2 due, 0 waiting, 0 blockers/i);
     } finally {
       if (previousRunner == null) {

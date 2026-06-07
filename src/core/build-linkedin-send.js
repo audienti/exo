@@ -1,15 +1,14 @@
 // @ts-check
 //
 // Outbound live-send executor — the outbound twin of the inbound live capture
-// handoff. For a send-ready message it resolves WHICH governed identity/browser
-// sends, and produces a native-browser execution contract the agent runtime
+// handoff. For a send-ready message it resolves WHICH governed connector path
+// sends, and produces a connector-native execution contract the agent runtime
 // fires. Exo never sends on its own: this builds the contract; the runtime
-// (Codex desktop / Claude-in-Chrome) performs the real send, then runs the
-// write-back, which records the "Sent" touch, marks the draft sent, and parks
-// cadence at "wait for a reply".
+// performs the real send, then runs the write-back, which records the "Sent"
+// touch, marks the draft sent, and parks cadence at "wait for a reply".
 
 import { buildCompanyExecutionView } from "./build-company-execution-view.js";
-import { extractUsableDraftBody, isSendableDraftStatus } from "../lib/draft-policy.js";
+import { extractUsableDraftBody, isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
 
 const DM_ACTION = "send_direct_message";
 const CONNECT_ACTION = "send_connection_request";
@@ -30,7 +29,7 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
   if (!prospect) throw new Error(`Prospect ${input.prospectId} is not targeted on ${company.name}.`);
 
   const sendReady = (prospect.drafts ?? []).filter(
-    (d) => isSendableDraftStatus(d.status) && (!input.surface || d.surface === input.surface),
+    (d) => isAutonomousSendReadyDraft(d) && (!input.surface || d.surface === input.surface),
   );
   if (!sendReady.length) {
     throw new Error("No send-ready draft to send for this prospect" + (input.surface ? ` on surface ${input.surface}.` : "."));
@@ -61,8 +60,14 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
 
   const identity = execution.assignments?.user ?? null;
   const browserProfile = execution.assignments?.profile ?? null;
-  const connector = transport.preferredTransport?.tool ?? "chrome";
-  const usesBrowserTransport = connector === "chrome" || connector === "browser-profile" || connector === "profile-relay";
+  const connector = normalizeNullableString(transport.preferredTransport?.tool);
+  const connectorKey = normalizeConnectorKey(connector);
+  if (!connector || !connectorKey) {
+    return blocked("No governed LinkedIn connector is available for this send.");
+  }
+  if (connectorKey !== "unipile") {
+    return blocked(`LinkedIn send requires a governed Unipile account. Resolved connector ${connector} is not supported.`);
+  }
   // Runtime-agnostic: the same contract is executable by either a Codex agent
   // or a Claude agent (or any runtime with native browser tools). --runtime is
   // just which one is driving this pass; the guardrails apply to all.
@@ -76,9 +81,9 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
     connector,
     // Governed execution policy — enforced regardless of which agent runs it.
     executionPolicy: {
-      mode: usesBrowserTransport ? "native_browser_tools_only" : "native_connector_tools_only",
+      mode: "native_connector_tools_only",
       shellFallbackAllowed: false,
-      disallowedFallbacks: ["shell_subprocess", "another_linkedin_identity", "paraphrasing_the_message"],
+      disallowedFallbacks: ["shell_subprocess", "another_linkedin_identity", "native_browser_tools", "paraphrasing_the_message"],
       pinnedIdentity: identity ? { label: identity.label, accountRefs: identity.accountRefs } : null,
       pinnedBrowserProfile: browserProfile?.label ?? null,
       writeBackOnlyAfterRealSend: true,
@@ -95,15 +100,11 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
     subject: draft.subject ?? null,
     message: normalizedMessage,
     instructions: [
-      usesBrowserTransport
-        ? `Send as the assigned identity ${identity?.label ?? "(assigned profile)"}${browserProfile?.label ? ` using the ${browserProfile.label} browser profile` : ""} only — do not drift to another LinkedIn account.`
-        : `Send as the assigned identity ${identity?.label ?? "(assigned connector)"} through the governed ${connector} connector only — do not drift to another LinkedIn account or another transport.`,
+      `Send as the assigned identity ${identity?.label ?? "(assigned connector)"} through the governed ${connector} connector only — do not drift to another LinkedIn account or another transport.`,
       action === CONNECT_ACTION
         ? `Open ${recipientUrl} and send a connection request${draft.body ? " with the note below" : " (no note)"}.`
         : `Open the LinkedIn message thread with ${prospect.name} at ${recipientUrl} and send the message below verbatim.`,
-      usesBrowserTransport
-        ? "Use native browser tools only (Codex or Claude). Do not shell out. Do not paraphrase or add anything beyond the stored draft."
-        : `Use the governed ${connector} connector only. Do not shell out, fall back to a browser session, or paraphrase or add anything beyond the stored draft.`,
+      `Use the governed ${connector} connector only. Do not shell out, fall back to a browser session, or paraphrase or add anything beyond the stored draft.`,
       `ONLY after it is actually sent, run the write-back: ${writeback}`,
     ],
     writeback,
@@ -114,4 +115,17 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
 function normalizeRuntime(runtime) {
   const value = String(runtime ?? "").trim().toLowerCase();
   return value === "codex" || value === "claude" ? value : "any";
+}
+
+/** @param {string|null|undefined} value */
+function normalizeNullableString(value) {
+  return typeof value === "string" && value.trim().length ? value.trim() : null;
+}
+
+/** @param {string|null|undefined} connector */
+function normalizeConnectorKey(connector) {
+  const normalized = normalizeNullableString(connector)?.toLowerCase() ?? null;
+  if (!normalized) return null;
+  const parts = normalized.split(":").filter(Boolean);
+  return parts[parts.length - 1] ?? normalized;
 }

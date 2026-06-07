@@ -20,13 +20,13 @@ test("formatAgentDoctorReport makes the worker diagnosis explicit", () => {
       waitingTaskCount: 1,
       blockerCount: 2,
       draftTaskCount: 0,
-      browserTaskCount: 6,
-      browserTaskKinds: ["send_message", "send_message"],
+      browserTaskCount: 0,
+      browserTaskKinds: [],
     },
     browser: {
-      required: true,
+      required: false,
       ready: true,
-      skipReason: null,
+      skipReason: "no_browser_tasks_due",
       blockedReasons: [],
       warnings: [
         "Additional Chrome app instance(s) are running with custom user-data-dir values: pid 9746.",
@@ -146,14 +146,14 @@ test("formatAgentDoctorReport makes the worker diagnosis explicit", () => {
   assert.match(output, /Queue: 6 due, 1 waiting, 2 blockers\./);
   assert.match(output, /Scheduler: launchd installed but not loaded\./);
   assert.match(output, /Scheduler is overdue\. 2026-06-03T02:45:00.000Z \(\d+s late\)\./);
-  assert.match(output, /Send mode: verify\. Browser sends stop before the final click, so send tasks will not drain\./);
+  assert.match(output, /Send mode: verify\. Send tasks stop before the final send, so they will not drain\./);
   assert.match(output, /Send proof coverage: 2\/6 due sends already have fresh proof\./);
   assert.match(output, /Verify mode still needs 4 more proofs\. Next likely proof: Georg Steiger at BillEase\./);
   assert.match(output, /Autonomous retrieval: 6\/6 enabled surfaces currently fresh, 0 due now\./);
   assert.match(output, /Next autonomous retrieval due around 2026-06-03T10:03:12.000Z for gmail:omalab-main · Inbox Threads\./);
   assert.match(output, /run_inbound_sync: ready/);
   assert.match(output, /send_message: ready/);
-  assert.match(output, /Browser transport is ready for due browser work/);
+  assert.match(output, /No browser-dependent queue work is due right now\./);
   assert.match(output, /withdraw_connection: ready/);
   assert.match(output, /pid 9746/);
   assert.match(output, /launchd plist: \/Users\/tester\/Library\/LaunchAgents\/com\.williamflanagan\.exo\.queue-drainer\.plist/);
@@ -170,13 +170,13 @@ test("formatAgentDoctorReport shows launchd run history when the worker is loade
       waitingTaskCount: 1,
       blockerCount: 3,
       draftTaskCount: 4,
-      browserTaskCount: 1,
-      browserTaskKinds: ["send_message"],
+      browserTaskCount: 0,
+      browserTaskKinds: [],
     },
     browser: {
-      required: true,
+      required: false,
       ready: true,
-      skipReason: null,
+      skipReason: "no_browser_tasks_due",
       blockedReasons: [],
       warnings: [],
       taskReadiness: {
@@ -257,7 +257,7 @@ test("formatAgentDoctorReport shows launchd run history when the worker is loade
 
   assert.match(output, /Scheduler: launchd loaded\. state=not running runs=0/);
   assert.match(output, /interval=15m/);
-  assert.match(output, /Send mode: live\. Browser sends are allowed to complete and write back\./);
+  assert.match(output, /Send mode: live\. Connector-native sends are allowed to complete and write back\./);
 });
 
 test("formatAgentDoctorReport surfaces stale installed runner artifacts", () => {
@@ -269,13 +269,13 @@ test("formatAgentDoctorReport surfaces stale installed runner artifacts", () => 
       waitingTaskCount: 1,
       blockerCount: 3,
       draftTaskCount: 0,
-      browserTaskCount: 5,
-      browserTaskKinds: ["send_message"],
+      browserTaskCount: 0,
+      browserTaskKinds: [],
     },
     browser: {
-      required: true,
+      required: false,
       ready: true,
-      skipReason: null,
+      skipReason: "no_browser_tasks_due",
       blockedReasons: [],
       warnings: [],
       taskReadiness: {
@@ -858,7 +858,7 @@ test("formatAgentDoctorReport describes canary send mode explicitly", () => {
     },
   });
 
-  assert.match(output, /Send mode: canary\. Each pass may send at most one previously verified browser send\./);
+  assert.match(output, /Send mode: canary\. Each pass may send at most one previously verified send\. Unverified due sends stop at ready_to_send first\./);
   assert.match(output, /Send proof coverage: 3\/5 due sends already have fresh proof\./);
   assert.match(output, /Canary is ready to send next from Taras Mykhalyshyn at BillEase\./);
 });
@@ -872,13 +872,13 @@ test("formatAgentDoctorReport recommends live after a successful canary send and
       waitingTaskCount: 0,
       blockerCount: 0,
       draftTaskCount: 0,
-      browserTaskCount: 2,
-      browserTaskKinds: ["send_message"],
+      browserTaskCount: 0,
+      browserTaskKinds: [],
     },
     browser: {
-      required: true,
+      required: false,
       ready: true,
-      skipReason: null,
+      skipReason: "no_browser_tasks_due",
       blockedReasons: [],
       warnings: [],
       taskReadiness: {
@@ -973,7 +973,7 @@ test("formatAgentDoctorReport recommends live after a successful canary send and
     },
   });
 
-  assert.match(output, /Send mode: canary\. Each pass may send at most one previously verified browser send\./);
+  assert.match(output, /Send mode: canary\. Each pass may send at most one previously verified send\. Unverified due sends stop at ready_to_send first\./);
   assert.match(output, /Canary is ready to send next from Georg Steiger at BillEase\./);
   assert.match(output, /Recommended rollout step: switch the scheduled worker to live\. Canary has already completed at least one successful live send\. Last canary send: Taras Mykhalyshyn at BillEase\./);
 });

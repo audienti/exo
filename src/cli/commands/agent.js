@@ -28,20 +28,20 @@ export function registerAgent(program) {
 Autonomous loop:
   exo agent queue                 # what the agent can do right now without operator input
   exo agent queue --json          # machine-readable, for an agent loop to drain
-  exo agent doctor                # why browser-backed background work is or is not runnable here
-  exo agent doctor --json         # machine-readable host/browser diagnosis for the worker
+  exo agent doctor                # why native autonomous work is or is not runnable here
+  exo agent doctor --json         # machine-readable host/runtime diagnosis for the worker
 
 How the loop works (runs in EITHER Codex or Claude — the contract is runtime-agnostic):
   1. exo agent run                             → run one real host-worker pass through the same path the scheduler uses
   2. exo agent send <co> --motion <m> --prospect <p>  → the governed send contract
-  3. perform the send with native browser tools (Codex or Claude)
+  3. perform the send with native connector tools (Codex or Claude)
   4. run the task's "writeback" command         → records the Sent touch, advances cadence
   5. repeat
 
-Only no-input work appears here. That includes send-ready drafts plus mechanical
-cleanup like rejecting inbound invites, withdrawing stale outbound invites, and
-undoing follows that should be cleared after a withdrawal. Nothing in this
-queue needs operator input.
+Only no-input work appears here. That includes inbound truth refresh, governed
+research packets, send-ready drafts, and mechanical cleanup like rejecting
+inbound invites or withdrawing stale outbound invites. Nothing in this queue
+needs operator input.
 `,
     );
 
@@ -56,7 +56,7 @@ queue needs operator input.
         return;
       }
       if (!queue.count && !(queue.blockers ?? []).length) {
-        console.log("Agent queue is empty — no sync, send-ready, or cleanup work is waiting to run.");
+        console.log("Agent queue is empty. No retrieval, research, send-ready, or cleanup work is waiting to run.");
         return;
       }
       if (queue.count) {
@@ -70,6 +70,30 @@ queue needs operator input.
             console.log(`    surfaces:  ${(task.surfaceLabels ?? []).join(", ") || task.surface}`);
             console.log(`    contract:  ${task.contractCommand}`);
             console.log(`    apply:     ${task.applyCommand}`);
+          } else if (task.kind === "company_discovery") {
+            console.log(`• company_discovery → ${task.motionName}`);
+            console.log(`    why:       ${task.whyItMatters ?? "motion inventory needs more companies"}`);
+            console.log(`    due:       ${task.dueAt ?? "now"}`);
+            console.log(`    minimum:   ${task.targetCompanyCount ?? 1} compan${task.targetCompanyCount === 1 ? "y" : "ies"}`);
+            console.log(`    brief:     ${task.briefCommand}`);
+          } else if (task.kind === "company_research") {
+            console.log(`• company_research → ${task.companyName}`);
+            console.log(`    why:       ${task.whyItMatters ?? "company research is due"}`);
+            console.log(`    due:       ${task.dueAt ?? "now"}`);
+            console.log(`    claim:     ${task.claimCommand}`);
+            console.log(`    brief:     ${task.briefCommand}`);
+          } else if (task.kind === "prospect_selection") {
+            console.log(`• prospect_selection → ${task.companyName}`);
+            console.log(`    why:       ${task.whyItMatters ?? "prospect selection is due"}`);
+            console.log(`    due:       ${task.dueAt ?? "now"}`);
+            console.log(`    claim:     ${task.claimCommand}`);
+            console.log(`    brief:     ${task.briefCommand}`);
+          } else if (task.kind === "prospect_research") {
+            console.log(`• prospect_research → ${task.prospectName} · ${task.companyName}`);
+            console.log(`    why:       ${task.whyItMatters ?? "prospect research is due"}`);
+            console.log(`    due:       ${task.dueAt ?? "now"}`);
+            console.log(`    claim:     ${task.claimCommand}`);
+            console.log(`    brief:     ${task.briefCommand}`);
           } else if (task.kind === "write_draft") {
             console.log(`• write_draft → ${task.prospectName} · ${task.companyName} (${task.surface})`);
             console.log(`    why:       ${task.reason === "no_draft" ? "no draft yet for this surface" : task.reason}`);
@@ -87,12 +111,6 @@ queue needs operator input.
             console.log(`    do:        withdraw this stale outbound invite on LinkedIn`);
             console.log(`    due:       ${task.dueAt ?? "now"}`);
             if (task.recipientUrl) console.log(`    invite:    ${task.recipientUrl}`);
-            console.log(`    on done:   ${task.writeback}`);
-          } else if (task.kind === "unfollow_profile") {
-            console.log(`• unfollow_profile → ${task.prospectName} · ${task.companyName}`);
-            console.log(`    do:        remove the follow now that the withdrawn branch is being cleaned up`);
-            console.log(`    due:       ${task.dueAt ?? "now"}`);
-            if (task.recipientUrl) console.log(`    profile:   ${task.recipientUrl}`);
             console.log(`    on done:   ${task.writeback}`);
           } else {
             console.log(`• ${task.action} → ${task.prospectName} · ${task.companyName} (${task.surface})`);
@@ -112,6 +130,9 @@ queue needs operator input.
           console.log(`    due:       ${task.dueAt ?? "not scheduled yet"}`);
           console.log(`    waiting:   ${humanizeWaitingReason(task.waitingReason)}`);
           if (task.kind === "run_inbound_sync") console.log(`    contract:  ${task.contractCommand}`);
+          if (task.kind === "company_discovery" || task.kind === "company_research" || task.kind === "prospect_selection" || task.kind === "prospect_research") {
+            console.log(`    brief:     ${task.briefCommand}`);
+          }
           if (task.kind === "write_draft") console.log(`    brief:     ${task.briefCommand}`);
           if (task.kind === "send_message" && task.body) console.log(`    message:   ${truncate(task.body, 100)}`);
           console.log("");
@@ -177,7 +198,7 @@ queue needs operator input.
 
   agent
     .command("doctor")
-    .description("Diagnose whether the background worker can actually run browser-backed queue work on this machine.")
+    .description("Diagnose whether the background worker can actually run the native autonomous queue on this machine.")
     .option("--json", "Emit machine-readable JSON")
     .action((options) => {
       const report = buildAgentDoctorReport();
@@ -466,16 +487,16 @@ queue needs operator input.
       console.log("\nPrerequisites for the scheduled agent to actually send:");
       if (plan.scheduler === "launchd") {
         console.log("  - the Codex desktop app installed at /Applications/Codex.app");
-        console.log("  - a host-local browser/session path the runner can bind without interactive approval");
+        console.log("  - the governed connector or MCP path callable in that detached Codex session");
       } else {
         console.log(`  - the '${plan.runtime}' CLI installed and authenticated`);
       }
       if (plan.sendMode === "verify") {
-        console.log("  - verification-only send mode is enabled, so browser sends will stop at ready_to_send and will not click Send or write back");
+        console.log("  - verification-only send mode is enabled, so send tasks will stop at ready_to_send and will not write back");
       } else if (plan.sendMode === "canary") {
-        console.log("  - canary send mode is enabled, so each pass will send at most one previously verified browser send, or prove one new send-ready task");
+        console.log("  - canary send mode is enabled, so each pass will send at most one previously verified send, or prove one new send-ready task");
       }
-      console.log("  - a browser session logged into LinkedIn as the assigned execution identity");
+      console.log("  - the assigned LinkedIn account mapped through its governed connector path");
       console.log("  - routine outbound drafts must land in send-ready state so the queue can drain them");
     });
 }
@@ -660,6 +681,8 @@ function sleep(ms) {
 }
 
 function loadAgentQueue() {
+  const stateDir = getHomeStateDir();
+  const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")));
   return buildAgentQueue({
     motions: listMotions(),
     companies: listCompanies(),
@@ -667,6 +690,7 @@ function loadAgentQueue() {
     users: listUsers(),
     observations: listInboundObservations(),
     cues: listInboundCues(),
+    hostState,
   });
 }
 
@@ -752,7 +776,7 @@ export function formatAgentDoctorReport(report) {
   const scheduler = report.scheduler ?? null;
   const routine = report.routine ?? null;
   const taskReadiness = browser.taskReadiness ?? {};
-  const taskKinds = ["run_inbound_sync", "send_message", "reject_connection_request", "withdraw_connection", "unfollow_profile"];
+  const taskKinds = ["run_inbound_sync", "send_message", "reject_connection_request", "withdraw_connection"];
   const shownKinds = taskKinds.filter((taskKind) => taskReadiness[taskKind]);
   const dueTaskKinds = [...new Set(Array.isArray(queue.browserTaskKinds) ? queue.browserTaskKinds : [])];
   const blockedDueTaskKinds = dueTaskKinds.filter((taskKind) => taskReadiness[taskKind]?.ready === false);
@@ -777,11 +801,11 @@ export function formatAgentDoctorReport(report) {
   }
   if (routine?.exists) {
     if (routine.sendMode === "verify") {
-      lines.push("Send mode: verify. Browser sends stop before the final click, so send tasks will not drain.");
+      lines.push("Send mode: verify. Send tasks stop before the final send, so they will not drain.");
     } else if (routine.sendMode === "canary") {
-      lines.push("Send mode: canary. Each pass may send at most one previously verified browser send. Unverified due sends stop at ready_to_send first.");
+      lines.push("Send mode: canary. Each pass may send at most one previously verified send. Unverified due sends stop at ready_to_send first.");
     } else if (routine.sendMode === "live") {
-      lines.push("Send mode: live. Browser sends are allowed to complete and write back.");
+      lines.push("Send mode: live. Connector-native sends are allowed to complete and write back.");
     }
     if (routine.stale) {
       lines.push(`Installed host runner artifacts are stale relative to current code (have ${routine.artifactVersion ?? "no version"}, need ${routine.expectedArtifactVersion}).`);
@@ -848,7 +872,7 @@ export function formatAgentDoctorReport(report) {
     }
   }
   if (!browser.required) {
-    lines.push("Browser-backed work is not due right now.");
+    lines.push("No browser-dependent queue work is due right now.");
   } else if (blockedDueTaskKinds.length) {
     lines.push(`General Chrome preflight passed, but some due task classes are blocked (${blockedDueTaskKinds.join(", ")}).`);
   } else if (browser.ready) {
@@ -1277,7 +1301,7 @@ function normalizeRoutineSendMode(value, currentSendMode = null) {
  * @param {any} lastPass
  * @param {string} checkedAt
  */
-function buildSchedulerCadenceSummary(scheduler, lastPass, checkedAt) {
+export function buildSchedulerCadenceSummary(scheduler, lastPass, checkedAt) {
   const runIntervalSeconds = Number.isFinite(scheduler?.runIntervalSeconds) ? Number(scheduler.runIntervalSeconds) : null;
   const lastStartedAt = normalizeIsoString(lastPass?.startedAt);
   const runningForSeconds = Number.isFinite(scheduler?.runningForSeconds) ? Number(scheduler.runningForSeconds) : null;

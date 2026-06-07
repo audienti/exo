@@ -241,7 +241,7 @@ export function buildNextSteps(targetingProfile, suppressionPolicy, premise, aud
     }
 
     if (prospectCount > 0 && readyCadenceCount >= prospectCount) {
-      steps.push("The first prospect batch is launch-ready. Let the agent execute the stored cadence branches through the pinned governed connector path, and surface only real exceptions or review decisions to the operator.");
+      steps.push("The first prospect batch is launch-ready. Let the agent execute the stored cadence branches through the assigned governed connector path, and surface only real exceptions or review decisions to the operator.");
     }
 
     if (missingEmailFallbackCount > 0) {

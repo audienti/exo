@@ -5,10 +5,11 @@ import os from "node:os";
 import path from "node:path";
 
 export const DEFAULT_UNIPILE_BASE_URL = "https://api1.unipile.com:13111";
+export const DEFAULT_UNIPILE_V2_BASE_URL = "https://api.unipile.com/v2";
 
 /**
  * @param {string | null | undefined} codexHome
- * @returns {{ apiKey: string | null, baseUrl: string }}
+ * @returns {{ apiKey: string | null, baseUrl: string, v2ApiKey: string | null, v2BaseUrl: string }}
  */
 export function readUnipileConfig(codexHome) {
   const home = normalizeNullableString(codexHome)
@@ -22,6 +23,11 @@ export function readUnipileConfig(codexHome) {
       baseUrl: normalizeUnipileBaseUrl(
         normalizeNullableString(process.env.UNIPILE_DSN)
         ?? normalizeNullableString(process.env.UNIPILE_BASE_URL)
+        ?? null,
+      ),
+      v2ApiKey: normalizeNullableString(process.env.UNIPILE_V2_API_KEY) ?? null,
+      v2BaseUrl: normalizeUnipileV2BaseUrl(
+        normalizeNullableString(process.env.UNIPILE_V2_BASE_URL)
         ?? null,
       ),
     };
@@ -38,6 +44,13 @@ export function readUnipileConfig(codexHome) {
       ?? normalizeNullableString(config.match(/UNIPILE_BASE_URL\s*=\s*"([^"]+)"/)?.[1] ?? null)
       ?? null,
     ),
+    v2ApiKey: normalizeNullableString(process.env.UNIPILE_V2_API_KEY)
+      ?? normalizeNullableString(config.match(/UNIPILE_V2_API_KEY\s*=\s*"([^"]+)"/)?.[1] ?? null),
+    v2BaseUrl: normalizeUnipileV2BaseUrl(
+      normalizeNullableString(process.env.UNIPILE_V2_BASE_URL)
+      ?? normalizeNullableString(config.match(/UNIPILE_V2_BASE_URL\s*=\s*"([^"]+)"/)?.[1] ?? null)
+      ?? null,
+    ),
   };
 }
 
@@ -48,6 +61,17 @@ function normalizeUnipileBaseUrl(value) {
   const normalized = normalizeNullableString(value);
   if (!normalized) {
     return DEFAULT_UNIPILE_BASE_URL;
+  }
+  return normalized.replace(/\/+$/, "");
+}
+
+/**
+ * @param {string | null | undefined} value
+ */
+function normalizeUnipileV2BaseUrl(value) {
+  const normalized = normalizeNullableString(value);
+  if (!normalized) {
+    return DEFAULT_UNIPILE_V2_BASE_URL;
   }
   return normalized.replace(/\/+$/, "");
 }

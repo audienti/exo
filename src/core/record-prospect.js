@@ -894,11 +894,11 @@ function buildContactEnrichmentStateUpdate(existing, patch = {}) {
         : existing.sourcesTried ?? [],
     missingChannels:
       patch.missingChannels !== undefined
-        ? mergeStringLists(existing.missingChannels ?? [], patch.missingChannels)
+        ? patch.missingChannels
         : existing.missingChannels ?? [],
     bestDirectChannels:
       patch.bestDirectChannels !== undefined
-        ? mergeStringLists(existing.bestDirectChannels ?? [], patch.bestDirectChannels)
+        ? patch.bestDirectChannels
         : existing.bestDirectChannels ?? [],
     lastEnrichedAt: patch.lastEnrichedAt ?? existing.lastEnrichedAt ?? null,
     notes: patch.notes ?? existing.notes ?? null

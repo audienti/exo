@@ -469,11 +469,11 @@ Examples:
           : null,
         blocker:
           assignedUserResolution && assignedUserResolution.sourceType === "harness-connection"
-            ? `Company is pinned to ${assignedUser.label}, but ${options.capability} resolves through a harness connection instead of a browser profile.`
+            ? `Company is assigned to ${assignedUser.label}, but ${options.capability} resolves through a harness connection instead of a browser profile.`
             : assignedUserResolution && assignedUserResolution.sourceType === "browser-profile" && !assignedUserResolution.browserProfile
-              ? `Company is pinned to ${assignedUser.label}, but the assigned browser-profile account is missing its registered profile.`
-            : assigned && !assignedSatisfies
-              ? `Company is pinned to ${assigned.label}, but that profile is not verified for ${options.capability}.`
+              ? `Company is assigned to ${assignedUser.label}, but the assigned browser-profile account is missing its registered profile.`
+              : assigned && !assignedSatisfies
+              ? `Company is assigned to ${assigned.label}, but that profile is not verified for ${options.capability}.`
               : null,
         candidates: candidates.map((profile) => ({
           id: profile.id,
@@ -502,7 +502,7 @@ Examples:
 
       if (result.resolutionMode === "company-assignment" || result.resolutionMode === "company-user-assignment") {
         console.log(
-          `Use pinned profile ${result.resolved.label} (${result.resolved.browser} / ${result.resolved.profileDirectory}) for ${options.capability}.`
+          `Use assigned profile ${result.resolved.label} (${result.resolved.browser} / ${result.resolved.profileDirectory}) for ${options.capability}.`
         );
         return;
       }

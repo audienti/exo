@@ -12,7 +12,8 @@ import {
   setupReadyChromeProfile,
   writeFakeCodexCaptureScript,
   writeFakeClaudeScript,
-  createLinkedProspectContext
+  createLinkedProspectContext,
+  uniqueTestLabel
 } from "./support/live-runtime.js";
 
 function writeCodexChromeConfig(codexHome, enabled) {
@@ -91,7 +92,7 @@ test("inbound sync gmail-live uses a Claude Gmail cassette and applies governed 
       email: "alicia@buyer.example"
     });
 
-    const user = runCliJson(tempDir, ["users", "add", "--label", "gmail-live-claude-user", "--owner", "william", "--json"]);
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "gmail-live-claude-user"), "--owner", "william", "--json"]);
     const withGmail = runCliJson(tempDir, [
       "users",
       "accounts",
@@ -165,7 +166,7 @@ test("inbound sync gmail-live rejects a legacy profile-backed Gmail account even
       email: "alicia@buyer.example"
     });
 
-    const user = runCliJson(tempDir, ["users", "add", "--label", "gmail-live-profile-claude-user", "--owner", "william", "--json"]);
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "gmail-live-profile-claude-user"), "--owner", "william", "--json"]);
     const withGmail = runCliJson(tempDir, [
       "users",
       "accounts",
@@ -233,7 +234,7 @@ test("inbound sync gmail-live rejects a legacy profile-backed Gmail account even
       email: "alicia@buyer.example"
     });
 
-    const user = runCliJson(tempDir, ["users", "add", "--label", "gmail-live-profile-user", "--owner", "william", "--json"]);
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "gmail-live-profile-user"), "--owner", "william", "--json"]);
     const withGmail = runCliJson(tempDir, [
       "users",
       "accounts",
@@ -283,7 +284,7 @@ test("inbound sync gmail-live rejects a legacy profile-backed Gmail account even
   }
 });
 
-test("inbound sync linkedin-live returns a handoff for a managed Codex chrome connector account", () => {
+test("inbound sync linkedin-live rejects a managed Codex chrome connector account and requires Unipile", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-codex-cassette-"));
   const codexHome = path.join(tempDir, ".codex");
   const fakeCodexPath = path.join(tempDir, "fake-codex");
@@ -292,7 +293,7 @@ test("inbound sync linkedin-live returns a handoff for a managed Codex chrome co
   writeFakeCodexCaptureScript(fakeCodexPath, loadJsonCassette("inbound/linkedin-live/codex-success.json"));
 
   try {
-    const user = runCliJson(tempDir, ["users", "add", "--label", "linkedin-live-user", "--owner", "william", "--json"]);
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "linkedin-live-user"), "--owner", "william", "--json"]);
     const withLinkedin = runCliJson(tempDir, [
       "users",
       "accounts",
@@ -311,37 +312,36 @@ test("inbound sync linkedin-live returns a handoff for a managed Codex chrome co
     ]);
     const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
 
-    const result = runCliJson(tempDir, [
-      "inbound",
-      "sync",
-      "linkedin-live",
-      user.id,
-      "--account",
-      linkedinAccountId,
-      "--runtime",
-      "codex",
-      "--limit",
-      "10",
-      "--json"
-    ], {
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath
-    });
+    let error = null;
+    try {
+      runCliJson(tempDir, [
+        "inbound",
+        "sync",
+        "linkedin-live",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--runtime",
+        "codex",
+        "--limit",
+        "10",
+        "--json"
+      ], {
+        CODEX_HOME: codexHome,
+        EXO_CODEX_CLI: fakeCodexPath
+      });
+    } catch (caught) {
+      error = caught;
+    }
 
-    assert.equal(result.probe.detectedStatus, "available");
-    assert.match(result.probe.reason, /chrome@openai-bundled/);
-    assert.equal(result.transport.kind, "agent_handoff");
-    assert.equal(result.transport.connector, "chrome");
-    assert.equal(result.transport.captureRequest.captureTransportMode, "connector_native_only");
-    assert.equal(result.transport.captureRequest.profileSelection, null);
-    assert.equal(result.capture, null);
-    assert.equal(result.payload, null);
+    assert.ok(error);
+    assert.match(String(error.stderr), /requires a managed Unipile account/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("inbound sync linkedin-live returns a handoff for a managed Claude chrome connector account", () => {
+test("inbound sync linkedin-live rejects a managed Claude chrome connector account and requires Unipile", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-claude-cassette-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude");
 
@@ -352,7 +352,7 @@ test("inbound sync linkedin-live returns a handoff for a managed Claude chrome c
   });
 
   try {
-    const user = runCliJson(tempDir, ["users", "add", "--label", "linkedin-live-claude-user", "--owner", "william", "--json"]);
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "linkedin-live-claude-user"), "--owner", "william", "--json"]);
     const withLinkedin = runCliJson(tempDir, [
       "users",
       "accounts",
@@ -371,30 +371,29 @@ test("inbound sync linkedin-live returns a handoff for a managed Claude chrome c
     ]);
     const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
 
-    const result = runCliJson(tempDir, [
-      "inbound",
-      "sync",
-      "linkedin-live",
-      user.id,
-      "--account",
-      linkedinAccountId,
-      "--runtime",
-      "claude",
-      "--limit",
-      "10",
-      "--json"
-    ], {
-      EXO_CLAUDE_CLI: fakeClaudePath
-    });
+    let error = null;
+    try {
+      runCliJson(tempDir, [
+        "inbound",
+        "sync",
+        "linkedin-live",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--runtime",
+        "claude",
+        "--limit",
+        "10",
+        "--json"
+      ], {
+        EXO_CLAUDE_CLI: fakeClaudePath
+      });
+    } catch (caught) {
+      error = caught;
+    }
 
-    assert.equal(result.probe.detectedStatus, "available");
-    assert.match(result.probe.reason, /Claude (plugin|MCP server)/i);
-    assert.equal(result.transport.kind, "agent_handoff");
-    assert.equal(result.transport.connector, "chrome");
-    assert.equal(result.transport.captureRequest.captureTransportMode, "connector_native_only");
-    assert.equal(result.transport.captureRequest.profileSelection, null);
-    assert.equal(result.capture, null);
-    assert.equal(result.payload, null);
+    assert.ok(error);
+    assert.match(String(error.stderr), /requires a managed Unipile account/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -405,6 +404,7 @@ test("inbound sync linkedin-live captures LinkedIn truth directly through a mapp
   const codexHome = path.join(tempDir, ".codex");
   const timestamp = "2026-06-04T12:00:00.000Z";
   const seenRequests = [];
+  const seenPosts = [];
 
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(path.join(codexHome, "config.toml"), [
@@ -516,6 +516,47 @@ test("inbound sync linkedin-live captures LinkedIn truth directly through a mapp
           };
         }
 
+        if (parsed.pathname === "/api/v1/users/member-1") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserProfile",
+              provider: "LINKEDIN",
+              provider_id: "member-1",
+              public_identifier: "jordan-cipolla",
+              headline: "VP Revenue Operations",
+              current_company_name: "BuyerCo",
+              profile_picture_url: "https://cdn.example.test/jordan.png",
+              work_experience: [
+                {
+                  id: "experience-1",
+                  position: "VP Revenue Operations",
+                  company_id: "buyerco",
+                  company_url: "https://www.linkedin.com/company/buyerco/",
+                  company_picture_url: "https://cdn.example.test/buyerco-logo.png",
+                  company: "BuyerCo",
+                  current: true,
+                }
+              ],
+            })
+          };
+        }
+
+        if (parsed.pathname === "/api/v1/linkedin/company/buyerco") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "CompanyProfile",
+              id: "buyerco",
+              name: "BuyerCo",
+              public_identifier: "buyerco",
+              profile_url: "https://www.linkedin.com/company/buyerco/",
+              website: "https://buyerco.example",
+              logo: "https://cdn.example.test/buyerco-logo.png",
+            })
+          };
+        }
+
         if (parsed.pathname === "/api/v1/users/invite/received") {
           return {
             status: 200,
@@ -609,6 +650,478 @@ test("inbound sync linkedin-live captures LinkedIn truth directly through a mapp
           };
         }
 
+        if (parsed.pathname === "/api/v1/users/member-3") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserProfile",
+              provider: "LINKEDIN",
+              provider_id: "member-3",
+              public_identifier: "nina-prospect",
+              headline: "Director of Demand Generation",
+              current_company_name: "Signal Foundry",
+              profile_picture_url: "https://cdn.example.test/nina.png",
+            })
+          };
+        }
+
+        if (parsed.pathname === "/api/v1/chats/thread-1/messages") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "MessageList",
+              items: [
+                {
+                  object: "Message",
+                  id: "message-1",
+                  text: "Following up on the governed inbound triage thread.",
+                  timestamp: "2026-05-30T18:14:00.000Z",
+                  is_sender: 0,
+                }
+              ],
+              cursor: null
+            })
+          };
+        }
+
+        if (parsed.pathname === "/api/v1/users/followers") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserFollowerList",
+              items: [
+                {
+                  object: "UserFollower",
+                  id: "member-3",
+                  urn: "urn:li:member:member-3",
+                  name: "Nina Prospect",
+                  headline: "Director of Demand Generation",
+                  profile_url: "https://www.linkedin.com/in/nina-prospect/",
+                  profile_picture_url: null,
+                  profile_picture_url_large: null
+                }
+              ],
+              cursor: null
+            })
+          };
+        }
+
+        if (parsed.pathname === "/api/v1/users/following") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserRelationsList",
+              items: [
+                {
+                  object: "UserRelation",
+                  first_name: "Paul",
+                  last_name: "Operator",
+                  headline: "Head of RevOps",
+                  public_identifier: "paul-operator",
+                  public_profile_url: "https://www.linkedin.com/in/paul-operator/",
+                  created_at: 1748628960,
+                  member_id: "member-4",
+                  member_urn: "urn:li:member:member-4",
+                  connection_urn: "urn:li:fsd_profile:member-4",
+                  profile_picture_url: "https://cdn.example.test/paul.png"
+                }
+              ],
+              cursor: null
+            })
+          };
+        }
+
+        if (parsed.pathname === "/api/v1/users/member-4") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserProfile",
+              provider: "LINKEDIN",
+              provider_id: "member-4",
+              public_identifier: "paul-operator",
+              headline: "Head of RevOps",
+              current_company_name: "OperatorCo",
+              profile_picture_url: "https://cdn.example.test/paul.png",
+            })
+          };
+        }
+
+        return {
+          status: 404,
+          bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+        };
+      },
+      unipileHttpPostImpl: (url, headers, bodyText) => {
+        const parsed = new URL(url);
+        const body = JSON.parse(bodyText);
+        seenPosts.push({
+          pathname: parsed.pathname,
+          apiKey: headers["X-API-KEY"] ?? null,
+          requestUrl: body.request_url ?? null
+        });
+
+        if (parsed.pathname !== "/api/v1/linkedin") {
+          return {
+            status: 404,
+            bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+          };
+        }
+
+        if (String(body.request_url ?? "").includes("voyagerPremiumDashAnalyticsObject")) {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "LinkedinRawData",
+              data: {
+                data: {
+                  premiumDashAnalyticsObjectByAnalyticsEntity: {
+                    paging: {
+                      count: 1,
+                      start: 0,
+                      total: 0
+                    },
+                    elements: [
+                      {
+                        content: {
+                          analyticsEntityLockup: {
+                            entityLockup: {
+                              title: { text: "Nina Prospect" },
+                              subtitle: { text: "Director of Demand Generation" },
+                              caption: { text: "Viewed 1d ago" },
+                              label: { text: "1st" },
+                              navigationUrl: "https://www.linkedin.com/in/nina-prospect?miniProfileUrn=urn%3Ali%3Afs_miniProfile%3Anina-prospect",
+                              image: {
+                                attributes: [
+                                  {
+                                    detailData: {
+                                      profilePicture: {
+                                        entityUrn: "urn:li:member:member-3"
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          },
+                          ctaItem: {
+                            actionData: {
+                              entityProfile: {
+                                publicIdentifier: "nina-prospect",
+                                entityUrn: "urn:li:member:member-3",
+                                headline: "Director of Demand Generation"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            })
+          };
+        }
+
+        if (String(body.request_url ?? "").includes("voyagerSearchDashClusters")) {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "LinkedinRawData",
+              data: {
+                data: {
+                  searchDashClustersByAll: {
+                    paging: {
+                      count: 1,
+                      start: 0,
+                      total: 1
+                    },
+                    metadata: {
+                      totalResultCount: 1
+                    },
+                    elements: [
+                      {
+                        items: [
+                          {
+                            item: {
+                              entityResult: {
+                                title: { text: "Paul Operator" },
+                                primarySubtitle: { text: "Head of RevOps" },
+                                navigationUrl: "https://www.linkedin.com/in/paul-operator?miniProfileUrn=urn%3Ali%3Afs_miniProfile%3Apaul-operator",
+                                trackingUrn: "urn:li:member:member-4",
+                                primaryActions: [
+                                  {
+                                    actionDetails: {
+                                      followAction: {
+                                        entityUrn: "urn:li:fsd_followingState:urn:li:fsd_profile:member-4",
+                                        followerCount: 711
+                                      }
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            })
+          };
+        }
+
+        return {
+          status: 404,
+          bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+        };
+      }
+    });
+
+    assert.equal(result.transport.kind, "direct_runtime");
+    assert.equal(result.transport.connector, "unipile");
+    assert.equal(result.capture.mode, "quick");
+    assert.ok(result.payload);
+    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-sent-invitations")?.status, "success");
+    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-received-invitations")?.observationCount, 1);
+    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-profile-views")?.status, "success");
+    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-following-list")?.status, "success");
+    assert.match(result.probe.reason, /unipile/i);
+
+    const receivedInvites = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-received-invitations");
+    assert.ok(receivedInvites);
+    assert.equal(receivedInvites.observations[0].actorProfileUrl, "https://www.linkedin.com/in/alicia-buyer/");
+    assert.equal(receivedInvites.observations[0].providerSharedSecret, "secret");
+    assert.equal(receivedInvites.observations[0].notes, "Would love to connect about governed inbound triage.");
+
+    const sentInvites = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-sent-invitations");
+    assert.ok(sentInvites);
+    assert.equal(sentInvites.observations[0].providerSharedSecret, "secret");
+    assert.equal(sentInvites.observations[0].notes, "Wanted to connect after reading the motion brief.");
+    assert.equal(sentInvites.observations[0].actorCompanyName, "BuyerCo");
+    assert.equal(sentInvites.observations[0].actorAvatarSourceUrl, "https://cdn.example.test/jordan.png");
+    assert.deepEqual(sentInvites.observations[0].actorCompanyProfile, {
+      name: "BuyerCo",
+      domain: "buyerco.example",
+      websiteUrl: "https://buyerco.example",
+      linkedinCompanyUrl: "https://www.linkedin.com/company/buyerco/",
+      logoSourceUrl: "https://cdn.example.test/buyerco-logo.png",
+    });
+
+    const messagingInbox = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-messaging-inbox");
+    assert.ok(messagingInbox);
+    assert.equal(messagingInbox.observations[0].kind, "inbound_reply_received");
+    assert.equal(messagingInbox.observations[0].actorName, "Alicia Buyer");
+    assert.equal(messagingInbox.observations[0].actorTitle, "VP Revenue Operations @ BuyerCo");
+    assert.equal(messagingInbox.observations[0].actorCompanyName, "BuyerCo");
+    assert.equal(messagingInbox.observations[0].actorProfileUrl, "https://www.linkedin.com/in/alicia-buyer/");
+    assert.equal(messagingInbox.observations[0].subject, "Get the clarity you've been looking for");
+    assert.match(messagingInbox.observations[0].notes ?? "", /thread subject/i);
+    assert.equal(messagingInbox.observations[0].messages.length, 1);
+    assert.equal(messagingInbox.observations[0].messages[0].direction, "inbound");
+    assert.match(messagingInbox.observations[0].messages[0].body, /governed inbound triage thread/i);
+
+    const profileViews = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-profile-views");
+    assert.ok(profileViews);
+    assert.equal(profileViews.observations[0].actorProfileUrl, "https://www.linkedin.com/in/nina-prospect");
+    assert.equal(profileViews.observations[0].kind, "profile_view_received");
+    assert.equal(
+      profileViews.observations[0].eventAt,
+      new Date(Date.parse(profileViews.observations[0].observedAt) - (24 * 60 * 60 * 1000)).toISOString(),
+    );
+    assert.equal(profileViews.observations[0].actorCompanyName, "Signal Foundry");
+    assert.match(profileViews.observations[0].notes ?? "", /viewer label/i);
+
+    const following = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-following-list");
+    assert.ok(following);
+    assert.equal(following.observations[0].actorName, "Paul Operator");
+    assert.equal(following.observations[0].actorProfileUrl, "https://www.linkedin.com/in/paul-operator");
+    assert.equal(following.observations[0].actorCompanyName, "OperatorCo");
+
+    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/users/invite/sent" && request.apiKey === "test-key"));
+    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/users/member-1" && /account_id=unipile-linkedin-1/.test(request.search)));
+    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/linkedin/company/buyerco" && /account_id=unipile-linkedin-1/.test(request.search)));
+    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/chats" && /unread=true/.test(request.search)));
+    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/chat_attendees/member-2"));
+    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/users/member-2" && /account_id=unipile-linkedin-1/.test(request.search)));
+    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/users/member-3" && /account_id=unipile-linkedin-1/.test(request.search)));
+    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/users/member-4" && /account_id=unipile-linkedin-1/.test(request.search)));
+    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/chats/thread-1/messages"));
+    assert.equal(seenRequests.some((request) => request.pathname === "/api/v1/users/following"), false);
+    assert.ok(seenPosts.some((request) => request.pathname === "/api/v1/linkedin" && /voyagerPremiumDashAnalyticsObject/.test(request.requestUrl ?? "")));
+    assert.ok(seenPosts.some((request) => request.pathname === "/api/v1/linkedin" && /voyagerSearchDashClusters/.test(request.requestUrl ?? "")));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync linkedin-live tolerates malformed Unipile company website URLs", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-bad-company-url-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const timestamp = "2026-06-04T12:00:00.000Z";
+  const seenRequests = [];
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ""
+  ].join("\n"));
+
+  try {
+    const result = await buildLiveLinkedinInboundSyncPayload({
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "linkedin-live-unipile-user",
+      owner: "william",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00"
+      },
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "linkedin-live-unipile-user",
+          label: "LinkedIn via Unipile",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-1",
+          providerAccountId: "unipile-linkedin-1",
+          preferred: true,
+          automationControls: {
+            weeklyQuotas: {
+              profileVisits: null,
+              invitations: null,
+              messages: null
+            }
+          },
+          notes: null,
+          inboundSync: {
+            surfaces: []
+          }
+        }
+      ],
+      harnessConnections: [
+        {
+          id: "harness-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          runtime: "codex",
+          connector: "unipile",
+          label: "codex:unipile",
+          status: "available",
+          notes: null
+        }
+      ],
+      inboundIgnoreRules: []
+    }, [], {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      surfaceKeys: ["linkedin-messaging-inbox", "linkedin-followers-list"],
+      codexHome,
+      unipileHttpGetImpl: (url) => {
+        const parsed = new URL(url);
+        seenRequests.push(parsed.pathname);
+
+        if (parsed.pathname === "/api/v1/chats") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "ChatList",
+              items: [
+                {
+                  object: "Chat",
+                  id: "thread-1",
+                  account_id: "unipile-linkedin-1",
+                  account_type: "LINKEDIN",
+                  provider_id: "12345",
+                  attendee_provider_id: "member-2",
+                  name: "Get the clarity you've been looking for",
+                  subject: "Get the clarity you've been looking for",
+                  timestamp: "2026-05-30T18:14:00.000Z",
+                  unread_count: 1
+                }
+              ],
+              cursor: null
+            })
+          };
+        }
+
+        if (parsed.pathname === "/api/v1/chat_attendees/member-2") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "ChatAttendee",
+              id: "attendee-1",
+              account_id: "unipile-linkedin-1",
+              provider_id: "member-2",
+              is_self: false,
+              hidden: false,
+              name: "Alicia Buyer",
+              picture_url: "https://cdn.example.test/alicia.png",
+              specifics: {
+                provider: "LINKEDIN",
+                occupation: "VP Revenue Operations @ BuyerCo",
+                public_identifier: "alicia-buyer",
+                profile_url: "https://www.linkedin.com/in/alicia-buyer/"
+              }
+            })
+          };
+        }
+
+        if (parsed.pathname === "/api/v1/users/member-2") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserProfile",
+              provider: "LINKEDIN",
+              provider_id: "member-2",
+              public_identifier: "alicia-buyer",
+              headline: "VP Revenue Operations @ BuyerCo",
+              current_company_name: "BuyerCo",
+              work_experience: [
+                {
+                  id: "experience-2",
+                  position: "VP Revenue Operations",
+                  company_id: "buyerco",
+                  company_url: "https://www.linkedin.com/company/buyerco/",
+                  company_picture_url: "https://cdn.example.test/buyerco-logo.png",
+                  company: "BuyerCo",
+                  current: true,
+                }
+              ],
+              profile_picture_url: "https://cdn.example.test/alicia.png",
+            })
+          };
+        }
+
+        if (parsed.pathname === "/api/v1/linkedin/company/buyerco") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "CompanyProfile",
+              id: "buyerco",
+              name: "BuyerCo",
+              public_identifier: "buyerco",
+              profile_url: "https://www.linkedin.com/company/buyerco/",
+              website: "buyerco.example",
+              logo: "https://cdn.example.test/buyerco-logo.png",
+            })
+          };
+        }
+
         if (parsed.pathname === "/api/v1/chats/thread-1/messages") {
           return {
             status: 200,
@@ -650,27 +1163,43 @@ test("inbound sync linkedin-live captures LinkedIn truth directly through a mapp
           };
         }
 
-        if (parsed.pathname === "/api/v1/users/following") {
+        if (parsed.pathname === "/api/v1/users/member-3") {
           return {
             status: 200,
             bodyText: JSON.stringify({
-              object: "UserRelationsList",
-              items: [
+              object: "UserProfile",
+              provider: "LINKEDIN",
+              provider_id: "member-3",
+              public_identifier: "nina-prospect",
+              headline: "Director of Demand Generation",
+              current_company_name: "Signal Foundry",
+              work_experience: [
                 {
-                  object: "UserRelation",
-                  first_name: "Paul",
-                  last_name: "Operator",
-                  headline: "Head of RevOps",
-                  public_identifier: "paul-operator",
-                  public_profile_url: "https://www.linkedin.com/in/paul-operator/",
-                  created_at: 1748628960,
-                  member_id: "member-4",
-                  member_urn: "urn:li:member:member-4",
-                  connection_urn: "urn:li:fsd_profile:member-4",
-                  profile_picture_url: "https://cdn.example.test/paul.png"
+                  id: "experience-3",
+                  position: "Director of Demand Generation",
+                  company_id: "signal-foundry",
+                  company_url: "https://www.linkedin.com/company/signal-foundry/",
+                  company_picture_url: "https://cdn.example.test/signal-foundry-logo.png",
+                  company: "Signal Foundry",
+                  current: true,
                 }
               ],
-              cursor: null
+              profile_picture_url: "https://cdn.example.test/nina.png",
+            })
+          };
+        }
+
+        if (parsed.pathname === "/api/v1/linkedin/company/signal-foundry") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "CompanyProfile",
+              id: "signal-foundry",
+              name: "Signal Foundry",
+              public_identifier: "signal-foundry",
+              profile_url: "https://www.linkedin.com/company/signal-foundry/",
+              website: "signal-foundry.example",
+              logo: "https://cdn.example.test/signal-foundry-logo.png",
             })
           };
         }
@@ -682,43 +1211,381 @@ test("inbound sync linkedin-live captures LinkedIn truth directly through a mapp
       }
     });
 
-    assert.equal(result.transport.kind, "direct_runtime");
-    assert.equal(result.transport.connector, "unipile");
-    assert.equal(result.capture.mode, "quick");
-    assert.ok(result.payload);
-    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-sent-invitations")?.status, "success");
-    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-received-invitations")?.observationCount, 1);
-    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-profile-views")?.status, "failed");
-    assert.match(result.capture.sections.find((section) => section.surfaceKey === "linkedin-profile-views")?.error ?? "", /profile views/i);
-    assert.match(result.probe.reason, /unipile/i);
-
-    const receivedInvites = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-received-invitations");
-    assert.ok(receivedInvites);
-    assert.equal(receivedInvites.observations[0].actorProfileUrl, "https://www.linkedin.com/in/alicia-buyer/");
-    assert.equal(receivedInvites.observations[0].notes, "Would love to connect about governed inbound triage.");
-
-    const sentInvites = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-sent-invitations");
-    assert.ok(sentInvites);
-    assert.equal(sentInvites.observations[0].notes, "Wanted to connect after reading the motion brief.");
-
     const messagingInbox = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-messaging-inbox");
     assert.ok(messagingInbox);
-    assert.equal(messagingInbox.observations[0].kind, "inbound_reply_received");
-    assert.equal(messagingInbox.observations[0].actorName, "Alicia Buyer");
-    assert.equal(messagingInbox.observations[0].actorTitle, "VP Revenue Operations @ BuyerCo");
-    assert.equal(messagingInbox.observations[0].actorCompanyName, "BuyerCo");
-    assert.equal(messagingInbox.observations[0].actorProfileUrl, "https://www.linkedin.com/in/alicia-buyer/");
-    assert.equal(messagingInbox.observations[0].subject, "Get the clarity you've been looking for");
-    assert.match(messagingInbox.observations[0].notes ?? "", /thread subject/i);
-    assert.equal(messagingInbox.observations[0].messages.length, 1);
-    assert.equal(messagingInbox.observations[0].messages[0].direction, "inbound");
-    assert.match(messagingInbox.observations[0].messages[0].body, /governed inbound triage thread/i);
+    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-messaging-inbox")?.status, "success");
+    assert.deepEqual(messagingInbox.observations[0].actorCompanyProfile, {
+      name: "BuyerCo",
+      domain: null,
+      websiteUrl: null,
+      linkedinCompanyUrl: "https://www.linkedin.com/company/buyerco/",
+      logoSourceUrl: "https://cdn.example.test/buyerco-logo.png",
+    });
 
-    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/users/invite/sent" && request.apiKey === "test-key"));
-    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/chats" && /unread=true/.test(request.search)));
-    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/chat_attendees/member-2"));
-    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/users/member-2" && /account_id=unipile-linkedin-1/.test(request.search)));
-    assert.ok(seenRequests.some((request) => request.pathname === "/api/v1/chats/thread-1/messages"));
+    const followers = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-followers-list");
+    assert.ok(followers);
+    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-followers-list")?.status, "success");
+    assert.ok(seenRequests.includes("/api/v1/linkedin/company/buyerco"));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync linkedin-live caps full followers sync to Unipile's LinkedIn page limit and tolerates an empty cursor tail", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-followers-full-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const timestamp = "2026-06-04T12:00:00.000Z";
+  const seenFollowerRequests = [];
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ""
+  ].join("\n"));
+
+  try {
+    const result = await buildLiveLinkedinInboundSyncPayload({
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "linkedin-live-unipile-user",
+      owner: "william",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00"
+      },
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "linkedin-live-unipile-user",
+          label: "LinkedIn via Unipile",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-1",
+          providerAccountId: "unipile-linkedin-1",
+          preferred: true,
+          automationControls: {
+            weeklyQuotas: {
+              profileVisits: null,
+              invitations: null,
+              messages: null
+            }
+          },
+          notes: null,
+          inboundSync: {
+            surfaces: []
+          }
+        }
+      ],
+      harnessConnections: [
+        {
+          id: "harness-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          runtime: "codex",
+          connector: "unipile",
+          label: "codex:unipile",
+          status: "available",
+          notes: null
+        }
+      ],
+      inboundIgnoreRules: []
+    }, [], {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      limit: 500,
+      surfaceKeys: ["linkedin-followers-list"],
+      codexHome,
+      unipileHttpGetImpl: (url) => {
+        const parsed = new URL(url);
+        if (parsed.pathname !== "/api/v1/users/followers") {
+          return {
+            status: 404,
+            bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+          };
+        }
+
+        seenFollowerRequests.push({
+          limit: parsed.searchParams.get("limit"),
+          cursor: parsed.searchParams.get("cursor")
+        });
+
+        if (parsed.searchParams.get("cursor") === "page-3") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserFollowerList",
+              items: [],
+              cursor: "page-4"
+            })
+          };
+        }
+
+        if (parsed.searchParams.get("cursor") === "page-2") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserFollowerList",
+              items: [
+                {
+                  object: "UserFollower",
+                  id: "follower-2",
+                  urn: "urn:li:member:member-4",
+                  name: "Page Two Prospect",
+                  headline: "Director of Procurement",
+                  profile_url: "https://www.linkedin.com/in/page-two-prospect/",
+                  profile_picture_url: null,
+                  profile_picture_url_large: null
+                }
+              ],
+              cursor: "page-3"
+            })
+          };
+        }
+
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            object: "UserFollowerList",
+            items: [
+              {
+                object: "UserFollower",
+                id: "follower-1",
+                urn: "urn:li:member:member-3",
+                name: "Page One Prospect",
+                headline: "Director of Demand Generation",
+                profile_url: "https://www.linkedin.com/in/page-one-prospect/",
+                profile_picture_url: null,
+                profile_picture_url_large: null
+              }
+            ],
+            cursor: "page-2"
+          })
+        };
+      }
+    });
+
+    assert.equal(result.transport.kind, "direct_runtime");
+    assert.equal(result.capture.mode, "full");
+    assert.equal(result.capture.sections.length, 1);
+    assert.equal(result.capture.sections[0]?.surfaceKey, "linkedin-followers-list");
+    assert.equal(result.capture.sections[0]?.status, "success");
+    assert.equal(result.capture.sections[0]?.itemCount, 2);
+    assert.equal(result.capture.sections[0]?.visibleTotalCount, 2);
+    assert.equal(seenFollowerRequests.length, 3);
+    assert.deepEqual(seenFollowerRequests, [
+      { limit: "100", cursor: null },
+      { limit: "100", cursor: "page-2" },
+      { limit: "100", cursor: "page-3" }
+    ]);
+
+    const followers = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-followers-list");
+    assert.ok(followers);
+    assert.equal(followers.observations.length, 2);
+    assert.equal(followers.observations[1].actorName, "Page Two Prospect");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync linkedin-live can stop a full following reconciliation at a page budget and resume from the next offset", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-following-page-budget-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const timestamp = "2026-06-04T12:00:00.000Z";
+  const seenFollowingRequests = [];
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ""
+  ].join("\n"));
+
+  try {
+    const rawUser = {
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "linkedin-live-unipile-user",
+      owner: "william",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00"
+      },
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "linkedin-live-unipile-user",
+          label: "LinkedIn via Unipile",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-1",
+          providerAccountId: "unipile-linkedin-1",
+          preferred: true,
+          automationControls: {
+            weeklyQuotas: {
+              profileVisits: null,
+              invitations: null,
+              messages: null
+            }
+          },
+          notes: null,
+          inboundSync: {
+            surfaces: []
+          }
+        }
+      ],
+      harnessConnections: [
+        {
+          id: "harness-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          runtime: "codex",
+          connector: "unipile",
+          label: "codex:unipile",
+          status: "available",
+          notes: null
+        }
+      ],
+      inboundIgnoreRules: []
+    };
+
+    const sharedOptions = {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      limit: 500,
+      surfaceKeys: ["linkedin-following-list"],
+      codexHome,
+      unipileHttpGetImpl: () => ({
+        status: 404,
+        bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+      }),
+      unipileHttpPostImpl: (_url, _headers, bodyText) => {
+        const payload = JSON.parse(bodyText);
+        const requestUrl = new URL(payload.request_url);
+        const variables = requestUrl.searchParams.get("variables") ?? "";
+        const start = Number((variables.match(/start:(\d+)/)?.[1] ?? "-1"));
+        const count = Number((variables.match(/count:(\d+)/)?.[1] ?? "-1"));
+        seenFollowingRequests.push({ start, count });
+
+        const item = (id, name, profileUrl) => ({
+          item: {
+            entityResult: {
+              navigationUrl: profileUrl,
+              title: { text: name },
+              primarySubtitle: { text: "Director of Revenue Operations" },
+              trackingUrn: `urn:li:member:${id}`,
+              primaryActions: [
+                {
+                  actionDetails: {
+                    followAction: {
+                      entityUrn: `follow:${id}`
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        });
+
+        if (start === 1) {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              data: {
+                data: {
+                  searchDashClustersByAll: {
+                    paging: { total: 2 },
+                    elements: [
+                      {
+                        items: [
+                          item("following-2", "Page Two Followed", "https://www.linkedin.com/in/page-two-followed/")
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            })
+          };
+        }
+
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            data: {
+              data: {
+                searchDashClustersByAll: {
+                  paging: { total: 2 },
+                  elements: [
+                    {
+                      items: [
+                        item("following-1", "Page One Followed", "https://www.linkedin.com/in/page-one-followed/")
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          })
+        };
+      }
+    };
+
+    const first = await buildLiveLinkedinInboundSyncPayload(rawUser, [], {
+      ...sharedOptions,
+      maxPages: 1,
+      pageSize: 1,
+    });
+
+    const firstFollowing = first.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-following-list");
+    assert.ok(firstFollowing);
+    assert.equal(firstFollowing.status, "warning");
+    assert.equal(firstFollowing.reconcileReason, "page_budget_stopped_early");
+    assert.equal(firstFollowing.nextStartOffset, 1);
+    assert.equal(firstFollowing.observations.length, 1);
+
+    const resumed = await buildLiveLinkedinInboundSyncPayload(rawUser, [], {
+      ...sharedOptions,
+      resumeStartOffset: 1,
+      maxPages: 1,
+      pageSize: 1,
+    });
+
+    const resumedFollowing = resumed.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-following-list");
+    assert.ok(resumedFollowing);
+    assert.equal(resumedFollowing.status, "success");
+    assert.equal(resumedFollowing.nextStartOffset, null);
+    assert.equal(resumedFollowing.observations.length, 1);
+    assert.deepEqual(seenFollowingRequests, [
+      { start: 0, count: 1 },
+      { start: 1, count: 1 },
+    ]);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -732,7 +1599,7 @@ test("inbound sync gmail-live returns a connector handoff for a managed Codex Gm
   fs.writeFileSync(path.join(codexHome, "config.toml"), ['[plugins."gmail@openai-curated"]', "enabled = true", ""].join("\n"));
 
   try {
-    const user = runCliJson(tempDir, ["users", "add", "--label", "gmail-live-codex-user", "--owner", "william", "--json"]);
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "gmail-live-codex-user"), "--owner", "william", "--json"]);
     const withGmail = runCliJson(tempDir, [
       "users",
       "accounts",

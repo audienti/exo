@@ -1,42 +1,54 @@
 // @ts-check
 //
-// The agent's autonomous work queue — everything that's been approved/queued and
+// The agent's autonomous work queue — everything that is truly send-ready or
 // can be executed WITHOUT further operator input. This is what an agent loop
 // drains: for each task it performs the real-world action (e.g. sends the
-// LinkedIn message via its browser runtime) and then writes the result back with
+// LinkedIn message via its governed connector path) and then writes the result back with
 // the `writeback` command, which marks the draft sent and records the touch.
 //
 // Task kinds today:
 //   - run_inbound_sync           — refresh stale or under-itemized inbound truth
 //                                  surfaces with no operator input.
+//   - company_discovery         — replenish thin motion inventory by finding
+//                                 new companies that match the motion thesis
+//                                 and signal contract.
 //   - company_research          — run one governed company-research packet
 //                                 against the motion signal contract. Claimable
 //                                 packets live in the same queue as already-
 //                                 claimed packets so there is only one
 //                                 executable research lane.
+//   - prospect_selection        — pick the smallest credible stakeholder set
+//                                 for one researched account and land the
+//                                 governed writebacks needed to complete the
+//                                 selection packet.
+//   - prospect_research         — complete one selected prospect's research,
+//                                 enrichment, and cadence packet until the
+//                                 branch is genuinely ready or terminal.
 //   - write_draft               — write the next governed draft with no
 //                                 operator input.
 //   - send_message              — fire a send-ready outbound message.
 //   - reject_connection_request — decline an inbound invite the operator
 //                                 already rejected in Exo.
 //   - withdraw_connection       — clear a stale outbound invite automatically.
-//   - unfollow_profile          — remove the paired follow after a withdrawn
-//                                 connection branch is cleaned up.
+// Cleanup stops at the invitation state change. Exo no longer synthesizes a
+// follow/unfollow cleanup branch when the connector path cannot prove it.
 //
-// Blockers cover send-ready drafts that became stale after they were queued
+// Blockers cover send-ready drafts that became stale after they were approved
 // (e.g. the prospect replied before send). Those are NOT auto-sent — the
 // operator has to re-review.
 
-import { accountRefsCanAttachConnectionNote } from "../schema/browser-profile.js";
 import { inboundCueSchema } from "../schema/inbound.js";
+import { createTaskLeaseFingerprint, getActiveTaskLease } from "../lib/agent-host-state.js";
 import { isConnectionRequestInFlight, isStalePendingConnectionRequest } from "../lib/cadence-helpers.js";
 import {
   draftWritebackStatusForSurface,
   extractUsableDraftBody,
-  isSendableDraftStatus,
+  isAutonomousSendReadyDraft,
   isStructuredDraftEnvelope,
 } from "../lib/draft-policy.js";
+import { withDerivedProspectQueueState } from "../lib/motion-queue.js";
 import { buildSendHandoff } from "./build-send-handoff.js";
+import { buildMotionDiscoveryDemand } from "./build-motion-discovery-brief.js";
 import { buildInboundReviewView } from "./build-inbound-review-view.js";
 import { steerSuppression } from "./prospect-steer.js";
 import {
@@ -49,8 +61,15 @@ import {
   classifyInboundSurfaceFreshness,
   computeInboundAutomationNextDueAt,
 } from "./user-inbound-sync.js";
+import { classifyUserWorkingHours } from "./working-hours.js";
+import { resolveScopedExecutionAssignment } from "./resolve-scoped-execution-assignment.js";
+import { resolveConnectionNoteCapability } from "./connection-note-capability.js";
 
 const LIVE_SYNC_TASK_CAPABILITIES = new Set(["linkedin", "gmail"]);
+const AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG = {
+  "linkedin-followers-list": { maxPages: 1, pageSize: 10 },
+  "linkedin-following-list": { maxPages: 1, pageSize: 10 },
+};
 
 /**
  * @param {{
@@ -60,6 +79,7 @@ const LIVE_SYNC_TASK_CAPABILITIES = new Set(["linkedin", "gmail"]);
  *   users?: any[],
  *   observations?: any[],
  *   cues?: any[],
+ *   hostState?: any,
  *   includeWaitingRetrieval?: boolean,
  *   now?: string | null
  * }} input
@@ -77,15 +97,47 @@ export function buildAgentQueue(input) {
   const includeWaitingRetrieval = input.includeWaitingRetrieval === true;
   const normalizedCues = normalizeInboundCues(input.cues ?? []);
   const profilesById = new Map((input.profiles ?? []).map((profile) => [profile.id, profile]));
-  // Sender premium status per company (Sales Navigator / LinkedIn Premium),
-  // which gates Premium→Premium messaging to non-connections.
-  const senderPremiumByCompany = new Map(
-    (input.companies ?? []).map((c) => [c.id, accountRefsCanAttachConnectionNote(c.engagementUserAssignment?.accountRefs ?? [])]),
-  );
   const companiesById = new Map((input.companies ?? []).map((company) => [company.id, company]));
-  const prospectContextById = new Map();
+  // Sender premium status per motion+company scope, which gates
+  // Premium→Premium messaging to non-connections.
+  const senderPremiumByScope = new Map();
+  const senderPremiumByCompany = new Map();
   for (const motion of input.motions ?? []) {
     for (const account of motion.targetMap?.accounts ?? []) {
+      const rawCompany = companiesById.get(account.companyId) ?? null;
+      if (!rawCompany) {
+        continue;
+      }
+
+      let resolution = null;
+      try {
+        resolution = resolveScopedExecutionAssignment({
+          rawCompany,
+          rawMotion: motion,
+          rawProfiles: input.profiles ?? [],
+          rawUsers: input.users ?? [],
+          capability: "linkedin",
+        });
+      } catch {
+        resolution = null;
+      }
+      const fallbackResolvedAccount = resolution?.resolvedAccount ?? resolveAssignedLinkedinAccount(
+        rawCompany.engagementUserAssignment,
+        input.users ?? [],
+      );
+      const premiumStatus = resolveConnectionNoteCapability({
+        resolvedAccount: fallbackResolvedAccount,
+        accountRefs: resolution?.userAssignmentRecord?.accountRefs ?? rawCompany.engagementUserAssignment?.accountRefs ?? [],
+      }) === true;
+      senderPremiumByScope.set(`${motion.id}:${account.companyId}`, premiumStatus);
+      if (!senderPremiumByCompany.has(account.companyId)) {
+        senderPremiumByCompany.set(account.companyId, premiumStatus);
+      }
+    }
+  }
+  const prospectContextById = new Map();
+  for (const motion of input.motions ?? []) {
+    for (const account of (motion.targetMap?.accounts ?? []).map((item) => normalizeAccountForAgentQueue(item, now))) {
       for (const prospect of account.prospects ?? []) {
         prospectContextById.set(prospect.id, { motion, account, prospect });
       }
@@ -98,6 +150,7 @@ export function buildAgentQueue(input) {
 
   for (const rawUser of input.users ?? []) {
     const syncView = buildUserInboundSyncView(rawUser);
+    const workingHoursStatus = classifyUserWorkingHours(rawUser, now);
     const review = buildInboundReviewView(rawUser, input.observations ?? [], input.motions ?? [], input.companies ?? []);
     const itemizationGapsByAccountId = groupBy(review.itemizationGaps, (gap) => gap.accountId);
     const openCuesByAccountId = groupBy(
@@ -112,10 +165,10 @@ export function buildAgentQueue(input) {
       const itemizationGaps = itemizationGapsByAccountId.get(account.accountId) ?? [];
       const openCues = openCuesByAccountId.get(account.accountId) ?? [];
       const staleSurfaces = account.surfaces
-        .filter((surface) => surface.enabled && surface.truthLevel === "authoritative")
+        .filter((surface) => surface.enabled && surface.autonomousBackgroundRetrieval !== false)
         .map((surface) => ({
           ...surface,
-          freshness: classifyInboundSurfaceFreshness(surface, now),
+          freshness: classifyInboundSurfaceFreshness(surface, now, { workingHoursStatus }),
         }))
         .filter((surface) => surface.freshness);
 
@@ -124,10 +177,10 @@ export function buildAgentQueue(input) {
           continue;
         }
         const nextDueSurfaces = account.surfaces
-          .filter((surface) => surface.enabled && surface.truthLevel === "authoritative" && surface.autonomousBackgroundRetrieval !== false)
+          .filter((surface) => surface.enabled && surface.autonomousBackgroundRetrieval !== false)
           .map((surface) => ({
             ...surface,
-            nextDueAt: computeInboundAutomationNextDueAt(surface),
+            nextDueAt: computeInboundAutomationNextDueAt(surface, { workingHoursStatus }),
           }))
           .filter((surface) => typeof surface.nextDueAt === "string" && surface.nextDueAt.length > 0)
           .sort((left, right) => String(left.nextDueAt).localeCompare(String(right.nextDueAt)));
@@ -135,61 +188,112 @@ export function buildAgentQueue(input) {
           continue;
         }
         const nextDueAt = nextDueSurfaces[0].nextDueAt;
-        const scheduledSurfaceLabels = nextDueSurfaces
+        const scheduledSurfaces = nextDueSurfaces
           .filter((surface) => surface.nextDueAt === nextDueAt)
-          .map((surface) => surface.label);
-        const scheduledSurfaceKeys = nextDueSurfaces
-          .filter((surface) => surface.nextDueAt === nextDueAt)
-          .map((surface) => surface.key);
+          .map((surface) => ({
+            key: surface.key,
+            label: surface.label,
+          }));
+        for (const scheduledSurface of scheduledSurfaces) {
+          placeTask(buildInboundSyncTask({
+            user: syncView.user,
+            account,
+            mode: "quick",
+            itemizationSurfaceCount: 0,
+            staleSurfaceCount: 0,
+            cueCount: 0,
+            surfaceKeys: [scheduledSurface.key],
+            surfaceLabels: [scheduledSurface.label],
+            dueAt: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
+              ? workingHoursStatus.nextOpenAt
+              : nextDueAt,
+            forceRetrieval: true,
+            waitingReason: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
+              ? "outside_working_hours"
+              : null,
+          }), { now, tasks, waiting });
+        }
+        continue;
+      }
+
+      const gapsBySurfaceKey = groupBy(itemizationGaps, (gap) => gap.surfaceKey);
+      const cuesBySurfaceKey = groupBy(openCues, (cue) => cue.surfaceKey);
+      const staleSurfaceByKey = new Map(staleSurfaces.map((surface) => [surface.key, surface]));
+      const fullSurfaceKeys = unique(itemizationGaps.map((gap) => gap.surfaceKey));
+
+      for (const surfaceKey of fullSurfaceKeys) {
+        const gapSurface = account.surfaces.find((surface) => surface.key === surfaceKey) ?? null;
+        const staleSurface = staleSurfaceByKey.get(surfaceKey) ?? null;
+        const surfaceCueCount = (cuesBySurfaceKey.get(surfaceKey) ?? []).length;
+        const oldestDueAt = normalizeOptionalIso(
+          unique(
+            [
+              gapSurface?.lastObservedAt ?? gapSurface?.lastSyncedAt ?? null,
+              staleSurface?.freshness?.dueAt ?? staleSurface?.lastObservedAt ?? staleSurface?.lastSyncedAt ?? null,
+              ...(cuesBySurfaceKey.get(surfaceKey) ?? []).map((cue) => cue.observedAt),
+            ],
+          )
+            .filter(Boolean)
+            .sort()[0] ?? now,
+        ) ?? now;
+
+        placeTask(buildInboundSyncTask({
+          user: syncView.user,
+          account,
+          mode: "full",
+          itemizationSurfaceCount: 1,
+          staleSurfaceCount: staleSurface ? 1 : 0,
+          cueCount: surfaceCueCount,
+          surfaceKeys: [surfaceKey],
+          surfaceLabels: [cueLabelForAccount(account, surfaceKey)],
+          dueAt: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
+            ? workingHoursStatus.nextOpenAt
+            : oldestDueAt,
+          resumeCursor: normalizeNullableString(gapSurface?.nextCursor) ?? null,
+          resumeStartOffset: Number.isInteger(gapSurface?.nextStartOffset) ? gapSurface.nextStartOffset : null,
+          ...resolveAutonomousInboundPaginationConfig(surfaceKey),
+          waitingReason: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
+            ? "outside_working_hours"
+            : null,
+        }), { now, tasks, waiting });
+      }
+
+      const quickSurfaceKeys = unique(
+        staleSurfaces.map((surface) => surface.key)
+          .concat(openCues.map((cue) => cue.surfaceKey)),
+      ).filter((surfaceKey) => !fullSurfaceKeys.includes(surfaceKey));
+
+      for (const surfaceKey of quickSurfaceKeys) {
+        const staleSurface = staleSurfaceByKey.get(surfaceKey) ?? null;
+        const surfaceCueCount = (cuesBySurfaceKey.get(surfaceKey) ?? []).length;
+        const oldestDueAt = normalizeOptionalIso(
+          unique(
+            [
+              staleSurface?.freshness?.dueAt ?? staleSurface?.lastObservedAt ?? staleSurface?.lastSyncedAt ?? null,
+              ...(cuesBySurfaceKey.get(surfaceKey) ?? []).map((cue) => cue.observedAt),
+            ],
+          )
+            .filter(Boolean)
+            .sort()[0] ?? now,
+        ) ?? now;
+
         placeTask(buildInboundSyncTask({
           user: syncView.user,
           account,
           mode: "quick",
           itemizationSurfaceCount: 0,
-          staleSurfaceCount: 0,
-          cueCount: 0,
-          surfaceKeys: scheduledSurfaceKeys,
-          surfaceLabels: scheduledSurfaceLabels,
-          dueAt: nextDueAt,
-          forceRetrieval: true,
+          staleSurfaceCount: staleSurface ? 1 : 0,
+          cueCount: surfaceCueCount,
+          surfaceKeys: [surfaceKey],
+          surfaceLabels: [cueLabelForAccount(account, surfaceKey)],
+          dueAt: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
+            ? workingHoursStatus.nextOpenAt
+            : oldestDueAt,
+          waitingReason: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
+            ? "outside_working_hours"
+            : null,
         }), { now, tasks, waiting });
-        continue;
       }
-
-      const surfaceKeys = unique(
-        itemizationGaps.map((gap) => gap.surfaceKey)
-          .concat(staleSurfaces.map((surface) => surface.key))
-          .concat(openCues.map((cue) => cue.surfaceKey)),
-      );
-      const surfaceLabels = surfaceKeys.map((surfaceKey) => cueLabelForAccount(account, surfaceKey));
-      const syncMode = itemizationGaps.length ? "full" : "quick";
-      const itemizationSurfaceCount = itemizationGaps.length;
-      const staleSurfaceCount = staleSurfaces.length;
-      const cueCount = openCues.length;
-      const oldestDueAt = normalizeOptionalIso(
-        unique(
-          itemizationGaps
-            .map((gap) => account.surfaces.find((surface) => surface.key === gap.surfaceKey)?.lastObservedAt
-              ?? account.surfaces.find((surface) => surface.key === gap.surfaceKey)?.lastSyncedAt
-              ?? null)
-            .concat(staleSurfaces.map((surface) => surface.freshness?.dueAt ?? surface.lastObservedAt ?? surface.lastSyncedAt ?? null))
-            .concat(openCues.map((cue) => cue.observedAt)),
-        )
-          .filter(Boolean)
-          .sort()[0] ?? now,
-      ) ?? now;
-
-      placeTask(buildInboundSyncTask({
-        user: syncView.user,
-        account,
-        mode: syncMode,
-        itemizationSurfaceCount,
-        staleSurfaceCount,
-        cueCount,
-        surfaceKeys,
-        surfaceLabels,
-        dueAt: oldestDueAt,
-      }), { now, tasks, waiting });
     }
   }
 
@@ -216,6 +320,50 @@ export function buildAgentQueue(input) {
     continue;
   }
 
+  // Operator-requested withdraws are already an explicit cleanup decision.
+  // They should queue immediately, even if the stale auto-withdraw logic would
+  // also match the older pending observation.
+  for (const observation of input.observations ?? []) {
+    if (observation?.kind !== "connection_request_withdraw_requested") continue;
+    const context = observation?.prospectId ? prospectContextById.get(observation.prospectId) ?? null : null;
+    const motion = context?.motion ?? null;
+    const account = context?.account ?? null;
+    const prospect = context?.prospect ?? null;
+    const recipientUrl = prospect?.linkedinProfileUrl ?? observation.actorProfileUrl ?? observation.sourceUrl ?? null;
+    if (!recipientUrl) continue;
+
+    const cleanupKey = buildWithdrawCleanupKey(observation);
+    if (queuedCleanupKeys.has(cleanupKey)) continue;
+    queuedCleanupKeys.add(cleanupKey);
+
+    placeTask({
+      kind: "withdraw_connection",
+      action: "withdraw_connection",
+      needsOperatorInput: false,
+      observationId: observation.id,
+      motionId: motion?.id ?? observation.motionId ?? null,
+      motionName: motion?.name ?? null,
+      companyId: account?.companyId ?? observation.companyId ?? null,
+      companyName: account?.companyName ?? observation.actorCompanyName ?? null,
+      prospectId: prospect?.id ?? observation.prospectId ?? null,
+      prospectName: prospect?.name ?? observation.actorName ?? "pending invite",
+      recipientUrl,
+      surface: "connection_request",
+      reason: "operator_requested_withdraw",
+      queuedAt: observation.observedAt ?? null,
+      dueAt: observation.observedAt ?? now,
+      writeback: buildActionResultWriteback({
+        action: "withdraw_connection",
+        result: "sent",
+        motionId: motion?.id ?? observation.motionId ?? null,
+        companyId: account?.companyId ?? observation.companyId ?? null,
+        prospectId: prospect?.id ?? observation.prospectId ?? null,
+        observationId: observation.id,
+        surface: "withdraw_connection",
+      }),
+    }, { now, tasks, waiting });
+  }
+
   // Stale outbound invites belong in the agent queue, not the operator
   // decision lane. Once the invite crosses policy age, the cleanup move is to
   // withdraw it automatically and let governed writeback collapse the branch.
@@ -229,13 +377,7 @@ export function buildAgentQueue(input) {
     const recipientUrl = prospect?.linkedinProfileUrl ?? observation.actorProfileUrl ?? observation.sourceUrl ?? null;
     if (!recipientUrl) continue;
 
-    const cleanupKey = observation.prospectId
-      ? `withdraw::${observation.prospectId}`
-      : observation.externalId
-        ? `withdraw::${observation.externalId}`
-        : observation.actorProfileUrl
-          ? `withdraw::${observation.actorProfileUrl}`
-          : `withdraw::${observation.id}`;
+    const cleanupKey = buildWithdrawCleanupKey(observation);
     if (queuedCleanupKeys.has(cleanupKey)) continue;
     queuedCleanupKeys.add(cleanupKey);
 
@@ -267,8 +409,18 @@ export function buildAgentQueue(input) {
     }, { now, tasks, waiting });
   }
   for (const motion of input.motions ?? []) {
-    for (const account of motion.targetMap?.accounts ?? []) {
-      const senderPremium = senderPremiumByCompany.get(account.companyId) ?? false;
+    const discoveryTask = buildCompanyDiscoveryTask({
+      motion,
+      companies: input.companies ?? [],
+    });
+    if (discoveryTask) {
+      placeTask(discoveryTask, { now, tasks, waiting });
+    }
+
+    for (const account of (motion.targetMap?.accounts ?? []).map((item) => normalizeAccountForAgentQueue(item, now))) {
+      const senderPremium = senderPremiumByScope.get(`${motion.id}:${account.companyId}`)
+        ?? senderPremiumByCompany.get(account.companyId)
+        ?? false;
       if (
         (account?.packetState?.kind === "company_research" && account.packetState?.status === "claimed")
         || isClaimableCompanyResearchAccount(account)
@@ -278,26 +430,47 @@ export function buildAgentQueue(input) {
           account,
         }), { now, tasks, waiting });
       }
+      if (
+        (account?.packetState?.kind === "prospect_selection" && account.packetState?.status === "claimed")
+        || isClaimableProspectSelectionAccount(account)
+      ) {
+        placeTask(buildProspectSelectionTask({
+          motion,
+          account,
+        }), { now, tasks, waiting });
+      }
       for (const prospect of account.prospects ?? []) {
         // Honor operator steers FIRST. A "do not contact / works for us" steer
         // removes the prospect from the loop entirely — the unattended agent
         // must never draft for or message someone the operator excluded.
         if (steerSuppression(prospect).suppressed) continue;
-        if (hasRecordedTouch(prospect, "withdraw_connection") && hasRecordedTouch(prospect, "follow") && !hasRecordedTouch(prospect, "unfollow")) {
-          const unfollowTask = buildUnfollowTask({ motion, account, prospect });
-          if (unfollowTask) placeTask(unfollowTask, { now, tasks, waiting });
+        if (
+          !isAccountProspectSelectionClaimed(account)
+          && (
+            (prospect?.packetState?.kind === "prospect_research" && prospect.packetState?.status === "claimed")
+            || isClaimableProspectResearchProspect(prospect)
+          )
+        ) {
+          placeTask(buildProspectResearchTask({
+            motion,
+            account,
+            prospect,
+          }), { now, tasks, waiting });
         }
         const candidateSurface = selectNextDraftSurface(prospect);
         const nextSurface = isQueueDraftSurfaceAvailable(prospect, candidateSurface) ? candidateSurface : null;
         const drafts = Array.isArray(prospect.drafts) ? prospect.drafts : [];
+        const touches = Array.isArray(prospect.touches) ? prospect.touches : [];
         const cadenceWindow = nextSurface ? resolveCadenceExecutionWindow(prospect, nextSurface, now) : null;
+        const draftOnNextSurface = nextSurface
+          ? drafts.find((draft) => draft.surface === nextSurface && isDraftActive(draft))
+          : null;
 
         // 1) write_draft: the prospect's next message hasn't been drafted yet.
         //    Skip if any active draft (drafting/ready/queued/approved) already sits on
         //    the right surface — that one is either being worked or already
         //    queued in the current send path.
         if (nextSurface) {
-          const draftOnNextSurface = drafts.find((d) => d.surface === nextSurface && isDraftActive(d));
           const needsRewrite = draftOnNextSurface ? isStructuredDraftEnvelope(draftOnNextSurface.body) : false;
           if (!draftOnNextSurface || needsRewrite) {
             placeTask(buildWriteDraftTask({
@@ -317,7 +490,7 @@ export function buildAgentQueue(input) {
         //    for the prospect and writes on the current surface; old surface
         //    drafts get marked discarded via the writeback contract.
         for (const draft of drafts) {
-          if (isSendableDraftStatus(draft.status) || draft.status === "sent" || draft.status === "discarded") continue;
+          if (isAutonomousSendReadyDraft(draft) || draft.status === "sent" || draft.status === "discarded") continue;
           const staleness = classifyDraftStaleness(draft, nextSurface);
           if (!staleness.stale) continue;
           // Don't double-queue — the no_draft task above already covers
@@ -327,11 +500,22 @@ export function buildAgentQueue(input) {
 
         // 3) send_message: send-ready drafts ready to fire.
         for (const draft of drafts) {
-          if (!isSendableDraftStatus(draft.status)) continue;
+          if (!isAutonomousSendReadyDraft(draft)) continue;
           if (isStructuredDraftEnvelope(draft.body)) continue;
 
           const staleness = classifyDraftStaleness(draft, nextSurface);
           if (staleness.stale) {
+            // If the branch has already been re-drafted on the live surface,
+            // the older send-ready draft is obsolete history, not a live
+            // blocker. Keep the current draft flowing and drop the stale card.
+            if (draftOnNextSurface) {
+              continue;
+            }
+            // Once the inbound has already been answered, an old send-ready
+            // draft on a dead surface is just stale history.
+            if (!nextSurface && hasAnsweredInbound(touches)) {
+              continue;
+            }
             // The prospect did something after queueing that moved the next
             // surface. Don't auto-send — surface as a blocker so the
             // operator re-reviews.
@@ -410,17 +594,69 @@ export function buildAgentQueue(input) {
       }
     }
   }
-  // Autonomous truth refresh and claimed research first, then cleanup, then
-  // sends, then drafting. Within each task class, oldest queued work wins.
+  // Autonomous truth refresh and packet work first, then discovery refill,
+  // then cleanup, then sends, then drafting. Within each task class, oldest
+  // queued work wins.
   tasks.sort(taskOrder);
   waiting.sort(taskOrder);
+  const annotatedTasks = annotateTaskCheckouts(tasks, input.hostState ?? null, now);
+  const annotatedWaiting = annotateTaskCheckouts(waiting, input.hostState ?? null, now);
   return {
-    count: tasks.length,
-    itemCount: tasks.length,
-    waitingCount: waiting.length,
-    tasks,
-    waiting,
+    count: annotatedTasks.length,
+    itemCount: annotatedTasks.length,
+    waitingCount: annotatedWaiting.length,
+    tasks: annotatedTasks,
+    waiting: annotatedWaiting,
     blockers,
+  };
+}
+
+/**
+ * @param {{
+ *   motion: any,
+ *   companies: any[],
+ * }} input
+ */
+function buildCompanyDiscoveryTask({ motion, companies }) {
+  let demand;
+  try {
+    demand = buildMotionDiscoveryDemand(motion, companies);
+  } catch {
+    return null;
+  }
+  if (!demand.autonomousEligible || !demand.needsDiscovery || demand.targetCompanyCount < 1) {
+    return null;
+  }
+
+  return {
+    kind: "company_discovery",
+    action: "discover_companies",
+    needsOperatorInput: false,
+    reason: "inventory_shortfall",
+    motionId: demand.motion.id,
+    motionName: demand.motion.name,
+    companyId: null,
+    companyName: demand.motion.name,
+    prospectId: null,
+    prospectName: `Discover at least ${demand.targetCompanyCount} compan${demand.targetCompanyCount === 1 ? "y" : "ies"}`,
+    packetId: `company_discovery:${demand.motion.id}`,
+    packetKind: "company_discovery",
+    claimState: "claimable",
+    surface: "company_discovery",
+    queueStatus: null,
+    targetCompanyCount: demand.targetCompanyCount,
+    minimumAvailableProspects: demand.minimumAvailableProspects ?? undefined,
+    availableProspectCount: demand.availableProspectCount,
+    projectedAvailableProspectCount: demand.projectedAvailableProspectCount,
+    deficitAfterBacklog: demand.deficitAfterBacklog,
+    stakeholderTargetCount: demand.stakeholderTargetCount,
+    expectedProspectYieldPerCompany: demand.expectedProspectYieldPerCompany,
+    linkedCompanyCount: demand.linkedCompanyCount,
+    whyItMatters: `${demand.motion.name} can only project ${demand.projectedAvailableProspectCount} available prospects against a floor of ${demand.minimumAvailableProspects}. Find at least ${demand.targetCompanyCount} more companies now so downstream research has real backlog instead of forcing weak-fit branches.`,
+    briefCommand: `exo motion discovery-brief ${demand.motion.id} --companies ${demand.targetCompanyCount} --json`,
+    queuedAt: demand.motion.updatedAt ?? demand.motion.createdAt ?? null,
+    dueAt: demand.motion.updatedAt ?? demand.motion.createdAt ?? null,
+    waitingReason: null,
   };
 }
 
@@ -474,6 +710,129 @@ function isClaimableCompanyResearchAccount(account) {
 }
 
 /**
+ * Preserve stored account-level queue state and packet ownership, but derive
+ * prospect queue state when older state snapshots or tests left it implicit.
+ *
+ * @param {any} rawAccount
+ * @param {string} now
+ */
+function normalizeAccountForAgentQueue(rawAccount, now) {
+  const account = /** @type {Record<string, any>} */ (rawAccount ?? {});
+  return {
+    ...account,
+    prospects: Array.isArray(account.prospects)
+      ? account.prospects.map((prospect) => withDerivedProspectQueueState(prospect, now))
+      : [],
+  };
+}
+
+/**
+ * @param {any} account
+ */
+function isClaimableProspectSelectionAccount(account) {
+  return account?.queueState?.status === "researched"
+    && !(account?.packetState?.status === "claimed");
+}
+
+/**
+ * @param {any} account
+ */
+function isAccountProspectSelectionClaimed(account) {
+  return account?.packetState?.kind === "prospect_selection"
+    && account?.packetState?.status === "claimed";
+}
+
+/**
+ * @param {any} prospect
+ */
+function isClaimableProspectResearchProspect(prospect) {
+  return prospect?.queueState?.status === "selected"
+    && !(prospect?.packetState?.status === "claimed");
+}
+
+/**
+ * @param {{
+ *   motion: any,
+ *   account: any,
+ * }} input
+ */
+function buildProspectSelectionTask({ motion, account }) {
+  const packetId = `prospect_selection:${account.companyId}`;
+  const claimState = account?.packetState?.kind === "prospect_selection" && account.packetState?.status === "claimed"
+    ? "claimed"
+    : "claimable";
+  const queuedAt = account?.packetState?.claimedAt ?? account?.queueState?.updatedAt ?? null;
+  return {
+    kind: "prospect_selection",
+    action: "select_prospects",
+    needsOperatorInput: false,
+    reason: claimState === "claimed" ? "claimed_prospect_selection_packet" : "claimable_prospect_selection_packet",
+    motionId: motion.id,
+    motionName: motion.name,
+    companyId: account.companyId,
+    companyName: account.companyName,
+    prospectName: account.companyName,
+    packetId,
+    packetKind: "prospect_selection",
+    claimState,
+    surface: "prospect_selection",
+    workerLabel: account?.packetState?.workerLabel ?? null,
+    queueStatus: account?.queueState?.status ?? null,
+    whyItMatters: claimState === "claimed"
+      ? `${account.companyName} already has a claimed stakeholder-selection packet and still needs the chosen prospect set landed before deeper research can start.`
+      : `${account.companyName} is already researched and can advance now by storing the smallest credible stakeholder set without operator input.`,
+    claimCommand: `exo companies queue claim ${account.companyId} --motion ${motion.id} --worker <worker-label> --json`,
+    briefCommand: `exo motion packet-brief ${motion.id} --packet ${packetId} --json`,
+    notes: account?.packetState?.notes ?? null,
+    queuedAt,
+    dueAt: queuedAt,
+    waitingReason: null,
+  };
+}
+
+/**
+ * @param {{
+ *   motion: any,
+ *   account: any,
+ *   prospect: any,
+ * }} input
+ */
+function buildProspectResearchTask({ motion, account, prospect }) {
+  const packetId = `prospect_research:${account.companyId}:${prospect.id}`;
+  const claimState = prospect?.packetState?.kind === "prospect_research" && prospect.packetState?.status === "claimed"
+    ? "claimed"
+    : "claimable";
+  const queuedAt = prospect?.packetState?.claimedAt ?? prospect?.queueState?.updatedAt ?? account?.queueState?.updatedAt ?? null;
+  return {
+    kind: "prospect_research",
+    action: "research_prospect",
+    needsOperatorInput: false,
+    reason: claimState === "claimed" ? "claimed_prospect_research_packet" : "claimable_prospect_research_packet",
+    motionId: motion.id,
+    motionName: motion.name,
+    companyId: account.companyId,
+    companyName: account.companyName,
+    prospectId: prospect.id,
+    prospectName: prospect.name,
+    packetId,
+    packetKind: "prospect_research",
+    claimState,
+    surface: "prospect_research",
+    workerLabel: prospect?.packetState?.workerLabel ?? null,
+    queueStatus: prospect?.queueState?.status ?? null,
+    whyItMatters: claimState === "claimed"
+      ? `${prospect.name} already has a claimed prospect-research packet and still needs governed research, enrichment, and cadence before the branch can become usable inventory.`
+      : `${prospect.name} is already selected and can advance now through governed research, enrichment, and cadence planning without operator input.`,
+    claimCommand: `exo companies prospects claim ${account.companyId} --motion ${motion.id} --prospect ${prospect.id} --worker <worker-label> --json`,
+    briefCommand: `exo motion packet-brief ${motion.id} --packet ${packetId} --json`,
+    notes: prospect?.packetState?.notes ?? null,
+    queuedAt,
+    dueAt: queuedAt,
+    waitingReason: null,
+  };
+}
+
+/**
  * @param {{
  *   motion: any,
   *   account: any,
@@ -499,9 +858,8 @@ function buildWriteDraftTask({ motion, account, prospect, surface, reason, dueAt
     prospectName: prospect.name,
     surface,
     // The brief is everything the agent needs to write in-voice: signals,
-    // cadence, prior touches, surface rules. The writeback marks
-    // the draft `queued` for agent-owned routine outbound surfaces, otherwise
-    // `ready` for explicit operator review.
+    // cadence, prior touches, surface rules. The writeback leaves the draft
+    // in `ready` so the operator can review and approve it before send.
     briefCommand: `exo motion draft-brief ${motion.id} --prospect ${prospect.id} --surface ${surface} --json`,
     writeback: `exo companies prospects draft set ${account.companyId} --prospect ${prospect.id}${motionFlag} --surface ${surface} --status ${status} --body "<written-body>"`,
     postWriteStatus: status,
@@ -524,10 +882,31 @@ function buildWriteDraftTask({ motion, account, prospect, surface, reason, dueAt
  *   surfaceKeys: string[],
  *   surfaceLabels: string[],
  *   dueAt: string | null,
+ *   resumeCursor?: string | null,
+ *   resumeStartOffset?: number | null,
+ *   maxPages?: number | null,
+ *   pageSize?: number | null,
  *   forceRetrieval?: boolean,
+ *   waitingReason?: string | null,
  * }} input
  */
-function buildInboundSyncTask({ user, account, mode, itemizationSurfaceCount, staleSurfaceCount, cueCount, surfaceKeys, surfaceLabels, dueAt, forceRetrieval = false }) {
+function buildInboundSyncTask({
+  user,
+  account,
+  mode,
+  itemizationSurfaceCount,
+  staleSurfaceCount,
+  cueCount,
+  surfaceKeys,
+  surfaceLabels,
+  dueAt,
+  resumeCursor = null,
+  resumeStartOffset = null,
+  maxPages = null,
+  pageSize = null,
+  forceRetrieval = false,
+  waitingReason = null,
+}) {
   const capabilityLabel = humanizeCapability(account.capability);
   const reason = forceRetrieval
     ? "manual_force_retrieval"
@@ -564,13 +943,23 @@ function buildInboundSyncTask({ user, account, mode, itemizationSurfaceCount, st
     surfaceKeys,
     surfaceLabels,
     mode,
+    resumeCursor,
+    resumeStartOffset,
+    maxPages,
+    pageSize,
     queuedAt: dueAt,
     dueAt,
+    waitingReason,
     contractCommand: buildInboundSyncContractCommand({
       userId: user.id,
       accountId: account.accountId,
       capability: account.capability,
+      surfaceKeys,
       mode,
+      resumeCursor,
+      resumeStartOffset,
+      maxPages,
+      pageSize,
     }),
     applyCommand: `exo inbound sync run ${user.id} --input <combined-inbound-sync.json> --refresh --json`,
     verificationCommands: [
@@ -596,6 +985,7 @@ function buildInboundSyncTask({ user, account, mode, itemizationSurfaceCount, st
 function buildSendMessageTask({ motion, account, prospect, draft, action, via, dueAt, waitingReason }) {
   const authoredBy = draft.authoredBy === "operator" ? "operator" : "agent";
   const editedByOperator = draft.editedByOperator === true;
+  const approvedByOperator = draft.approvedByOperator === true || draft.status === "approved";
   return {
     kind: "send_message",
     action,
@@ -615,6 +1005,7 @@ function buildSendMessageTask({ motion, account, prospect, draft, action, via, d
     body: extractUsableDraftBody(draft.body) ?? (draft.body ?? ""),
     authoredBy,
     editedByOperator,
+    approvedByOperator,
     queuedAt: draft.approvedAt ?? null,
     dueAt,
     waitingReason,
@@ -691,36 +1082,6 @@ function normalizeRecipientString(value) {
  *   prospect: any,
  * }} input
  */
-function buildUnfollowTask({ motion, account, prospect }) {
-  if (!prospect.linkedinProfileUrl) {
-    return null;
-  }
-  return {
-    kind: "unfollow_profile",
-    action: "unfollow",
-    needsOperatorInput: false,
-    reason: "withdrawn_connection_cleanup",
-    motionId: motion.id,
-    motionName: motion.name,
-    companyId: account.companyId,
-    companyName: account.companyName,
-    prospectId: prospect.id,
-    prospectName: prospect.name,
-    recipientUrl: prospect.linkedinProfileUrl,
-    surface: "follow",
-    queuedAt: latestTouchOccurredAt(prospect, "withdraw_connection") ?? prospect?.cadenceState?.updatedAt ?? null,
-    dueAt: latestTouchOccurredAt(prospect, "withdraw_connection") ?? prospect?.cadenceState?.updatedAt ?? null,
-    writeback: buildActionResultWriteback({
-      action: "unfollow",
-      result: "sent",
-      motionId: motion.id,
-      companyId: account.companyId,
-      prospectId: prospect.id,
-      surface: "unfollow",
-    }),
-  };
-}
-
 /**
  * Sort by queue class, then by the oldest relevant queue timestamp.
  * @param {any} a
@@ -730,11 +1091,13 @@ function taskOrder(a, b) {
   const rank = {
     run_inbound_sync: 0,
     company_research: 1,
-    reject_connection_request: 2,
-    withdraw_connection: 3,
-    unfollow_profile: 4,
-    send_message: 5,
-    write_draft: 6,
+    prospect_selection: 2,
+    prospect_research: 3,
+    company_discovery: 4,
+    reject_connection_request: 5,
+    withdraw_connection: 6,
+    send_message: 7,
+    write_draft: 8,
   };
   const aRank = rank[a.kind] ?? 99;
   const bRank = rank[b.kind] ?? 99;
@@ -769,6 +1132,33 @@ function placeTask(task, buckets) {
 }
 
 /**
+ * @param {Array<Record<string, any>>} items
+ * @param {any} hostState
+ * @param {string} now
+ */
+function annotateTaskCheckouts(items, hostState, now) {
+  return items.map((item) => annotateTaskCheckout(item, hostState, now));
+}
+
+/**
+ * @param {Record<string, any>} task
+ * @param {any} hostState
+ * @param {string} now
+ */
+function annotateTaskCheckout(task, hostState, now) {
+  const checkoutFingerprint = createTaskLeaseFingerprint(task);
+  const lease = getActiveTaskLease(hostState, checkoutFingerprint, now);
+  return {
+    ...task,
+    checkoutFingerprint,
+    checkoutState: lease ? "checked_out" : null,
+    checkedOutBy: lease?.workerLabel ?? null,
+    checkedOutAt: lease?.acquiredAt ?? null,
+    checkoutExpiresAt: lease?.expiresAt ?? null,
+  };
+}
+
+/**
  * @param {{
  *   action: string,
  *   result: string,
@@ -789,6 +1179,24 @@ function buildActionResultWriteback(input) {
   if (input.observationId) parts.push(`--observation ${input.observationId}`);
   if (input.surface) parts.push(`--surface ${input.surface}`);
   return parts.join(" ");
+}
+
+/**
+ * @param {{
+ *   prospectId?: string | null,
+ *   externalId?: string | null,
+ *   actorProfileUrl?: string | null,
+ *   id?: string | null,
+ * }} observation
+ */
+function buildWithdrawCleanupKey(observation) {
+  return observation.prospectId
+    ? `withdraw::${observation.prospectId}`
+    : observation.externalId
+      ? `withdraw::${observation.externalId}`
+      : observation.actorProfileUrl
+        ? `withdraw::${observation.actorProfileUrl}`
+        : `withdraw::${observation.id ?? "unknown"}`;
 }
 
 /**
@@ -911,6 +1319,83 @@ function normalizeNowIso(value) {
   return normalizeOptionalIso(value) ?? new Date().toISOString();
 }
 
+/** @param {string | null | undefined} value */
+function normalizeNullableString(value) {
+  if (!value) return null;
+  const normalized = String(value).trim();
+  return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {string} surfaceKey
+ */
+function resolveAutonomousInboundPaginationConfig(surfaceKey) {
+  return AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG[surfaceKey] ?? {};
+}
+
+/**
+ * @param {any} assignment
+ * @param {any[]} rawUsers
+ */
+function resolveAssignedLinkedinAccount(assignment, rawUsers) {
+  if (!assignment) {
+    return null;
+  }
+
+  const user = rawUsers.find((candidate) =>
+    candidate?.id === assignment.userId
+    || (assignment.label && candidate?.label === assignment.label)
+  ) ?? null;
+  if (!user) {
+    return null;
+  }
+
+  const scopedHandles = [...new Set(
+    (assignment.accountRefs ?? [])
+      .filter((ref) => typeof ref === "string" && ref.startsWith("linkedin:"))
+      .map((ref) => ref.slice("linkedin:".length).trim())
+      .filter(Boolean)
+  )];
+  const candidates = (user.accounts ?? []).filter((account) => account?.capability === "linkedin");
+  if (!candidates.length) {
+    return null;
+  }
+
+  if (scopedHandles.length === 1) {
+    return candidates.find((account) => account.handle === scopedHandles[0]) ?? null;
+  }
+
+  return candidates.find((account) => account.preferred) ?? candidates[0] ?? null;
+}
+
+/**
+ * Has the latest inbound already been answered by an outbound touch?
+ * If yes, stale approved drafts on dead surfaces should not keep blocking.
+ * @param {any[]} touches
+ */
+function hasAnsweredInbound(touches) {
+  const lastInbound = lastTouchWhere(touches, (touch) => touch?.direction === "inbound");
+  if (!lastInbound?.occurredAt) return false;
+  const lastOutbound = lastTouchWhere(touches, (touch) => touch?.direction === "outbound");
+  if (!lastOutbound?.occurredAt) return false;
+  return String(lastOutbound.occurredAt) > String(lastInbound.occurredAt);
+}
+
+/**
+ * @param {any[]} touches
+ * @param {(touch: any) => boolean} predicate
+ */
+function lastTouchWhere(touches, predicate) {
+  let chosen = null;
+  for (const touch of touches) {
+    if (!predicate(touch)) continue;
+    if (!chosen || String(touch?.occurredAt ?? "") > String(chosen?.occurredAt ?? "")) {
+      chosen = touch;
+    }
+  }
+  return chosen;
+}
+
 /**
  * Is this prospect a 1st-degree connection (so a direct message can be sent)?
  * @param {any} prospect
@@ -942,12 +1427,40 @@ function directMessageReach(prospect, senderPremium) {
 }
 
 /**
- * @param {{ userId: string, accountId: string, capability: string, mode: "quick" | "full" }} input
+ * @param {{
+ *   userId: string,
+ *   accountId: string,
+ *   capability: string,
+ *   surfaceKeys?: string[] | null,
+ *   mode: "quick" | "full",
+ *   resumeCursor?: string | null,
+ *   resumeStartOffset?: number | null,
+ *   maxPages?: number | null,
+ *   pageSize?: number | null,
+ * }} input
  */
-function buildInboundSyncContractCommand({ userId, accountId, capability, mode }) {
+function buildInboundSyncContractCommand({
+  userId,
+  accountId,
+  capability,
+  surfaceKeys = null,
+  mode,
+  resumeCursor = null,
+  resumeStartOffset = null,
+  maxPages = null,
+  pageSize = null,
+}) {
+  const surfaceFlags = unique(surfaceKeys ?? []).map((surfaceKey) => `--surface ${surfaceKey}`).join(" ");
+  const surfaceSuffix = surfaceFlags ? ` ${surfaceFlags}` : "";
+  const resumeCursorSuffix = normalizeNullableString(resumeCursor) ? ` --resume-cursor ${normalizeNullableString(resumeCursor)}` : "";
+  const resumeStartOffsetSuffix = Number.isInteger(resumeStartOffset) && resumeStartOffset >= 0
+    ? ` --resume-start-offset ${resumeStartOffset}`
+    : "";
+  const maxPagesSuffix = Number.isInteger(maxPages) && maxPages > 0 ? ` --max-pages ${maxPages}` : "";
+  const pageSizeSuffix = Number.isInteger(pageSize) && pageSize > 0 ? ` --page-size ${pageSize}` : "";
   switch (capability) {
     case "linkedin":
-      return `exo inbound sync linkedin-live ${userId} --account ${accountId} --mode ${mode} --json`;
+      return `exo inbound sync linkedin-live ${userId} --account ${accountId}${surfaceSuffix} --mode ${mode}${resumeCursorSuffix}${resumeStartOffsetSuffix}${maxPagesSuffix}${pageSizeSuffix} --json`;
     case "gmail":
       return `exo inbound sync gmail-live ${userId} --account ${accountId} --mode ${mode} --json`;
     default:

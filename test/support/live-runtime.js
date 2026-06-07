@@ -23,6 +23,15 @@ export const offerUrl = `data:text/html,${encodeURIComponent(offerHtml)}`;
 
 /**
  * @param {string} tempDir
+ * @param {string} baseLabel
+ */
+export function uniqueTestLabel(tempDir, baseLabel) {
+  const suffix = path.basename(tempDir).replace(/[^a-z0-9]/gi, "").toLowerCase().slice(-12) || "test";
+  return `${baseLabel}-${suffix}`;
+}
+
+/**
+ * @param {string} tempDir
  * @param {string[]} args
  * @param {NodeJS.ProcessEnv} [extraEnv]
  */
@@ -218,6 +227,8 @@ export function writeFakeClaudeScript(filePath, options = {}) {
  *   prospectName: string,
  *   prospectTitle: string,
  *   whyRelevant: string,
+ *   companyName?: string,
+ *   companyDomain?: string,
  *   email?: string,
  *   linkedinProfileUrl?: string
  * }} input
@@ -237,13 +248,15 @@ export function createLinkedProspectContext(tempDir, input) {
     "--json"
   ]);
 
+  const companyName = input.companyName ?? "BuyerCo";
+  const companyDomain = input.companyDomain ?? "buyer.example";
   const company = runCliJson(tempDir, [
     "companies",
     "add",
     "--name",
-    "BuyerCo",
+    companyName,
     "--domain",
-    "buyer.example",
+    companyDomain,
     "--motion",
     motion.id,
     "--json"

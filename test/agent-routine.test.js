@@ -84,6 +84,9 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   const prompt = plan.prompt;
   assert.match(runner, new RegExp(`# exo_agent_routine_version=${ROUTINE_ARTIFACT_VERSION}`));
   assert.match(runner, /\/Applications\/Codex\.app\/Contents\/Resources\/codex/);
+  assert.match(runner, /HOME="\$\{HOME:-\/Users\/tester\}"/);
+  assert.match(runner, /USER="\$\{USER:-williamflanagan\}"/);
+  assert.match(runner, /LOGNAME="\$\{LOGNAME:-williamflanagan\}"/);
   assert.match(runner, /export EXO_STATE_DIR="\$STATE_DIR"/);
   assert.match(runner, /export CODEX_SHELL=1/);
   assert.match(runner, /export EXO_AGENT_SEND_DRY_RUN="\$\{EXO_AGENT_SEND_DRY_RUN:-1\}"/);
@@ -106,6 +109,9 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   const plist = plan.launchAgent?.plist ?? "";
   assert.match(plist, new RegExp(`exo_agent_routine_version=${ROUTINE_ARTIFACT_VERSION}`));
   assert.match(plist, /<string>com\.williamflanagan\.exo\.queue-drainer<\/string>/);
+  assert.match(plist, /<key>HOME<\/key>\s*<string>\/Users\/tester<\/string>/);
+  assert.match(plist, /<key>USER<\/key>\s*<string>williamflanagan<\/string>/);
+  assert.match(plist, /<key>LOGNAME<\/key>\s*<string>williamflanagan<\/string>/);
   assert.match(plist, /<key>StartInterval<\/key>\s*<integer>900<\/integer>/);
   assert.match(plist, /<string>\/tmp\/exo\/\.exo\/run-agent-host\.sh<\/string>/);
 });
@@ -130,6 +136,9 @@ test("buildRoutinePlan falls back to cron and still emits the shared host runner
   assert.equal(plan.launchAgent, null);
   assert.equal(plan.artifacts.length, 2);
   const runner = plan.artifacts.find((artifact) => artifact.path.endsWith("run-agent-host.sh"))?.content ?? "";
+  assert.match(runner, /export HOME="\/Users\/tester"/);
+  assert.match(runner, /export USER="tester"/);
+  assert.match(runner, /export LOGNAME="tester"/);
   assert.match(runner, /LOCK_PID_FILE="\$LOCK_DIR\/pid"/);
   assert.match(runner, /Exo queue drainer already active/);
   assert.match(runner, /PREFLIGHT_SCRIPT="\$ROOT\/scripts\/preflight-agent-runtime\.js"/);
@@ -413,12 +422,21 @@ test("agent install-routine --send-mode canary --json blocks rollout when autono
   try {
     execFileSync("node", ["--input-type=module", "-e", `
       import { insertUser } from ${JSON.stringify(databaseModuleUrl)};
-      insertUser(${JSON.stringify({
+      const staleAt = "2000-01-01T00:00:00.000Z";
+      const veryStaleAt = "1999-12-31T00:00:00.000Z";
+      const user = ${JSON.stringify({
         id: "user-1",
         createdAt: "2026-06-03T00:00:00.000Z",
         updatedAt: "2026-06-03T00:00:00.000Z",
         label: "William",
         owner: "William",
+        workingHours: {
+          mode: "always",
+          timezone: "America/New_York",
+          weekdays: ["mon", "tue", "wed", "thu", "fri"],
+          startLocalTime: "07:00",
+          endLocalTime: "18:00",
+        },
         accounts: [
           {
             id: "account-1",
@@ -436,43 +454,47 @@ test("agent install-routine --send-mode canary --json blocks rollout when autono
                   surfaceKey: "linkedin-sent-invitations",
                   enabled: true,
                   lastRunStatus: "success",
-                  lastObservedAt: "2026-06-03T11:30:00.000Z",
+                  lastObservedAt: null,
                 },
                 {
                   surfaceKey: "linkedin-received-invitations",
                   enabled: true,
                   lastRunStatus: "success",
-                  lastObservedAt: "2026-06-03T11:30:00.000Z",
+                  lastObservedAt: null,
                 },
                 {
                   surfaceKey: "linkedin-messaging-inbox",
                   enabled: true,
                   lastRunStatus: "success",
-                  lastObservedAt: "2026-06-02T20:00:00.000Z",
+                  lastObservedAt: null,
                 },
                 {
                   surfaceKey: "linkedin-profile-views",
                   enabled: true,
                   lastRunStatus: "success",
-                  lastObservedAt: "2026-06-03T11:30:00.000Z",
+                  lastObservedAt: null,
                 },
                 {
                   surfaceKey: "linkedin-followers-list",
                   enabled: true,
                   lastRunStatus: "success",
-                  lastObservedAt: "2026-06-03T11:30:00.000Z",
+                  lastObservedAt: null,
                 },
                 {
                   surfaceKey: "linkedin-following-list",
                   enabled: true,
                   lastRunStatus: "success",
-                  lastObservedAt: "2026-06-03T11:30:00.000Z",
+                  lastObservedAt: null,
                 },
               ],
             },
           },
         ],
-      })});
+      })};
+      for (const surface of user.accounts[0].inboundSync.surfaces) {
+        surface.lastObservedAt = surface.surfaceKey === "linkedin-messaging-inbox" ? veryStaleAt : staleAt;
+      }
+      insertUser(user);
     `], {
       cwd: repoRoot,
       env: buildNodeTestEnv({ ...process.env, EXO_STATE_DIR: stateDir }),

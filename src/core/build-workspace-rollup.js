@@ -8,6 +8,8 @@
 //
 // Pure data — no rendering.
 
+import { isCleanupLaneItem } from "./cleanup-lane.js";
+
 /** stage → readiness fraction (mirrors build-motions-view) */
 const STAGE_READINESS = {
   "needs-motion-definition": 0.08,
@@ -30,6 +32,7 @@ const STAGE_READINESS = {
  *   motionSummaries: any[],
  *   truthAccounts: any[],
  *   reviewItems: any[],
+ *   itemizationGaps?: any[],
  *   executionUsers: any[],
  * }} input
  */
@@ -39,6 +42,7 @@ export function buildWorkspaceRollup(input) {
     pulse: buildPulse(input),
     motions: buildMotions(input.motionSummaries),
     surfaces: buildSurfaces(input.truthAccounts),
+    reconciliation: buildReconciliation(input.itemizationGaps),
     execution: buildExecution(input.executionUsers),
   };
 }
@@ -69,13 +73,14 @@ function buildStats(input) {
 
 /** @param {any} input */
 function buildPulse(input) {
-  const topDecision = (input.decisionQueue?.items ?? [])[0] ?? null;
+  const decisionItems = (input.decisionQueue?.items ?? []).filter((item) => !isCleanupLaneItem(item));
+  const topDecision = decisionItems[0] ?? null;
   const topAgent = (input.agentQueue?.items ?? [])[0] ?? null;
   const blockers = input.blockedQueue?.items ?? input.agentQueue?.blockers ?? [];
   const topBlocker = blockers[0] ?? null;
   return {
     counts: {
-      decisions: input.decisionQueue?.itemCount ?? (input.decisionQueue?.items ?? []).length,
+      decisions: decisionItems.length,
       agentReady: input.agentQueue?.itemCount ?? (input.agentQueue?.items ?? []).length,
       blocked: input.blockedQueue?.itemCount ?? blockers.length,
     },
@@ -144,6 +149,47 @@ function buildSurfaces(truthAccounts) {
   return { toReconcile, items: surfaces };
 }
 
+/** @param {any[] | null | undefined} itemizationGaps */
+function buildReconciliation(itemizationGaps) {
+  const items = (itemizationGaps ?? []).map((gap) => {
+    const visibleCount = Number.isFinite(gap.itemCount) ? Number(gap.itemCount) : 0;
+    const writtenBackCount = Number.isFinite(gap.observationCount)
+      ? Number(gap.observationCount)
+      : Number.isFinite(gap.itemizedCount)
+        ? Number(gap.itemizedCount)
+        : 0;
+    const missingCount = Number.isFinite(gap.missingObservationCount)
+      ? Number(gap.missingObservationCount)
+      : Math.max(visibleCount - writtenBackCount, 0);
+    const reason = gap.exhaustionReason === "page_budget_stopped_early"
+      ? "page-budgeted full reconcile"
+      : gap.reconcileReason === "bounded_capture_stopped_early"
+        ? "quick-pass bounded"
+        : humanizeReason(gap.reconcileReason ?? gap.exhaustionReason ?? "needs_reconciliation");
+
+    return {
+      label: gap.label ?? "Surface",
+      accountHandle: gap.handle ?? null,
+      visibleCount,
+      writtenBackCount,
+      missingCount,
+      reason,
+      note: gap.summary ?? "",
+      action: gap.recommendedAction ?? "",
+    };
+  }).sort((left, right) => {
+    if (right.missingCount !== left.missingCount) return right.missingCount - left.missingCount;
+    if (right.visibleCount !== left.visibleCount) return right.visibleCount - left.visibleCount;
+    return left.label.localeCompare(right.label);
+  });
+
+  return {
+    gapCount: items.length,
+    missingCount: items.reduce((sum, item) => sum + item.missingCount, 0),
+    items,
+  };
+}
+
 /** @param {any[]} executionUsers */
 function buildExecution(executionUsers) {
   const accounts = [];
@@ -208,4 +254,11 @@ function relative(iso) {
 function shorten(text, max) {
   if (!text || text.length <= max) return text;
   return `${text.slice(0, max).replace(/\s+\S*$/, "")}…`;
+}
+
+/** @param {string} value */
+function humanizeReason(value) {
+  return String(value ?? "")
+    .replaceAll(/[-_]+/g, " ")
+    .trim() || "needs reconciliation";
 }

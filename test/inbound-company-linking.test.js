@@ -117,7 +117,7 @@ test("inbound sync run reuses an existing canonical company from inbound LinkedI
   }
 });
 
-test("inbound sync run does not create a new canonical company from an unscoped inbound row", () => {
+test("inbound sync run creates and links a canonical company from an unscoped inbound row when the company identity is durable", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-company-linking-unscoped-"));
 
   try {
@@ -144,10 +144,13 @@ test("inbound sync run does not create a new canonical company from an unscoped 
     fs.writeFileSync(syncRunPath, JSON.stringify(buildInboundSyncPayload(linkedinAccountId), null, 2));
 
     const result = runCliJson(tempDir, ["inbound", "sync", "run", user.id, "--input", syncRunPath, "--json"]);
-    assert.equal(result.observations[0].companyId, null);
+    assert.ok(result.observations[0].companyId);
 
     const companies = runCliJson(tempDir, ["companies", "list", "--json"]);
-    assert.equal(companies.filter((company) => company.name === "LeadsCampaign").length, 0);
+    const leadsCampaignEntries = companies.filter((company) => company.name === "LeadsCampaign");
+    assert.equal(leadsCampaignEntries.length, 1);
+    assert.equal(result.observations[0].companyId, leadsCampaignEntries[0].id);
+    assert.deepEqual(leadsCampaignEntries[0].motionIds, []);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -203,6 +206,117 @@ test("inbound sync run can create a canonical company when the inbound row is al
     const leadsCampaignEntries = companies.filter((company) => company.name === "LeadsCampaign");
     assert.equal(leadsCampaignEntries.length, 1);
     assert.equal(leadsCampaignEntries[0].motionIds.includes(motion.id), true);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync run hydrates the canonical company with company profile data carried by the inbound row", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-company-linking-enrichment-"));
+
+  try {
+    const user = runCliJson(tempDir, ["users", "add", "--label", "linkedin-user", "--owner", "william", "--json"]);
+    const withLinkedin = runCliJson(tempDir, [
+      "users",
+      "accounts",
+      "add",
+      user.id,
+      "--capability",
+      "linkedin",
+      "--handle",
+      "linkedin-user",
+      "--runtime",
+      "codex",
+      "--connector",
+      "chrome",
+      "--preferred",
+      "--json",
+    ]);
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    const syncRunPath = path.join(tempDir, "inbound-company-enrichment-sync.json");
+    fs.writeFileSync(
+      syncRunPath,
+      JSON.stringify(
+        buildInboundSyncPayload(linkedinAccountId, {
+          actorCompanyProfile: {
+            name: "LeadsCampaign",
+            domain: "leadscampaign.com",
+            websiteUrl: "https://leadscampaign.com",
+            linkedinCompanyUrl: "https://www.linkedin.com/company/leadscampaign/",
+            logoSourceUrl: "https://cdn.example.test/leadscampaign-logo.png",
+          },
+        }),
+        null,
+        2,
+      ),
+    );
+
+    const result = runCliJson(tempDir, ["inbound", "sync", "run", user.id, "--input", syncRunPath, "--json"]);
+    assert.ok(result.observations[0].companyId);
+
+    const companies = runCliJson(tempDir, ["companies", "list", "--json"]);
+    const company = companies.find((candidate) => candidate.id === result.observations[0].companyId);
+    assert.ok(company);
+    assert.equal(company.name, "LeadsCampaign");
+    assert.equal(company.domain, "leadscampaign.com");
+    assert.equal(company.websiteUrl, "https://leadscampaign.com");
+    assert.equal(company.linkedinCompanyUrl, "https://www.linkedin.com/company/leadscampaign/");
+    assert.equal(company.logoSourceUrl, "https://cdn.example.test/leadscampaign-logo.png");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync run creates a canonical company from company-profile enrichment even when actorCompanyName is missing", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-company-linking-profile-only-"));
+
+  try {
+    const user = runCliJson(tempDir, ["users", "add", "--label", "linkedin-user", "--owner", "william", "--json"]);
+    const withLinkedin = runCliJson(tempDir, [
+      "users",
+      "accounts",
+      "add",
+      user.id,
+      "--capability",
+      "linkedin",
+      "--handle",
+      "linkedin-user",
+      "--runtime",
+      "codex",
+      "--connector",
+      "chrome",
+      "--preferred",
+      "--json",
+    ]);
+    const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
+
+    const syncRunPath = path.join(tempDir, "inbound-company-profile-only-sync.json");
+    fs.writeFileSync(
+      syncRunPath,
+      JSON.stringify(
+        buildInboundSyncPayload(linkedinAccountId, {
+          actorCompanyName: null,
+          actorCompanyProfile: {
+            name: "LeadsCampaign",
+            domain: "leadscampaign.com",
+            websiteUrl: "https://leadscampaign.com",
+            linkedinCompanyUrl: "https://www.linkedin.com/company/leadscampaign/",
+            logoSourceUrl: "https://cdn.example.test/leadscampaign-logo.png",
+          },
+        }),
+        null,
+        2,
+      ),
+    );
+
+    const result = runCliJson(tempDir, ["inbound", "sync", "run", user.id, "--input", syncRunPath, "--json"]);
+    assert.ok(result.observations[0].companyId);
+
+    const companies = runCliJson(tempDir, ["companies", "list", "--json"]);
+    const leadsCampaignEntries = companies.filter((company) => company.name === "LeadsCampaign");
+    assert.equal(leadsCampaignEntries.length, 1);
+    assert.equal(result.observations[0].companyId, leadsCampaignEntries[0].id);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

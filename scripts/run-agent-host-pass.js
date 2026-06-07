@@ -12,7 +12,6 @@ import { buildInboundAutomationHealthWarnings, buildInboundAutomationWarnings } 
 import {
   findCompanyById,
   findMotionById,
-  listBrowserProfiles,
   listCompanies,
   listInboundCues,
   listInboundObservations,
@@ -21,18 +20,20 @@ import {
   updateMotion,
 } from "../src/db/database.js";
 import { updateMotionProspect } from "../src/core/record-prospect.js";
-import { resolveScopedExecutionAssignment } from "../src/core/resolve-scoped-execution-assignment.js";
-import { resolveUserConnection } from "../src/core/resolve-user-connection.js";
 import { setMotionProspectCadence } from "../src/core/set-prospect-cadence.js";
 import { setMotionProspectDraft } from "../src/core/set-prospect-draft.js";
 import { claimMotionTargetAccountPacket } from "../src/core/claim-target-account-packet.js";
+import { claimMotionProspectPacket } from "../src/core/claim-motion-prospect-packet.js";
 import { recordActionResult } from "../src/core/record-action-result.js";
 import {
   BROWSER_TRANSPORT_TASK_KINDS,
   clearBrowserBackoffForTask,
+  checkoutTaskLease,
   getCanaryCooldown,
   clearSendCircuitBreaker,
+  createTaskLeaseFingerprint,
   createTaskVerificationFingerprint as createHostStateTaskVerificationFingerprint,
+  getActiveTaskLease,
   getBrowserBackoffForTask,
   getRecentTaskVerification,
   getSendCircuitBreaker,
@@ -41,17 +42,14 @@ import {
   recordSendCircuitFailure,
   recordTaskVerification,
   recordCanarySendCooldown,
+  releaseTaskLease,
   setBrowserBackoffForTask,
 } from "../src/lib/agent-host-state.js";
 import { buildPreflightSummary } from "../src/lib/agent-preflight.js";
-import { runLinkedinMaintenanceWithPlaywriter } from "../src/lib/linkedin-playwriter-maintenance.js";
-import { sendLinkedinMessageWithPlaywriter } from "../src/lib/linkedin-playwriter-send.js";
+import { runLinkedinMaintenanceWithUnipile } from "../src/lib/linkedin-unipile-maintenance.js";
 import { extractUsableDraftBody } from "../src/lib/draft-policy.js";
-import {
-  deletePlaywriterSession,
-  ensurePlaywriterSession,
-} from "../src/lib/playwriter-session.js";
 import { extractLinkedinPublicId } from "../src/lib/prospect-contacts.js";
+import { readUnipileConfig } from "../src/lib/unipile-config.js";
 
 const CODEX_BIN = process.env.EXO_CODEX_BIN || "/Applications/Codex.app/Contents/Resources/codex";
 const ROOT = process.cwd();
@@ -61,7 +59,9 @@ const PASS_SUMMARY_PATH = path.join(STATE_DIR, "agent-last-pass.json");
 const PREFLIGHT_PATH = path.join(STATE_DIR, "agent-preflight.json");
 const HOST_STATE_PATH = path.join(STATE_DIR, "agent-host-state.json");
 const TEMP_ROOT = path.join(STATE_DIR, "automation-tmp");
-const MAX_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_TASKS, 8);
+const MAX_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_TASKS, 1000);
+const MAX_MAINTENANCE_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_MAINTENANCE_TASKS, 25);
+const STANDARD_PASS_BUDGET_MS = normalizePositiveInteger(process.env.EXO_AGENT_STANDARD_PASS_BUDGET_MS, 14 * 60 * 1000);
 const DRAFT_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_DRAFT_TIMEOUT_MS, 120000);
 const BROWSER_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_BROWSER_TIMEOUT_MS, 300000);
 const INBOUND_CAPTURE_TIMEOUT_MS = normalizePositiveInteger(
@@ -69,16 +69,20 @@ const INBOUND_CAPTURE_TIMEOUT_MS = normalizePositiveInteger(
   Math.max(BROWSER_TIMEOUT_MS, 6 * 60 * 1000),
 );
 const COMPANY_RESEARCH_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_COMPANY_RESEARCH_TIMEOUT_MS, 10 * 60 * 1000);
+const PROSPECT_RESEARCH_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_PROSPECT_RESEARCH_TIMEOUT_MS, 15 * 60 * 1000);
 const EXO_COMMAND_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_EXO_COMMAND_TIMEOUT_MS, 60000);
+const INBOUND_EXO_COMMAND_TIMEOUT_MS = normalizePositiveInteger(
+  process.env.EXO_AGENT_INBOUND_EXO_COMMAND_TIMEOUT_MS,
+  Math.max(EXO_COMMAND_TIMEOUT_MS, 3 * 60 * 1000),
+);
 const SHELL_COMMAND_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_SHELL_COMMAND_TIMEOUT_MS, 60000);
-const CHROME_ATTACH_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_CHROME_ATTACH_TIMEOUT_MS, 60000);
-const CHROME_WINDOW_BOOTSTRAP_WAIT_MS = normalizePositiveInteger(process.env.EXO_AGENT_CHROME_WINDOW_BOOTSTRAP_WAIT_MS, 5000);
 const BROWSER_TRANSPORT_BACKOFF_MS = normalizePositiveInteger(process.env.EXO_AGENT_BROWSER_BACKOFF_MS, 15 * 60 * 1000);
 const VERIFY_TASK_COOLDOWN_MS = normalizePositiveInteger(process.env.EXO_AGENT_VERIFY_TASK_COOLDOWN_MS, 6 * 60 * 60 * 1000);
 const SEND_CIRCUIT_BREAKER_THRESHOLD = normalizePositiveInteger(process.env.EXO_AGENT_SEND_CIRCUIT_BREAKER_THRESHOLD, 2);
 const SEND_CIRCUIT_BREAKER_BACKOFF_MS = normalizePositiveInteger(process.env.EXO_AGENT_SEND_CIRCUIT_BREAKER_BACKOFF_MS, 12 * 60 * 60 * 1000);
 const CANARY_SEND_COOLDOWN_MS = normalizePositiveInteger(process.env.EXO_AGENT_CANARY_SEND_COOLDOWN_MS, 6 * 60 * 60 * 1000);
 const VERIFICATION_OUTPUT_MAX_CHARS = normalizePositiveInteger(process.env.EXO_AGENT_VERIFICATION_OUTPUT_MAX_CHARS, 1200);
+const TASK_LEASE_GRACE_MS = normalizePositiveInteger(process.env.EXO_AGENT_TASK_LEASE_GRACE_MS, 10 * 60 * 1000);
 const AUTONOMOUS_WORKER_LABEL = normalizeNullableString(process.env.EXO_AGENT_WORKER_LABEL) ?? buildAutonomousWorkerLabel();
 const DRAFT_OUTPUT_SCHEMA = {
   type: "object",
@@ -103,6 +107,51 @@ const CODEX_CONNECTOR_RUNTIME_CONFIG = {
   },
 };
 
+export function buildCodexTaskEnv(baseEnv = process.env) {
+  const env = { ...baseEnv };
+  const codexHome = normalizeNullableString(env.CODEX_HOME) ?? CODEX_HOME;
+  const homeDir = resolveCodexTaskHomeDir(codexHome, normalizeNullableString(env.HOME));
+  const username = normalizeNullableString(env.USER)
+    ?? normalizeNullableString(env.LOGNAME)
+    ?? path.basename(homeDir);
+  const unipileConfig = readUnipileConfig(codexHome);
+
+  env.CODEX_HOME = codexHome;
+  env.HOME = homeDir;
+  env.USER = username;
+  env.LOGNAME = username;
+
+  if (!normalizeNullableString(env.UNIPILE_API_KEY) && unipileConfig.apiKey) {
+    env.UNIPILE_API_KEY = unipileConfig.apiKey;
+  }
+  if (!normalizeNullableString(env.UNIPILE_DSN) && unipileConfig.baseUrl) {
+    env.UNIPILE_DSN = unipileConfig.baseUrl;
+  }
+  if (!normalizeNullableString(env.UNIPILE_BASE_URL) && unipileConfig.baseUrl) {
+    env.UNIPILE_BASE_URL = unipileConfig.baseUrl;
+  }
+  if (!normalizeNullableString(env.UNIPILE_V2_API_KEY) && unipileConfig.v2ApiKey) {
+    env.UNIPILE_V2_API_KEY = unipileConfig.v2ApiKey;
+  }
+  if (!normalizeNullableString(env.UNIPILE_V2_BASE_URL) && unipileConfig.v2BaseUrl) {
+    env.UNIPILE_V2_BASE_URL = unipileConfig.v2BaseUrl;
+  }
+
+  return env;
+}
+
+function resolveCodexTaskHomeDir(codexHome, currentHome) {
+  const normalizedHome = normalizeNullableString(currentHome);
+  if (normalizedHome) {
+    return normalizedHome;
+  }
+  const normalizedCodexHome = normalizeNullableString(codexHome);
+  if (normalizedCodexHome && path.basename(normalizedCodexHome) === ".codex") {
+    return path.dirname(normalizedCodexHome);
+  }
+  return os.homedir();
+}
+
 if (isMainModule(import.meta.url)) {
   try {
     const summary = runAgentHostPass();
@@ -119,150 +168,188 @@ export function runAgentHostPass() {
   fs.mkdirSync(TEMP_ROOT, { recursive: true });
 
   const preflight = buildAndPersistPreflight();
-  const hostState = loadHostState();
+  let hostState = loadHostState();
+  const executionContext = createAgentExecutionContext();
   const browserReady = preflight.browser?.ready !== false;
   const ignoreBrowserBackoff = isBrowserBackoffIgnored();
   const forceRetrieval = isRetrievalForceEnabled();
   const sendMode = getSendMode();
 
   const startedAt = new Date().toISOString();
+  const startedAtMs = Date.now();
   const results = [];
-  let iteration = 0;
+  let standardTaskCount = 0;
+  let maintenanceTaskCount = 0;
   let noOpReason = null;
 
-  while (iteration < MAX_TASKS_PER_PASS) {
-    const queue = loadQueue();
-    const queueCheckedAt = new Date().toISOString();
-    const rolloutWarnings = loadInboundAutomationRolloutWarnings(queueCheckedAt);
-    const task = chooseNextQueueTask(
-      queue,
-      browserReady,
-      hostState,
-      queueCheckedAt,
-      ignoreBrowserBackoff,
-      sendMode,
-      rolloutWarnings.automationWarnings,
-      rolloutWarnings.automationHealthWarnings,
-      forceRetrieval,
-    );
-    if (!task) {
-      if (results.length === 0) {
-        noOpReason = explainNoopPass(
-          queue,
-          browserReady,
-          hostState,
-          queueCheckedAt,
-          ignoreBrowserBackoff,
-          sendMode,
-          rolloutWarnings.automationWarnings,
-          rolloutWarnings.automationHealthWarnings,
-          forceRetrieval,
-        );
-      }
-      break;
-    }
-
-    const result = executeTask(task, preflight, {
-      sendMode,
-      automationWarnings: rolloutWarnings.automationWarnings,
-      automationHealthWarnings: rolloutWarnings.automationHealthWarnings,
-    });
-    results.push(result);
-    iteration += 1;
-
-    const blockedBrowserTask = result.status === "blocked" && BROWSER_TRANSPORT_TASK_KINDS.has(task.kind);
-    const selectedMode = typeof task?._selectedSendMode === "string" ? task._selectedSendMode : getSendMode();
-    const liveSendAttempt = task.kind === "send_message"
-      && (selectedMode === "live" || selectedMode === "canary_live" || selectedMode === "operator_live");
-    if (blockedBrowserTask) {
-      const unavailableUntil = new Date(Date.now() + BROWSER_TRANSPORT_BACKOFF_MS).toISOString();
-      const nextState = setBrowserBackoffForTask(
+  try {
+    while (true) {
+      const queue = loadQueue(hostState);
+      const queueCheckedAt = new Date().toISOString();
+      const rolloutWarnings = loadInboundAutomationRolloutWarnings(queueCheckedAt);
+      const task = chooseNextQueueTask(
+        queue,
+        browserReady,
         hostState,
-        task.kind,
-        unavailableUntil,
-        result.detail?.reason ?? "browser_transport_blocked",
+        queueCheckedAt,
+        ignoreBrowserBackoff,
+        sendMode,
+        rolloutWarnings.automationWarnings,
+        rolloutWarnings.automationHealthWarnings,
+        forceRetrieval,
+        {
+          passLane: maintenanceTaskCount > 0 ? "maintenance" : standardTaskCount > 0 ? "standard" : null,
+          standardTaskCount,
+          maintenanceTaskCount,
+        },
       );
-      hostState.browserBackoff = nextState.browserBackoff;
-      saveHostState(hostState);
-    }
-
-    if ((result.status === "blocked" || result.status === "failed") && liveSendAttempt) {
-      const failureAt = result.finishedAt ?? new Date().toISOString();
-      const breakerBefore = getSendCircuitBreaker(hostState, failureAt);
-      const nextFailureCount = breakerBefore.consecutiveFailures + 1;
-      const nextState = recordSendCircuitFailure(hostState, {
-        failureAt,
-        reason: result.detail?.reason ?? `${result.status}: send task did not complete`,
-        taskFingerprint: createTaskVerificationFingerprint(task),
-        taskLabel: [task.prospectName, task.companyName].filter(Boolean).join(" at ") || task.recipientUrl || task.prospectId || "unknown send",
-        unavailableUntil: nextFailureCount >= SEND_CIRCUIT_BREAKER_THRESHOLD
-          ? new Date(Date.parse(failureAt) + SEND_CIRCUIT_BREAKER_BACKOFF_MS).toISOString()
-          : null,
-      });
-      hostState.sendCircuitBreaker = nextState.sendCircuitBreaker;
-      saveHostState(hostState);
-    }
-
-    if (blockedBrowserTask) {
-      if ((getSendMode() === "verify" || getSendMode() === "canary") && task.kind === "send_message") {
+      if (!task) {
+        if (results.length === 0) {
+          noOpReason = explainNoopPass(
+            queue,
+            browserReady,
+            hostState,
+            queueCheckedAt,
+            ignoreBrowserBackoff,
+            sendMode,
+            rolloutWarnings.automationWarnings,
+            rolloutWarnings.automationHealthWarnings,
+            forceRetrieval,
+          );
+        }
         break;
       }
-      continue;
-    }
 
-    if (result.status === "completed" && BROWSER_TRANSPORT_TASK_KINDS.has(task.kind)) {
-      const nextState = clearBrowserBackoffForTask(hostState, task.kind);
-      hostState.browserBackoff = nextState.browserBackoff;
-      saveHostState(hostState);
-    }
-
-    if (result.status === "completed" && liveSendAttempt && result.detail?.verificationOnly !== true) {
-      const nextState = clearSendCircuitBreaker(hostState);
-      hostState.sendCircuitBreaker = nextState.sendCircuitBreaker;
-      if (selectedMode === "canary_live") {
-        const cooldownState = recordCanarySendCooldown(hostState, {
-          sentAt: result.finishedAt ?? new Date().toISOString(),
-          unavailableUntil: new Date(Date.parse(result.finishedAt ?? new Date().toISOString()) + CANARY_SEND_COOLDOWN_MS).toISOString(),
-          taskFingerprint: createTaskVerificationFingerprint(task),
-          taskLabel: [task.prospectName, task.companyName].filter(Boolean).join(" at ") || task.recipientUrl || task.prospectId || "unknown send",
-        });
-        hostState.canaryCooldown = cooldownState.canaryCooldown;
+      if (!canRunTaskInCurrentPass(task.kind, results, standardTaskCount, maintenanceTaskCount, {
+        elapsedMs: Date.now() - startedAtMs,
+        standardPassBudgetMs: STANDARD_PASS_BUDGET_MS,
+      })) {
+        break;
       }
-      saveHostState(hostState);
-    }
 
-    if (result.status === "completed" && result.detail?.verificationOnly === true) {
-      const nextState = recordTaskVerification(hostState, {
-        taskKind: task.kind,
-        fingerprint: createTaskVerificationFingerprint(task),
-        verifiedAt: result.finishedAt ?? new Date().toISOString(),
-        expiresAt: new Date(Date.now() + VERIFY_TASK_COOLDOWN_MS).toISOString(),
-        motionId: task.motionId ?? null,
-        companyId: task.companyId ?? null,
-        prospectId: task.prospectId ?? null,
-        surface: task.surface ?? null,
-        recipientUrl: task.recipientUrl ?? null,
-        verificationStatus: result.detail?.sendStatus ?? null,
-        prospectName: task.prospectName ?? null,
-        companyName: task.companyName ?? null,
-      });
-      hostState.recentTaskVerifications = nextState.recentTaskVerifications;
-      saveHostState(hostState);
-    }
+      const checkout = maybeCheckoutTaskForExecution(hostState, task, queueCheckedAt);
+      if (!checkout.ok) {
+        continue;
+      }
+      if (checkout.stateChanged) {
+        hostState = checkout.state;
+        saveHostState(hostState);
+      }
 
-    if (shouldStopAfterTaskResult(task, result)) {
-      break;
-    }
+      const executableTask = checkout.task;
+      const maintenanceTask = isBrowserMaintenanceTaskKind(executableTask.kind);
+      const result = executeTask(executableTask, preflight, {
+        sendMode,
+        automationWarnings: rolloutWarnings.automationWarnings,
+        automationHealthWarnings: rolloutWarnings.automationHealthWarnings,
+      }, executionContext);
+      if (checkout.stateChanged) {
+        hostState = releaseCheckedOutTask(hostState, executableTask);
+        saveHostState(hostState);
+      }
+      results.push(result);
+      if (maintenanceTask) {
+        maintenanceTaskCount += 1;
+      } else {
+        standardTaskCount += 1;
+      }
 
-    if (result.status === "failed" || result.status === "blocked") {
-      break;
+      const blockedBrowserTask = result.status === "blocked" && BROWSER_TRANSPORT_TASK_KINDS.has(executableTask.kind);
+      const selectedMode = typeof executableTask?._selectedSendMode === "string" ? executableTask._selectedSendMode : getSendMode();
+      const liveSendAttempt = executableTask.kind === "send_message"
+        && (selectedMode === "live" || selectedMode === "canary_live" || selectedMode === "operator_live");
+      if (blockedBrowserTask) {
+        const unavailableUntil = new Date(Date.now() + BROWSER_TRANSPORT_BACKOFF_MS).toISOString();
+        const nextState = setBrowserBackoffForTask(
+          hostState,
+          executableTask.kind,
+          unavailableUntil,
+          result.detail?.reason ?? "browser_transport_blocked",
+        );
+        hostState.browserBackoff = nextState.browserBackoff;
+        saveHostState(hostState);
+      }
+
+      if ((result.status === "blocked" || result.status === "failed") && liveSendAttempt) {
+        const failureAt = result.finishedAt ?? new Date().toISOString();
+        const breakerBefore = getSendCircuitBreaker(hostState, failureAt);
+        const nextFailureCount = breakerBefore.consecutiveFailures + 1;
+        const nextState = recordSendCircuitFailure(hostState, {
+          failureAt,
+          reason: result.detail?.reason ?? `${result.status}: send task did not complete`,
+          taskFingerprint: createTaskVerificationFingerprint(executableTask),
+          taskLabel: [executableTask.prospectName, executableTask.companyName].filter(Boolean).join(" at ") || executableTask.recipientUrl || executableTask.prospectId || "unknown send",
+          unavailableUntil: nextFailureCount >= SEND_CIRCUIT_BREAKER_THRESHOLD
+            ? new Date(Date.parse(failureAt) + SEND_CIRCUIT_BREAKER_BACKOFF_MS).toISOString()
+            : null,
+        });
+        hostState.sendCircuitBreaker = nextState.sendCircuitBreaker;
+        saveHostState(hostState);
+      }
+
+      if (blockedBrowserTask) {
+        if ((getSendMode() === "verify" || getSendMode() === "canary") && executableTask.kind === "send_message") {
+          break;
+        }
+        continue;
+      }
+
+      if (result.status === "completed" && BROWSER_TRANSPORT_TASK_KINDS.has(executableTask.kind)) {
+        const nextState = clearBrowserBackoffForTask(hostState, executableTask.kind);
+        hostState.browserBackoff = nextState.browserBackoff;
+        saveHostState(hostState);
+      }
+
+      if (result.status === "completed" && liveSendAttempt && result.detail?.verificationOnly !== true) {
+        const nextState = clearSendCircuitBreaker(hostState);
+        hostState.sendCircuitBreaker = nextState.sendCircuitBreaker;
+        if (selectedMode === "canary_live") {
+          const cooldownState = recordCanarySendCooldown(hostState, {
+            sentAt: result.finishedAt ?? new Date().toISOString(),
+            unavailableUntil: new Date(Date.parse(result.finishedAt ?? new Date().toISOString()) + CANARY_SEND_COOLDOWN_MS).toISOString(),
+            taskFingerprint: createTaskVerificationFingerprint(executableTask),
+            taskLabel: [executableTask.prospectName, executableTask.companyName].filter(Boolean).join(" at ") || executableTask.recipientUrl || executableTask.prospectId || "unknown send",
+          });
+          hostState.canaryCooldown = cooldownState.canaryCooldown;
+        }
+        saveHostState(hostState);
+      }
+
+      if (result.status === "completed" && result.detail?.verificationOnly === true) {
+        const nextState = recordTaskVerification(hostState, {
+          taskKind: executableTask.kind,
+          fingerprint: createTaskVerificationFingerprint(executableTask),
+          verifiedAt: result.finishedAt ?? new Date().toISOString(),
+          expiresAt: new Date(Date.now() + VERIFY_TASK_COOLDOWN_MS).toISOString(),
+          motionId: executableTask.motionId ?? null,
+          companyId: executableTask.companyId ?? null,
+          prospectId: executableTask.prospectId ?? null,
+          surface: executableTask.surface ?? null,
+          recipientUrl: executableTask.recipientUrl ?? null,
+          verificationStatus: result.detail?.sendStatus ?? null,
+          prospectName: executableTask.prospectName ?? null,
+          companyName: executableTask.companyName ?? null,
+        });
+        hostState.recentTaskVerifications = nextState.recentTaskVerifications;
+        saveHostState(hostState);
+      }
+
+      if (shouldStopAfterTaskResult(executableTask, result)) {
+        break;
+      }
+
+      if (shouldAbortPassAfterTaskProblem(executableTask, result)) {
+        break;
+      }
     }
+  } finally {
+    disposeAgentExecutionContext(executionContext);
   }
 
   const endedAt = new Date().toISOString();
-  const finalQueue = loadQueue();
+  const finalQueue = loadQueue(hostState);
   const finalRolloutWarnings = loadInboundAutomationRolloutWarnings(endedAt);
-  const status = summarizePassStatus(results);
+  const status = summarizePassStatus(results, finalQueue);
   const reason = status === "noop"
     ? (noOpReason ?? explainNoopPass(
       finalQueue,
@@ -282,6 +369,7 @@ export function runAgentHostPass() {
     startedAt,
     endedAt,
     maxTasksPerPass: MAX_TASKS_PER_PASS,
+    maxMaintenanceTasksPerPass: MAX_MAINTENANCE_TASKS_PER_PASS,
     browserReady,
     preflightPath: PREFLIGHT_PATH,
     results,
@@ -316,8 +404,94 @@ export function shouldStopAfterTaskResult(task, result) {
   );
 }
 
-/** @param {any[]} results */
-export function summarizePassStatus(results) {
+/**
+ * Retrieval failures should not monopolize the whole host pass. A single flaky
+ * inbound surface can fail while other governed work still completes safely in
+ * the same pass. Send and maintenance failures still stop the pass.
+ *
+ * @param {any} task
+ * @param {any} result
+ */
+export function shouldAbortPassAfterTaskProblem(task, result) {
+  if (result?.status !== "failed" && result?.status !== "blocked") {
+    return false;
+  }
+
+  return task?.kind !== "run_inbound_sync";
+}
+
+/** @param {string | null | undefined} taskKind */
+export function isBrowserMaintenanceTaskKind(taskKind) {
+  return taskKind === "withdraw_connection"
+    || taskKind === "reject_connection_request";
+}
+
+/**
+ * Keep passes homogeneous. Standard passes drain until their time budget is
+ * exhausted, with MAX_TASKS_PER_PASS acting only as a safety ceiling.
+ * Cleanup bursts handle at most MAX_MAINTENANCE_TASKS_PER_PASS maintenance
+ * tasks.
+ *
+ * @param {string | null | undefined} taskKind
+ * @param {Array<Record<string, any>>} results
+ * @param {number} standardTaskCount
+ * @param {number} maintenanceTaskCount
+ * @param {{ elapsedMs?: number | null, standardPassBudgetMs?: number | null }} [options]
+ */
+export function canRunTaskInCurrentPass(taskKind, results, standardTaskCount, maintenanceTaskCount, options = {}) {
+  const maintenanceTask = isBrowserMaintenanceTaskKind(taskKind);
+  const passHasMaintenanceWork = Array.isArray(results)
+    && results.some((result) => isBrowserMaintenanceTaskKind(result?.kind));
+  const passHasNonMaintenanceWork = Array.isArray(results)
+    && results.some((result) => !isBrowserMaintenanceTaskKind(result?.kind));
+  const elapsedMs = Number.isFinite(options?.elapsedMs)
+    ? Math.max(0, Number(options.elapsedMs))
+    : 0;
+  const standardPassBudgetMs = Number.isFinite(options?.standardPassBudgetMs)
+    ? Math.max(0, Number(options.standardPassBudgetMs))
+    : STANDARD_PASS_BUDGET_MS;
+
+  if (maintenanceTask) {
+    return !passHasNonMaintenanceWork && maintenanceTaskCount < MAX_MAINTENANCE_TASKS_PER_PASS;
+  }
+  if (elapsedMs >= standardPassBudgetMs) {
+    return false;
+  }
+  return !passHasMaintenanceWork && standardTaskCount < MAX_TASKS_PER_PASS;
+}
+
+/**
+ * @param {{ kind?: string | null } | null | undefined} task
+ * @param {{ passLane?: "standard" | "maintenance" | null }} [passState]
+ */
+function taskMatchesPassLane(task, passState = {}) {
+  if (!passState?.passLane) return true;
+  return classifyTaskPassLane(task?.kind) === passState.passLane;
+}
+
+/** @param {string | null | undefined} taskKind */
+function classifyTaskPassLane(taskKind) {
+  return isBrowserMaintenanceTaskKind(taskKind) ? "maintenance" : "standard";
+}
+
+/**
+ * @param {{ tasks?: any[], blockers?: any[], dueTaskCount?: number | null, blockerCount?: number | null } | null | undefined} queue
+ */
+function hasRemainingDueBacklog(queue) {
+  if (!queue || typeof queue !== "object") return false;
+  const dueTaskCount = Number.isFinite(queue.dueTaskCount) ? Number(queue.dueTaskCount) : null;
+  if (dueTaskCount !== null) return dueTaskCount > 0;
+  const blockerCount = Number.isFinite(queue.blockerCount) ? Number(queue.blockerCount) : null;
+  if (blockerCount !== null && blockerCount > 0) return true;
+  return (Array.isArray(queue.tasks) && queue.tasks.length > 0)
+    || (Array.isArray(queue.blockers) && queue.blockers.length > 0);
+}
+
+/**
+ * @param {any[]} results
+ * @param {{ tasks?: any[], blockers?: any[], dueTaskCount?: number | null, blockerCount?: number | null } | null | undefined} [finalQueue]
+ */
+export function summarizePassStatus(results, finalQueue = null) {
   if (!Array.isArray(results) || results.length === 0) {
     return "noop";
   }
@@ -328,6 +502,9 @@ export function summarizePassStatus(results) {
     return "blocked";
   }
   if (results.every((result) => result?.status === "completed" || result?.status === "discarded")) {
+    if (hasRemainingDueBacklog(finalQueue)) {
+      return "partial";
+    }
     return "completed";
   }
   return "mixed";
@@ -340,15 +517,166 @@ export function summarizePassReason(results) {
   return firstProblem?.detail?.reason ?? null;
 }
 
+/** @param {string | null | undefined} taskKind */
+export function resolveResearchTaskTimeoutMs(taskKind) {
+  return taskKind === "prospect_research"
+    ? PROSPECT_RESEARCH_TIMEOUT_MS
+    : COMPANY_RESEARCH_TIMEOUT_MS;
+}
+
+/**
+ * Codex subprocess failures in autonomous packet work are retriable host/runtime
+ * blockers, not Exo state corruption.
+ *
+ * @param {unknown} error
+ * @param {Record<string, any>} [detail]
+ */
+export function buildBlockedCodexTaskResult(error, detail = {}) {
+  const reason = error instanceof Error ? error.message : String(error);
+  return {
+    status: "blocked",
+    detail: {
+      ...detail,
+      reason,
+    },
+  };
+}
+
 /** @param {any} task */
 export function createTaskVerificationFingerprint(task) {
   return createHostStateTaskVerificationFingerprint(task);
 }
 
+/** @param {string | null | undefined} taskKind */
+function supportsGenericTaskCheckout(taskKind) {
+  return taskKind === "run_inbound_sync"
+    || taskKind === "company_discovery"
+    || taskKind === "write_draft"
+    || taskKind === "send_message"
+    || taskKind === "reject_connection_request"
+    || taskKind === "withdraw_connection";
+}
+
+/**
+ * @param {any} hostState
+ * @param {any} task
+ * @param {string} checkedOutAt
+ */
+function maybeCheckoutTaskForExecution(hostState, task, checkedOutAt) {
+  if (!supportsGenericTaskCheckout(task?.kind)) {
+    return {
+      ok: true,
+      stateChanged: false,
+      state: hostState,
+      task,
+    };
+  }
+
+  const fingerprint = createTaskLeaseFingerprint(task);
+  const expiresAt = new Date(Date.parse(checkedOutAt) + resolveTaskLeaseDurationMs(task)).toISOString();
+  const checkout = checkoutTaskLease(hostState, {
+    taskKind: task.kind,
+    fingerprint,
+    workerLabel: AUTONOMOUS_WORKER_LABEL,
+    acquiredAt: checkedOutAt,
+    expiresAt,
+    motionId: task.motionId ?? null,
+    companyId: task.companyId ?? null,
+    prospectId: task.prospectId ?? null,
+    observationId: task.observationId ?? null,
+    userId: task.userId ?? null,
+    accountId: task.accountId ?? null,
+    capability: task.capability ?? null,
+    surface: task.surface ?? null,
+    subject: buildTaskCheckoutSubject(task),
+    action: normalizeNullableString(task.action ?? task.kind) ?? null,
+  });
+  if (!checkout.ok) {
+    return {
+      ok: false,
+      stateChanged: false,
+      state: hostState,
+      task,
+    };
+  }
+
+  return {
+    ok: true,
+    stateChanged: true,
+    state: checkout.state,
+    task: {
+      ...task,
+      checkoutState: "checked_out",
+      checkedOutBy: AUTONOMOUS_WORKER_LABEL,
+      checkedOutAt,
+      checkoutExpiresAt: expiresAt,
+      checkoutFingerprint: fingerprint,
+    },
+  };
+}
+
+/**
+ * @param {any} hostState
+ * @param {any} task
+ */
+function releaseCheckedOutTask(hostState, task) {
+  if (!supportsGenericTaskCheckout(task?.kind)) {
+    return hostState;
+  }
+  return releaseTaskLease(hostState, createTaskLeaseFingerprint(task));
+}
+
+/**
+ * @param {any} task
+ */
+function resolveTaskLeaseDurationMs(task) {
+  let baseDurationMs = EXO_COMMAND_TIMEOUT_MS;
+  switch (task?.kind) {
+    case "send_message":
+    case "reject_connection_request":
+    case "withdraw_connection":
+      baseDurationMs = BROWSER_TIMEOUT_MS;
+      break;
+    case "write_draft":
+      baseDurationMs = DRAFT_TIMEOUT_MS;
+      break;
+    case "run_inbound_sync":
+      baseDurationMs = Math.max(INBOUND_CAPTURE_TIMEOUT_MS, resolveInboundExoCommandTimeoutMs(task));
+      break;
+    case "prospect_research":
+    case "prospect_selection":
+    case "company_research":
+    case "company_discovery":
+      baseDurationMs = resolveResearchTaskTimeoutMs(task.kind);
+      break;
+    default:
+      baseDurationMs = EXO_COMMAND_TIMEOUT_MS;
+      break;
+  }
+  return Math.max(baseDurationMs + TASK_LEASE_GRACE_MS, 60_000);
+}
+
+/**
+ * @param {any} task
+ */
+function buildTaskCheckoutSubject(task) {
+  return normalizeNullableString(
+    task?.prospectName
+      ?? task?.companyName
+      ?? task?.accountHandle
+      ?? task?.userLabel
+      ?? task?.motionName
+      ?? task?.surface
+      ?? task?.kind,
+  ) ?? "queued task";
+}
+
 /** @param {any} task */
 function isOperatorControlledSendTask(task) {
   if (task?.kind !== "send_message") return false;
-  return task?.authoredBy === "operator" || task?.editedByOperator === true;
+  return task?.authoredBy === "operator"
+    || task?.editedByOperator === true
+    || task?.approvedByOperator === true;
 }
 
 /**
@@ -361,6 +689,7 @@ function isOperatorControlledSendTask(task) {
  * @param {Array<Record<string, any>>} [automationWarnings]
  * @param {Array<Record<string, any>>} [automationHealthWarnings]
  * @param {boolean} [forceRetrieval]
+ * @param {{ passLane?: "standard" | "maintenance" | null, standardTaskCount?: number, maintenanceTaskCount?: number }} [passState]
  */
 export function chooseNextQueueTask(
   queue,
@@ -372,21 +701,31 @@ export function chooseNextQueueTask(
   automationWarnings = [],
   automationHealthWarnings = [],
   forceRetrieval = false,
+  passState = {},
 ) {
-  if (!browserReady) {
-    return getQueueTasksForExecution(queue, forceRetrieval).find((task) => !BROWSER_TRANSPORT_TASK_KINDS.has(task.kind)) ?? null;
-  }
-
   /** @type {any | null} */
   let canaryFallback = null;
   const sendCircuitBreaker = getSendCircuitBreaker(hostState, now);
   const canaryCooldown = getCanaryCooldown(hostState, now);
   const automationBlockReason = getInboundAutomationRolloutBlockReason(automationWarnings, sendMode, automationHealthWarnings);
   for (const task of getQueueTasksForExecution(queue, forceRetrieval)) {
-    if (!BROWSER_TRANSPORT_TASK_KINDS.has(task.kind)) {
-      return task;
+    if (!taskMatchesPassLane(task, passState)) {
+      continue;
     }
-    if (!ignoreBrowserBackoff) {
+
+    if (supportsGenericTaskCheckout(task?.kind)) {
+      const activeLease = getActiveTaskLease(hostState, createTaskLeaseFingerprint(task), now);
+      if (activeLease) {
+        continue;
+      }
+    }
+
+    const browserTransportRequired = BROWSER_TRANSPORT_TASK_KINDS.has(task.kind);
+    if (browserTransportRequired && !browserReady) {
+      continue;
+    }
+
+    if (browserTransportRequired && !ignoreBrowserBackoff) {
       const backoff = getBrowserBackoffForTask(hostState, task.kind, now);
       if (backoff.active) {
         continue;
@@ -469,25 +808,31 @@ function getQueueTasksForExecution(queue, forceRetrieval = false) {
   const waitingRetrievalTasks = Array.isArray(queue?.waiting)
     ? queue.waiting.filter((task) => task?.kind === "run_inbound_sync")
     : [];
-  return sortQueueTasksForExecution([...dueTasks, ...waitingRetrievalTasks]);
+  return sortQueueTasksForExecution([...dueTasks, ...waitingRetrievalTasks], { forceRetrieval: true });
 }
 
 /**
- * The host runner should not depend on upstream queue ordering for its safety
- * model. Retrieval and mechanical cleanup must outrank send work even if the
- * queue builder changes shape later.
+ * The host runner should not depend on upstream queue ordering. Urgent
+ * execution work should clear before long retrieval and research tasks so a
+ * full reconciliation pass cannot starve live replies, sends, or drafting.
+ * Explicit retrieval forcing is still allowed to override this during manual
+ * sync recovery.
  *
  * @param {any[]} tasks
+ * @param {{ forceRetrieval?: boolean }} [options]
  */
-function sortQueueTasksForExecution(tasks) {
+function sortQueueTasksForExecution(tasks, options = {}) {
+  const forceRetrieval = options.forceRetrieval === true;
   const rank = {
-    run_inbound_sync: 0,
-    company_research: 1,
+    send_message: 0,
+    write_draft: 1,
     reject_connection_request: 2,
-    withdraw_connection: 3,
-    unfollow_profile: 4,
-    send_message: 5,
-    write_draft: 6,
+    withdraw_connection: 2,
+    run_inbound_sync: forceRetrieval ? -1 : 3,
+    company_research: 4,
+    prospect_selection: 5,
+    prospect_research: 6,
+    company_discovery: 7,
   };
 
   return [...(tasks ?? [])].sort((left, right) => {
@@ -533,9 +878,9 @@ export function explainNoopPass(
 
   if (!browserReady) {
     if (tasks.some((task) => !BROWSER_TRANSPORT_TASK_KINDS.has(task.kind))) {
-      return "Browser-backed work is blocked, and the remaining due non-browser work was already exhausted in this pass.";
+      return "Browser preflight was not ready, but the remaining due connector-native work was already exhausted in this pass.";
     }
-    return "Browser preflight was not ready, and no due non-browser tasks were available.";
+    return "Browser preflight was not ready, and no due browser-backed tasks were available.";
   }
 
   const sendTasks = tasks.filter((task) => task.kind === "send_message");
@@ -584,7 +929,7 @@ export function explainNoopPass(
     return `All due browser task classes are currently under backoff (${Array.from(new Set(blockedTaskKinds)).join(", ")}).`;
   }
 
-  return "No selectable tasks were available for the current browser and send-mode state.";
+  return "No selectable tasks were available for the current transport and send-mode state.";
 }
 
 /**
@@ -596,7 +941,7 @@ export function explainNoopPass(
  *   automationHealthWarnings?: Array<Record<string, any>> | null
  * }} [options]
  */
-function executeTask(task, preflight, options = {}) {
+function executeTask(task, preflight, options = {}, executionContext = null) {
   const startedAt = new Date().toISOString();
   const base = {
     kind: task.kind,
@@ -617,7 +962,49 @@ function executeTask(task, preflight, options = {}) {
       };
     }
 
-    if (preflight.browser?.ready === false) {
+    if (task.kind === "company_discovery") {
+      const discovery = runCompanyDiscoveryTask(task);
+      return {
+        ...base,
+        status: discovery.status,
+        finishedAt: new Date().toISOString(),
+        detail: discovery.detail,
+      };
+    }
+
+    if (task.kind === "company_research") {
+      const research = runCompanyResearchTask(task);
+      return {
+        ...base,
+        status: research.status,
+        finishedAt: new Date().toISOString(),
+        detail: research.detail,
+      };
+    }
+
+    if (task.kind === "prospect_selection") {
+      const selection = runProspectSelectionTask(task);
+      return {
+        ...base,
+        status: selection.status,
+        finishedAt: new Date().toISOString(),
+        detail: selection.detail,
+      };
+    }
+
+    if (task.kind === "prospect_research") {
+      const research = runProspectResearchTask(task);
+      return {
+        ...base,
+        status: research.status,
+        finishedAt: new Date().toISOString(),
+        detail: research.detail,
+      };
+    }
+
+    const browserTransportRequired = BROWSER_TRANSPORT_TASK_KINDS.has(task.kind);
+
+    if (browserTransportRequired && preflight.browser?.ready === false) {
       return {
         ...base,
         status: "blocked",
@@ -628,7 +1015,9 @@ function executeTask(task, preflight, options = {}) {
       };
     }
 
-    const taskGate = getPreflightTaskGate(preflight, task.kind);
+    const taskGate = browserTransportRequired
+      ? getPreflightTaskGate(preflight, task.kind)
+      : { allowed: true, reason: null };
     if (!taskGate.allowed) {
       return {
         ...base,
@@ -653,16 +1042,6 @@ function executeTask(task, preflight, options = {}) {
         status: sync.status,
         finishedAt: new Date().toISOString(),
         detail: sync.detail,
-      };
-    }
-
-    if (task.kind === "company_research") {
-      const research = runCompanyResearchTask(task);
-      return {
-        ...base,
-        status: research.status,
-        finishedAt: new Date().toISOString(),
-        detail: research.detail,
       };
     }
 
@@ -697,8 +1076,8 @@ function executeTask(task, preflight, options = {}) {
       };
     }
 
-    if (task.kind === "withdraw_connection" || task.kind === "reject_connection_request" || task.kind === "unfollow_profile") {
-      const action = runBrowserActionTask(task);
+    if (isBrowserMaintenanceTaskKind(task.kind)) {
+      const action = runBrowserActionTask(task, executionContext);
       if (action.status === "blocked" || action.status === "failed") {
         action.detail = {
           ...action.detail,
@@ -779,13 +1158,18 @@ function runDraftTask(task) {
       },
     };
   }
-  const response = runCodexTask({
-    prompt: buildDraftPrompt(brief),
-    schema: DRAFT_OUTPUT_SCHEMA,
-    outputName: `draft-${task.motionId}-${task.prospectId}.json`,
-    browserRequired: false,
-    timeoutMs: DRAFT_TIMEOUT_MS,
-  });
+  let response;
+  try {
+    response = runCodexTask({
+      prompt: buildDraftPrompt(brief),
+      schema: DRAFT_OUTPUT_SCHEMA,
+      outputName: `draft-${task.motionId}-${task.prospectId}.json`,
+      browserRequired: false,
+      timeoutMs: DRAFT_TIMEOUT_MS,
+    });
+  } catch (error) {
+    return buildBlockedCodexTaskResult(error);
+  }
   const body = extractDraftBodyFromCodexResponse(response);
   if (!body) {
     throw new Error("Draft task did not return a non-empty body.");
@@ -835,27 +1219,10 @@ function runInboundSyncTask(task, preflight) {
   const captureRequest = liveResult.transport.captureRequest;
   let capture;
   if (requiresBrowserAttachForInboundCapture(captureRequest)) {
-    stageStartedAt = Date.now();
-    const transportReady = ensureChromeTransportReady(preflight);
-    stageTimingsMs.attach = Date.now() - stageStartedAt;
-
-    if (transportReady.status !== "ok") {
-      capture = buildFailedInboundCapture(task, `chrome_attach_failed: ${transportReady.reason ?? "native Chrome/browser-control attach was unavailable for background retrieval."}`);
-    } else {
-      stageStartedAt = Date.now();
-      try {
-        capture = runRecoveredBrowserCodexTask({
-          prompt: buildInboundCapturePrompt(captureRequest, liveResult.transport.connector ?? null),
-          schema: captureRequest.outputSchema,
-          outputName: `inbound-${task.capability}-${task.accountId}.json`,
-          classifyBlockedReason: (result) => classifyBrowserTransportBlockedReason(result?.error ?? result?.reason ?? null),
-          timeoutMs: INBOUND_CAPTURE_TIMEOUT_MS,
-        });
-      } catch (error) {
-        capture = buildFailedInboundCapture(task, normalizeInboundCaptureFailureReason(error));
-      }
-      stageTimingsMs.capture = Date.now() - stageStartedAt;
-    }
+    capture = buildFailedInboundCapture(
+      task,
+      `connector_native_required: ${task.capability} live sync no longer uses browser-native capture. Re-map this account or surface to a connector-native path.`,
+    );
   } else {
     stageStartedAt = Date.now();
     try {
@@ -898,6 +1265,87 @@ function runInboundSyncTask(task, preflight) {
 }
 
 /** @param {any} task */
+function runCompanyDiscoveryTask(task) {
+  const beforeCompanyIds = findMotionLinkedCompanyIds(task.motionId);
+  const briefArgs = [
+    "motion",
+    "discovery-brief",
+    task.motionId,
+  ];
+  if (Number.isInteger(task?.targetCompanyCount) && task.targetCompanyCount > 0) {
+    briefArgs.push("--companies", String(task.targetCompanyCount));
+  }
+  briefArgs.push("--json");
+
+  const brief = runExoJsonArgs(briefArgs);
+  const remainingDeficit = Number(brief?.inputs?.inventory?.deficitAfterBacklog ?? 0);
+  const minimumCompanyCount = Number.isInteger(task?.targetCompanyCount) && task.targetCompanyCount > 0
+    ? task.targetCompanyCount
+    : (
+        Number.isInteger(brief?.inputs?.inventory?.targetCompanyCount) && Number(brief.inputs.inventory.targetCompanyCount) > 0
+          ? Number(brief.inputs.inventory.targetCompanyCount)
+          : 1
+      );
+  if (Number.isFinite(remainingDeficit) && remainingDeficit <= 0) {
+    return {
+      status: "discarded",
+      detail: {
+        reason: "Motion no longer needs autonomous company discovery.",
+      },
+    };
+  }
+
+  let result;
+  try {
+    result = runCodexTask({
+      prompt: buildCompanyDiscoveryPrompt(brief, task),
+      schema: null,
+      outputName: `company-discovery-${task.motionId}.json`,
+      browserRequired: false,
+      useOutputSchema: false,
+      timeoutMs: resolveResearchTaskTimeoutMs(task.kind),
+    });
+  } catch (error) {
+    return buildBlockedCodexTaskResult(error, { summary: null });
+  }
+
+  if (!isAutonomousPacketRunSuccessful(result?.status)) {
+    return {
+      status: "blocked",
+      detail: {
+        reason: normalizeNullableString(result?.reason) ?? "Company discovery task did not complete.",
+        summary: normalizeNullableString(result?.summary) ?? null,
+      },
+    };
+  }
+
+  const afterCompanyIds = findMotionLinkedCompanyIds(task.motionId);
+  const addedCompanyIds = afterCompanyIds.filter((companyId) => !beforeCompanyIds.includes(companyId));
+  const summary = normalizeNullableString(result?.summary) ?? null;
+  const completionStatus = normalizeNullableString(result?.completionStatus) ?? null;
+
+  if (addedCompanyIds.length < minimumCompanyCount && completionStatus !== "exhausted") {
+    return {
+      status: "failed",
+      detail: {
+        reason: `Company discovery task reported completion, but only ${addedCompanyIds.length} of the required minimum ${minimumCompanyCount} compan${minimumCompanyCount === 1 ? "y was" : "ies were"} linked into the motion backlog.`,
+        summary,
+      },
+    };
+  }
+
+  return {
+    status: "completed",
+    detail: {
+      addedCompanyCount: addedCompanyIds.length,
+      targetCompanyCount: minimumCompanyCount,
+      completionStatus: completionStatus ?? (addedCompanyIds.length > 0 ? "queued_for_research" : "exhausted"),
+      summary,
+    },
+  };
+}
+
+/** @param {any} task */
 function runCompanyResearchTask(task) {
   const claimed = ensureCompanyResearchTaskClaimed(task);
   if (!claimed.ok) {
@@ -919,16 +1367,21 @@ function runCompanyResearchTask(task) {
     "--json",
   ]);
 
-  const result = runCodexTask({
-    prompt: buildCompanyResearchPrompt(brief, claimedTask),
-    schema: null,
-    outputName: `company-research-${claimedTask.motionId}-${claimedTask.companyId}.json`,
-    browserRequired: false,
-    useOutputSchema: false,
-    timeoutMs: COMPANY_RESEARCH_TIMEOUT_MS,
-  });
+  let result;
+  try {
+    result = runCodexTask({
+      prompt: buildCompanyResearchPrompt(brief, claimedTask),
+      schema: null,
+      outputName: `company-research-${claimedTask.motionId}-${claimedTask.companyId}.json`,
+      browserRequired: false,
+      useOutputSchema: false,
+      timeoutMs: resolveResearchTaskTimeoutMs(claimedTask.kind),
+    });
+  } catch (error) {
+    return buildBlockedCodexTaskResult(error, { summary: null });
+  }
 
-  if (result?.status !== "completed") {
+  if (!isAutonomousPacketRunSuccessful(result?.status)) {
     return {
       status: "blocked",
       detail: {
@@ -964,7 +1417,7 @@ function runCompanyResearchTask(task) {
     };
   }
 
-  if (completionStatus && completionStatus !== "none" && completionStatus !== queueStatus) {
+  if (!terminalPacketCompletionMatchesQueueState(completionStatus, queueStatus)) {
     return {
       status: "failed",
       detail: {
@@ -1041,10 +1494,307 @@ function ensureCompanyResearchTaskClaimed(task) {
 }
 
 /** @param {any} task */
+function runProspectSelectionTask(task) {
+  const claimed = ensureProspectSelectionTaskClaimed(task);
+  if (!claimed.ok) {
+    return {
+      status: claimed.status,
+      detail: {
+        reason: claimed.reason,
+      },
+    };
+  }
+
+  const claimedTask = claimed.task;
+  const brief = runExoJsonArgs([
+    "motion",
+    "packet-brief",
+    claimedTask.motionId,
+    "--packet",
+    claimedTask.packetId,
+    "--json",
+  ]);
+
+  let result;
+  try {
+    result = runCodexTask({
+      prompt: buildProspectSelectionPrompt(brief, claimedTask),
+      schema: null,
+      outputName: `prospect-selection-${claimedTask.motionId}-${claimedTask.companyId}.json`,
+      browserRequired: false,
+      useOutputSchema: false,
+      timeoutMs: resolveResearchTaskTimeoutMs(claimedTask.kind),
+    });
+  } catch (error) {
+    return buildBlockedCodexTaskResult(error, { summary: null });
+  }
+
+  if (!isAutonomousPacketRunSuccessful(result?.status)) {
+    return {
+      status: "blocked",
+      detail: {
+        reason: normalizeNullableString(result?.reason) ?? "Prospect selection task did not complete.",
+        summary: normalizeNullableString(result?.summary) ?? null,
+      },
+    };
+  }
+
+  const accountState = findMotionTargetAccountState(claimedTask.motionId, claimedTask.companyId);
+  const packetStatus = accountState?.packetState?.status ?? null;
+  const queueStatus = accountState?.queueState?.status ?? null;
+  const completionStatus = normalizeNullableString(result?.completionStatus) ?? null;
+  const summary = normalizeNullableString(result?.summary) ?? null;
+
+  if (packetStatus !== "completed") {
+    return {
+      status: "failed",
+      detail: {
+        reason: `Prospect selection task reported completion, but packet state is still ${packetStatus ?? "unknown"}.`,
+        summary,
+      },
+    };
+  }
+
+  if (!["selected", "ready", "suppressed", "exhausted"].includes(queueStatus ?? "")) {
+    return {
+      status: "failed",
+      detail: {
+        reason: `Prospect selection task reported completion, but account queue state is still ${queueStatus ?? "unknown"}.`,
+        summary,
+      },
+    };
+  }
+
+  if (!prospectSelectionCompletionMatchesQueueState(completionStatus, queueStatus)) {
+    return {
+      status: "failed",
+      detail: {
+        reason: `Prospect selection task returned ${completionStatus}, but Exo stored ${queueStatus}.`,
+        summary,
+      },
+    };
+  }
+
+  return {
+    status: "completed",
+    detail: {
+      queueStatus,
+      completionStatus: queueStatus,
+      summary,
+    },
+  };
+}
+
+/**
+ * @param {any} task
+ */
+function ensureProspectSelectionTaskClaimed(task) {
+  if (task?.claimState !== "claimable") {
+    return { ok: true, status: "completed", task };
+  }
+
+  const rawMotion = task?.motionId ? findMotionById(task.motionId) : null;
+  if (!rawMotion) {
+    return {
+      ok: false,
+      status: "failed",
+      reason: `Prospect selection task is missing motion ${task?.motionId ?? "unknown"}.`,
+    };
+  }
+
+  const rawCompany = task?.companyId ? findCompanyById(task.companyId) : null;
+  if (!rawCompany) {
+    return {
+      ok: false,
+      status: "failed",
+      reason: `Prospect selection task is missing company ${task?.companyId ?? "unknown"}.`,
+    };
+  }
+
+  try {
+    const updatedMotion = claimMotionTargetAccountPacket(rawMotion, rawCompany, {
+      workerLabel: AUTONOMOUS_WORKER_LABEL,
+      notes: task?.notes ?? "Claimed automatically for autonomous prospect selection.",
+    });
+    const storedMotion = updateMotion(updatedMotion);
+    const account = (storedMotion.targetMap?.accounts ?? []).find((item) => item.companyId === rawCompany.id) ?? null;
+    const claimedAt = account?.packetState?.claimedAt ?? task?.queuedAt ?? null;
+    return {
+      ok: true,
+      status: "completed",
+      task: {
+        ...task,
+        claimState: "claimed",
+        reason: "claimed_prospect_selection_packet",
+        workerLabel: account?.packetState?.workerLabel ?? AUTONOMOUS_WORKER_LABEL,
+        queuedAt: claimedAt,
+        dueAt: claimedAt,
+      },
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      status: /already claimed by/i.test(reason) ? "discarded" : "blocked",
+      reason,
+    };
+  }
+}
+
+/** @param {any} task */
+function runProspectResearchTask(task) {
+  const claimed = ensureProspectResearchTaskClaimed(task);
+  if (!claimed.ok) {
+    return {
+      status: claimed.status,
+      detail: {
+        reason: claimed.reason,
+      },
+    };
+  }
+
+  const claimedTask = claimed.task;
+  const brief = runExoJsonArgs([
+    "motion",
+    "packet-brief",
+    claimedTask.motionId,
+    "--packet",
+    claimedTask.packetId,
+    "--json",
+  ]);
+
+  let result;
+  try {
+    result = runCodexTask({
+      prompt: buildProspectResearchPrompt(brief, claimedTask),
+      schema: null,
+      outputName: `prospect-research-${claimedTask.motionId}-${claimedTask.companyId}-${claimedTask.prospectId}.json`,
+      browserRequired: false,
+      useOutputSchema: false,
+      timeoutMs: resolveResearchTaskTimeoutMs(claimedTask.kind),
+    });
+  } catch (error) {
+    return buildBlockedCodexTaskResult(error, { summary: null });
+  }
+
+  if (!isAutonomousPacketRunSuccessful(result?.status)) {
+    return {
+      status: "blocked",
+      detail: {
+        reason: normalizeNullableString(result?.reason) ?? "Prospect research task did not complete.",
+        summary: normalizeNullableString(result?.summary) ?? null,
+      },
+    };
+  }
+
+  const prospectState = findMotionProspectState(claimedTask.motionId, claimedTask.companyId, claimedTask.prospectId);
+  const packetStatus = prospectState?.packetState?.status ?? null;
+  const queueStatus = prospectState?.queueState?.status ?? null;
+  const completionStatus = normalizeNullableString(result?.completionStatus) ?? null;
+  const summary = normalizeNullableString(result?.summary) ?? null;
+
+  if (packetStatus !== "completed") {
+    return {
+      status: "failed",
+      detail: {
+        reason: `Prospect research task reported completion, but packet state is still ${packetStatus ?? "unknown"}.`,
+        summary,
+      },
+    };
+  }
+
+  if (!["ready", "suppressed", "exhausted"].includes(queueStatus ?? "")) {
+    return {
+      status: "failed",
+      detail: {
+        reason: `Prospect research task reported completion, but prospect queue state is still ${queueStatus ?? "unknown"}.`,
+        summary,
+      },
+    };
+  }
+
+  if (!terminalPacketCompletionMatchesQueueState(completionStatus, queueStatus)) {
+    return {
+      status: "failed",
+      detail: {
+        reason: `Prospect research task returned ${completionStatus}, but Exo stored ${queueStatus}.`,
+        summary,
+      },
+    };
+  }
+
+  return {
+    status: "completed",
+    detail: {
+      queueStatus,
+      completionStatus: queueStatus,
+      summary,
+    },
+  };
+}
+
+/**
+ * @param {any} task
+ */
+function ensureProspectResearchTaskClaimed(task) {
+  if (task?.claimState !== "claimable") {
+    return { ok: true, status: "completed", task };
+  }
+
+  const rawMotion = task?.motionId ? findMotionById(task.motionId) : null;
+  if (!rawMotion) {
+    return {
+      ok: false,
+      status: "failed",
+      reason: `Prospect research task is missing motion ${task?.motionId ?? "unknown"}.`,
+    };
+  }
+
+  const rawCompany = task?.companyId ? findCompanyById(task.companyId) : null;
+  if (!rawCompany) {
+    return {
+      ok: false,
+      status: "failed",
+      reason: `Prospect research task is missing company ${task?.companyId ?? "unknown"}.`,
+    };
+  }
+
+  try {
+    const updatedMotion = claimMotionProspectPacket(rawMotion, rawCompany, {
+      prospectId: task.prospectId,
+      workerLabel: AUTONOMOUS_WORKER_LABEL,
+      notes: task?.notes ?? "Claimed automatically for autonomous prospect research.",
+    });
+    const storedMotion = updateMotion(updatedMotion);
+    const account = (storedMotion.targetMap?.accounts ?? []).find((item) => item.companyId === rawCompany.id) ?? null;
+    const prospect = (account?.prospects ?? []).find((item) => item.id === task?.prospectId) ?? null;
+    const claimedAt = prospect?.packetState?.claimedAt ?? task?.queuedAt ?? null;
+    return {
+      ok: true,
+      status: "completed",
+      task: {
+        ...task,
+        claimState: "claimed",
+        reason: "claimed_prospect_research_packet",
+        workerLabel: prospect?.packetState?.workerLabel ?? AUTONOMOUS_WORKER_LABEL,
+        queuedAt: claimedAt,
+        dueAt: claimedAt,
+      },
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      status: /already claimed by/i.test(reason) ? "discarded" : "blocked",
+      reason,
+    };
+  }
+}
+
+/** @param {any} task */
 function runSendTask(task) {
   const selectedMode = typeof task?._selectedSendMode === "string" ? task._selectedSendMode : getSendMode();
   const dryRun = selectedMode === "verify" || selectedMode === "canary_verify";
-  const verifyFirst = selectedMode === "verify" || selectedMode === "canary_verify";
   const handoff = runExoJsonArgs([
     "agent",
     "send",
@@ -1064,55 +1814,22 @@ function runSendTask(task) {
     };
   }
 
-  const directSend = maybeRunLinkedinSendWithPlaywriter(handoff, { dryRun, verifyFirst });
-  if (directSend) {
-    const reconciled = maybeReconcileBlockedLinkedinSendTask(task, handoff, directSend);
-    if (reconciled) {
-      return reconciled;
-    }
-    const handledUnavailable = maybeHandleUnavailableLinkedinReplyTask(task, handoff, directSend, { dryRun });
-    if (handledUnavailable) {
-      return handledUnavailable;
-    }
-    if (dryRun && (directSend.status === "ready_to_send" || directSend.status === "sent")) {
-      return {
-        status: "completed",
-        detail: {
-          action: handoff.action,
-          recipient: describeHandoffRecipient(handoff),
-          verificationOnly: true,
-          sendStatus: directSend.status,
-        },
-      };
-    }
-    if (directSend.status !== "sent") {
-      return {
-        status: "blocked",
-        detail: { reason: directSend.reason ?? "Send task was not completed." },
-      };
-    }
-
-    runShellText(task.writeback);
+  if (!usesConnectorNativeSend(handoff)) {
     return {
-      status: "completed",
-      detail: { action: handoff.action, recipient: describeHandoffRecipient(handoff) },
+      status: "blocked",
+      detail: {
+        reason: `LinkedIn send no longer supports browser-backed execution. ${handoff.connector ?? "unknown"} must resolve through a governed connector-native path.`,
+      },
     };
   }
 
-  const result = usesConnectorNativeSend(handoff)
-    ? runConnectorCodexTask({
-        prompt: buildSendPrompt(handoff, { dryRun }),
-        outputName: `send-${task.motionId}-${task.prospectId}-${task.surface}.json`,
-        timeoutMs: BROWSER_TIMEOUT_MS,
-        enabledPlugins: resolveCodexConnectorPluginIds(handoff.connector ?? handoff.channel ?? null),
-        enabledMcpServers: resolveCodexConnectorMcpServerIds(handoff.connector ?? handoff.channel ?? null),
-      })
-    : runRecoveredBrowserCodexTask({
-        prompt: buildSendPrompt(handoff, { dryRun }),
-        outputName: `send-${task.motionId}-${task.prospectId}-${task.surface}.json`,
-        classifyBlockedReason: (payload) => classifyBrowserTransportBlockedReason(payload?.reason ?? null),
-        timeoutMs: BROWSER_TIMEOUT_MS,
-      });
+  const result = runConnectorCodexTask({
+    prompt: buildSendPrompt(handoff, { dryRun }),
+    outputName: `send-${task.motionId}-${task.prospectId}-${task.surface}.json`,
+    timeoutMs: BROWSER_TIMEOUT_MS,
+    enabledPlugins: resolveCodexConnectorPluginIds(handoff.connector ?? handoff.channel ?? null),
+    enabledMcpServers: resolveCodexConnectorMcpServerIds(handoff.connector ?? handoff.channel ?? null),
+  });
 
   if (dryRun && (result.status === "ready_to_send" || result.status === "sent")) {
     return {
@@ -1303,222 +2020,13 @@ export function classifyHandledLinkedinReplyUnavailable(task, handoff, result) {
   };
 }
 
-/** @param {any} handoff @param {{ dryRun?: boolean | undefined, verifyFirst?: boolean | undefined }} [options] */
-function maybeRunLinkedinSendWithPlaywriter(handoff, options = {}) {
-  if (!supportsDirectLinkedinPlaywriterSend(handoff)) {
-    return null;
-  }
-
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const session = ensurePlaywriterSession({
-      profileDirectory: handoff.browserProfile.profileDirectory,
-      expectedHandle: handoff.sender?.accountRefs?.linkedin ?? null,
-      capability: "linkedin",
-      targetUrl: handoff.recipient.profileUrl,
-      allowReuseExisting: false,
-      forceWindowPreflight: true,
-    });
-    if (!session.ok || !session.sessionId) {
-      return {
-        status: "blocked",
-        reason: `playwriter_session_failed: ${session.reason ?? "could not prepare a Playwriter session for LinkedIn send."}`,
-      };
-    }
-
-    let shouldDeleteSession = !session.reused;
-    try {
-      if (options.verifyFirst === true) {
-        const verification = sendLinkedinMessageWithPlaywriter({
-          sessionId: session.sessionId,
-          playwriterBin: session.playwriterBin,
-          handoff,
-          dryRun: true,
-          timeoutMs: Math.min(BROWSER_TIMEOUT_MS, 180000),
-        });
-        if (verification?.status !== "ready_to_send" && verification?.status !== "sent") {
-          if (attempt === 1 && shouldRetryPlaywriterTransportResult(verification)) {
-            shouldDeleteSession = true;
-          } else {
-            return verification;
-          }
-        }
-      }
-
-      const result = sendLinkedinMessageWithPlaywriter({
-        sessionId: session.sessionId,
-        playwriterBin: session.playwriterBin,
-        handoff,
-        dryRun: options.dryRun === true,
-        timeoutMs: BROWSER_TIMEOUT_MS,
-      });
-      if (attempt === 1 && shouldRetryPlaywriterTransportResult(result)) {
-        shouldDeleteSession = true;
-      } else {
-        return result;
-      }
-    } catch (error) {
-      const result = {
-        status: "blocked",
-        reason: `playwriter_send_failed: ${error instanceof Error ? error.message : String(error)}`,
-      };
-      if (attempt === 1 && shouldRetryPlaywriterTransportResult(result)) {
-        shouldDeleteSession = true;
-      } else {
-        return result;
-      }
-    } finally {
-      if (shouldDeleteSession) {
-        deletePlaywriterSession({
-          sessionId: session.sessionId,
-          playwriterBin: session.playwriterBin,
-        });
-      }
-    }
-  }
-
-  return {
-    status: "blocked",
-    reason: "playwriter_send_failed: LinkedIn send did not complete after refreshing the Playwriter session.",
-  };
+function createAgentExecutionContext() {
+  return null;
 }
 
-/** @param {any} handoff */
-function supportsDirectLinkedinPlaywriterSend(handoff) {
-  return Boolean(
-    handoff
-    && handoff.status === "ready"
-    && handoff.channel === "linkedin"
-    && handoff.connector === "chrome"
-    && typeof handoff.recipient?.profileUrl === "string"
-    && handoff.recipient.profileUrl.trim().length
-    && typeof handoff.browserProfile?.profileDirectory === "string"
-    && handoff.browserProfile.profileDirectory.trim().length
-    && (handoff.action === "send_connection_request" || handoff.action === "send_direct_message")
-  );
-}
-
-/** @param {{ status?: string | null, reason?: string | null } | null | undefined } result */
-function shouldRetryPlaywriterTransportResult(result) {
-  const lowered = String(result?.reason ?? "").toLowerCase();
-  return result?.status === "blocked" && (
-    lowered.includes("fetch failed")
-    || lowered.includes("session ")
-    || lowered.includes("run 'playwriter session new' first")
-    || lowered.includes("socket hang up")
-    || lowered.includes("target page, context or browser has been closed")
-    || lowered.includes("econnreset")
-  );
-}
-
-/** @param {any} task */
-function maybeRunLinkedinMaintenanceWithPlaywriter(task) {
-  const binding = resolveLinkedinMaintenanceBinding(task);
-  if (!binding) {
-    return null;
-  }
-
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const session = ensurePlaywriterSession({
-      profileDirectory: binding.profileDirectory,
-      expectedHandle: binding.expectedHandle,
-      capability: "linkedin",
-      targetUrl: task.recipientUrl,
-      allowReuseExisting: false,
-      forceWindowPreflight: true,
-    });
-    if (!session.ok || !session.sessionId) {
-      return {
-        status: "blocked",
-        reason: `playwriter_session_failed: ${session.reason ?? "could not prepare a Playwriter session for LinkedIn maintenance."}`,
-      };
-    }
-
-    let shouldDeleteSession = !session.reused;
-    try {
-      const result = runLinkedinMaintenanceWithPlaywriter({
-        sessionId: session.sessionId,
-        playwriterBin: session.playwriterBin,
-        task,
-        timeoutMs: BROWSER_TIMEOUT_MS,
-      });
-      if (attempt === 1 && shouldRetryPlaywriterTransportResult(result)) {
-        shouldDeleteSession = true;
-      } else {
-        return result;
-      }
-    } catch (error) {
-      const result = {
-        status: "blocked",
-        reason: `playwriter_maintenance_failed: ${error instanceof Error ? error.message : String(error)}`,
-      };
-      if (attempt === 1 && shouldRetryPlaywriterTransportResult(result)) {
-        shouldDeleteSession = true;
-      } else {
-        return result;
-      }
-    } finally {
-      if (shouldDeleteSession) {
-        deletePlaywriterSession({
-          sessionId: session.sessionId,
-          playwriterBin: session.playwriterBin,
-        });
-      }
-    }
-  }
-
-  return {
-    status: "blocked",
-    reason: "playwriter_maintenance_failed: LinkedIn maintenance did not complete after refreshing the Playwriter session.",
-  };
-}
-
-/** @param {any} task */
-function resolveLinkedinMaintenanceBinding(task) {
-  if (typeof task?.recipientUrl !== "string" || !task.recipientUrl.trim()) {
-    return null;
-  }
-
-  const rawProfiles = listBrowserProfiles();
-  const rawUsers = listUsers();
-  if (!Array.isArray(rawProfiles) || rawProfiles.length === 0 || !Array.isArray(rawUsers) || rawUsers.length === 0) {
-    return null;
-  }
-
-  if (typeof task.companyId === "string" && task.companyId.trim()) {
-    const rawCompany = findCompanyById(task.companyId);
-    if (rawCompany) {
-      const rawMotion = typeof task.motionId === "string" && task.motionId.trim()
-        ? findMotionById(task.motionId)
-        : null;
-      const resolution = resolveScopedExecutionAssignment({
-        rawCompany,
-        rawMotion,
-        rawProfiles,
-        rawUsers,
-        capability: "linkedin",
-      });
-      const profileDirectory = normalizeNullableString(resolution?.resolvedProfile?.profileDirectory);
-      if (profileDirectory) {
-        return {
-          profileDirectory,
-          expectedHandle: normalizeNullableString(resolution?.resolvedAccount?.handle),
-        };
-      }
-    }
-  }
-
-  const readyCandidates = rawUsers
-    .map((user) => resolveUserConnection(user, rawProfiles, { capability: "linkedin" }).resolved)
-    .filter((candidate) => candidate?.status === "ready" && candidate.browserProfile?.profileDirectory);
-
-  if (readyCandidates.length !== 1) {
-    return null;
-  }
-
-  return {
-    profileDirectory: readyCandidates[0].browserProfile.profileDirectory,
-    expectedHandle: normalizeNullableString(readyCandidates[0].handle),
-  };
+/** @param {{ linkedinMaintenanceSessions?: Map<string, any> } | null} executionContext */
+function disposeAgentExecutionContext(executionContext) {
+  void executionContext;
 }
 
 /**
@@ -1533,80 +2041,101 @@ function findProspectDraft(rawMotion, companyId, prospectId, surface) {
   return (prospect?.drafts ?? []).find((draft) => draft.surface === surface && draft.status !== "sent" && draft.status !== "discarded") ?? null;
 }
 
-/** @param {any} task */
-function runBrowserActionTask(task) {
-  const directMaintenance = maybeRunLinkedinMaintenanceWithPlaywriter(task);
-  if (directMaintenance) {
-    if (directMaintenance.status !== "completed") {
-      return {
-        status: "blocked",
-        detail: { reason: directMaintenance.reason ?? `${task.kind} did not complete.` },
-      };
-    }
-
-    runShellText(task.writeback);
-    return {
-      status: "completed",
-      detail: {
-        action: task.kind,
-        recipientUrl: task.recipientUrl ?? null,
-        alreadySatisfied: directMaintenance.alreadySatisfied === true,
-      },
-    };
-  }
-
-  const result = runRecoveredBrowserCodexTask({
-    prompt: buildBrowserActionPrompt(task),
-    outputName: `${task.kind}-${task.motionId ?? "none"}-${task.prospectId ?? "none"}.json`,
-    classifyBlockedReason: (payload) => classifyBrowserTransportBlockedReason(payload?.reason ?? null),
-    timeoutMs: BROWSER_TIMEOUT_MS,
+/**
+ * @param {any} task
+ * @param {{ linkedinMaintenanceSessions?: Map<string, any> } | null} [executionContext]
+ */
+function runBrowserActionTask(task, executionContext = null) {
+  const result = runLinkedinMaintenanceWithUnipile(task, {
+    codexHome: CODEX_HOME,
   });
-
   if (result.status !== "completed") {
     return {
       status: "blocked",
-      detail: { reason: result.reason ?? `${task.kind} did not complete.` }
+      detail: { reason: result.reason ?? `${task.kind} did not complete.` },
     };
   }
 
   runShellText(task.writeback);
   return {
     status: "completed",
-    detail: { action: task.kind, recipientUrl: task.recipientUrl ?? null }
+    detail: {
+      action: task.kind,
+      recipientUrl: task.recipientUrl ?? null,
+      transport: "unipile",
+    }
   };
 }
 
 /** @param {any} task */
 function runInboundContract(task) {
-  if (task.capability === "gmail") {
-    return runExoJsonArgs([
-      "inbound",
-      "sync",
-      "gmail-live",
-      task.userId,
-      "--account",
-      task.accountId,
-      "--mode",
-      task.mode,
-      "--json",
-    ]);
-  }
-
-  if (task.capability === "linkedin") {
-    return runExoJsonArgs([
-      "inbound",
-      "sync",
-      "linkedin-live",
-      task.userId,
-      "--account",
-      task.accountId,
-      "--mode",
-      task.mode,
-      "--json",
-    ]);
+  if (task.capability === "gmail" || task.capability === "linkedin") {
+    return runExoJsonArgs(
+      buildInboundContractArgs(task),
+      { timeoutMs: resolveInboundExoCommandTimeoutMs(task) },
+    );
   }
 
   throw new Error(`Unsupported inbound capability: ${task.capability}`);
+}
+
+/** @param {any} task */
+export function buildInboundContractArgs(task) {
+  const command = task?.capability === "linkedin"
+    ? "linkedin-live"
+    : task?.capability === "gmail"
+      ? "gmail-live"
+      : null;
+  if (!command) {
+    throw new Error(`Unsupported inbound capability: ${task?.capability ?? "unknown"}`);
+  }
+
+  const args = [
+    "inbound",
+    "sync",
+    command,
+    task.userId,
+    "--account",
+    task.accountId,
+  ];
+  for (const surfaceKey of normalizeInboundTaskSurfaceKeys(task)) {
+    args.push("--surface", surfaceKey);
+  }
+  const resumeCursor = normalizeNullableString(task?.resumeCursor);
+  if (resumeCursor) {
+    args.push("--resume-cursor", resumeCursor);
+  }
+  if (Number.isInteger(task?.resumeStartOffset) && task.resumeStartOffset >= 0) {
+    args.push("--resume-start-offset", String(task.resumeStartOffset));
+  }
+  if (Number.isInteger(task?.maxPages) && task.maxPages > 0) {
+    args.push("--max-pages", String(task.maxPages));
+  }
+  if (Number.isInteger(task?.pageSize) && task.pageSize > 0) {
+    args.push("--page-size", String(task.pageSize));
+  }
+  args.push(
+    "--mode",
+    task.mode,
+    "--json",
+  );
+  return args;
+}
+
+/** @param {any} task */
+export function resolveInboundExoCommandTimeoutMs(task) {
+  if (task?.mode === "full") {
+    return Math.max(INBOUND_EXO_COMMAND_TIMEOUT_MS, INBOUND_CAPTURE_TIMEOUT_MS);
+  }
+  return INBOUND_EXO_COMMAND_TIMEOUT_MS;
+}
+
+/** @param {any} task */
+function normalizeInboundTaskSurfaceKeys(task) {
+  if (!Array.isArray(task?.surfaceKeys)) return [];
+  return [...new Set(task.surfaceKeys
+    .map((surfaceKey) => normalizeNullableString(surfaceKey))
+    .filter(Boolean))];
 }
 
 /**
@@ -1635,7 +2164,7 @@ function applyInboundPayload(task, payload) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 10 * 1024 * 1024,
-      timeout: EXO_COMMAND_TIMEOUT_MS,
+      timeout: resolveInboundExoCommandTimeoutMs(task),
     });
     return parseJsonLoose(output);
   } catch (error) {
@@ -1677,7 +2206,7 @@ function buildInboundPayload(task, capture) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 10 * 1024 * 1024,
-      timeout: EXO_COMMAND_TIMEOUT_MS,
+      timeout: resolveInboundExoCommandTimeoutMs(task),
     });
     return parseJsonLoose(output);
   } catch (error) {
@@ -1757,10 +2286,7 @@ function setDraft(task, body) {
  *   timeoutMs: number,
  * }} input
  */
-function runCodexTask(input) {
-  const tempDir = fs.mkdtempSync(path.join(TEMP_ROOT, "codex-task-"));
-  const outputPath = path.join(tempDir, input.outputName);
-
+export function buildCodexTaskArgs(input, outputPath, schemaPath = null) {
   const args = [
     "exec",
     "--ephemeral",
@@ -1775,33 +2301,19 @@ function runCodexTask(input) {
     outputPath,
   ];
 
-  if (shouldIgnoreCodexUserConfig(input)) {
+  const ignoreUserConfig = shouldIgnoreCodexUserConfig(input);
+  if (ignoreUserConfig) {
     args.push("--ignore-user-config");
   }
 
-  if (input.useOutputSchema !== false) {
-    const schemaPath = path.join(tempDir, "schema.json");
-    fs.writeFileSync(schemaPath, JSON.stringify(sanitizeCodexOutputSchema(input.schema), null, 2));
+  if (schemaPath) {
     args.push("--output-schema", schemaPath);
   }
 
-  if (input.browserRequired) {
+  if (input.browserRequired || input.connectorRequired) {
     args.push(
       "-c",
       'model_reasoning_effort="medium"',
-      "-c",
-      'mcp_servers.playwriter.enabled=false',
-      "-c",
-      'mcp_servers.icypeas.enabled=false',
-      "-c",
-      'mcp_servers.leadmagic.enabled=false',
-      "-c",
-      'mcp_servers.prospeo.enabled=false'
-    );
-  } else if (input.connectorRequired) {
-    args.push(
-      "-c",
-      'model_reasoning_effort="medium"'
     );
   }
 
@@ -1811,25 +2323,71 @@ function runCodexTask(input) {
     args.push("-c", `plugins."${pluginId}".enabled=true`);
   }
 
-  for (const mcpServerId of normalizePluginIds(input.enabledMcpServers)) {
-    args.push("-c", `mcp_servers.${mcpServerId}.enabled=true`);
+  if (!ignoreUserConfig) {
+    for (const mcpServerId of normalizePluginIds(input.enabledMcpServers)) {
+      args.push("-c", `mcp_servers.${mcpServerId}.enabled=true`);
+    }
   }
 
   args.push("-");
+  return args;
+}
+
+/**
+ * @param {{
+ *   prompt: string,
+ *   schema: unknown,
+ *   outputName: string,
+ *   browserRequired: boolean,
+ *   connectorRequired?: boolean,
+ *   enabledPlugins?: string[] | undefined,
+ *   enabledMcpServers?: string[] | undefined,
+ *   useOutputSchema?: boolean,
+ *   timeoutMs: number,
+ * }} input
+ */
+export function buildCodexTaskExecOptions(input) {
+  return {
+    cwd: ROOT,
+    env: buildCodexTaskEnv(process.env),
+    encoding: "utf8",
+    input: input.prompt,
+    stdio: ["pipe", "pipe", "pipe"],
+    timeout: input.timeoutMs,
+    // The background host pass must reclaim control when a Codex child times
+    // out. SIGTERM can leave the pass hung while the child ignores shutdown.
+    killSignal: "SIGKILL",
+    maxBuffer: 10 * 1024 * 1024,
+  };
+}
+
+/**
+ * @param {{
+ *   prompt: string,
+ *   schema: unknown,
+ *   outputName: string,
+ *   browserRequired: boolean,
+ *   connectorRequired?: boolean,
+ *   enabledPlugins?: string[] | undefined,
+ *   enabledMcpServers?: string[] | undefined,
+ *   useOutputSchema?: boolean,
+ *   timeoutMs: number,
+ * }} input
+ */
+function runCodexTask(input) {
+  const tempDir = fs.mkdtempSync(path.join(TEMP_ROOT, "codex-task-"));
+  const outputPath = path.join(tempDir, input.outputName);
+  let schemaPath = null;
+
+  if (input.useOutputSchema !== false) {
+    schemaPath = path.join(tempDir, "schema.json");
+    fs.writeFileSync(schemaPath, JSON.stringify(sanitizeCodexOutputSchema(input.schema), null, 2));
+  }
+
+  const args = buildCodexTaskArgs(input, outputPath, schemaPath);
 
   try {
-    execFileSync(CODEX_BIN, args, {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        CODEX_HOME,
-      },
-      encoding: "utf8",
-      input: input.prompt,
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: input.timeoutMs,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    execFileSync(CODEX_BIN, args, buildCodexTaskExecOptions(input));
   } catch (error) {
     const message = buildExecErrorMessage(error);
     throw new Error(`Codex task failed: ${message}`);
@@ -1861,72 +2419,6 @@ function runConnectorCodexTask(input) {
     useOutputSchema: false,
     timeoutMs: input.timeoutMs,
   });
-}
-
-/**
- * @param {{
- *   prompt: string,
- *   schema?: unknown,
- *   outputName: string,
- *   classifyBlockedReason?: ((payload: any) => string | null),
- *   timeoutMs: number,
- * }} input
- */
-function runRecoveredBrowserCodexTask(input) {
-  const firstAttempt = runBrowserCodexTaskOnce(input);
-  if (!firstAttempt.shouldRetry) {
-    if (firstAttempt.error) throw firstAttempt.error;
-    return firstAttempt.result;
-  }
-
-  const preflight = fs.existsSync(PREFLIGHT_PATH)
-    ? parseJsonLoose(fs.readFileSync(PREFLIGHT_PATH, "utf8"))
-    : buildAndPersistPreflight();
-  const opened = openSelectedChromeWindow(preflight);
-  if (!opened.ok) {
-    if (firstAttempt.error) throw firstAttempt.error;
-    return firstAttempt.result;
-  }
-
-  sleepMs(CHROME_WINDOW_BOOTSTRAP_WAIT_MS);
-  const secondAttempt = runBrowserCodexTaskOnce(input);
-  if (secondAttempt.error) throw secondAttempt.error;
-  return secondAttempt.result;
-}
-
-/**
- * @param {{
- *   prompt: string,
- *   schema?: unknown,
- *   outputName: string,
- *   classifyBlockedReason?: ((payload: any) => string | null),
- *   timeoutMs: number,
- * }} input
- */
-function runBrowserCodexTaskOnce(input) {
-  try {
-    const result = runCodexTask({
-      prompt: input.prompt,
-      schema: input.schema ?? null,
-      outputName: input.outputName,
-      browserRequired: true,
-      useOutputSchema: false,
-      timeoutMs: input.timeoutMs,
-    });
-    const blockedReason = input.classifyBlockedReason?.(result) ?? null;
-    return {
-      result,
-      error: null,
-      shouldRetry: shouldRetryChromeAttachWithProfileWindow(blockedReason),
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      result: null,
-      error: error instanceof Error ? error : new Error(message),
-      shouldRetry: shouldRetryChromeAttachWithProfileWindow(message),
-    };
-  }
 }
 
 /** @param {string[]} commands */
@@ -2073,13 +2565,15 @@ function saveHostState(state) {
   fs.writeFileSync(HOST_STATE_PATH, JSON.stringify(state, null, 2));
 }
 
-function loadQueue() {
+/** @param {any} [hostState] */
+function loadQueue(hostState = null) {
   return buildAgentQueue({
     motions: listMotions(),
     companies: listCompanies(),
     users: listUsers(),
     observations: listInboundObservations(),
     cues: listInboundCues(),
+    hostState,
     includeWaitingRetrieval: isRetrievalForceEnabled(),
   });
 }
@@ -2157,8 +2651,80 @@ export function buildCompanyResearchPrompt(brief, task) {
     "Use the runtime's native web retrieval capabilities for the actual research. Do not use browser tools or open Chrome windows.",
     "Start with the company site, then broaden to public web or news only if needed by the brief.",
     "Use shell commands only for the governed Exo writeback commands needed to store findings and complete the packet.",
-    "Work only this one company. Persist only concise, writer-usable signal summaries. No em dashes.",
+    "Work only this one company. Persist only concise, writer-usable signal summaries and the company-level prospect case. Do not hunt people or direct contact data here. No em dashes.",
     "Before returning completed, run the governed Exo writeback commands needed to store the strongest evidence and complete the packet as researched, suppressed, or exhausted.",
+    "When the packet is successful, set completionStatus to researched, suppressed, or exhausted. Do not use completed there.",
+    "Return only JSON with exactly these fields: status, completionStatus, summary, reason.",
+    "",
+    "Task JSON:",
+    JSON.stringify(task, null, 2),
+    "",
+    "Governed packet brief JSON:",
+    JSON.stringify(brief, null, 2),
+  ].join("\n");
+}
+
+/** @param {any} brief @param {any} task */
+export function buildCompanyDiscoveryPrompt(brief, task) {
+  return [
+    "This is one bounded Exo company discovery task.",
+    "Do not inspect arbitrary repo files, do not read arbitrary Exo state, do not run exo what-is-this, and do not narrate.",
+    "Use the runtime's native web retrieval capabilities for public company discovery. Do not use browser tools or open Chrome windows.",
+    "Stay on this one motion only. Add companies, not prospects, in this task.",
+    "This lane is for fresh signal-qualified account discovery only. Do not do full company research or people research here.",
+    "Treat the requested company count as a floor, not a ceiling.",
+    "Use shell commands only for the governed Exo writeback commands needed to land new companies into the motion backlog.",
+    "Only add companies that match the premise, target profile, and signal questions closely enough to justify downstream research. No filler accounts.",
+    "If the same search path, source list, or page is already yielding more strong-fit companies, land them in this pass instead of stopping exactly at the minimum.",
+    "Before returning completed, run the governed Exo writeback commands needed to queue the discovered companies for research.",
+    "If the public web cannot support the full requested count, return exhausted instead of inventing weak fits.",
+    "When the task is successful, set completionStatus to queued_for_research or exhausted. Do not use completed there.",
+    "Return only JSON with exactly these fields: status, completionStatus, summary, reason.",
+    "",
+    "Task JSON:",
+    JSON.stringify(task, null, 2),
+    "",
+    "Governed discovery brief JSON:",
+    JSON.stringify(brief, null, 2),
+  ].join("\n");
+}
+
+/** @param {any} brief @param {any} task */
+export function buildProspectSelectionPrompt(brief, task) {
+  return [
+    "This is one bounded Exo prospect selection packet.",
+    "Do not inspect arbitrary repo files, do not read arbitrary Exo state, do not run exo what-is-this, and do not narrate.",
+    "Use the runtime's native web retrieval capabilities for public stakeholder discovery. Do not use browser tools or open Chrome windows.",
+    "Stay on this one company. Pick the smallest credible stakeholder set and avoid committee bloat.",
+    "Use shell commands only for the governed Exo writeback commands needed to store prospects, land any required LinkedIn profile viewbacks, and complete the packet.",
+    "This lane is for finding the right people, not full contact enrichment. Only land the minimum governed profile evidence needed to identify the selected prospects.",
+    "If you justify a selected prospect from a LinkedIn profile, store the governed LinkedIn profile enrichment before completing the packet.",
+    "Persist only concise, writer-usable reasoning tied to the motion signal or premise. No em dashes.",
+    "Before returning completed, run the governed Exo writeback commands needed to store the chosen stakeholders and complete the packet as selected, suppressed, or exhausted.",
+    "When the packet is successful, set completionStatus to selected, ready, suppressed, or exhausted. Do not use completed there.",
+    "Return only JSON with exactly these fields: status, completionStatus, summary, reason.",
+    "",
+    "Task JSON:",
+    JSON.stringify(task, null, 2),
+    "",
+    "Governed packet brief JSON:",
+    JSON.stringify(brief, null, 2),
+  ].join("\n");
+}
+
+/** @param {any} brief @param {any} task */
+export function buildProspectResearchPrompt(brief, task) {
+  return [
+    "This is one bounded Exo prospect research packet.",
+    "Do not inspect arbitrary repo files, do not read arbitrary Exo state, do not run exo what-is-this, and do not narrate.",
+    "Use the runtime's actual available public-web and enrichment capabilities. Do not use browser tools or open Chrome windows.",
+    "Stay on this one prospect only. Do not branch into unrelated account work.",
+    "Use shell commands only for the governed Exo writeback commands needed to store profile/contact enrichment, the minimum first-touch research context, and packet completion.",
+    "This lane is for enriching the selected person and landing their governed profile/contact surface. Do not draft outreach, do not pick a touch sequence, and do not do broader account research here.",
+    "The packet is not done until Exo shows the branch is ready for a first-touch decision, or you explicitly complete it into suppressed or exhausted.",
+    "Persist only defensible research and verified usable contact points when found. No em dashes.",
+    "Before returning completed, run the governed Exo writeback commands needed to land profile/contact enrichment, store only the research needed for first-touch context, and complete the packet.",
+    "When the packet is successful, set completionStatus to ready, suppressed, or exhausted. Do not use completed there.",
     "Return only JSON with exactly these fields: status, completionStatus, summary, reason.",
     "",
     "Task JSON:",
@@ -2174,6 +2740,8 @@ export function buildSendPrompt(handoff, options = {}) {
   const dryRun = options.dryRun === true;
   if (usesConnectorNativeSend(handoff)) {
     const connectorLabel = connectorToolLabel(handoff.connector);
+    const unipilePromptHints = buildUnipileSendPromptHints(handoff);
+    const dryRunHints = buildConnectorDryRunHints(handoff, { dryRun });
     return [
       "This is one bounded Exo connector send task.",
       "Do not inspect the repo, do not read Exo state, do not run exo what-is-this, and do not narrate.",
@@ -2181,6 +2749,8 @@ export function buildSendPrompt(handoff, options = {}) {
         ? "Prepare the governed send and stop before the final send action."
         : "Perform the governed send and nothing else.",
       `Use the native ${connectorLabel} tools already available in this runtime. Do not use Chrome browser tools.`,
+      ...unipilePromptHints,
+      ...dryRunHints,
       "Do not run diagnostics, do not open browser windows, do not switch identities, do not fall back to shell commands, and do not paraphrase the stored message.",
       dryRun
         ? "Do not send yet. After the exact governed subject/body are loaded into the correct composer and are ready for a real send, return {\"status\":\"ready_to_send\",\"reason\":null}."
@@ -2208,94 +2778,46 @@ export function buildSendPrompt(handoff, options = {}) {
   ]);
 }
 
-/** @param {any} task */
-export function buildBrowserActionPrompt(task) {
-  const actionLine = task.kind === "withdraw_connection"
-    ? `Withdraw the stale outbound LinkedIn invitation for ${task.prospectName}.`
-    : task.kind === "reject_connection_request"
-      ? `Decline the inbound LinkedIn invitation from ${task.prospectName}.`
-      : `Unfollow ${task.prospectName} on LinkedIn.`;
+/** @param {any} handoff */
+function buildUnipileSendPromptHints(handoff) {
+  if (normalizeConnectorPluginKey(handoff?.connector) !== "unipile") {
+    return [];
+  }
 
-  return buildChromeNativePrompt([
-    "This is one bounded Exo browser maintenance task.",
-    "Do not inspect the repo, do not read Exo state, do not run exo what-is-this, and do not narrate.",
-    actionLine,
-    "Use native Chrome tools only.",
-    "Do one Chrome connector attach attempt and one retry after 2 seconds if the first attempt cannot attach.",
-    "If it still cannot attach, return {\"status\":\"blocked\",\"reason\":\"<concrete reason>\"}.",
-    "Do not run diagnostics, do not open new Chrome windows, and do not use Playwriter or shell fallbacks.",
-    "Do not run Exo writeback yourself. After the real browser action happens, return {\"status\":\"completed\",\"reason\":null}.",
-    "",
-    "Task JSON:",
-    JSON.stringify(task, null, 2),
-  ]);
+  const codexHome = normalizeNullableString(process.env.CODEX_HOME) ?? CODEX_HOME;
+  const { baseUrl } = readUnipileConfig(codexHome);
+  const exactBaseUrl = normalizeNullableString(baseUrl);
+  if (!exactBaseUrl) {
+    return [];
+  }
+
+  return [
+    `Every Unipile MCP request in this task MUST use URLs rooted at ${exactBaseUrl}. Do not substitute api1.unipile.com, localhost, or any documented default server example.`,
+    `If you need governed account discovery, call GET ${exactBaseUrl}/api/v1/accounts with accept: application/json and keep every follow-on Unipile request on that same base URL.`,
+    "If a different Unipile base URL returns errors/no_client_session, treat that as a misrouted request, not as proof that the governed connector is down.",
+  ];
 }
 
-export function buildBrowserAttachProbePrompt() {
-  return buildChromeNativePrompt([
-    "This is a detached background Chrome attach probe with a complete supplied contract.",
-    "Do not inspect the repo, do not read Exo state, do not run exo what-is-this, and do not narrate.",
-    "Use the Chrome browser plugin only.",
-    "Do not use shell commands, npm packages, or repo inspection.",
-    "Do not import or require playwright.",
-    "Do one lightweight browser-client call such as listing open tabs after bootstrap.",
-    "Do not open new windows. Do not use Playwriter. Do not ask for approval.",
-    "Return only JSON: {\"status\":\"ok\",\"reason\":null} or {\"status\":\"blocked\",\"reason\":\"<concrete reason>\"}.",
-  ]);
-}
-
-function ensureChromeTransportReady(preflight) {
-  const initial = runChromeAttachProbe();
-  if (initial.status === "ok") {
-    return { status: "ok", reason: null };
+/**
+ * @param {any} handoff
+ * @param {{ dryRun: boolean }} options
+ */
+function buildConnectorDryRunHints(handoff, options) {
+  if (!options.dryRun) {
+    return [];
   }
-
-  if (!shouldRetryChromeAttachWithProfileWindow(initial.reason ?? null)) {
-    return initial;
+  if (normalizeConnectorPluginKey(handoff?.connector) !== "unipile") {
+    return [];
   }
-
-  const recovered = openSelectedChromeWindow(preflight);
-  if (!recovered.ok) {
-    return {
-      status: "blocked",
-      reason: recovered.reason ?? initial.reason ?? "Chrome transport is blocked.",
-    };
-  }
-
-  sleepMs(2000);
-  return runChromeAttachProbe();
+  return [
+    "If the governed Unipile action is a direct POST with no native draft/composer state, do not treat that as a blocker.",
+    "In that case, verify the governed account, recipient, and exact native send endpoint without firing it, then return {\"status\":\"ready_to_send\",\"reason\":null}.",
+  ];
 }
 
 /** @param {any} captureRequest */
 export function requiresBrowserAttachForInboundCapture(captureRequest) {
   return captureRequest?.captureTransportMode !== "connector_native_only";
-}
-
-function runChromeAttachProbe() {
-  const result = runCodexTask({
-    prompt: buildBrowserAttachProbePrompt(),
-    schema: null,
-    outputName: "chrome-attach-probe.json",
-    browserRequired: true,
-    useOutputSchema: false,
-    timeoutMs: CHROME_ATTACH_TIMEOUT_MS,
-  });
-
-  return {
-    status: result?.status === "ok" ? "ok" : "blocked",
-    reason: typeof result?.reason === "string" && result.reason.trim().length ? result.reason.trim() : null,
-  };
-}
-
-export function shouldRetryChromeAttachWithProfileWindow(reason) {
-  return typeof reason === "string" && /browser is not available: extension/i.test(reason);
-}
-
-/** @param {unknown} value */
-function classifyBrowserTransportBlockedReason(value) {
-  if (typeof value !== "string") return null;
-  const reason = value.trim();
-  return reason.length ? reason : null;
 }
 
 /**
@@ -2321,44 +2843,6 @@ function buildFailedInboundCapture(task, reason) {
     threads: [],
     error: reason,
   };
-}
-
-function openSelectedChromeWindow(preflight) {
-  const pluginRoot = typeof preflight?.browser?.pluginRoot === "string" ? preflight.browser.pluginRoot : null;
-  if (!pluginRoot) {
-    return {
-      ok: false,
-      reason: "Chrome plugin root is unavailable, so the host runner cannot open the selected Chrome profile window.",
-    };
-  }
-
-  const scriptPath = path.join(pluginRoot, "scripts", "open-chrome-window.js");
-  try {
-    const output = execFileSync(process.execPath, [scriptPath], {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        EXO_STATE_DIR: STATE_DIR,
-      },
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 1024 * 1024,
-    });
-    return {
-      ok: true,
-      reason: null,
-      output,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      reason: `Could not open the selected Chrome profile window.\n${buildExecErrorMessage(error)}`,
-    };
-  }
-}
-
-function sleepMs(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 function buildChromeNativePrompt(lines, connector = "chrome") {
@@ -2428,6 +2912,67 @@ function augmentBrowserTaskReason(reason, preflight) {
 }
 
 /**
+ * @param {string | null} completionStatus
+ * @param {string | null} queueStatus
+ */
+export function terminalPacketCompletionMatchesQueueState(completionStatus, queueStatus) {
+  const normalizedCompletionStatus = canonicalizePacketCompletionStatus(completionStatus);
+  const normalizedQueueStatus = canonicalizePacketCompletionStatus(queueStatus);
+  if (!normalizedCompletionStatus || normalizedCompletionStatus === "none" || normalizedCompletionStatus === "completed") {
+    return true;
+  }
+  if (normalizedCompletionStatus === "ready_for_first_touch_decision") {
+    return normalizedQueueStatus === "ready";
+  }
+  return normalizedCompletionStatus === normalizedQueueStatus;
+}
+
+function prospectSelectionCompletionMatchesQueueState(completionStatus, queueStatus) {
+  if (terminalPacketCompletionMatchesQueueState(completionStatus, queueStatus)) {
+    return true;
+  }
+  const normalizedCompletionStatus = canonicalizePacketCompletionStatus(completionStatus);
+  const normalizedQueueStatus = canonicalizePacketCompletionStatus(queueStatus);
+  if (normalizedCompletionStatus === "selected" || normalizedCompletionStatus === "ready") {
+    return normalizedQueueStatus === "selected" || normalizedQueueStatus === "ready";
+  }
+  return false;
+}
+
+/**
+ * Bounded autonomous packet runs have emitted `completed`, `success`, and
+ * `ok` for the same successful writeback path. Treat all three as success.
+ *
+ * @param {string | null | undefined} status
+ * @returns {boolean}
+ */
+export function isAutonomousPacketRunSuccessful(status) {
+  const normalized = normalizeNullableString(status)?.toLowerCase() ?? null;
+  return normalized === "completed" || normalized === "success" || normalized === "ok";
+}
+
+/**
+ * Tolerate small packet-status drift from bounded autonomous workers.
+ * Different runs have emitted spaces, hyphens, or generic "complete"
+ * language for the same terminal outcome.
+ *
+ * @param {string | null | undefined} value
+ * @returns {string | null}
+ */
+function canonicalizePacketCompletionStatus(value) {
+  const normalized = normalizeNullableString(value)?.toLowerCase() ?? null;
+  if (!normalized) return null;
+  const compact = normalized
+    .replace(/[.\s-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (!compact) return null;
+  if (compact === "complete" || compact === "done") return "completed";
+  if (compact === "ready_for_first_touch" || compact === "first_touch_decision") return "ready_for_first_touch_decision";
+  return compact;
+}
+
+/**
  * @param {string} command
  * @param {{ stdin?: string | undefined }} [options]
  */
@@ -2458,8 +3003,11 @@ function runShellText(command, options = {}) {
   }
 }
 
-/** @param {string[]} args */
-function runExoJsonArgs(args) {
+/**
+ * @param {string[]} args
+ * @param {{ timeoutMs?: number | null }} [options]
+ */
+function runExoJsonArgs(args, options = {}) {
   try {
     const output = execFileSync(process.execPath, ["src/cli/index.js", ...args], {
       cwd: ROOT,
@@ -2470,12 +3018,22 @@ function runExoJsonArgs(args) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 10 * 1024 * 1024,
-      timeout: EXO_COMMAND_TIMEOUT_MS,
+      timeout: options.timeoutMs ?? EXO_COMMAND_TIMEOUT_MS,
     });
     return parseJsonLoose(output);
   } catch (error) {
     throw new Error(`Exo command failed: ${args.join(" ")}\n${buildExecErrorMessage(error)}`);
   }
+}
+
+/**
+ * @param {string} motionId
+ */
+function findMotionLinkedCompanyIds(motionId) {
+  return listCompanies()
+    .filter((company) => Array.isArray(company.motionIds) && company.motionIds.includes(motionId))
+    .map((company) => company.id)
+    .sort((left, right) => left.localeCompare(right));
 }
 
 /**
@@ -2490,6 +3048,16 @@ function findMotionTargetAccountState(motionId, companyId) {
     "--json",
   ]);
   return (motion?.targetMap?.accounts ?? []).find((account) => account?.companyId === companyId) ?? null;
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} companyId
+ * @param {string} prospectId
+ */
+function findMotionProspectState(motionId, companyId, prospectId) {
+  const account = findMotionTargetAccountState(motionId, companyId);
+  return (account?.prospects ?? []).find((prospect) => prospect?.id === prospectId) ?? null;
 }
 
 /** @param {unknown} value */

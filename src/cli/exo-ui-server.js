@@ -11,44 +11,59 @@ import http from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { resolveStatePaths } from "../db/paths.js";
+import { renderCleanupPage } from "../artifacts/render-cleanup.js";
 import { renderConnectionsPage } from "../artifacts/render-connections.js";
 import { renderExecutionPage, renderUserDetailPage } from "../artifacts/render-execution.js";
 import { renderMotionsPage, renderMotionDetailPage, renderMotionSettingsPage } from "../artifacts/render-motions.js";
+import { renderOnboardingPage } from "../artifacts/render-onboarding.js";
 import { renderOperatorPage } from "../artifacts/render-operator.js";
 import { renderQueuePage } from "../artifacts/render-queue.js";
+import { renderSettingsPage } from "../artifacts/render-settings.js";
 import { renderPersonPage } from "../artifacts/render-person.js";
 import { renderProspectsPage, renderProspectDetailPage } from "../artifacts/render-prospects.js";
 import { renderCompanyDetailPage } from "../artifacts/render-company-detail.js";
 import { renderCompanyResearchBriefPage } from "../artifacts/render-company-research-brief-page.js";
+import { buildInboundReviewView } from "../core/build-inbound-review-view.js";
+import { buildCleanupViewModel } from "../core/build-cleanup-view.js";
 import { buildCompanyViewModel } from "../core/build-company-view.js";
 import { buildCompanyResearchBrief } from "../core/build-company-research-brief.js";
+import { filterCleanupLaneItems } from "../core/cleanup-lane.js";
 import { buildMotionPacketSummary } from "../lib/motion-packets.js";
 import { renderWorkspaceRollupPage } from "../artifacts/render-workspace-rollup.js";
 import { buildConnectionsViewModel } from "../core/build-connections-view.js";
 import { buildAgentQueue } from "../core/build-agent-queue.js";
-import { resolvePersonComposeDraft } from "../core/build-person-compose-draft.js";
 import { buildPersonView } from "../core/build-person-view.js";
-import { findTransitionMotion } from "../core/ensure-transition-motion.js";
+import { findTransitionMotion, isTransitionMotion } from "../core/ensure-transition-motion.js";
 import { buildExecutionViewModel } from "../core/build-execution-view.js";
 import { buildMotionsViewModel } from "../core/build-motions-view.js";
+import { buildOnboardingState } from "../core/onboarding.js";
 import { buildOperatorViewModel } from "../core/build-operator-view.js";
 import { buildProspectsViewModel } from "../core/build-prospects-view.js";
+import { buildMotionProspectView } from "../core/build-motion-prospect-view.js";
+import { buildSettingsViewModel } from "../core/build-settings-view.js";
 import { buildWorkspaceRollup } from "../core/build-workspace-rollup.js";
+import { buildUserWorkspaceContext } from "../core/workspace-context.js";
 import { executeActionIntent } from "../core/execute-action-intent.js";
+import { resolveConnectionNoteCapability } from "../core/connection-note-capability.js";
+import { resolveScopedExecutionAssignment } from "../core/resolve-scoped-execution-assignment.js";
 import { removeUiLock, writeUiLock } from "./ui-lock.js";
-import { escapeHtml, renderShell } from "../lib/exo-ui-components.js";
+import { btn, card, countChip, escapeHtml, renderShell, sectionHead } from "../lib/exo-ui-components.js";
 import { findCompanyById, findMotionById, listBrowserProfiles, listCompanies, listInboundCues, listInboundObservations, listMotions, listUsers } from "../db/database.js";
-import { accountRefsCanAttachConnectionNote } from "../schema/browser-profile.js";
+import { summarizeExecutionUsers } from "../lib/execution-users.js";
 import { buildWorkspaceProjection } from "./workspace-runtime.js";
-import { inspectAgentRoutineState, inspectAgentSchedulerState } from "./commands/agent.js";
+import { buildSchedulerCadenceSummary, inspectAgentRoutineState, inspectAgentSchedulerState } from "./commands/agent.js";
 import { buildAgentRunLockDir, inspectAgentRunLock } from "../lib/agent-run-lock.js";
 import { pruneExpiredBrowserBackoffs } from "../lib/agent-host-state.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4317;
+/** @type {{ key: string, projection: ReturnType<typeof buildWorkspaceProjection> } | null} */
+let cachedWorkspaceProjection = null;
+/** @type {{ key: string, promise: Promise<ReturnType<typeof buildWorkspaceProjection>> } | null} */
+let cachedWorkspaceProjectionBuild = null;
 
 /**
- * @param {{ userId: string, capability?: string | null, host?: string | null, port?: number | null }} input
+ * @param {{ userId?: string | null, capability?: string | null, host?: string | null, port?: number | null }} input
  */
 export async function startExoUiServer(input) {
   const capability = input.capability ?? "linkedin";
@@ -61,13 +76,22 @@ export async function startExoUiServer(input) {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? `${host}:${requestedPort}`}`);
 
     try {
+      if ((request.method === "GET" || request.method === "HEAD") && url.pathname === "/") {
+        respondRedirect(response, `/operator${url.search}`);
+        return;
+      }
+
       if (request.method === "GET" && (url.pathname === "/status" || url.pathname === "/healthz")) {
+        const session = resolveUiRouteSession(input.userId ?? null);
         respondJson(response, 200, {
           ok: true,
           service: "exo-ui",
-          userId: input.userId,
+          userId: session.userId,
+          onboarding: session.mode === "onboarding",
           startedAt: startedAt,
-          routes: ["/operator", "/motions", "/prospects", "/users", "/connections", "/workspace", "/queue"],
+          routes: session.mode === "onboarding"
+            ? ["/onboarding", "/users"]
+            : ["/operator", "/motions", "/prospects", "/users", "/connections", "/workspace", "/settings", "/cleanup", "/queue"],
         });
         return;
       }
@@ -83,13 +107,14 @@ export async function startExoUiServer(input) {
       if (request.method === "POST" && url.pathname === "/act") {
         const body = await readJsonBody(request);
         const result = await executeActionIntent(/** @type {any} */ (body));
+        clearWorkspaceProjectionCache();
         respondJson(response, 200, result);
         return;
       }
 
       if (request.method === "GET") {
-        const route = url.pathname === "/" ? "/operator" : url.pathname;
-        const html = renderRoute(route, { userId: input.userId, capability });
+        const route = url.pathname === "/" ? "/operator" : `${url.pathname}${url.search}`;
+        const html = await renderRoute(route, { userId: input.userId ?? null, capability });
         if (html) {
           respondHtml(response, html);
           return;
@@ -109,7 +134,7 @@ export async function startExoUiServer(input) {
   const url = `http://${host}:${port}/`;
 
   // Advertise the running UI so other agents can discover it.
-  writeUiLock({ host, port, url, userId: input.userId });
+  writeUiLock({ host, port, url, userId: input.userId ?? null });
   const cleanup = () => removeUiLock();
   server.once("close", cleanup);
   process.once("exit", cleanup);
@@ -121,11 +146,40 @@ export async function startExoUiServer(input) {
 
 /**
  * @param {string} route
- * @param {{ userId: string, capability: string }} ctx
- * @returns {string | null}
+ * @param {{ userId: string | null, capability: string }} ctx
+ * @param {{
+ *   listInboundObservations?: typeof listInboundObservations,
+ *   listMotions?: typeof listMotions,
+ *   listCompanies?: typeof listCompanies,
+ *   buildPersonView?: typeof buildPersonView,
+ *   findTransitionMotion?: typeof findTransitionMotion,
+ *   renderPersonPage?: typeof renderPersonPage,
+ *   resolveWorkspaceProjectionForUi?: typeof resolveWorkspaceProjectionForUi,
+ * }} [hooks]
+ * @returns {Promise<string | null>}
  */
-function renderRoute(route, ctx) {
-  const agentRuntime = buildAgentRuntimeSnapshot(ctx.userId);
+export async function renderRoute(route, ctx, hooks = {}) {
+  const requestUrl = new URL(route, "http://exo.local");
+  const pathname = requestUrl.pathname;
+  const searchQuery = normalizeRouteSearchQuery(requestUrl.searchParams.get("q"));
+  const listInboundObservationsFn = hooks.listInboundObservations ?? listInboundObservations;
+  const listMotionsFn = hooks.listMotions ?? listMotions;
+  const listCompaniesFn = hooks.listCompanies ?? listCompanies;
+  const buildPersonViewFn = hooks.buildPersonView ?? buildPersonView;
+  const findTransitionMotionFn = hooks.findTransitionMotion ?? findTransitionMotion;
+  const renderPersonPageFn = hooks.renderPersonPage ?? renderPersonPage;
+  const resolveWorkspaceProjectionForUiFn = hooks.resolveWorkspaceProjectionForUi ?? resolveWorkspaceProjectionForUi;
+  const session = resolveUiRouteSession(ctx.userId);
+  const agentRuntime = {
+    ...buildAgentRuntimeSnapshot(session.userId ?? session.preferredUserId ?? null),
+    nav: resolveCleanupNavState({
+      userId: session.userId ?? session.preferredUserId ?? null,
+      capability: ctx.capability,
+      listInboundObservationsFn,
+      listMotionsFn,
+      listCompaniesFn,
+    }),
+  };
   const meta = (regenerateCommand) => ({
     user: { label: undefined },
     generatedAt: new Date().toISOString(),
@@ -133,24 +187,32 @@ function renderRoute(route, ctx) {
     interactive: true,
     agentRuntime,
   });
+  const runtimeAccountDiscovery = buildUiRuntimeAccountDiscovery();
+
+  if (
+    session.mode === "onboarding"
+    && pathname !== "/users"
+    && !pathname.startsWith("/users/")
+  ) {
+    return renderOnboardingPage(
+      buildOnboardingState({ preferredUserId: session.preferredUserId }),
+      { interactive: true },
+    );
+  }
 
   // Users roster + per-user detail are sourced from raw state (all users).
-  if (route === "/users" || route.startsWith("/users/")) {
+  if (pathname === "/users" || pathname.startsWith("/users/")) {
     const model = buildExecutionViewModel({
       rawUsers: listUsers(),
       rawMotions: listMotions(),
       rawCompanies: listCompanies(),
       rawProfiles: listBrowserProfiles(),
-      runtimeAccountDiscovery: {
-        runtime: "codex",
-        codexHome: process.env.CODEX_HOME ?? null,
-        claudeCli: process.env.EXO_CLAUDE_CLI ?? null,
-      },
+      runtimeAccountDiscovery,
     });
-    if (route === "/users") {
+    if (pathname === "/users") {
       return renderExecutionPage(model, meta("exo ui"));
     }
-    const id = decodeURIComponent(route.slice("/users/".length));
+    const id = decodeURIComponent(pathname.slice("/users/".length));
     const user = model.users.find((candidate) => candidate.id === id);
     if (!user) {
       return renderNotFound("User", id, "/users", "Users");
@@ -158,13 +220,21 @@ function renderRoute(route, ctx) {
     return renderUserDetailPage(user, meta("exo ui"));
   }
 
+  if (pathname === "/settings") {
+    const model = buildSettingsViewModel({
+      settingsCwd: process.cwd(),
+      runtimeAccountDiscovery,
+    });
+    return renderSettingsPage(model, meta("exo ui"));
+  }
+
   // Internal person show page (works for any inbound person, not just prospects).
-  if (route.startsWith("/people/")) {
-    const id = decodeURIComponent(route.slice("/people/".length));
-    const rawObservations = listInboundObservations({ userId: ctx.userId });
-    const rawMotions = listMotions();
-    const rawCompanies = listCompanies();
-    const person = buildPersonView({
+  if (pathname.startsWith("/people/")) {
+    const id = decodeURIComponent(pathname.slice("/people/".length));
+    const rawObservations = listInboundObservationsFn({ userId: session.userId });
+    const rawMotions = listMotionsFn();
+    const rawCompanies = listCompaniesFn();
+    const person = buildPersonViewFn({
       observationId: id,
       rawObservations,
       rawMotions,
@@ -173,49 +243,59 @@ function renderRoute(route, ctx) {
     if (!person) {
       return renderNotFound("Person", id, "/connections", "Connections");
     }
-    if (!person.matchedProspect) {
-      person.composeDraft = resolvePersonComposeDraft(person);
-    }
-    const transition = findTransitionMotion();
-    return renderPersonPage(person, {
+    const transition = findTransitionMotionFn();
+    return renderPersonPageFn(person, {
       interactive: true,
-      userId: ctx.userId,
+      userId: session.userId,
       transitionMotionId: transition?.id ?? null,
       // Transition backlog first (the default add target), then real motions.
-      motions: [
-        ...(transition ? [{ id: transition.id, name: transition.name }] : []),
-        ...rawMotions
-          .filter((motion) => motion.id !== transition?.id)
-          .map((motion) => ({ id: motion.id, name: motion.name })),
-      ],
+      motions: buildClaimMotionChoices(rawMotions, transition),
     });
   }
 
-  const projection = buildWorkspaceProjection({
-    userId: ctx.userId,
+  const projection = await resolveWorkspaceProjectionForUiFn({
+    userId: session.userId,
     capability: ctx.capability,
     regenerateCommand: "exo ui",
   });
   const data = projection.data;
-  const baseMeta = { user: data.user, generatedAt: data.generatedAt, regenerateCommand: "exo ui", interactive: true, agentRuntime };
+  const baseMeta = {
+    user: data.user,
+    generatedAt: data.generatedAt,
+    regenerateCommand: "exo ui",
+    interactive: true,
+    agentRuntime: {
+      ...agentRuntime,
+      nav: resolveCleanupNavState({
+        userId: session.userId ?? session.preferredUserId ?? null,
+        capability: ctx.capability,
+        generatedAt: data.generatedAt,
+        reviewItems: data.reviewItems ?? [],
+      }),
+    },
+  };
 
   // Motion settings page.
-  if (route.startsWith("/motions/") && route.endsWith("/settings")) {
-    const segments = route.split("/").filter(Boolean);
+  if (pathname.startsWith("/motions/") && pathname.endsWith("/settings")) {
+    const segments = pathname.split("/").filter(Boolean);
     const id = decodeURIComponent(segments[1] ?? "");
-    const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails });
+    const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions() });
     const motion = model.details.find((candidate) => candidate.id === id);
     if (!motion) {
       return renderNotFound("Motion", id, "/motions", "Motions");
     }
-    return renderMotionSettingsPage(motion, baseMeta);
+    const rawMotion = findMotionById(id);
+    return renderMotionSettingsPage({
+      ...motion,
+      executionAssignment: rawMotion?.engagementUserAssignment ?? null,
+    }, baseMeta);
   }
 
   // Per-motion detail page.
-  if (route.startsWith("/motions/")) {
-    const segments = route.split("/").filter(Boolean);
+  if (pathname.startsWith("/motions/")) {
+    const segments = pathname.split("/").filter(Boolean);
     const id = decodeURIComponent(segments[1] ?? "");
-    const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails });
+    const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions() });
     const motion = model.details.find((candidate) => candidate.id === id);
     if (!motion) {
       return renderNotFound("Motion", id, "/motions", "Motions");
@@ -224,8 +304,8 @@ function renderRoute(route, ctx) {
   }
 
   // Per-prospect detail page.
-  if (route.startsWith("/prospects/")) {
-    const id = decodeURIComponent(route.slice("/prospects/".length));
+  if (pathname.startsWith("/prospects/")) {
+    const id = decodeURIComponent(pathname.slice("/prospects/".length));
     const model = buildProspectsViewModel({
       prospectPrepLanes: data.prospectPrepLanes,
       engagementLanes: data.engagementLanes,
@@ -257,15 +337,39 @@ function renderRoute(route, ctx) {
       : null;
     const transition = findTransitionMotion();
     const company = person.companyId ? findCompanyById(person.companyId) : null;
+    const rawMotion = person.motionId ? findMotionById(person.motionId) : null;
+    const motionProspectView = rawMotion
+      ? buildMotionProspectView(rawMotion, {
+          companyId: person.companyId,
+          prospectId: person.id,
+          rawObservations: data.observations ?? [],
+        }).prospect
+      : null;
+    person.threadMessages = motionProspectView?.threadMessages ?? [];
+    person.latestInboundMessage = motionProspectView?.latestInboundMessage ?? null;
+    person.timelineObservations = motionProspectView?.timelineObservations ?? [];
+    const linkedinExecution = company
+      ? resolveScopedExecutionAssignment({
+          rawCompany: company,
+          rawMotion,
+          rawProfiles: listBrowserProfiles(),
+          rawUsers: listUsers(),
+          capability: "linkedin",
+        })
+      : null;
     const detailMeta = {
       ...baseMeta,
-      userId: ctx.userId,
+      userId: session.userId,
+      searchQuery,
       transitionMotionId: transition?.id ?? null,
       // Whether the sending identity can attach a note to a connection request
       // (Premium / Sales Navigator). null = no identity pinned yet.
-      connectionNoteCapable: company?.engagementUserAssignment?.accountRefs
-        ? accountRefsCanAttachConnectionNote(company.engagementUserAssignment.accountRefs)
-        : null,
+      connectionNoteCapable: resolveConnectionNoteCapability({
+        resolvedAccount: linkedinExecution?.resolvedAccount ?? null,
+        accountRefs: linkedinExecution?.userAssignmentRecord?.accountRefs
+          ?? company?.engagementUserAssignment?.accountRefs
+          ?? null,
+      }),
       assignedIdentity: company?.engagementUserAssignment?.label ?? null,
       motions: listMotions()
         .filter((motion) => motion.id !== transition?.id)
@@ -277,8 +381,8 @@ function renderRoute(route, ctx) {
   }
 
   // Motion-scoped company research brief page.
-  if (route.startsWith("/companies/") && route.includes("/research-brief/")) {
-    const segments = route.split("/").filter(Boolean);
+  if (pathname.startsWith("/companies/") && pathname.includes("/research-brief/")) {
+    const segments = pathname.split("/").filter(Boolean);
     const companyId = decodeURIComponent(segments[1] ?? "");
     const motionId = decodeURIComponent(segments[3] ?? "");
     const company = findCompanyById(companyId);
@@ -315,8 +419,8 @@ function renderRoute(route, ctx) {
   }
 
   // Per-company detail page (the canonical company record).
-  if (route.startsWith("/companies/")) {
-    const id = decodeURIComponent(route.slice("/companies/".length));
+  if (pathname.startsWith("/companies/")) {
+    const id = decodeURIComponent(pathname.slice("/companies/".length));
     const company = findCompanyById(id);
     if (!company) {
       return renderNotFound("Company", id, "/prospects", "Prospects");
@@ -335,7 +439,7 @@ function renderRoute(route, ctx) {
     return renderCompanyDetailPage(model, baseMeta);
   }
 
-  switch (route) {
+  switch (pathname) {
     case "/operator": {
       const model = buildOperatorViewModel({
         user: data.user,
@@ -364,8 +468,18 @@ function renderRoute(route, ctx) {
       });
       return renderQueuePage(model, baseMeta);
     }
+    case "/cleanup": {
+      const model = buildCleanupViewModel({
+        user: data.user,
+        generatedAt: data.generatedAt,
+        regenerateCommand: "exo ui",
+        reviewItems: data.reviewItems ?? [],
+        agentRuntime,
+      });
+      return renderCleanupPage(model, { ...baseMeta, returnTo: "/cleanup" });
+    }
     case "/motions": {
-      const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails });
+      const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions() });
       return renderMotionsPage(model, baseMeta);
     }
     case "/prospects": {
@@ -373,13 +487,21 @@ function renderRoute(route, ctx) {
         prospectPrepLanes: data.prospectPrepLanes,
         engagementLanes: data.engagementLanes,
         motionDetails: data.motionDetails,
+        query: searchQuery,
       });
-      return renderProspectsPage(model, baseMeta);
+      return renderProspectsPage(model, { ...baseMeta, searchQuery });
     }
     case "/connections": {
+      const transition = findTransitionMotion();
+      const claimMotions = buildClaimMotionChoices(
+        listMotions().filter((motion) => motion.status !== "archived"),
+        transition,
+      );
       const model = buildConnectionsViewModel({
+        observations: data.observations,
         reviewItems: data.reviewItems,
         truthAccounts: data.truthAccounts,
+        agentQueue: data.agentQueue,
         // Authoritative connection-degree by profile URL, so the Sent / Received
         // tabs reconcile against the real connection state (1st-degree = accepted).
         degreeByProfile: buildDegreeByProfile(),
@@ -387,7 +509,7 @@ function renderRoute(route, ctx) {
         // the Sent tab shows true age instead of LinkedIn's rounded label.
         sentAtByProfile: buildSentAtByProfile(),
       });
-      return renderConnectionsPage(model, { ...baseMeta, userId: ctx.userId });
+      return renderConnectionsPage(model, { ...baseMeta, userId: session.userId, claimMotions });
     }
     case "/workspace": {
       const executionModel = buildExecutionViewModel({
@@ -404,6 +526,7 @@ function renderRoute(route, ctx) {
         motionSummaries: data.motionSummaries,
         truthAccounts: data.truthAccounts,
         reviewItems: data.reviewItems,
+        itemizationGaps: data.itemizationGaps ?? [],
         executionUsers: executionModel.users,
       });
       return renderWorkspaceRollupPage(model, baseMeta);
@@ -411,6 +534,123 @@ function renderRoute(route, ctx) {
     default:
       return null;
   }
+}
+
+/**
+ * @param {string | null | undefined} value
+ * @returns {string}
+ */
+function normalizeRouteSearchQuery(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Reuse one derived workspace projection per state revision so repeated page
+ * navigations do not rebuild the same large model over and over, and concurrent
+ * requests collapse onto one in-flight build instead of serializing.
+ *
+ * @param {{ userId: string, capability?: string | null, regenerateCommand: string }} input
+ * @param {{
+ *   buildProjection?: typeof buildWorkspaceProjection,
+ *   stateRevision?: string,
+ * }} [options]
+ */
+export async function resolveWorkspaceProjectionForUi(input, options = {}) {
+  const cacheKey = [
+    options.stateRevision ?? currentStateRev(),
+    input.userId,
+    input.capability ?? "linkedin",
+    input.regenerateCommand,
+  ].join("|");
+
+  if (cachedWorkspaceProjection?.key === cacheKey) {
+    return cachedWorkspaceProjection.projection;
+  }
+  if (cachedWorkspaceProjectionBuild?.key === cacheKey) {
+    return cachedWorkspaceProjectionBuild.promise;
+  }
+
+  const buildProjection = options.buildProjection ?? buildWorkspaceProjection;
+  const promise = Promise.resolve().then(() => buildProjection(input));
+  cachedWorkspaceProjectionBuild = { key: cacheKey, promise };
+
+  try {
+    const projection = await promise;
+    cachedWorkspaceProjection = { key: cacheKey, projection };
+    return projection;
+  } finally {
+    if (cachedWorkspaceProjectionBuild?.key === cacheKey) {
+      cachedWorkspaceProjectionBuild = null;
+    }
+  }
+}
+
+function clearWorkspaceProjectionCache() {
+  cachedWorkspaceProjection = null;
+  cachedWorkspaceProjectionBuild = null;
+}
+
+/**
+ * @param {{
+ *   userId: string | null,
+ *   capability?: string | null,
+ *   generatedAt?: string | null,
+ *   reviewItems?: any[] | null,
+ *   listInboundObservationsFn?: typeof listInboundObservations,
+ *   listMotionsFn?: typeof listMotions,
+ *   listCompaniesFn?: typeof listCompanies,
+ * }} input
+ */
+function resolveCleanupNavState(input) {
+  if (Array.isArray(input.reviewItems)) {
+    return { showCleanup: countCleanupLaneItems(input.reviewItems, input.generatedAt) > 0 };
+  }
+
+  if (!input.userId) {
+    return { showCleanup: true };
+  }
+
+  const rawUser = listUsers().find((candidate) => candidate.id === input.userId) ?? null;
+  if (!rawUser) {
+    return { showCleanup: true };
+  }
+
+  const listInboundObservationsFn = input.listInboundObservationsFn ?? listInboundObservations;
+  const listMotionsFn = input.listMotionsFn ?? listMotions;
+  const listCompaniesFn = input.listCompaniesFn ?? listCompanies;
+  const workspaceContext = buildUserWorkspaceContext(rawUser, {
+    rawObservations: listInboundObservationsFn({ userId: rawUser.id }),
+  });
+  const review = buildInboundReviewView(
+    workspaceContext.user,
+    workspaceContext.observations,
+    listMotionsFn(),
+    listCompaniesFn(),
+    { capability: input.capability ?? null },
+  );
+
+  return { showCleanup: countCleanupLaneItems(review.reviewItems, input.generatedAt) > 0 };
+}
+
+/**
+ * @param {any[] | null | undefined} reviewItems
+ * @param {string | null | undefined} generatedAt
+ */
+function countCleanupLaneItems(reviewItems, generatedAt) {
+  const now = generatedAt ? new Date(generatedAt) : new Date();
+  return filterCleanupLaneItems(reviewItems ?? [], { now }).length;
+}
+
+export function resetWorkspaceProjectionCacheForTests() {
+  clearWorkspaceProjectionCache();
+}
+
+function buildUiRuntimeAccountDiscovery() {
+  return {
+    runtime: "codex",
+    codexHome: process.env.CODEX_HOME ?? null,
+    claudeCli: process.env.EXO_CLAUDE_CLI ?? null,
+  };
 }
 
 /**
@@ -506,26 +746,46 @@ export function buildUiStateRevision(statePaths = resolveStatePaths()) {
     ? path.join(buildAgentRunLockDir({ stateDir: homeStateDir }), "pid")
     : null;
   const parts = [
-    buildFileRevision(statePaths.localDatabasePath ?? null),
-    buildFileRevision(statePaths.homeDatabasePath ?? null),
-    buildFileRevision(statePaths.repoPolicyPath ?? null),
-    buildFileRevision(statePaths.homePolicyPath ?? null),
-    buildFileRevision(homeStateDir ? path.join(homeStateDir, "agent-preflight.json") : null),
-    buildFileRevision(homeStateDir ? path.join(homeStateDir, "agent-host-state.json") : null),
-    buildFileRevision(homeStateDir ? path.join(homeStateDir, "agent-last-pass.json") : null),
-    buildFileRevision(agentRunLockPidPath),
+    ...buildDatabaseFamilyRevisions(statePaths.localDatabasePath ?? null, "local-db"),
+    ...buildDatabaseFamilyRevisions(statePaths.homeDatabasePath ?? null, "home-db"),
+    buildFileRevision(statePaths.repoPolicyPath ?? null, "repo-policy"),
+    buildFileRevision(statePaths.homePolicyPath ?? null, "home-policy"),
+    buildFileRevision(homeStateDir ? path.join(homeStateDir, "agent-preflight.json") : null, "agent-preflight"),
+    buildFileRevision(homeStateDir ? path.join(homeStateDir, "agent-host-state.json") : null, "agent-host-state"),
+    buildFileRevision(homeStateDir ? path.join(homeStateDir, "agent-last-pass.json") : null, "agent-last-pass"),
+    buildFileRevision(agentRunLockPidPath, "agent-run-lock"),
   ].filter(Boolean);
   return parts.length ? parts.join("|") : "0";
+}
+
+/**
+ * SQLite state changes often land in the WAL before the base database file is
+ * checkpointed, so the UI revision has to watch the whole database family.
+ *
+ * @param {string | null} databasePath
+ * @param {string} label
+ * @returns {string[]}
+ */
+function buildDatabaseFamilyRevisions(databasePath, label) {
+  if (!databasePath) return [];
+  return [
+    buildFileRevision(databasePath, label),
+    buildFileRevision(`${databasePath}-wal`, `${label}-wal`),
+    buildFileRevision(`${databasePath}-shm`, `${label}-shm`),
+  ].filter(Boolean);
 }
 
 /** @param {any} task */
 function isOperatorControlledQueueSendTask(task) {
   if (task?.kind !== "send_message") return false;
-  return task?.authoredBy === "operator" || task?.editedByOperator === true;
+  return task?.authoredBy === "operator"
+    || task?.editedByOperator === true
+    || task?.approvedByOperator === true;
 }
 
 function buildAgentRuntimeSnapshot(userId = null) {
   const stateDir = resolveStatePaths().homeStateDir;
+  const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")));
   const motions = listMotions();
   const companies = listCompanies();
   const users = userId ? listUsers().filter((user) => user.id === userId) : listUsers();
@@ -537,22 +797,62 @@ function buildAgentRuntimeSnapshot(userId = null) {
     users,
     observations,
     cues,
+    hostState,
   });
   const sendTasks = Array.isArray(queue?.tasks) ? queue.tasks.filter((task) => task?.kind === "send_message") : [];
   const verificationSendCount = sendTasks.filter((task) => !isOperatorControlledQueueSendTask(task)).length;
   const operatorSendCount = sendTasks.length - verificationSendCount;
+  const lock = inspectAgentRunLock({ stateDir });
+  const scheduler = inspectAgentSchedulerState();
+  const routine = inspectAgentRoutineState(stateDir);
+  const lastPass = readJsonIfExists(path.join(stateDir, "agent-last-pass.json"));
   return {
-    lock: inspectAgentRunLock({ stateDir }),
-    scheduler: inspectAgentSchedulerState(),
-    routine: inspectAgentRoutineState(stateDir),
-    hostState: pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json"))),
-    lastPass: readJsonIfExists(path.join(stateDir, "agent-last-pass.json")),
+    lock,
+    scheduler,
+    routine,
+    hostState,
+    lastPass,
+    cadence: buildSchedulerCadenceSummary(scheduler, lastPass, new Date().toISOString()),
     queueCount: Number.isFinite(queue?.count) ? Number(queue.count) : Number(queue?.itemCount ?? 0),
     sendQueueCount: sendTasks.length,
     verificationSendCount,
     operatorSendCount,
     waitingCount: Number.isFinite(queue?.waitingCount) ? Number(queue.waitingCount) : 0,
     blockerCount: Array.isArray(queue?.blockers) ? queue.blockers.length : 0,
+  };
+}
+
+/**
+ * @param {string | null} preferredUserId
+ */
+function resolveUiRouteSession(preferredUserId = null) {
+  const users = listUsers();
+  const preferredUser = preferredUserId
+    ? users.find((user) => user.id === preferredUserId) ?? null
+    : null;
+
+  if (preferredUserId) {
+    if (!preferredUser) {
+      return { mode: "workspace", userId: preferredUserId, preferredUserId };
+    }
+    return Array.isArray(preferredUser.accounts) && preferredUser.accounts.length > 0
+      ? { mode: "workspace", userId: preferredUser.id, preferredUserId: preferredUser.id }
+      : { mode: "onboarding", userId: null, preferredUserId: preferredUser.id };
+  }
+
+  const { totalUserCount, eligibleUserCount, eligibleUsers } = summarizeExecutionUsers(users);
+  if (eligibleUserCount === 1) {
+    return {
+      mode: "workspace",
+      userId: eligibleUsers[0].id,
+      preferredUserId: eligibleUsers[0].id,
+    };
+  }
+
+  return {
+    mode: "onboarding",
+    userId: null,
+    preferredUserId: totalUserCount === 1 ? users[0].id : null,
   };
 }
 
@@ -621,12 +921,14 @@ function isAddressInUseError(error) {
 }
 
 /**
- * @param {string} filePath
+ * @param {string | null} filePath
+ * @param {string} [label]
  */
-function buildFileRevision(filePath) {
+function buildFileRevision(filePath, label) {
+  if (!filePath) return null;
   try {
     const stat = statSync(filePath);
-    return `${path.basename(filePath)}:${Math.round(stat.mtimeMs)}-${stat.size}`;
+    return `${label ?? path.basename(filePath)}:${Math.round(stat.mtimeMs)}-${stat.size}`;
   } catch {
     return null;
   }
@@ -642,6 +944,111 @@ function readJsonIfExists(filePath) {
   } catch {
     return null;
   }
+}
+
+/**
+ * @param {Array<any>} motions
+ * @param {any | null | undefined} transition
+ * @returns {Array<{ id: string, name: string, offerLabel: string, premise: string, status: string | null, statusLabel: string | null }>}
+ */
+function buildClaimMotionChoices(motions, transition) {
+  const choices = [];
+  if (transition) {
+    choices.push(shapeClaimMotionChoice(transition));
+  }
+  for (const motion of motions ?? []) {
+    if (!motion || motion.id === transition?.id) {
+      continue;
+    }
+    choices.push(shapeClaimMotionChoice(motion));
+  }
+  return choices;
+}
+
+/**
+ * @param {any} motion
+ * @returns {{ id: string, name: string, offerLabel: string, premise: string, status: string | null, statusLabel: string | null }}
+ */
+function shapeClaimMotionChoice(motion) {
+  const name = normalizeClaimText(motion?.name) ?? "untitled-motion";
+  const status = normalizeClaimMotionStatus(motion?.status);
+  return {
+    id: String(motion?.id ?? ""),
+    name,
+    offerLabel: claimMotionOfferLabel(motion, name),
+    premise: normalizeClaimText(motion?.premise?.statement) ?? "No premise authored yet.",
+    status,
+    statusLabel: formatClaimMotionStatus(status),
+  };
+}
+
+/**
+ * @param {any} motion
+ * @param {string} fallback
+ * @returns {string}
+ */
+function claimMotionOfferLabel(motion, fallback) {
+  const sourceTitle = normalizeClaimText(motion?.offerThesis?.sourceTitle);
+  if (sourceTitle) {
+    return sourceTitle;
+  }
+  if (isTransitionMotion(motion)) {
+    return "Transition backlog";
+  }
+  const host = claimMotionOfferHost(motion?.offer?.sourceUrl ?? motion?.offerThesis?.sourceUrl ?? null);
+  return host ?? fallback;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function claimMotionOfferHost(value) {
+  const text = normalizeClaimText(value);
+  if (!text) {
+    return null;
+  }
+  if (/^data:/i.test(text)) {
+    return "Captured offer page";
+  }
+  try {
+    return new URL(text).hostname.replace(/^www\./i, "") || text;
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * @param {unknown} value
+ * @returns {"draft" | "active" | "paused" | "archived" | null}
+ */
+function normalizeClaimMotionStatus(value) {
+  return value === "draft" || value === "active" || value === "paused" || value === "archived"
+    ? value
+    : null;
+}
+
+/**
+ * @param {"draft" | "active" | "paused" | "archived" | null} status
+ * @returns {string | null}
+ */
+function formatClaimMotionStatus(status) {
+  if (!status) {
+    return null;
+  }
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function normalizeClaimText(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const text = value.replace(/\s+/g, " ").trim();
+  return text ? text : null;
 }
 
 function lookupProspectDrafts(motionId, companyId, prospectId) {
@@ -708,6 +1115,15 @@ async function readJsonBody(request) {
 function respondHtml(response, html) {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
   response.end(html);
+}
+
+/**
+ * @param {http.ServerResponse} response
+ * @param {string} location
+ */
+function respondRedirect(response, location) {
+  response.writeHead(302, { location, "cache-control": "no-store" });
+  response.end();
 }
 
 /**

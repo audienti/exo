@@ -1,17 +1,6 @@
 // @ts-check
 
-export const AUTO_SEND_DRAFT_SURFACES = new Set([
-  "connection_request",
-  "post_accept_message",
-  "follow_up_direct_message",
-]);
-
 export const SENDABLE_DRAFT_STATUSES = new Set(["approved", "queued"]);
-
-/** @param {string | null | undefined} surface */
-export function isAutoSendDraftSurface(surface) {
-  return AUTO_SEND_DRAFT_SURFACES.has(String(surface ?? ""));
-}
 
 /** @param {string | null | undefined} status */
 export function isSendableDraftStatus(status) {
@@ -20,7 +9,7 @@ export function isSendableDraftStatus(status) {
 
 /** @param {string | null | undefined} surface */
 export function draftWritebackStatusForSurface(surface) {
-  return isAutoSendDraftSurface(surface) ? "queued" : "ready";
+  return "ready";
 }
 
 /**
@@ -106,4 +95,32 @@ function tryParseJson(text) {
   } catch {
     return null;
   }
+}
+
+/**
+ * A draft is operator-controlled when the operator authored it, edited it, or
+ * explicitly approved it for sending.
+ *
+ * @param {any} draft
+ * @returns {boolean}
+ */
+export function isOperatorControlledDraft(draft) {
+  return draft?.authoredBy === "operator"
+    || draft?.editedByOperator === true
+    || draft?.approvedByOperator === true;
+}
+
+/**
+ * Unattended send work is stricter than generic "sendable" status. `approved`
+ * always means the operator reviewed the draft. `queued` only qualifies when
+ * it was explicitly operator-controlled; legacy agent-authored queued drafts
+ * stay review-only until the operator approves them.
+ *
+ * @param {any} draft
+ * @returns {boolean}
+ */
+export function isAutonomousSendReadyDraft(draft) {
+  if (!draft || typeof draft !== "object") return false;
+  if (draft.status === "approved") return true;
+  return draft.status === "queued" && isOperatorControlledDraft(draft);
 }

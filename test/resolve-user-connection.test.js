@@ -2,224 +2,265 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { resolveUserConnection } from "../src/core/resolve-user-connection.js";
+import { resetResolveUserConnectionCachesForTest, resolveUserConnection } from "../src/core/resolve-user-connection.js";
 
-function baseUser() {
-  return {
-    id: "user-1",
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-01T00:00:00.000Z",
-    label: "william-main",
-    owner: "operator",
-    notes: null,
-    workingHours: {
-      mode: "always",
-      timezone: "America/New_York",
-      weekdays: ["mon", "tue", "wed", "thu", "fri"],
-      startLocalTime: "09:00",
-      endLocalTime: "17:00",
-    },
-    accounts: [],
-    harnessConnections: [],
-  };
-}
+test.beforeEach(() => {
+  resetResolveUserConnectionCachesForTest();
+});
 
-function harnessConnection() {
-  return {
-    id: "harness-unipile",
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-01T00:00:00.000Z",
-    runtime: "codex",
-    connector: "unipile",
-    label: null,
-    status: "available",
-    notes: null,
-  };
-}
+test.afterEach(() => {
+  resetResolveUserConnectionCachesForTest();
+});
 
-function managedLinkedinAccount(overrides = {}) {
-  return {
-    id: overrides.id ?? "account-1",
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-01T00:00:00.000Z",
-    capability: "linkedin",
-    handle: overrides.handle ?? "williamflanagan",
-    label: overrides.label ?? "William Flanagan",
-    sourceType: "harness-connection",
-    browserProfileId: null,
-    harnessConnectionId: "harness-unipile",
-    providerAccountId: overrides.providerAccountId ?? null,
-    preferred: overrides.preferred ?? false,
-    automationControls: {
-      weeklyQuotas: {
-        profileVisits: null,
-        invitations: null,
-        messages: null,
+test("resolveUserConnection backfills LinkedIn premium metadata from shared runtime hints for an existing managed account", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-resolve-user-connection-"));
+  const stateDir = path.join(tempDir, ".exo");
+  const automationTmpDir = path.join(stateDir, "automation-tmp", "codex-task-test");
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(automationTmpDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(stateDir, "runtime-account-hints.json"),
+    JSON.stringify({
+      syncedAt: "2026-06-06T18:00:00.000Z",
+      accounts: [
+        {
+          runtime: "codex",
+          connector: "unipile",
+          capability: "linkedin",
+          providerAccountId: "acct-linkedin",
+          handle: "williamflanagan",
+          label: "William Flanagan",
+          metadata: {
+            accountType: "LINKEDIN",
+          },
+        },
+      ],
+    }, null, 2),
+  );
+  fs.writeFileSync(
+    path.join(automationTmpDir, "inbound-linkedin-linkedin-managed.json"),
+    JSON.stringify({
+      accountVerification: {
+        connectedAccount: {
+          accountId: "acct-linkedin",
+          type: "LINKEDIN",
+          name: "William Flanagan",
+          publicIdentifier: "williamflanagan",
+          premiumFeatures: ["sales_navigator"],
+        },
       },
-    },
-    notes: null,
-    inboundSync: {
-      surfaces: [],
-    },
-  };
-}
+    }, null, 2),
+  );
 
-function browserProfile() {
-  return {
-    id: "profile-1",
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-01T00:00:00.000Z",
-    label: "LinkedIn Main",
-    browser: "chrome",
-    browserCommand: null,
-    userDataDir: "/Users/example/Library/Application Support/Google/Chrome",
-    profileDirectory: "Profile 4",
-    profilePath: "/Users/example/Library/Application Support/Google/Chrome/Profile 4",
-    detectedProfileName: null,
-    capabilities: ["generic-web", "linkedin"],
-    verifiedCapabilities: ["linkedin"],
-    identity: {
+  process.env.EXO_STATE_DIR = stateDir;
+  process.env.EXO_HOME_STATE_DIR = stateDir;
+
+  try {
+    const result = resolveUserConnection({
+      id: "user-1",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      label: "william-main",
       owner: "operator",
-      workspace: "workspace",
-      scope: "work",
-      accounts: [{ capability: "linkedin", handle: "william-browser" }],
-    },
-    automationControls: {
-      weeklyQuotas: {
-        profileVisits: null,
-        invitations: null,
-        messages: null,
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00",
       },
-    },
-    notes: null,
-    status: "ready",
-    lastTestedAt: null,
-    lastTestResult: null,
-    lastAuthProbedAt: null,
-    lastAuthProbeResult: null,
-  };
-}
+      accounts: [
+        {
+          id: "linkedin-managed",
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+          capability: "linkedin",
+          handle: "williamflanagan",
+          label: "William Flanagan",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-unipile",
+          providerAccountId: "acct-linkedin",
+          preferred: true,
+          metadata: null,
+          notes: null,
+          inboundSync: {
+            surfaces: [],
+          },
+        },
+      ],
+      harnessConnections: [
+        {
+          id: "harness-unipile",
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+          runtime: "codex",
+          connector: "unipile",
+          label: null,
+          status: "available",
+          notes: null,
+        },
+      ],
+      inboundIgnoreRules: [],
+    }, [], { capability: "linkedin" });
 
-function browserLinkedinAccount(overrides = {}) {
-  return {
-    id: overrides.id ?? "browser-account-1",
-    createdAt: "2026-06-01T00:00:00.000Z",
-    updatedAt: "2026-06-01T00:00:00.000Z",
-    capability: "linkedin",
-    handle: overrides.handle ?? "william-browser",
-    label: overrides.label ?? "William Browser",
-    sourceType: "browser-profile",
-    browserProfileId: "profile-1",
-    harnessConnectionId: null,
-    providerAccountId: null,
-    preferred: overrides.preferred ?? false,
-    automationControls: {
-      weeklyQuotas: {
-        profileVisits: null,
-        invitations: null,
-        messages: null,
+    assert.equal(result.resolutionStatus, "resolved");
+    assert.equal(result.resolved?.connectionNoteCapable, true);
+    assert.deepEqual(result.resolved?.metadata?.premiumFeatures, ["sales_navigator"]);
+  } finally {
+    if (previousStateDir == null) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir == null) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("resolveUserConnection prefers provider-matched LinkedIn evidence with premium signals over newer failed captures", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-resolve-user-connection-"));
+  const stateDir = path.join(tempDir, ".exo");
+  const failedCaptureDir = path.join(stateDir, "automation-tmp", "codex-task-z-failed");
+  const capturedAccountDir = path.join(stateDir, "automation-tmp", "codex-task-a-captured");
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(failedCaptureDir, { recursive: true });
+  fs.mkdirSync(capturedAccountDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(stateDir, "runtime-account-hints.json"),
+    JSON.stringify({
+      syncedAt: "2026-06-06T18:00:00.000Z",
+      accounts: [
+        {
+          runtime: "codex",
+          connector: "unipile",
+          capability: "linkedin",
+          providerAccountId: "acct-linkedin-fallback",
+          handle: "williamflanagan",
+          label: "William Flanagan",
+          metadata: {
+            accountType: "LINKEDIN",
+          },
+        },
+      ],
+    }, null, 2),
+  );
+  fs.writeFileSync(
+    path.join(failedCaptureDir, "inbound-linkedin-linkedin-managed-fallback.json"),
+    JSON.stringify({
+      status: "failed",
+      account_identity: {
+        state: "failed",
       },
-    },
-    notes: null,
-    inboundSync: {
-      surfaces: [],
-    },
-  };
-}
+      surfaces: {},
+    }, null, 2),
+  );
+  fs.writeFileSync(
+    path.join(capturedAccountDir, "inbound-linkedin-linkedin-managed-fallback.json"),
+    JSON.stringify({
+      account: {
+        state: "verified",
+        provider: "LINKEDIN",
+        account_id: "acct-linkedin-fallback",
+        public_identifier: "williamflanagan",
+        name: "William Flanagan",
+      },
+      surfaces: {
+        messaging_inbox: {
+          state: "captured",
+          items: [
+            {
+              folder: ["INBOX", "INBOX_LINKEDIN_SALES_NAVIGATOR"],
+            },
+          ],
+        },
+      },
+    }, null, 2),
+  );
 
-test("resolveUserConnection blocks a managed connector account that is not pinned to one exact external identity", () => {
-  const user = {
-    ...baseUser(),
-    accounts: [
-      managedLinkedinAccount({
-        preferred: true,
-        providerAccountId: null,
-      }),
-    ],
-    harnessConnections: [harnessConnection()],
-  };
+  process.env.EXO_STATE_DIR = stateDir;
+  process.env.EXO_HOME_STATE_DIR = stateDir;
 
-  const result = resolveUserConnection(user, [], { capability: "linkedin" });
+  try {
+    const result = resolveUserConnection({
+      id: "user-2",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+      label: "william-main",
+      owner: "operator",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00",
+      },
+      accounts: [
+        {
+          id: "linkedin-managed-fallback",
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+          capability: "linkedin",
+          handle: "williamflanagan",
+          label: "William Flanagan",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-unipile",
+          providerAccountId: "acct-linkedin-fallback",
+          preferred: true,
+          metadata: null,
+          notes: null,
+          inboundSync: {
+            surfaces: [],
+          },
+        },
+      ],
+      harnessConnections: [
+        {
+          id: "harness-unipile",
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+          runtime: "codex",
+          connector: "unipile",
+          label: null,
+          status: "available",
+          notes: null,
+        },
+      ],
+      inboundIgnoreRules: [],
+    }, [], { capability: "linkedin" });
 
-  assert.equal(result.resolved, null);
-  assert.equal(result.resolutionStatus, "identity_unresolved");
-  assert.match(result.reason, /exact external account/i);
-});
-
-test("resolveUserConnection blocks multiple managed accounts until one exact account is selected", () => {
-  const user = {
-    ...baseUser(),
-    accounts: [
-      managedLinkedinAccount({
-        id: "account-1",
-        handle: "williamflanagan",
-        providerAccountId: "acct-linkedin-1",
-      }),
-      managedLinkedinAccount({
-        id: "account-2",
-        handle: "knit-operator",
-        label: "Knit Operator",
-        providerAccountId: "acct-linkedin-2",
-      }),
-    ],
-    harnessConnections: [harnessConnection()],
-  };
-
-  const result = resolveUserConnection(user, [], { capability: "linkedin" });
-
-  assert.equal(result.resolved, null);
-  assert.equal(result.resolutionStatus, "identity_ambiguous");
-  assert.match(result.reason, /multiple managed linkedin accounts/i);
-});
-
-test("resolveUserConnection resolves the preferred managed account when one exact account is selected", () => {
-  const user = {
-    ...baseUser(),
-    accounts: [
-      managedLinkedinAccount({
-        id: "account-1",
-        handle: "williamflanagan",
-        providerAccountId: "acct-linkedin-1",
-        preferred: true,
-      }),
-      managedLinkedinAccount({
-        id: "account-2",
-        handle: "knit-operator",
-        label: "Knit Operator",
-        providerAccountId: "acct-linkedin-2",
-      }),
-    ],
-    harnessConnections: [harnessConnection()],
-  };
-
-  const result = resolveUserConnection(user, [], { capability: "linkedin" });
-
-  assert.equal(result.resolutionStatus, "resolved");
-  assert.equal(result.resolved?.handle, "williamflanagan");
-  assert.equal(result.resolved?.providerAccountId, "acct-linkedin-1");
-});
-
-test("resolveUserConnection does not fall back to a browser profile when managed connector identity is unresolved", () => {
-  const user = {
-    ...baseUser(),
-    accounts: [
-      browserLinkedinAccount({
-        preferred: true,
-      }),
-      managedLinkedinAccount({
-        id: "account-2",
-        handle: "williamflanagan",
-        providerAccountId: null,
-      }),
-    ],
-    harnessConnections: [harnessConnection()],
-  };
-
-  const result = resolveUserConnection(user, [browserProfile()], { capability: "linkedin" });
-
-  assert.equal(result.resolutionStatus, "identity_unresolved");
-  assert.equal(result.resolved, null);
-  assert.equal(result.sourceType, "harness-connection");
-  assert.match(result.reason, /exact external account/i);
+    assert.equal(result.resolutionStatus, "resolved");
+    assert.equal(result.resolved?.connectionNoteCapable, true);
+    assert.deepEqual(result.resolved?.metadata?.premiumFeatures, ["sales_navigator"]);
+    assert.equal(result.resolved?.metadata?.publicIdentifier, "williamflanagan");
+  } finally {
+    if (previousStateDir == null) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir == null) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });

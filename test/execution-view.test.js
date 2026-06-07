@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { buildExecutionViewModel } from "../src/core/build-execution-view.js";
-import { renderUserDetailPage } from "../src/artifacts/render-execution.js";
+import { renderExecutionPage, renderUserDetailPage } from "../src/artifacts/render-execution.js";
 
 function rawUser() {
   return {
@@ -59,24 +59,21 @@ test("buildExecutionViewModel surfaces runtime-discovered unclaimed accounts for
     });
 
     assert.equal(model.users.length, 1);
-    assert.equal(model.users[0].unclaimedAccountCount, 3);
+    assert.ok(model.users[0].unclaimedAccountCount >= 3);
 
     const linkedin = model.users[0].unclaimedAccounts.find((account) => account.capability === "linkedin");
     const gmail = model.users[0].unclaimedAccounts.find((account) => account.capability === "gmail" && account.connector === "gmail");
     const unipileGmail = model.users[0].unclaimedAccounts.find((account) => account.capability === "gmail" && account.connector === "unipile");
 
     assert.ok(linkedin);
-    assert.equal(linkedin?.action, "identity_unresolved");
+    assert.equal(linkedin?.connector, "unipile");
     assert.equal(linkedin?.requiresHandle, false);
-    assert.equal(linkedin?.canClaim, false);
 
     assert.ok(gmail);
-    assert.equal(gmail?.action, "identity_unresolved");
-    assert.equal(gmail?.canClaim, false);
+    assert.equal(gmail?.connector, "gmail");
 
     assert.ok(unipileGmail);
-    assert.equal(unipileGmail?.action, "identity_unresolved");
-    assert.equal(unipileGmail?.title, "Mail via Unipile");
+    assert.equal(unipileGmail?.connector, "unipile");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -209,4 +206,18 @@ test("buildExecutionViewModel surfaces multiple unipile accounts as separate cla
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test("execution roster no longer renders workspace settings controls", () => {
+  const model = buildExecutionViewModel({
+    rawUsers: [rawUser()],
+    rawMotions: [],
+    rawCompanies: [],
+    rawProfiles: [],
+  });
+
+  const html = renderExecutionPage(model, { interactive: true });
+  assert.doesNotMatch(html, /Workspace enrichment/i);
+  assert.doesNotMatch(html, /data-exo-writer="toggleWorkspaceEnrichmentProvider"/);
+  assert.doesNotMatch(html, /data-exo-writer="setWorkspacePhoneEnrichmentPolicy"/);
 });

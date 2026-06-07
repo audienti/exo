@@ -232,7 +232,7 @@ Inspect or set it with:
 
 ```bash
 exo users working-hours show <user-id> --json
-exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 09:00 --end 17:00 --json
+exo users working-hours set <user-id> --timezone America/New_York --weekday mon --weekday tue --weekday wed --weekday thu --weekday fri --start 07:00 --end 18:00 --json
 ```
 
 Planner behavior:

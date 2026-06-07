@@ -156,142 +156,97 @@ test("promoteInboundPersonToProspect honors a pre-resolved company id", () => {
   assert.equal(account?.prospects[0]?.name, "Rita Resolved");
 });
 
-test("promoteInboundPersonToProspect does not enforce stakeholder caps on the Unknown company fallback", () => {
-  const unknownCompany = buildCompany({
-    id: "company-unknown",
-    name: "Unknown company",
-    domain: null,
-    websiteUrl: null,
-    motionIds: ["motion-1"],
-  });
-  const motion = buildMotion({
-    targetMap: {
-      status: "ready",
-      segments: [],
-      accounts: [
-        {
-          companyId: unknownCompany.id,
-          companyName: "Unknown company",
-          domain: null,
-          websiteUrl: null,
-          linkedinCompanyUrl: null,
-          companyLogoSourceUrl: null,
-          companyLogoUrl: null,
-          signalMatches: [],
-          prospects: [
-            {
-              id: "prospect-1",
-              name: "First Unknown",
-              title: "Role One",
-              linkedinProfileUrl: "https://www.linkedin.com/in/first-unknown/",
-              avatarSourceUrl: null,
-              avatarUrl: null,
-              email: null,
-              buyingCommitteeRole: "other",
-              decisionAuthority: "unknown",
-              fitConfidence: "moderate",
-              whyRelevant: "Already promoted.",
-              sourceUrl: "https://www.linkedin.com/in/first-unknown/",
-              observedAt: "2026-06-04T15:00:00.000Z",
-              profileViewedAt: null,
-              roleTruth: { currentRoleDescription: null, summary: null, operatingMode: null, scope: null, evidence: [] },
-              triggerWindow: { summary: null, tenureMonths: null, tenureBand: null, whyNowAnchor: null, personTriggers: [], companyTriggers: [] },
-              identityTells: { summary: null, headline: null, aboutQuotes: [], frameworks: [], certifications: [], quantifiedReceipts: [], selfImageVerbs: [], metaphors: [] },
-              linkedinProfileSnapshot: {
-                capturedAt: null,
-                profileUrl: null,
-                publicId: null,
-                memberId: null,
-                displayName: null,
-                currentRoleTitle: null,
-                currentCompanyName: null,
-                headline: null,
-                location: null,
-                about: null,
-                followerCount: null,
-                connectionCount: null,
-                isPremium: null,
-                isOpenProfile: null,
-                connectionDegree: null,
-                recentPosts: [],
-              },
-              liveSignal: {
-                channel: null,
-                activityType: null,
-                summary: null,
-                url: null,
-                observedAt: null,
-                freshnessBand: null,
-                hookStrength: null,
-                engagementRationale: null,
-              },
-              contactPoints: [],
-              contactEnrichmentState: {
-                status: "pending",
-                sourcesTried: [],
-                missingChannels: [],
-                bestDirectChannels: [],
-                lastEnrichedAt: null,
-                notes: null,
-              },
-              queueState: {
-                status: "ready",
-                source: "derived",
-                updatedAt: "2026-06-04T15:00:00.000Z",
-                notes: null,
-              },
-              packetState: null,
-              notes: null,
-              signalMatchIds: [],
-              touches: [],
-              cadenceState: {
-                status: "ready",
-                currentStep: null,
-                lastTouchChannel: null,
-                lastTouchOutcome: "pending",
-                lastTouchAt: null,
-                nextAction: "Review this inbound person and choose the next move.",
-                nextActionDueAt: null,
-                blockedChannels: [],
-                requireNewHook: false,
-                notes: null,
-                updatedAt: null,
-              },
-              drafts: [],
-              timelineNotes: [],
-            },
-          ],
-          queueState: {
-            status: "ready",
-            source: "derived",
-            updatedAt: "2026-06-04T15:00:00.000Z",
-            notes: null,
-          },
-          packetState: null,
-          lastResearchAt: null,
-          notes: null,
-        },
-      ],
-    },
-  });
-
+test("promoteInboundPersonToProspect preserves the latest inbound reply body on the carried touch", () => {
+  const motion = buildMotion();
+  const company = buildCompany();
   const result = promoteInboundPersonToProspect({
     rawMotion: motion,
-    rawCompanies: [unknownCompany],
+    rawCompanies: [company],
     seedObservation: buildObservation({
-      id: "obs-2",
-      actorName: "Second Unknown",
-      actorTitle: "Role Two",
-      actorProfileUrl: "https://www.linkedin.com/in/second-unknown/",
-      actorLinkedinPublicId: "second-unknown",
-      actorLinkedinMemberId: "member-second",
+      companyId: company.id,
+      motionId: motion.id,
+      messages: [
+        {
+          id: "msg-outbound",
+          direction: "outbound",
+          sentAt: "2026-06-04T16:05:59.952Z",
+          fromName: "You",
+          fromHandle: null,
+          body: "Is it alright if I reach out to your CTO directly?",
+        },
+        {
+          id: "msg-inbound",
+          direction: "inbound",
+          sentAt: "2026-06-04T16:19:00.000Z",
+          fromName: "Rita Resolved",
+          fromHandle: null,
+          body: "Yes, that's fine.",
+        },
+      ],
     }),
     relatedObservations: [],
     now: "2026-06-04T16:30:00.000Z",
   });
 
-  const account = result.motion.targetMap.accounts.find((item) => item.companyId === unknownCompany.id);
+  const account = result.motion.targetMap.accounts.find((item) => item.companyId === company.id);
+  const touch = account?.prospects[0]?.touches?.[0] ?? null;
+  assert.ok(touch);
+  assert.equal(touch?.surface, "inbound_reply");
+  assert.equal(touch?.body, "Yes, that's fine.");
+  assert.equal(touch?.sourceUrl, "https://www.linkedin.com/messaging/thread/example/");
+});
+
+test("promoteInboundPersonToProspect uses a resolved company profile hint when the inbound row has no company name", () => {
+  const motion = buildMotion();
+
+  const result = promoteInboundPersonToProspect({
+    rawMotion: motion,
+    rawCompanies: [],
+    seedObservation: buildObservation({
+      actorName: "Ezra Fox",
+      actorTitle: "Founder, Creative Lead",
+      actorCompanyName: null,
+      actorProfileUrl: "https://www.linkedin.com/in/ezrafox/",
+      actorLinkedinPublicId: "ezrafox",
+      actorLinkedinMemberId: "member-ezra",
+    }),
+    relatedObservations: [],
+    resolvedCompanyProfile: {
+      name: "Chaotic Good Studios",
+      domain: "hellochaoticgood.com",
+      websiteUrl: "https://www.hellochaoticgood.com/",
+      linkedinCompanyUrl: "https://www.linkedin.com/company/chaotic-good-studios-llc/",
+      logoSourceUrl: null,
+    },
+    now: "2026-06-04T16:30:00.000Z",
+  });
+
+  assert.equal(result.company.name, "Chaotic Good Studios");
+  assert.equal(result.company.domain, "hellochaoticgood.com");
+  assert.equal(result.company.websiteUrl, "https://www.hellochaoticgood.com/");
+  const account = result.motion.targetMap.accounts.find((item) => item.companyId === result.company.id);
   assert.ok(account);
-  assert.equal(account?.prospects.length, 2);
-  assert.equal(account?.prospects[1]?.name, "Second Unknown");
+  assert.equal(account?.companyName, "Chaotic Good Studios");
+  assert.equal(account?.prospects[0]?.name, "Ezra Fox");
+});
+
+test("promoteInboundPersonToProspect rejects unresolved people instead of merging them into a shared placeholder company", () => {
+  assert.throws(
+    () =>
+      promoteInboundPersonToProspect({
+        rawMotion: buildMotion(),
+        rawCompanies: [],
+        seedObservation: buildObservation({
+          actorName: "Second Unknown",
+          actorTitle: "Role Two",
+          actorCompanyName: null,
+          actorProfileUrl: "https://www.linkedin.com/in/second-unknown/",
+          actorLinkedinPublicId: "second-unknown",
+          actorLinkedinMemberId: "member-second",
+        }),
+        relatedObservations: [],
+        now: "2026-06-04T16:30:00.000Z",
+      }),
+    /Cannot promote Second Unknown until a real company is resolved/i,
+  );
 });

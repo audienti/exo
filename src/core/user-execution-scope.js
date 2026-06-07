@@ -18,15 +18,17 @@ export function classifyUserExecutionScope(user, motion, company, options = {}) 
   const scopedProfileId = company.engagementProfileAssignment?.profileId
     ?? motion.engagementProfileAssignment?.profileId
     ?? null;
-  const assignedToUser = scopedUserId === user.id
-    || (!scopedUserId && !scopedProfileId && options.singletonReadyUserId === user.id);
+  const autoResolvedSingleton = !scopedUserId
+    && !scopedProfileId
+    && options.singletonReadyUserId === user.id;
+  const assignedToUser = scopedUserId === user.id || autoResolvedSingleton;
 
   return {
     key: buildMotionCompanyScopeKey(motion.id, company.id),
     assignedToUser,
     assignedToOtherUser: Boolean(scopedUserId) && scopedUserId !== user.id,
     blockedByOtherProfile: Boolean(!scopedUserId && scopedProfileId),
-    blockedByMissingAssignment: !scopedUserId && !scopedProfileId,
+    blockedByMissingAssignment: !scopedUserId && !scopedProfileId && !autoResolvedSingleton,
     scopedUserId,
     scopedProfileId
   };
@@ -95,7 +97,8 @@ export function buildUserAssignedExecutionScopeIndex(user, motions, companies, o
   return {
     assignedExecutionScopeKeys,
     assignedMotionIds,
-    assignedCompanyIdsByMotion
+    assignedCompanyIdsByMotion,
+    singletonReadyUserId
   };
 }
 

@@ -10,6 +10,7 @@ import path from "node:path";
 import { getStateDir } from "../db/paths.js";
 
 export const UI_LOCK_VERSION = 1;
+export const DEFAULT_UI_STATUS_TIMEOUT_MS = 5000;
 
 /** @returns {string} */
 export function getUiLockPath() {
@@ -17,7 +18,7 @@ export function getUiLockPath() {
 }
 
 /**
- * @param {{ host: string, port: number, url: string, userId: string }} info
+ * @param {{ host: string, port: number, url: string, userId: string | null }} info
  */
 export function writeUiLock(info) {
   const lockPath = getUiLockPath();
@@ -45,7 +46,7 @@ export function removeUiLock() {
 }
 
 /**
- * @returns {{ version?: number, service?: string, pid?: number, host?: string, port?: number, url?: string, userId?: string, startedAt?: string } | null}
+ * @returns {{ version?: number, service?: string, pid?: number, host?: string, port?: number, url?: string, userId?: string | null, startedAt?: string } | null}
  */
 export function readUiLock() {
   try {
@@ -80,7 +81,7 @@ export function isPidAlive(pid) {
 export async function probeUiStatus(url, options = {}) {
   if (typeof fetch !== "function") return null;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 1500);
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_UI_STATUS_TIMEOUT_MS);
   try {
     const response = await fetch(new URL("/status", url), { signal: controller.signal });
     if (!response.ok) return null;

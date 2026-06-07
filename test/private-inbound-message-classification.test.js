@@ -61,27 +61,267 @@ function rawObservation(overrides = {}) {
   };
 }
 
-test("cold inbound private messages are not mislabeled as replies", () => {
+function claimedPrivateInboundFixture({ observationOverrides = {}, prospectOverrides = {} } = {}) {
+  const observation = rawObservation({
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    ...observationOverrides,
+  });
+
+  const prospect = {
+    id: "prospect-1",
+    name: "Zoe Jupp",
+    title: "Head of Strategic Partnerships @ Nassau Street Partners",
+    linkedinProfileUrl: "https://www.linkedin.com/in/zoe-jupp/",
+    avatarSourceUrl: null,
+    avatarUrl: null,
+    email: null,
+    buyingCommitteeRole: "other",
+    decisionAuthority: "unknown",
+    fitConfidence: "moderate",
+    whyRelevant: "Transitioned from messaging inbox.",
+    sourceUrl: "https://www.linkedin.com/messaging/thread/example/",
+    observedAt: "2026-06-04T16:20:00.000Z",
+    profileViewedAt: null,
+    roleTruth: {
+      currentRoleDescription: null,
+      summary: null,
+      operatingMode: null,
+      scope: null,
+      evidence: [],
+    },
+    triggerWindow: {
+      summary: null,
+      tenureMonths: null,
+      tenureBand: null,
+      whyNowAnchor: null,
+      personTriggers: [],
+      companyTriggers: [],
+    },
+    identityTells: {
+      summary: null,
+      headline: null,
+      aboutQuotes: [],
+      frameworks: [],
+      certifications: [],
+      quantifiedReceipts: [],
+      selfImageVerbs: [],
+      metaphors: [],
+    },
+    linkedinProfileSnapshot: {
+      capturedAt: null,
+      profileUrl: null,
+      publicId: null,
+      memberId: null,
+      displayName: null,
+      currentRoleTitle: null,
+      currentCompanyName: null,
+      headline: null,
+      location: null,
+      about: null,
+      followerCount: null,
+      connectionCount: null,
+      isPremium: null,
+      isOpenProfile: null,
+      connectionDegree: null,
+      recentPosts: [],
+    },
+    liveSignal: {
+      channel: null,
+      activityType: null,
+      summary: null,
+      url: null,
+      observedAt: null,
+      freshnessBand: null,
+      hookStrength: null,
+      engagementRationale: null,
+    },
+    contactPoints: [],
+    contactEnrichmentState: {
+      status: "pending",
+      sourcesTried: [],
+      missingChannels: [],
+      bestDirectChannels: [],
+      lastEnrichedAt: null,
+      notes: null,
+    },
+    queueState: {
+      status: "ready",
+      source: "derived",
+      updatedAt: "2026-06-04T16:20:00.000Z",
+      notes: null,
+    },
+    packetState: null,
+    notes: null,
+    signalMatchIds: [],
+    touches: [
+      {
+        id: "touch-1",
+        surface: "inbound_reply",
+        direction: "inbound",
+        outcome: "replied",
+        occurredAt: "2026-06-04T16:20:00.000Z",
+        summary: "Zoe Jupp has unread LinkedIn message activity.",
+        subject: null,
+        body: "Would be good to compare notes on partnerships.",
+        sourceUrl: "https://www.linkedin.com/messaging/thread/example/",
+        notes: null,
+      },
+    ],
+    cadenceState: {
+      status: "ready",
+      currentStep: "direct-message",
+      lastTouchChannel: "direct-message",
+      lastTouchOutcome: "replied",
+      lastTouchAt: "2026-06-04T16:20:00.000Z",
+      nextAction: "Live reply — continue the conversation.",
+      nextActionDueAt: null,
+      blockedChannels: [],
+      requireNewHook: false,
+      notes: null,
+      updatedAt: "2026-06-04T16:20:00.000Z",
+    },
+    drafts: [],
+    timelineNotes: [],
+    ...prospectOverrides,
+  };
+
+  const rawMotions = [
+    {
+      id: "motion-1",
+      name: "transition-inbound-backlog",
+      createdAt: "2026-06-04T16:00:00.000Z",
+      updatedAt: "2026-06-04T16:00:00.000Z",
+      status: "active",
+      offer: {
+        sourceUrl: "https://transition.exo.local/inbound-backlog",
+        offerNotes: null,
+      },
+      premise: {
+        statement: "Carry transition backlog safely.",
+        notes: null,
+        source: "operator",
+        status: "defined",
+      },
+      targetingProfile: {
+        geolocations: [],
+        icpTypes: [],
+        industries: [],
+        companyTypes: [],
+        companyShapes: [],
+        companySizes: [],
+        targetTitles: [],
+        roleFamilies: [],
+        segmentVariants: [],
+        stakeholderTargetCount: 3,
+      },
+      suppressionPolicy: {
+        excludedAccounts: [],
+        excludedDomains: [],
+        excludedContacts: [],
+        doNotContactEntries: [],
+        doNotContactSources: [],
+        crmCustomerSuppressionEnabled: false,
+        crmOpportunitySuppressionEnabled: false,
+      },
+      offerThesis: {
+        sourceUrl: "https://transition.exo.local/inbound-backlog",
+        sourceTitle: null,
+        sourceDescription: null,
+        sourceSummary: "Carry transition backlog safely.",
+        offerNotes: null,
+        problemThesis: null,
+        buyerImpactThesis: null,
+        likelyTriggerThesis: null,
+        likelyRoleThesis: null,
+        likelySegmentThesis: null,
+        status: "seeded",
+      },
+      audienceHypotheses: [],
+      signals: [],
+      targetMap: {
+        status: "ready",
+        segments: [],
+        accounts: [
+          {
+            companyId: "company-1",
+            companyName: "Unknown company",
+            domain: null,
+            websiteUrl: null,
+            linkedinCompanyUrl: null,
+            companyLogoSourceUrl: null,
+            companyLogoUrl: null,
+            signalMatches: [],
+            queueState: {
+              status: "selected",
+              source: "manual",
+              updatedAt: "2026-06-04T16:00:00.000Z",
+              notes: null,
+            },
+            packetState: null,
+            lastResearchAt: null,
+            notes: null,
+            prospects: [prospect],
+          },
+        ],
+      },
+      stakeholderMap: {
+        status: "pending",
+        stakeholders: [],
+      },
+      motionPlan: {
+        status: "pending",
+        variants: [],
+      },
+      nextSteps: [],
+      engagementProfileAssignment: null,
+      engagementUserAssignment: null,
+    },
+  ];
+
+  const rawCompanies = [
+    {
+      id: "company-1",
+      createdAt: "2026-06-04T16:00:00.000Z",
+      updatedAt: "2026-06-04T16:00:00.000Z",
+      name: "Unknown company",
+      domain: null,
+      websiteUrl: null,
+      linkedinCompanyUrl: null,
+      logoSourceUrl: null,
+      logoUrl: null,
+      notes: null,
+      tags: [],
+      motionIds: ["motion-1"],
+      engagementProfileAssignment: null,
+      engagementUserAssignment: null,
+    },
+  ];
+
+  return { observation, rawMotions, rawCompanies };
+}
+
+test("unclaimed cold inbound private messages stay in global intake until they are claimed", () => {
   const observation = rawObservation();
   const inbox = buildInboxView(rawUser, [observation], [], []);
   const review = buildInboundReviewView(rawUser, [observation], [], []);
 
   const item = inbox.items[0];
-  assert.equal(item.status, "needs-triage");
-  assert.match(item.recommendedAction, /inbound message/i);
-  assert.match(item.recommendedAction, /reply or ignore/i);
-  assert.equal(buildOperatorPromptFromInboxItem(item), "Zoe Jupp sent you a private message. Reply or ignore?");
+  assert.equal(item.status, "global-intake");
+  assert.equal(item.reviewState, "needs_claim");
+  assert.match(item.recommendedAction, /claim zoe jupp/i);
+  assert.equal(buildOperatorPromptFromInboxItem(item), null);
 
   const reviewItem = review.reviewItems[0];
-  assert.equal(reviewItem.state, "needs_triage");
-  assert.match(reviewItem.recommendedAction, /inbound message/i);
-  assert.match(reviewItem.recommendedAction, /reply or ignore/i);
+  assert.equal(reviewItem.state, "needs_claim");
+  assert.match(reviewItem.recommendedAction, /claim zoe jupp/i);
   assert.equal(reviewItem.previewLabel, "Latest message");
   assert.equal(reviewItem.previewSubject, "Strategic partnership fit");
   assert.equal(reviewItem.previewText, "Would be good to compare notes on partnerships.");
 });
 
-test("private messages with prior outbound history stay classified as replies", () => {
+test("unclaimed private messages with prior outbound history still require claim before reply handling", () => {
   const observation = rawObservation({
     id: "obs-2",
     dedupeKey: "obs-2",
@@ -117,9 +357,12 @@ test("private messages with prior outbound history stay classified as replies", 
   const item = inbox.items[0];
   const reviewItem = review.reviewItems[0];
 
-  assert.equal(item.status, "needs-reply");
-  assert.match(item.recommendedAction, /move the cadence branch into a live conversation/i);
-  assert.equal(buildOperatorPromptFromInboxItem(item), "Lina Park replied. Reply now?");
+  assert.equal(item.status, "global-intake");
+  assert.equal(item.reviewState, "needs_claim");
+  assert.match(item.recommendedAction, /claim lina park/i);
+  assert.equal(buildOperatorPromptFromInboxItem(item), null);
+  assert.equal(reviewItem.state, "needs_claim");
+  assert.match(reviewItem.recommendedAction, /claim lina park/i);
   assert.equal(reviewItem.previewLabel, "Latest message");
   assert.equal(reviewItem.previewText, "Attached.");
 });
@@ -141,6 +384,68 @@ test("received invitation notes become operator preview content", () => {
 
   assert.equal(reviewItem.previewLabel, "Invitation note");
   assert.equal(reviewItem.previewText, note);
+});
+
+test("claimed private inbound without a draft stays in the agent lane", () => {
+  const { observation, rawMotions, rawCompanies } = claimedPrivateInboundFixture();
+  const inbox = buildInboxView(rawUser, [observation], rawMotions, rawCompanies);
+  const review = buildInboundReviewView(rawUser, [observation], rawMotions, rawCompanies);
+  const daily = buildDailyView(rawUser, rawMotions, rawCompanies, [], [observation], { now: "2026-06-04T17:00:00.000Z" });
+
+  const item = inbox.items[0];
+  assert.equal(item.status, "agent-draft");
+  assert.equal(item.reviewState, "agent_draft_due");
+  assert.match(item.recommendedAction, /draft the response/i);
+  assert.equal(buildOperatorPromptFromInboxItem(item), null);
+
+  const reviewItem = review.reviewItems[0];
+  assert.equal(reviewItem.state, "agent_draft_due");
+  assert.match(reviewItem.recommendedAction, /draft the response/i);
+
+  assert.equal(daily.items.some((entry) => entry.prospect?.id === "prospect-1"), false);
+});
+
+test("claimed private inbound with a ready draft returns to operator review", () => {
+  const { observation, rawMotions, rawCompanies } = claimedPrivateInboundFixture({
+    prospectOverrides: {
+      drafts: [
+        {
+          id: "draft-1",
+          surface: "inbound_reply",
+          channel: "linkedin",
+          subject: null,
+          body: "Drafted reply body.",
+          status: "ready",
+          authoredBy: "agent",
+          editedByOperator: false,
+          createdAt: "2026-06-04T16:21:00.000Z",
+          updatedAt: "2026-06-04T16:21:00.000Z",
+          approvedAt: null,
+          sentAt: null,
+          notes: null,
+        },
+      ],
+    },
+  });
+  const inbox = buildInboxView(rawUser, [observation], rawMotions, rawCompanies);
+  const review = buildInboundReviewView(rawUser, [observation], rawMotions, rawCompanies);
+  const daily = buildDailyView(rawUser, rawMotions, rawCompanies, [], [observation], { now: "2026-06-04T17:00:00.000Z" });
+
+  const item = inbox.items[0];
+  assert.equal(item.status, "needs-triage");
+  assert.equal(item.reviewState, "ready_for_reply");
+  assert.match(item.recommendedAction, /review the drafted response/i);
+  assert.match(buildOperatorPromptFromInboxItem(item) ?? "", /review the drafted reply/i);
+
+  const reviewItem = review.reviewItems[0];
+  assert.equal(reviewItem.state, "ready_for_reply");
+  assert.equal(reviewItem.previewLabel, "Draft message");
+  assert.equal(reviewItem.previewText, "Drafted reply body.");
+
+  const dailyItem = daily.items.find((entry) => entry.prospect?.id === "prospect-1");
+  assert.ok(dailyItem);
+  assert.equal(dailyItem.priority, "reply");
+  assert.match(dailyItem.recommendedAction, /review the drafted response/i);
 });
 
 test("queued private replies are treated as already handled", () => {

@@ -72,6 +72,7 @@ export function setMotionProspectDraft(rawMotion, rawCompany, input) {
         status,
         authoredBy: input.authoredBy ?? "agent",
         editedByOperator: false,
+        approvedByOperator: false,
         createdAt: now,
         updatedAt: now,
         approvedAt: sendReadyAt,
@@ -95,18 +96,26 @@ export function approveMotionProspectDraft(rawMotion, rawCompany, input) {
     const channel = SURFACE_CHANNEL[input.surface] ?? "linkedin";
     const subject = SURFACE_HAS_SUBJECT.has(input.surface) ? (input.subject ?? null) : null;
     const existing = drafts.find((draft) => draft.surface === input.surface && draft.status !== "sent" && draft.status !== "discarded");
-    const edited =
-      !existing || existing.body !== input.body || (existing.subject ?? null) !== subject;
     if (existing) {
       return drafts.map((draft) =>
         draft === existing
-          ? { ...draft, channel, subject, body: input.body, status: "approved", editedByOperator: draft.editedByOperator || edited, approvedAt: now, updatedAt: now }
+          ? {
+              ...draft,
+              channel,
+              subject,
+              body: input.body,
+              status: "approved",
+              editedByOperator: draft.editedByOperator || existing.body !== input.body || (existing.subject ?? null) !== subject,
+              approvedByOperator: true,
+              approvedAt: now,
+              updatedAt: now,
+            }
           : draft,
       );
     }
     // Approving with no prior draft creates one straight to approved. Authorship
     // is whoever actually wrote the text (the caller declares it) — NOT "whoever
-    // approved it". Only mark editedByOperator when the operator authored it.
+    // approved it". Approval itself is still an operator-controlled send signal.
     const authoredBy = input.authoredBy === "agent" ? "agent" : input.authoredBy === "operator" ? "operator" : "operator";
     return [
       ...drafts,
@@ -119,6 +128,7 @@ export function approveMotionProspectDraft(rawMotion, rawCompany, input) {
         status: "approved",
         authoredBy,
         editedByOperator: authoredBy === "operator",
+        approvedByOperator: true,
         createdAt: now,
         updatedAt: now,
         approvedAt: now,

@@ -187,7 +187,7 @@ function resolveUserConnectionForScopedAccountRefs(user, profiles, capability, a
       resolved: null,
       candidates: capabilityAccounts,
       resolutionStatus: "identity_ambiguous",
-      reason: `Multiple ${capability} account refs are pinned for ${user.label}. Keep only one exact ${capability} account on this assignment before launch.`,
+      reason: `Multiple ${capability} account refs are assigned for ${user.label}. Keep only one exact ${capability} account on this assignment before launch.`,
       sourceType: inferAccountSourceType(capabilityAccounts)
     };
   }
@@ -204,7 +204,7 @@ function resolveUserConnectionForScopedAccountRefs(user, profiles, capability, a
       resolved: null,
       candidates: capabilityAccounts,
       resolutionStatus: "not_found",
-      reason: `The pinned ${capability} account ref ${capability}:${scopedHandles[0]} is not stored on ${user.label}.`,
+      reason: `The assigned ${capability} account ref ${capability}:${scopedHandles[0]} is not stored on ${user.label}.`,
       sourceType: inferAccountSourceType(capabilityAccounts)
     };
   }

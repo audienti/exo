@@ -33,6 +33,7 @@ export function renderWorkspaceRollupPage(model, meta = {}) {
     renderPulse(model.pulse, meta) +
     renderMotions(model.motions, meta) +
     renderSurfaces(model.surfaces) +
+    renderReconciliation(model.reconciliation) +
     renderExecution(model.execution) +
     `</div>` +
     renderFooter(meta) +
@@ -175,6 +176,41 @@ function renderSurfaces(surfaces) {
     `<div class="ws-panel span-2">` +
     `<div class="ws-panel-head">${iconSvg("eye", 15)}<h3>Surface freshness</h3><span class="ws-head-right">${countChip(surfaces.toReconcile, "amber", "to reconcile")}</span></div>` +
     `<div class="ws-surfaces">${rows}</div>` +
+    `</div>`
+  );
+}
+
+/** @param {any} reconciliation */
+function renderReconciliation(reconciliation) {
+  const items = reconciliation?.items ?? [];
+  const rows = items.length
+    ? (
+      `<div class="ws-gaps">` +
+      items
+        .map((item) =>
+          `<div class="ws-gap">` +
+          `<div class="ws-gap-top">` +
+          `<span class="wsf-name">${escapeHtml(item.label)}</span>` +
+          truthTag("partial", item.reason) +
+          `</div>` +
+          `<div class="ws-gap-stats">` +
+          countChip(item.visibleCount, item.missingCount > 0 ? "red" : "amber", "visible") +
+          countChip(item.writtenBackCount, "blue", "written back") +
+          countChip(item.missingCount, item.missingCount > 0 ? "red" : "amber", "missing") +
+          `</div>` +
+          (item.note ? `<div class="ws-gap-note">${escapeHtml(item.note)}</div>` : "") +
+          (item.action ? `<div class="ws-gap-action">${escapeHtml(item.action)}</div>` : "") +
+          `</div>`,
+        )
+        .join("") +
+      `</div>`
+    )
+    : emptyState({ icon: "check", message: "No reconciliation gaps right now." });
+
+  return (
+    `<div class="ws-panel span-2">` +
+    `<div class="ws-panel-head">${iconSvg("refresh", 15)}<h3>Reconciliation pressure</h3><span class="ws-head-right">${countChip(reconciliation?.gapCount ?? 0, "amber", "gaps")}${countChip(reconciliation?.missingCount ?? 0, (reconciliation?.missingCount ?? 0) > 0 ? "red" : "blue", "missing rows")}</span></div>` +
+    rows +
     `</div>`
   );
 }

@@ -3,6 +3,7 @@
 import { z } from "zod";
 import {
   inboundCaptureCompletenessSchema,
+  inboundObservationCompanyProfileSchema,
   inboundSurfaceExhaustionStatusSchema,
   inboundThreadMessageSchema,
   inboundSyncPlanModeSchema,
@@ -22,6 +23,7 @@ const linkedinCaptureActorFields = {
   motionId: z.string().min(1).nullable().default(null),
   companyId: z.string().min(1).nullable().default(null),
   prospectId: z.string().min(1).nullable().default(null),
+  actorCompanyProfile: inboundObservationCompanyProfileSchema.nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null)
 };
 
@@ -40,6 +42,9 @@ export const linkedinSurfaceCaptureSchema = z.object({
   paginationAttempted: z.boolean().nullable().default(null),
   terminalSignalSeen: z.boolean().nullable().default(null),
   stalledPassCount: z.coerce.number().int().min(0).nullable().default(null),
+  continuationStartedAt: z.string().datetime().nullable().default(null),
+  nextCursor: z.string().trim().min(1).nullable().default(null),
+  nextStartOffset: z.coerce.number().int().min(0).nullable().default(null),
   error: z.string().trim().min(1).nullable().default(null)
 });
 
@@ -49,6 +54,7 @@ export const linkedinSentInvitationCaptureSchema = z.object({
   observedAt: z.string().datetime(),
   eventAt: z.string().datetime().nullable().default(null),
   summary: z.string().trim().min(1).max(280),
+  providerSharedSecret: z.string().trim().min(1).nullable().default(null),
   ...linkedinCaptureActorFields
 });
 
@@ -57,6 +63,7 @@ export const linkedinReceivedInvitationCaptureSchema = z.object({
   kind: z.enum(["connection_request_received", "connection_request_accepted", "connection_request_declined"]).default("connection_request_received"),
   observedAt: z.string().datetime(),
   summary: z.string().trim().min(1).max(280),
+  providerSharedSecret: z.string().trim().min(1).nullable().default(null),
   ...linkedinCaptureActorFields
 });
 

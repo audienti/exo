@@ -52,23 +52,26 @@ export function mapUserRuntimeAccounts(rawUser, options) {
    *     providerAccountId: string | null,
    *     handle: string | null,
    *     label: string | null,
-   *     identityState: string
+   *     identityState: string,
+   *     metadata: Record<string, unknown> | null
    *   } | null,
    *   existingAccount: {
    *     accountId: string,
    *     handle: string,
-   *     label: string | null,
-   *     sourceType: string,
-   *     providerAccountId: string | null,
-   *     preferred: boolean
+    *     label: string | null,
+    *     sourceType: string,
+    *     providerAccountId: string | null,
+   *     preferred: boolean,
+   *     metadata: Record<string, unknown> | null
    *   } | null,
    *   mappedAccount: {
    *     accountId: string,
    *     handle: string,
-   *     label: string | null,
-   *     sourceType: string,
-   *     providerAccountId: string | null,
-   *     preferred: boolean
+    *     label: string | null,
+    *     sourceType: string,
+    *     providerAccountId: string | null,
+   *     preferred: boolean,
+   *     metadata: Record<string, unknown> | null
    *   } | null
    * }>} */
   const mappings = [];
@@ -170,6 +173,7 @@ export function mapUserRuntimeAccounts(rawUser, options) {
             harnessConnectionId: persistedConnection.id,
             providerAccountId: discoveredAccount?.providerAccountId ?? null,
             preferred: preferManaged,
+            metadata: discoveredAccount?.metadata ?? existingManagedAccount?.metadata ?? existingAccount?.metadata ?? null,
             notes: existingManagedAccount?.notes ?? existingAccount?.notes ?? null,
           });
 
@@ -206,6 +210,7 @@ export function mapUserRuntimeAccounts(rawUser, options) {
                 handle: discoveredAccount.handle,
                 label: discoveredAccount.label,
                 identityState: discoveredAccount.identityState,
+                metadata: discoveredAccount.metadata ?? null,
               }
             : null,
           existingAccount: existingAccount ? shapeAccountRef(existingAccount) : null,
@@ -309,6 +314,7 @@ function shapeAccountRef(account) {
     sourceType: account.sourceType,
     providerAccountId: account.providerAccountId ?? null,
     preferred: account.preferred,
+    metadata: account.metadata ?? null,
   };
 }
 

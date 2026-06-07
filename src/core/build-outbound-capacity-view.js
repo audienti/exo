@@ -57,7 +57,8 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     : fallbackLinkedinAccount;
   const {
     assignedExecutionScopeKeys,
-    assignedMotionIds
+    assignedMotionIds,
+    singletonReadyUserId
   } = buildUserAssignedExecutionScopeIndex(user, motions, companies, {
     users: allUsers,
     profiles,
@@ -87,7 +88,9 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
           motion,
           account,
           company,
-          executionScope: classifyUserExecutionScope(user, motion, company)
+          executionScope: classifyUserExecutionScope(user, motion, company, {
+            singletonReadyUserId
+          })
         };
       })
       .filter(Boolean)
@@ -165,10 +168,24 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       ? null
       : Math.max(observedPendingInvitations - pendingInvitationObservationCount, 0));
   const pendingInvitations = Math.max(trackedPendingInvitations, observedPendingInvitations ?? 0);
-  const pendingInvitationReconciliationBlocked = (pendingInvitationItemizationGapCount ?? 0) > 0;
+  const pendingInvitationReconciliationBlocked = pendingInvitationReconcileRequired === true
+    || (pendingInvitationItemizationGapCount ?? 0) > 0;
   const readyConnectionRequests = executableScopedProspects.filter(({ prospect }) => isReadyConnectionRequestProspect(prospect)).length;
   const assignmentBlockedReadyConnectionRequests = assignmentBlockedReadyProspects.length;
   const assignmentBlockedCompanyCount = new Set(assignmentBlockedReadyProspects.map(({ account }) => account.companyId)).size;
+  const assignmentBlockedCompanies = [...new Map(
+    assignmentBlockedReadyProspects.map(({ motion, company, prospect }) => [
+      company.id,
+      {
+        motionId: motion.id,
+        motionName: motion.name,
+        companyId: company.id,
+        companyName: company.name,
+        prospectId: prospect.id,
+        prospectName: prospect.name,
+      },
+    ]),
+  ).values()];
   const consideredMotionCount = new Set(executableScopedAccounts.map(({ motion }) => motion.id)).size;
   const consideredCompanyCount = new Set(executableScopedAccounts.map(({ account }) => account.companyId)).size;
   const consideredProspectCount = executableScopedProspects.length;
@@ -239,13 +256,14 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       pendingInvitationReconciliationBlocked,
       pendingInvitations,
       readyConnectionRequests,
-    assignmentBlockedReadyConnectionRequests,
-    assignmentBlockedCompanyCount,
-    consideredMotionCount,
-    consideredCompanyCount,
-    consideredProspectCount,
-    queue,
-    packets
+      assignmentBlockedReadyConnectionRequests,
+      assignmentBlockedCompanyCount,
+      assignmentBlockedCompanies,
+      consideredMotionCount,
+      consideredCompanyCount,
+      consideredProspectCount,
+      queue,
+      packets
   };
 
   if (linkedinResolution.resolutionStatus !== "resolved") {
@@ -642,7 +660,7 @@ function buildPendingInvitationReconciliationReason(input) {
   const visibleCount = input.observedPendingInvitations ?? 0;
   const itemizedCount = input.itemizedPendingInvitations ?? input.pendingInvitationObservationCount ?? 0;
   const completeness = input.pendingInvitationCaptureCompleteness === "partial_visible_slice"
-    ? "only a visible slice was itemized"
+    ? "only a bounded quick-pass slice was itemized"
     : "the live backlog was not fully itemized";
   return `LinkedIn sent invitations still need reconciliation: ${visibleCount} pending invite${visibleCount === 1 ? "" : "s"} are visible, ${itemizedCount} ${itemizedCount === 1 ? "row was" : "rows were"} itemized, and ${completeness}. Exo should not push new connection-request pressure until the full backlog is trustworthy.`;
 }
@@ -808,9 +826,9 @@ function buildDeficitActionFromQueue(queue, packets, remainingInvitationsToday, 
 
   if (inventoryShortfall > 0) {
     return {
-      kind: "seed_motion_targets",
-      guidanceKey: "seed_motion_targets",
-      recommendedAction: `Seed more known companies or people directly into the active motion so the queue has real backlog to turn into ${remainingInvitationsToday} more ready LinkedIn connection-request branch${remainingInvitationsToday === 1 ? "" : "es"} today.`
+      kind: "run_company_discovery",
+      guidanceKey: "run_company_discovery",
+      recommendedAction: `Run autonomous company discovery on the active motion so the agent can queue more researchable accounts and refill ${remainingInvitationsToday} LinkedIn connection-request slot${remainingInvitationsToday === 1 ? "" : "s"} without waiting for manual seeding.`
     };
   }
 
@@ -844,7 +862,7 @@ function buildAssignmentBlockedAction({ user, blockedReadyProspects }) {
     return {
       kind: "assign_ready_execution",
       guidanceKey: "assign_ready_execution",
-      recommendedAction: `Pin ${blockedCompanyNames[0]} to ${user.label} so ${blockedReadyProspects.length} ready LinkedIn connection-request branch${blockedReadyProspects.length === 1 ? "" : "es"} become executable today.`
+      recommendedAction: `Assign ${blockedCompanyNames[0]} to ${user.label} so ${blockedReadyProspects.length} ready LinkedIn connection-request branch${blockedReadyProspects.length === 1 ? "" : "es"} become executable today.`
     };
   }
 
@@ -852,7 +870,7 @@ function buildAssignmentBlockedAction({ user, blockedReadyProspects }) {
   return {
     kind: "assign_ready_execution",
     guidanceKey: "assign_ready_execution",
-    recommendedAction: `Pin ${blockedCompanyIds.length} ready companies to ${user.label} so ${blockedReadyProspects.length} already-prepared LinkedIn connection-request branch${blockedReadyProspects.length === 1 ? "" : "es"} become executable today. Start with ${previewNames}.`
+    recommendedAction: `Assign ${blockedCompanyIds.length} ready companies to ${user.label} so ${blockedReadyProspects.length} already-prepared LinkedIn connection-request branch${blockedReadyProspects.length === 1 ? "" : "es"} become executable today. Start with ${previewNames}.`
   };
 }
 

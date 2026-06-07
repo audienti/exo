@@ -4,9 +4,11 @@ import { browserProfileCapabilitySchema } from "../schema/browser-profile.js";
 import { userSchema } from "../schema/user.js";
 import { inboundSyncPlanModeSchema, inboundSyncRunStatusSchema, inboundSurfaceStateSchema } from "../schema/inbound.js";
 import { findInboundSurfaceDefinition, listInboundSurfaceCatalog } from "../lib/inbound-surface-catalog.js";
+import { classifyWorkingHoursWindow } from "./working-hours.js";
 
 export const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
 export const INBOUND_SYNC_FAILED_RETRY_MS = 30 * 60 * 1000;
+export const INBOUND_SYNC_LINKEDIN_MESSAGE_OPEN_WINDOW_MS = 15 * 60 * 1000;
 const QUICK_MODE_SUPPLEMENTARY_SURFACES = new Set([
   "linkedin-followers-list"
 ]);
@@ -83,11 +85,13 @@ export function buildInboundAutomationWarnings(rawUsers) {
 export function buildInboundAutomationHealthWarnings(rawUsers, now = new Date().toISOString()) {
   const warnings = [];
   for (const rawUser of rawUsers ?? []) {
-    const syncView = buildUserInboundSyncView(rawUser);
+    const user = userSchema.parse(rawUser);
+    const workingHoursStatus = classifyWorkingHoursWindow(user.workingHours, now);
+    const syncView = buildUserInboundSyncView(user);
     for (const account of syncView.accounts) {
       for (const surface of account.surfaces) {
         if (!surface.enabled || surface.autonomousBackgroundRetrieval === false) continue;
-        const healthState = classifyInboundAutomationHealthState(surface, now);
+        const healthState = classifyInboundAutomationHealthState(surface, now, { workingHoursStatus });
         if (!healthState) continue;
         warnings.push({
           userId: syncView.user.id,
@@ -124,12 +128,17 @@ export function buildInboundAutomationStatus(rawUsers, now = new Date().toISOStr
   let nextDueSurface = null;
 
   for (const rawUser of rawUsers ?? []) {
-    const syncView = buildUserInboundSyncView(rawUser);
+    const user = userSchema.parse(rawUser);
+    const workingHoursStatus = classifyWorkingHoursWindow(user.workingHours, now);
+    const syncView = buildUserInboundSyncView(user);
     for (const account of syncView.accounts) {
       for (const surface of account.surfaces) {
         if (!surface.enabled || surface.autonomousBackgroundRetrieval === false) continue;
         enabledAutonomousSurfaceCount += 1;
-        const freshness = classifyInboundSurfaceFreshness(surface, now);
+        const freshness = classifyInboundSurfaceFreshness(surface, now, {
+          workingHoursStatus,
+          deferOutsideWorkingHours: true,
+        });
         if (freshness) {
           dueNowCount += 1;
           continue;
@@ -138,7 +147,7 @@ export function buildInboundAutomationStatus(rawUsers, now = new Date().toISOStr
         if (surface.lastRunStatus === "failed" && !isAutonomousSurfaceUnsupported(surface)) {
           retryBackoffCount += 1;
         }
-        const dueAt = computeInboundAutomationNextDueAt(surface);
+        const dueAt = computeInboundAutomationNextDueAt(surface, { workingHoursStatus });
         if (!dueAt) continue;
         if (!nextDueSurface || Date.parse(dueAt) < Date.parse(nextDueSurface.dueAt)) {
           nextDueSurface = {
@@ -179,6 +188,7 @@ export function buildUserInboundSyncPlan(rawUser, options = {}) {
   const capability = options.capability ? browserProfileCapabilitySchema.parse(options.capability) : null;
   const mode = inboundSyncPlanModeSchema.parse(options.mode ?? "quick");
   const now = options.now ?? new Date().toISOString();
+  const workingHoursStatus = classifyWorkingHoursWindow(user.workingHours, now);
   const syncView = buildUserInboundSyncView(user, { capability });
   const accountId = options.accountId ?? null;
 
@@ -188,7 +198,7 @@ export function buildUserInboundSyncPlan(rawUser, options = {}) {
 
   const accounts = syncView.accounts
     .filter((account) => !accountId || account.accountId === accountId)
-    .map((account) => buildAccountSyncPlan(user.id, account, { mode, now }))
+    .map((account) => buildAccountSyncPlan(user.id, account, { mode, now, workingHoursStatus }))
     .filter((account) => account.includedSurfaceCount > 0);
 
   const includedSurfaces = accounts.flatMap((account) => account.phases.flatMap((phase) => phase.surfaces));
@@ -321,6 +331,9 @@ export function setUserInboundSyncPolicy(rawUser, input) {
  *   actualMode?: import("../schema/inbound.js").inboundSyncPlanModeSchema._type | null,
  *   reconcileRequired?: boolean | null,
  *   reconcileReason?: string | null,
+ *   continuationStartedAt?: string | null,
+ *   nextCursor?: string | null,
+ *   nextStartOffset?: number | null,
  *   observationCount?: number | null,
  *   itemizationGapCount?: number | null,
  *   error?: string | null
@@ -371,6 +384,16 @@ export function recordUserInboundSyncRun(rawUser, input) {
         return surface;
       }
 
+      const continuationActive = status !== "failed"
+        && nextExhaustionStatus !== "complete"
+        && (
+          normalizeNullableString(input.nextCursor) !== null
+          || (Number.isInteger(input.nextStartOffset) && input.nextStartOffset >= 0)
+        );
+      const continuationStartedAt = continuationActive
+        ? normalizeNullableString(input.continuationStartedAt) ?? surface.continuationStartedAt ?? input.observedAt ?? now
+        : null;
+
       return inboundSurfaceStateSchema.parse({
         ...surface,
         enabled: true,
@@ -389,6 +412,11 @@ export function recordUserInboundSyncRun(rawUser, input) {
         lastPaginationAttempted: typeof input.paginationAttempted === "boolean" ? input.paginationAttempted : null,
         lastTerminalSignalSeen: typeof input.terminalSignalSeen === "boolean" ? input.terminalSignalSeen : null,
         lastStalledPassCount: Number.isInteger(input.stalledPassCount) ? input.stalledPassCount : null,
+        continuationStartedAt,
+        nextCursor: continuationActive ? normalizeNullableString(input.nextCursor) : null,
+        nextStartOffset: continuationActive && Number.isInteger(input.nextStartOffset) && input.nextStartOffset >= 0
+          ? input.nextStartOffset
+          : null,
         lastObservationCount: nextObservationCount,
         lastItemizationGapCount: nextItemizationGapCount,
         lastCountDiscrepancyCount: nextCountDiscrepancyCount,
@@ -401,6 +429,12 @@ export function recordUserInboundSyncRun(rawUser, input) {
     });
 
     if (!surfaces.some((surface) => surface.surfaceKey === definition.key)) {
+      const continuationActive = status !== "failed"
+        && nextExhaustionStatus !== "complete"
+        && (
+          normalizeNullableString(input.nextCursor) !== null
+          || (Number.isInteger(input.nextStartOffset) && input.nextStartOffset >= 0)
+        );
       surfaces.push(inboundSurfaceStateSchema.parse({
         surfaceKey: definition.key,
         enabled: true,
@@ -419,6 +453,13 @@ export function recordUserInboundSyncRun(rawUser, input) {
         lastPaginationAttempted: typeof input.paginationAttempted === "boolean" ? input.paginationAttempted : null,
         lastTerminalSignalSeen: typeof input.terminalSignalSeen === "boolean" ? input.terminalSignalSeen : null,
         lastStalledPassCount: Number.isInteger(input.stalledPassCount) ? input.stalledPassCount : null,
+        continuationStartedAt: continuationActive
+          ? normalizeNullableString(input.continuationStartedAt) ?? input.observedAt ?? now
+          : null,
+        nextCursor: continuationActive ? normalizeNullableString(input.nextCursor) : null,
+        nextStartOffset: continuationActive && Number.isInteger(input.nextStartOffset) && input.nextStartOffset >= 0
+          ? input.nextStartOffset
+          : null,
         lastObservationCount: nextObservationCount,
         lastItemizationGapCount: nextItemizationGapCount,
         lastCountDiscrepancyCount: nextCountDiscrepancyCount,
@@ -444,18 +485,42 @@ export function recordUserInboundSyncRun(rawUser, input) {
 
 /**
  * @param {{
+ *   key?: string | null,
  *   lastRunStatus: "never" | "success" | "warning" | "failed",
  *   lastObservedAt?: string | null,
  *   lastSyncedAt?: string | null
  * }} surface
  * @param {string} now
+ * @param {{
+ *   workingHoursStatus?: { openNow: boolean, nextOpenAt: string | null } | null,
+ *   deferOutsideWorkingHours?: boolean
+ * }} [options]
  */
-export function classifyInboundSurfaceFreshness(surface, now) {
+export function classifyInboundSurfaceFreshness(surface, now, options = {}) {
+  const freshnessWindowMs = inboundSurfaceFreshnessWindowMs(surface, options);
+  const deferDueIfClosedWindow = (candidate) => {
+    if (
+      !candidate
+      || options.deferOutsideWorkingHours !== true
+      || !options.workingHoursStatus
+      || options.workingHoursStatus.openNow
+    ) {
+      return candidate;
+    }
+    const nextDueAt = computeInboundAutomationNextDueAt(surface, options);
+    const nextDueMs = typeof nextDueAt === "string" ? Date.parse(nextDueAt) : Number.NaN;
+    const nowMs = Date.parse(now);
+    if (!Number.isNaN(nextDueMs) && !Number.isNaN(nowMs) && nextDueMs > nowMs) {
+      return null;
+    }
+    return candidate;
+  };
+
   if (surface.lastRunStatus === "never") {
-    return {
+    return deferDueIfClosedWindow({
       reason: "never",
       dueAt: "1970-01-01T00:00:00.000Z"
-    };
+    });
   }
 
   if (surface.lastRunStatus === "failed") {
@@ -467,18 +532,18 @@ export function classifyInboundSurfaceFreshness(surface, now) {
     if (!Number.isNaN(failedAt) && !Number.isNaN(nowMs) && nowMs - failedAt < INBOUND_SYNC_FAILED_RETRY_MS) {
       return null;
     }
-    return {
+    return deferDueIfClosedWindow({
       reason: "failed",
       dueAt: surface.lastSyncedAt ?? "1970-01-01T00:00:00.000Z"
-    };
+    });
   }
 
   const freshnessTime = surface.lastObservedAt ?? surface.lastSyncedAt;
   if (!freshnessTime) {
-    return {
+    return deferDueIfClosedWindow({
       reason: "never",
       dueAt: "1970-01-01T00:00:00.000Z"
-    };
+    });
   }
 
   const freshnessMs = Date.parse(freshnessTime);
@@ -490,16 +555,16 @@ export function classifyInboundSurfaceFreshness(surface, now) {
   if (
     surface.lastRunStatus === "warning"
     && isBoundedCaptureWarning(surface)
-    && nowMs - freshnessMs <= INBOUND_SYNC_STALE_MS
+    && nowMs - freshnessMs <= freshnessWindowMs
   ) {
     return null;
   }
 
-  if (surface.lastRunStatus === "warning" || nowMs - freshnessMs > INBOUND_SYNC_STALE_MS) {
-    return {
+  if (surface.lastRunStatus === "warning" || nowMs - freshnessMs > freshnessWindowMs) {
+    return deferDueIfClosedWindow({
       reason: surface.lastRunStatus === "warning" ? "warning" : "stale",
       dueAt: freshnessTime
-    };
+    });
   }
 
   return null;
@@ -524,6 +589,9 @@ function buildAccountInboundView(account) {
       retrievalMode: definition.retrievalMode,
       autonomousBackgroundRetrieval: definition.autonomousBackgroundRetrieval !== false,
       autonomousBackgroundReason: definition.autonomousBackgroundReason ?? null,
+      automationCadenceMs: Number.isInteger(definition.automationCadenceMs) && definition.automationCadenceMs > 0
+        ? definition.automationCadenceMs
+        : null,
       observationKinds: definition.observationKinds,
       enabled: state.enabled,
       lastRunStatus: state.lastRunStatus,
@@ -541,6 +609,9 @@ function buildAccountInboundView(account) {
       lastPaginationAttempted: state.lastPaginationAttempted,
       lastTerminalSignalSeen: state.lastTerminalSignalSeen,
       lastStalledPassCount: state.lastStalledPassCount,
+      continuationStartedAt: state.continuationStartedAt,
+      nextCursor: state.nextCursor,
+      nextStartOffset: state.nextStartOffset,
       lastObservationCount: state.lastObservationCount,
       lastItemizationGapCount: state.lastItemizationGapCount,
       lastCountDiscrepancyCount: state.lastCountDiscrepancyCount,
@@ -567,7 +638,8 @@ function buildAccountInboundView(account) {
  * @param {ReturnType<typeof buildAccountInboundView>} account
  * @param {{
  *   mode: import("../schema/inbound.js").inboundSyncPlanModeSchema._type,
- *   now: string
+ *   now: string,
+ *   workingHoursStatus: { openNow: boolean, nextOpenAt: string | null }
  * }} input
  */
 function buildAccountSyncPlan(userId, account, input) {
@@ -602,7 +674,8 @@ function buildAccountSyncPlan(userId, account, input) {
  * @param {ReturnType<typeof buildAccountInboundView>["surfaces"][number]} surface
  * @param {{
  *   mode: import("../schema/inbound.js").inboundSyncPlanModeSchema._type,
- *   now: string
+ *   now: string,
+ *   workingHoursStatus: { openNow: boolean, nextOpenAt: string | null }
  * }} input
  */
 function buildSurfaceSyncPlan(userId, account, surface, input) {
@@ -611,7 +684,11 @@ function buildSurfaceSyncPlan(userId, account, surface, input) {
     return null;
   }
 
-  const freshness = surface.enabled ? classifyInboundSurfaceFreshness(surface, input.now) : null;
+  const freshness = surface.enabled
+    ? classifyInboundSurfaceFreshness(surface, input.now, {
+        workingHoursStatus: input.workingHoursStatus,
+      })
+    : null;
   const freshnessState = !surface.enabled
     ? "disabled"
     : freshness?.reason ?? "fresh";
@@ -699,6 +776,9 @@ function materializeSurfaceStates(account) {
       lastPaginationAttempted: configuredStates.get(definition.key)?.lastPaginationAttempted ?? null,
       lastTerminalSignalSeen: configuredStates.get(definition.key)?.lastTerminalSignalSeen ?? null,
       lastStalledPassCount: configuredStates.get(definition.key)?.lastStalledPassCount ?? null,
+      continuationStartedAt: configuredStates.get(definition.key)?.continuationStartedAt ?? null,
+      nextCursor: configuredStates.get(definition.key)?.nextCursor ?? null,
+      nextStartOffset: configuredStates.get(definition.key)?.nextStartOffset ?? null,
       lastObservationCount: configuredStates.get(definition.key)?.lastObservationCount ?? null,
       lastItemizationGapCount: configuredStates.get(definition.key)?.lastItemizationGapCount ?? null,
       lastCountDiscrepancyCount: configuredStates.get(definition.key)?.lastCountDiscrepancyCount ?? null,
@@ -804,13 +884,17 @@ function describeAutomationHealthWarningReason(freshnessReason, inRetryBackoff =
  * its next retry.
  *
  * @param {{
+ *   key?: string | null,
  *   lastRunStatus: "never" | "success" | "warning" | "failed",
  *   lastObservedAt?: string | null,
  *   lastSyncedAt?: string | null
  * }} surface
  * @param {string} now
+ * @param {{
+ *   workingHoursStatus?: { openNow: boolean, nextOpenAt: string | null } | null
+ * }} [options]
  */
-function classifyInboundAutomationHealthState(surface, now) {
+function classifyInboundAutomationHealthState(surface, now, options = {}) {
   if (isAutonomousSurfaceUnsupported(surface)) {
     return null;
   }
@@ -826,7 +910,10 @@ function classifyInboundAutomationHealthState(surface, now) {
     };
   }
 
-  const freshness = classifyInboundSurfaceFreshness(surface, now);
+  const freshness = classifyInboundSurfaceFreshness(surface, now, {
+    ...options,
+    deferOutsideWorkingHours: true,
+  });
   if (!freshness) {
     return null;
   }
@@ -838,28 +925,90 @@ function classifyInboundAutomationHealthState(surface, now) {
 
 /**
  * @param {{
+ *   key?: string | null,
  *   lastRunStatus: "never" | "success" | "warning" | "failed",
  *   lastObservedAt?: string | null,
  *   lastSyncedAt?: string | null
  * }} surface
+ * @param {{
+ *   workingHoursStatus?: { openNow: boolean, nextOpenAt: string | null } | null
+ * }} [options]
  */
-export function computeInboundAutomationNextDueAt(surface) {
+export function computeInboundAutomationNextDueAt(surface, options = {}) {
   if (isAutonomousSurfaceUnsupported(surface)) {
     return null;
   }
 
+  let candidateDueAt = null;
+
   if (surface.lastRunStatus === "failed" && surface.lastSyncedAt) {
     const failedAt = Date.parse(surface.lastSyncedAt);
     if (!Number.isNaN(failedAt)) {
-      return new Date(failedAt + INBOUND_SYNC_FAILED_RETRY_MS).toISOString();
+      candidateDueAt = new Date(failedAt + INBOUND_SYNC_FAILED_RETRY_MS).toISOString();
     }
   }
 
-  const freshnessTime = surface.lastObservedAt ?? surface.lastSyncedAt;
-  if (!freshnessTime) return null;
-  const freshnessMs = Date.parse(freshnessTime);
-  if (Number.isNaN(freshnessMs)) return null;
-  return new Date(freshnessMs + INBOUND_SYNC_STALE_MS).toISOString();
+  if (!candidateDueAt) {
+    const freshnessTime = surface.lastObservedAt ?? surface.lastSyncedAt;
+    if (freshnessTime) {
+      const freshnessMs = Date.parse(freshnessTime);
+      if (!Number.isNaN(freshnessMs)) {
+        candidateDueAt = new Date(freshnessMs + inboundSurfaceFreshnessWindowMs(surface, options)).toISOString();
+      }
+    }
+  }
+
+  const nextOpenAt = normalizeNextOpenAt(options.workingHoursStatus);
+  if (!candidateDueAt) {
+    return nextOpenAt;
+  }
+  if (!nextOpenAt) {
+    return candidateDueAt;
+  }
+  return laterIso(candidateDueAt, nextOpenAt);
+}
+
+/**
+ * @param {{ key?: string | null, automationCadenceMs?: number | null }} surface
+ * @param {{
+ *   workingHoursStatus?: { openNow: boolean, nextOpenAt: string | null } | null
+ * }} [options]
+ */
+function inboundSurfaceFreshnessWindowMs(surface, options = {}) {
+  if (surface?.key === "linkedin-messaging-inbox" && options.workingHoursStatus) {
+    return INBOUND_SYNC_LINKEDIN_MESSAGE_OPEN_WINDOW_MS;
+  }
+  const configured = Number(surface?.automationCadenceMs);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : INBOUND_SYNC_STALE_MS;
+}
+
+/**
+ * @param {{ openNow?: boolean, nextOpenAt?: string | null } | null | undefined} workingHoursStatus
+ */
+function normalizeNextOpenAt(workingHoursStatus) {
+  if (!workingHoursStatus || workingHoursStatus.openNow) {
+    return null;
+  }
+  const nextOpenAt = String(workingHoursStatus.nextOpenAt ?? "").trim();
+  return nextOpenAt.length ? nextOpenAt : null;
+}
+
+/**
+ * @param {string} left
+ * @param {string} right
+ */
+function laterIso(left, right) {
+  const leftMs = Date.parse(left);
+  const rightMs = Date.parse(right);
+  if (Number.isNaN(leftMs)) {
+    return right;
+  }
+  if (Number.isNaN(rightMs)) {
+    return left;
+  }
+  return leftMs >= rightMs ? left : right;
 }
 
 /**

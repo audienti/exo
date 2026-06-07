@@ -3,6 +3,7 @@
 import { inboundObservationSchema } from "../schema/inbound.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
+import { isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
 import { buildUserInboundSyncView } from "./user-inbound-sync.js";
 import {
   classifyPrivateInboundMessage,
@@ -18,7 +19,9 @@ import {
  */
 export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanies, options = {}) {
   const user = userSchema.parse(rawUser);
-  const observations = rawObservations.map((item) => inboundObservationSchema.parse(item));
+  const observations = rawObservations
+    .map((item) => inboundObservationSchema.parse(item))
+    .filter((observation) => !shouldSuppressOperationalObservation(observation));
   const motions = rawMotions.map((item) => motionSchema.parse(item));
   const companiesById = new Map(
     rawCompanies
@@ -95,27 +98,80 @@ export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanie
 }
 
 /**
+ * `*_confirmed` rows on follow-state surfaces are durable baseline state for
+ * future reconciliation, not fresh operator work. Keep them out of inbox/review
+ * so only net-new additions/removals read like updates.
+ *
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ */
+export function shouldSuppressOperationalObservation(observation) {
+  return isBaselineFollowStateObservation(observation)
+    || isPrivateModeAggregateProfileViewObservation(observation);
+}
+
+/**
+ * Current-list follow rows are useful canonical state for the Connections
+ * surface, but they are not fresh operator work by themselves.
+ *
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type | { kind?: string | null }} observation
+ */
+export function isBaselineFollowStateObservation(observation) {
+  return observation?.kind === "follower_confirmed"
+    || observation?.kind === "follow_state_confirmed";
+}
+
+/**
+ * LinkedIn private-mode viewer aggregates ("92 LinkedIn members") are counts,
+ * not people. They must never become claimable pseudo-prospects or repeated
+ * decision rows.
+ *
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type | {
+ *   kind?: string | null,
+ *   actorName?: string | null,
+ *   actorProfileUrl?: string | null,
+ *   actorHandle?: string | null,
+ *   actorLinkedinPublicId?: string | null,
+ *   actorLinkedinMemberId?: string | null,
+ *   summary?: string | null,
+ * }} observation
+ */
+export function isPrivateModeAggregateProfileViewObservation(observation) {
+  if (observation?.kind !== "profile_view_received") {
+    return false;
+  }
+
+  const hasDurableIdentity = Boolean(
+    observation.actorProfileUrl
+      || observation.actorHandle
+      || observation.actorLinkedinPublicId
+      || observation.actorLinkedinMemberId,
+  );
+  if (hasDurableIdentity) {
+    return false;
+  }
+
+  const actorName = String(observation.actorName ?? "").trim();
+  const summary = String(observation.summary ?? "").trim();
+  return /^\d+\s+linkedin members$/i.test(actorName) || /private mode/i.test(summary);
+}
+
+/**
  * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
  * @param {import("../schema/motion.js").motionSchema._type[]} motions
  * @param {Map<string, any>} companiesById
  * @param {Map<string, { motion: import("../schema/motion.js").motionSchema._type, account: any, prospect: any }>} prospectContextById
  */
 function buildInboxItem(observation, motions, companiesById, prospectContextById) {
-  const prospectContext = observation.prospectId ? prospectContextById.get(observation.prospectId) ?? null : null;
-  const motion = observation.motionId
-    ? motions.find((candidate) => candidate.id === observation.motionId) ?? prospectContext?.motion ?? null
-    : prospectContext?.motion ?? null;
-  const account = prospectContext?.account ?? (motion && observation.companyId
-    ? motion.targetMap.accounts.find((candidate) => candidate.companyId === observation.companyId) ?? null
-    : null);
-  const company = observation.companyId
-    ? companiesById.get(observation.companyId) ?? account ?? null
-    : account ?? null;
-  const prospect = prospectContext?.prospect ?? (account && observation.prospectId
-    ? account.prospects.find((candidate) => candidate.id === observation.prospectId) ?? null
-    : null);
+  const workspaceContext = resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById);
+  const { claimState, motion, account, company, prospect } = workspaceContext;
   const messageContext = classifyPrivateInboundMessage(observation);
+  if (claimState === "claimed_elsewhere") {
+    return buildClaimedElsewhereInboxItem(observation, messageContext, motion, company, prospect);
+  }
   const triage = classifyObservation(observation, messageContext);
+  if (claimState === "unclaimed") {
+    return buildGlobalIntakeInboxItem(observation, triage, messageContext, motion, company, prospect);
+  }
   const acceptedStage = observation.kind === "connection_request_accepted"
     ? classifyAcceptedConnectionStage(prospect, observation.actorName ?? null)
     : null;
@@ -144,6 +200,7 @@ function buildInboxItem(observation, motions, companiesById, prospectContextById
     whyItMatters: acceptedStage?.whyItMatters ?? handledPrivateInboundStage?.whyItMatters ?? triage.whyItMatters,
     recommendedAction: acceptedStage?.recommendedAction ?? handledPrivateInboundStage?.recommendedAction ?? recommendAction(observation, prospect, messageContext),
     reviewState: acceptedStage?.state ?? handledPrivateInboundStage?.state ?? null,
+    claimState,
     messageContext,
     account: {
       id: observation.accountId,
@@ -153,6 +210,133 @@ function buildInboxItem(observation, motions, companiesById, prospectContextById
     company: company ? { id: company.id, name: company.name ?? company.companyName ?? null } : null,
     prospect: prospect ? { id: prospect.id, name: prospect.name, title: prospect.title } : null
   };
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {import("../schema/motion.js").motionSchema._type[]} motions
+ * @param {Map<string, any>} companiesById
+ * @param {Map<string, { motion: import("../schema/motion.js").motionSchema._type, account: any, prospect: any }>} prospectContextById
+ */
+export function resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById) {
+  const prospectContext = observation.prospectId ? prospectContextById.get(observation.prospectId) ?? null : null;
+  const motion = observation.motionId
+    ? motions.find((candidate) => candidate.id === observation.motionId) ?? prospectContext?.motion ?? null
+    : prospectContext?.motion ?? null;
+  const account = prospectContext?.account ?? (motion && observation.companyId
+    ? motion.targetMap.accounts.find((candidate) => candidate.companyId === observation.companyId) ?? null
+    : null);
+  const company = observation.companyId
+    ? companiesById.get(observation.companyId) ?? account ?? null
+    : account ?? null;
+  const prospect = prospectContext?.prospect ?? (account && observation.prospectId
+    ? account.prospects.find((candidate) => candidate.id === observation.prospectId) ?? null
+    : null);
+  const claimState = observation.motionId || observation.companyId || observation.prospectId
+    ? (motion || company || prospect ? "claimed_here" : "claimed_elsewhere")
+    : "unclaimed";
+
+  return { claimState, motion, account, company, prospect };
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {{ priority: string }} triage
+ * @param {"reply" | "first_inbound" | "not_private_inbound"} messageContext
+ * @param {any | null} motion
+ * @param {any | null} company
+ * @param {any | null} prospect
+ */
+function buildGlobalIntakeInboxItem(observation, triage, messageContext, motion, company, prospect) {
+  const actorName = observation.actorName ?? "this inbound person";
+  return {
+    id: observation.id,
+    observedAt: observation.observedAt,
+    recordedAt: observation.recordedAt,
+    kind: observation.kind,
+    surfaceKey: observation.surfaceKey,
+    summary: observation.summary,
+    actorName: observation.actorName,
+    actorTitle: observation.actorTitle,
+    actorCompanyName: observation.actorCompanyName,
+    actorProfileUrl: observation.actorProfileUrl,
+    actorLinkedinPublicId: observation.actorLinkedinPublicId,
+    actorLinkedinMemberId: observation.actorLinkedinMemberId,
+    actorAvatarUrl: observation.actorAvatarUrl,
+    priority: triage.priority,
+    status: "global-intake",
+    whyItMatters: "This inbound person is still global intake. Keep them visible, but do not route them into this folder's motion flow until this workspace explicitly claims them.",
+    recommendedAction: buildGlobalIntakeAction(observation.kind, actorName),
+    reviewState: "needs_claim",
+    claimState: "unclaimed",
+    messageContext,
+    account: {
+      id: observation.accountId,
+      capability: observation.capability
+    },
+    motion: motion ? { id: motion.id, name: motion.name } : null,
+    company: company ? { id: company.id, name: company.name ?? company.companyName ?? null } : null,
+    prospect: prospect ? { id: prospect.id, name: prospect.name, title: prospect.title } : null
+  };
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {"reply" | "first_inbound" | "not_private_inbound"} messageContext
+ * @param {any | null} motion
+ * @param {any | null} company
+ * @param {any | null} prospect
+ */
+function buildClaimedElsewhereInboxItem(observation, messageContext, motion, company, prospect) {
+  return {
+    id: observation.id,
+    observedAt: observation.observedAt,
+    recordedAt: observation.recordedAt,
+    kind: observation.kind,
+    surfaceKey: observation.surfaceKey,
+    summary: observation.summary,
+    actorName: observation.actorName,
+    actorTitle: observation.actorTitle,
+    actorCompanyName: observation.actorCompanyName,
+    actorProfileUrl: observation.actorProfileUrl,
+    actorLinkedinPublicId: observation.actorLinkedinPublicId,
+    actorLinkedinMemberId: observation.actorLinkedinMemberId,
+    actorAvatarUrl: observation.actorAvatarUrl,
+    priority: "low",
+    status: "claimed-elsewhere",
+    whyItMatters: "This inbound person is already claimed in another workspace. Do not fork them into this folder's motion flow.",
+    recommendedAction: `Leave ${observation.actorName ?? "this inbound person"} in the owning workspace. Do not add them to a motion here.`,
+    reviewState: "claimed_elsewhere",
+    claimState: "claimed_elsewhere",
+    messageContext,
+    account: {
+      id: observation.accountId,
+      capability: observation.capability
+    },
+    motion: motion ? { id: motion.id, name: motion.name } : null,
+    company: company ? { id: company.id, name: company.name ?? company.companyName ?? null } : null,
+    prospect: prospect ? { id: prospect.id, name: prospect.name, title: prospect.title } : null
+  };
+}
+
+/**
+ * @param {string} kind
+ * @param {string} actorName
+ */
+function buildGlobalIntakeAction(kind, actorName) {
+  switch (kind) {
+    case "connection_request_received":
+    case "connection_request_received_no_longer_pending":
+      return `Claim ${actorName} into this workspace's transition backlog if the invite belongs here. Until then, keep it in global intake instead of routing it into a local motion.`;
+    case "inbound_reply_received":
+    case "email_reply_received":
+    case "message_received":
+    case "thread_updated":
+    case "email_thread_updated":
+      return `Claim ${actorName} into this workspace's transition backlog if this thread belongs here. Do not treat it as local motion work until this workspace claims it.`;
+    default:
+      return `Claim ${actorName} into this workspace's transition backlog if they belong here. Otherwise leave the item in global intake.`;
+  }
 }
 
 /**
@@ -209,6 +393,11 @@ function classifyObservation(observation, messageContext) {
         whyItMatters: "A public conversation moved. This may create a legitimate visibility or engagement opening."
       };
     case "profile_view_after_touch":
+      return {
+        priority: "medium",
+        status: "attention-signal",
+        whyItMatters: "Attention happened after the invite. That is a reason to leave the branch alone and keep the rest of the motion moving."
+      };
     case "profile_view_received":
     case "follower_added":
     case "follower_removed":
@@ -267,6 +456,7 @@ function recommendAction(observation, prospect, messageContext) {
     case "catch_up_update_detected":
       return `Review the public update and decide whether it is worth an inbound-motion engagement move.`;
     case "profile_view_after_touch":
+      return `Do not add another touch right now. Treat this as attention evidence, keep the invite patient, and move to the next ready branch.`;
     case "profile_view_received":
       return `Treat this as attention evidence and decide whether cadence should stay patient or advance.`;
     case "follower_added":
@@ -291,6 +481,8 @@ function classifyHandledPrivateInboundStage(observation, prospect, actorName) {
   const response = describePrivateInboundResponse(observation, prospect);
   const responseState = response.state;
   const name = prospect?.name ?? actorName ?? "this person";
+  const messageContext = classifyPrivateInboundMessage(observation);
+  const responseLabel = messageContext === "first_inbound" ? "response" : "reply";
   if (responseState === "queued") {
     return {
       priority: "low",
@@ -317,6 +509,24 @@ function classifyHandledPrivateInboundStage(observation, prospect, actorName) {
       state: "reply_unavailable",
       whyItMatters: detail,
       recommendedAction: `Reply unavailable for ${name} — ${detail}`,
+    };
+  }
+  if (responseState === "ready") {
+    return {
+      priority: "high",
+      status: messageContext === "first_inbound" ? "needs-triage" : "needs-reply",
+      state: "ready_for_reply",
+      whyItMatters: `The agent already drafted the ${responseLabel}. The operator can review the actual copy now.`,
+      recommendedAction: `Review the drafted ${responseLabel} for ${name} and decide whether to queue it for send.`,
+    };
+  }
+  if (responseState === "open") {
+    return {
+      priority: "low",
+      status: "agent-draft",
+      state: "agent_draft_due",
+      whyItMatters: `The private inbound thread is linked to this prospect, but the operator should not have to decide in the abstract. The agent needs to draft the ${responseLabel} first.`,
+      recommendedAction: `Agent should draft the ${responseLabel} for ${name} before this returns to the operator lane.`,
     };
   }
   return null;
@@ -392,7 +602,7 @@ function hasQueuedPostAcceptMessage(prospect) {
   if (!prospect) return false;
   const surfaces = new Set(["post_accept_message", "follow_up_direct_message"]);
   return (prospect.drafts ?? []).some(
-    (d) => surfaces.has(d.surface) && (d.status === "approved" || d.status === "queued"),
+    (d) => surfaces.has(d.surface) && isAutonomousSendReadyDraft(d),
   );
 }
 

@@ -295,7 +295,7 @@ export function buildLinkedinMessagingInboxSurfaceHint(input = {}) {
 
   return {
     surface: "linkedin-messaging-inbox",
-    goal: "Inspect the live LinkedIn messaging inbox, prove that the thread list really rendered, and capture only thread updates that materially change operator action.",
+    goal: "Inspect the live LinkedIn messaging surface, capture only thread updates that materially change operator action, and distinguish a bounded unread-thread pass from full reconciliation.",
     source: {
       kind: "legacy_bootstrap",
       app: "v10",
@@ -349,7 +349,7 @@ export function buildLinkedinMessagingInboxSurfaceHint(input = {}) {
         "body",
         "subject"
       ],
-      partialCaptureRule: "Return warning when the agent only itemized a visible inbox slice or a visible message-history slice."
+      partialCaptureRule: "Return warning when the agent only itemized a bounded unread-thread slice or a bounded message-history slice."
     }
   };
 }
@@ -362,7 +362,7 @@ export function buildLinkedinSentInvitationsSurfaceHint(input = {}) {
 
   return {
     surface: "linkedin-sent-invitations",
-    goal: "Inspect the live LinkedIn sent-invitations surface, distinguish quick visible-slice triage from full reconciliation, and never overclaim pending-invite completeness.",
+    goal: "Inspect the live LinkedIn sent-invitations surface, distinguish bounded quick-pass triage from full reconciliation, and never overclaim pending-invite completeness.",
     source: {
       kind: "legacy_bootstrap",
       app: "v10",
@@ -420,7 +420,7 @@ export function buildLinkedinSentInvitationsSurfaceHint(input = {}) {
       loadMoreTriggerText: ["load more"],
       quickMode: {
         strategy: "top_slice_with_gap_accounting",
-        stopCondition: "first material visible slice itemized, then preserve any remaining total as an explicit itemization gap"
+        stopCondition: "first material quick-pass slice itemized, then preserve any remaining total as an explicit itemization gap"
       },
       reconcileMode: {
         strategy: "paginate_until_terminal_zero_row",
@@ -557,7 +557,7 @@ export function buildLinkedinReceivedInvitationsSurfaceHint(input = {}) {
         "The invitation manager received surface never rendered a usable inbound-invite list."
       ],
       warningCases: [
-        "Only the visible top slice of received invitations was itemized.",
+        "Only the bounded quick-pass slice of received invitations was itemized.",
         "The received invitations surface showed a larger visible total than the current bounded itemization."
       ]
     },
@@ -582,7 +582,7 @@ export function buildLinkedinFollowersSurfaceHint(input = {}) {
 
   return {
     surface: "linkedin-followers-list",
-    goal: "Inspect the live LinkedIn followers surface, capture who currently follows us, and distinguish a bounded visible slice from a full followers reconciliation.",
+    goal: "Inspect the live LinkedIn followers surface, capture who currently follows us, and distinguish a bounded quick-pass slice from a full followers reconciliation.",
     source: {
       kind: "legacy_bootstrap",
       app: "v10",
@@ -660,7 +660,7 @@ export function buildLinkedinFollowersSurfaceHint(input = {}) {
         "The followers surface never rendered a usable list of current followers."
       ],
       warningCases: [
-        "Only the visible top slice of followers was itemized.",
+        "Only the bounded quick-pass slice of followers was itemized.",
         "The followers surface showed a larger visible total than the current bounded itemization."
       ]
     },
@@ -694,7 +694,7 @@ export function buildLinkedinFollowingSurfaceHint(input = {}) {
 
   return {
     surface: "linkedin-following-list",
-    goal: "Inspect the live LinkedIn following surface, capture who we are currently following, and distinguish a bounded visible slice from a full following reconciliation.",
+    goal: "Inspect the live LinkedIn following surface, capture who we are currently following, and distinguish a bounded quick-pass slice from a full following reconciliation.",
     source: {
       kind: "legacy_bootstrap",
       app: "v10",
@@ -767,7 +767,7 @@ export function buildLinkedinFollowingSurfaceHint(input = {}) {
         "The following surface never rendered a usable list of current follows."
       ],
       warningCases: [
-        "Only the visible top slice of following rows was itemized.",
+        "Only the bounded quick-pass slice of following rows was itemized.",
         "The following surface showed a larger visible total than the current bounded itemization."
       ]
     },
@@ -857,7 +857,7 @@ export function buildLinkedinProfileViewsSurfaceHint(input = {}) {
         "The profile-views surface never rendered enough stable content to extract any governed viewer rows."
       ],
       warningCases: [
-        "Only the visible top slice of profile viewers was itemized.",
+        "Only the bounded quick-pass slice of profile viewers was itemized.",
         "Anonymous or company-only viewers remain low-confidence attention signals even when itemized."
       ]
     },

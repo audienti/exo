@@ -9,6 +9,7 @@
 // daily surfaces read from this, so they update on the next render.
 
 import { assignCompanyUser } from "./assign-company-user.js";
+import { assignMotionUser } from "./assign-motion-user.js";
 import { buildMotionIntake } from "./build-motion-intake.js";
 import { ignoreInboundObservation } from "./ignore-inbound-observation.js";
 import { spawn } from "node:child_process";
@@ -28,11 +29,17 @@ import { setMotionProspectCadence } from "./set-prospect-cadence.js";
 import { transitionInboundObservation } from "./transition-inbound-observation.js";
 import { claimUserRuntimeAccount } from "./claim-user-runtime-account.js";
 import { addMotionSignals, removeMotionSignal } from "./manage-motion-signals.js";
+import { applyInstallScope, completeOnboardingUser } from "./onboarding.js";
 import { runAgentWorkerPass } from "../cli/commands/agent.js";
 import { findActionResultForTouch } from "../lib/action-result-catalog.js";
 import { inspectAgentRunLock } from "../lib/agent-run-lock.js";
 import { getHomeStateDir } from "../db/paths.js";
 import { startMotion } from "./start-motion.js";
+import { transitionMotionStatus } from "./transition-motion-status.js";
+import {
+  toggleWorkspaceEnrichmentProvider,
+  updateWorkspacePhoneEnrichmentPolicy,
+} from "../lib/workspace-settings.js";
 import {
   findCompanyById,
   findMotionById,
@@ -69,12 +76,32 @@ export async function executeActionIntent(intent) {
       return await runInboundObservation(args);
     case "assignCompanyUser":
       return runAssignCompanyUser(args);
+    case "assignMotionUser":
+      return runAssignMotionUser(args);
+    case "restartMotion":
+      return runRestartMotion(args);
     case "claimTargetAccountPacket":
       return runClaimTargetAccountPacket(args);
     case "claimRuntimeAccount":
       return runClaimRuntimeAccount(args);
     case "runAgentQueuePass":
       return runAgentQueuePass(args);
+    case "claimInboundPersonToMotion": {
+      if (!args.observationId) throw new Error("claimInboundPersonToMotion requires observationId.");
+      const promoted = await runTransitionPromote({
+        observationId: args.observationId,
+        userId: args.userId ?? null,
+      });
+      if (!args.toMotionId || args.toMotionId === promoted.motion.id) {
+        return { ok: true, writer: "claimInboundPersonToMotion", message: promoted.message };
+      }
+      const rehomed = runRehome({
+        prospectId: promoted.prospectId,
+        toMotionId: args.toMotionId,
+        userId: args.userId ?? null,
+      });
+      return { ok: true, writer: "claimInboundPersonToMotion", message: rehomed.message };
+    }
     case "promoteInboundPerson": {
       if (!args.observationId) throw new Error("promoteInboundPerson requires observationId.");
       const result = await runTransitionPromote({
@@ -126,6 +153,14 @@ export async function executeActionIntent(intent) {
       return runAddMotionSignals(args);
     case "removeMotionSignal":
       return runRemoveMotionSignal(args);
+    case "setWorkspaceInstallScope":
+      return runSetWorkspaceInstallScope(args);
+    case "completeOnboardingUser":
+      return runCompleteOnboardingUser(args);
+    case "toggleWorkspaceEnrichmentProvider":
+      return runToggleWorkspaceEnrichmentProvider(args);
+    case "setWorkspacePhoneEnrichmentPolicy":
+      return runSetWorkspacePhoneEnrichmentPolicy(args);
     default:
       throw new Error(`Unsupported action writer: ${intent.writer}`);
   }
@@ -222,6 +257,63 @@ function runTouch(args) {
     ok: true,
     writer: "recordMotionProspectTouch",
     message: `Logged ${String(args.surface).replaceAll("_", " ")} for prospect on ${stored.name}.`,
+  };
+}
+
+/** @param {Record<string, any>} args */
+function runToggleWorkspaceEnrichmentProvider(args) {
+  const lane = normalizeEnrichmentLane(args.lane);
+  const provider = String(args.provider ?? "").trim().toLowerCase();
+  if (!provider) {
+    throw new Error("toggleWorkspaceEnrichmentProvider requires provider.");
+  }
+  if (args.enabled === undefined || args.enabled === null) {
+    throw new Error("toggleWorkspaceEnrichmentProvider requires enabled.");
+  }
+
+  const settings = toggleWorkspaceEnrichmentProvider({
+    cwd: process.cwd(),
+    lane,
+    provider,
+    enabled: toBooleanArg(args.enabled),
+  });
+  const action = toBooleanArg(args.enabled) ? "Enabled" : "Disabled";
+  const laneLabel = lane === "validation" ? "email validation" : `${lane} enrichment`;
+  const configured = lane === "validation"
+    ? settings.workspace.enrichment.email.validators
+    : settings.workspace.enrichment[lane].providers;
+
+  return {
+    ok: true,
+    writer: "toggleWorkspaceEnrichmentProvider",
+    message: `${action} ${provider} for ${laneLabel}. ${configured.length} provider${configured.length === 1 ? "" : "s"} configured.`,
+  };
+}
+
+/** @param {Record<string, any>} args */
+function runSetWorkspacePhoneEnrichmentPolicy(args) {
+  if (!args.field) {
+    throw new Error("setWorkspacePhoneEnrichmentPolicy requires field.");
+  }
+  const field = String(args.field).trim();
+  const value = toBooleanArg(args.value);
+  if (!["mobileOnly", "preferWhatsappCapable"].includes(field)) {
+    throw new Error(`Unsupported phone enrichment field: ${field}`);
+  }
+
+  const settings = updateWorkspacePhoneEnrichmentPolicy({
+    cwd: process.cwd(),
+    ...(field === "mobileOnly" ? { mobileOnly: value } : {}),
+    ...(field === "preferWhatsappCapable" ? { preferWhatsappCapable: value } : {}),
+  });
+
+  return {
+    ok: true,
+    writer: "setWorkspacePhoneEnrichmentPolicy",
+    message:
+      field === "mobileOnly"
+        ? `Phone enrichment now ${settings.workspace.enrichment.phone.mobileOnly ? "requires mobile numbers only" : "allows non-mobile numbers"}.`
+        : `Phone enrichment will ${settings.workspace.enrichment.phone.preferWhatsappCapable ? "prefer WhatsApp-capable numbers when the provider can prove it" : "stop prioritizing WhatsApp-capable evidence"}.`,
   };
 }
 
@@ -338,6 +430,68 @@ function runAssignCompanyUser(args) {
     ok: true,
     writer: "assignCompanyUser",
     message: `Pinned ${updated.name} to ${updated.engagementUserAssignment?.label ?? "the selected user"}.`,
+  };
+}
+
+/** @param {Record<string, any>} args */
+function runAssignMotionUser(args) {
+  if (!args.motionId || !args.userId) throw new Error("assignMotionUser requires motionId and userId.");
+  const rawMotion = findMotionById(args.motionId);
+  if (!rawMotion) throw new Error(`Motion not found: ${args.motionId}`);
+  const rawUser = findUserById(args.userId);
+  if (!rawUser) throw new Error(`User not found: ${args.userId}`);
+  const updated = assignMotionUser(rawMotion, rawUser, listBrowserProfiles(), {
+    assignedBy: "exo-ui",
+    reason: args.reason ?? "Keep one execution identity for this motion",
+  });
+  updateMotion(updated);
+  return {
+    ok: true,
+    writer: "assignMotionUser",
+    message: `Pinned ${updated.name} to ${updated.engagementUserAssignment?.label ?? "the selected user"}.`,
+  };
+}
+
+/** @param {Record<string, any>} args */
+function runRestartMotion(args) {
+  if (!args.motionId) throw new Error("restartMotion requires motionId.");
+  const rawMotion = findMotionById(args.motionId);
+  if (!rawMotion) throw new Error(`Motion not found: ${args.motionId}`);
+  const result = transitionMotionStatus(rawMotion, "restart");
+  const storedMotion = result.changed ? updateMotion(result.motion) : result.motion;
+  return {
+    ok: true,
+    writer: "restartMotion",
+    message: result.changed
+      ? `Set ${storedMotion.name} live.`
+      : `${storedMotion.name} is already live.`,
+  };
+}
+
+/** @param {Record<string, any>} args */
+function runSetWorkspaceInstallScope(args) {
+  const result = applyInstallScope({ scope: args.scope });
+  return {
+    ok: true,
+    writer: "setWorkspaceInstallScope",
+    message: result.scope === "global-install"
+      ? `This folder now attaches to the global Exo install at ${result.statePaths.homeStateDir}.`
+      : "This folder now keeps its Exo state locally.",
+  };
+}
+
+/** @param {Record<string, any>} args */
+function runCompleteOnboardingUser(args) {
+  const result = completeOnboardingUser({
+    userId: args.userId ?? null,
+    label: args.label ?? null,
+    owner: args.owner ?? null,
+    runtime: args.runtime ?? "codex",
+  });
+  return {
+    ok: true,
+    writer: "completeOnboardingUser",
+    message: result.message,
   };
 }
 
@@ -477,6 +631,7 @@ function runClaimRuntimeAccount(args) {
     connector: args.connector,
     providerAccountId: args.providerAccountId ?? null,
     preferred: typeof args.preferred === "boolean" ? args.preferred : true,
+    metadata: args.metadata && typeof args.metadata === "object" ? args.metadata : null,
     notes: args.notes ?? null,
     codexHome: process.env.CODEX_HOME ?? null,
     claudeCli: process.env.EXO_CLAUDE_CLI ?? null,
@@ -652,7 +807,9 @@ function summarizeAgentQueuePass(summary) {
   const lastReason = summary?.reason
     ?? results.at(-1)?.detail?.reason
     ?? null;
-  const ranSentence = `Agent ran ${count} task${count === 1 ? "" : "s"}${summary?.status === "blocked" ? " before blocking" : ""}.`;
+  const ranSentence = summary?.status === "partial"
+    ? `Agent made progress on ${count} task${count === 1 ? "" : "s"}.`
+    : `Agent ran ${count} task${count === 1 ? "" : "s"}${summary?.status === "blocked" ? " before blocking" : ""}.`;
   return [ranSentence, lastReason, queueSentence].filter(Boolean).join(" ");
 }
 
@@ -692,10 +849,45 @@ async function runInboundObservation(args) {
       message: `Queued the agent to reject ${transitioned.existing.actorName ?? "this invite"} on LinkedIn — it will drop off once declined.`,
     };
   }
+  if (args.nextKind === "connection_request_withdraw_requested") {
+    return {
+      ok: true,
+      writer: "recordInboundObservation",
+      message: `Queued the agent to withdraw ${transitioned.existing.actorName ?? "this pending invite"} on LinkedIn — it will drop off once withdrawn.`,
+    };
+  }
 
   return {
     ok: true,
     writer: "recordInboundObservation",
     message: `Recorded ${transitioned.existing.actorName ?? "inbound invite"} as ${args.nextKind.replace(/^connection_request_/, "")}.${degreeNote}${promoteNote}`,
   };
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeEnrichmentLane(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "email" || normalized === "phone" || normalized === "validation") {
+    return normalized;
+  }
+  throw new Error(`Unsupported enrichment lane: ${String(value ?? "")}`);
+}
+
+/**
+ * @param {unknown} value
+ */
+function toBooleanArg(value) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+    return false;
+  }
+  throw new Error(`Expected boolean value, received ${String(value ?? "")}.`);
 }

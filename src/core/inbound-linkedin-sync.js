@@ -12,34 +12,54 @@ import { userSchema } from "../schema/user.js";
 
 ensureLinkedinToolMethodsRegistered();
 
-const LEGACY_LINKEDIN_SURFACE_BUILDERS = [
+export const LINKEDIN_CAPTURE_SURFACE_DEFINITIONS = [
+  {
+    surfaceKey: "linkedin-sent-invitations",
+    sectionKey: "sentInvitations",
+    canonicalToolMethodId: LINKEDIN_SYNC_SENT_INVITATIONS_METHOD,
+    externalIdField: "invitationId"
+  },
+  {
+    surfaceKey: "linkedin-received-invitations",
+    sectionKey: "receivedInvitations",
+    canonicalToolMethodId: LINKEDIN_SYNC_RECEIVED_INVITATIONS_METHOD,
+    externalIdField: "invitationId"
+  },
   {
     surfaceKey: "linkedin-messaging-inbox",
     sectionKey: "messagingInbox",
+    canonicalToolMethodId: null,
     externalIdField: "threadId",
     threadUrlField: "threadUrl"
   },
   {
     surfaceKey: "linkedin-profile-views",
     sectionKey: "profileViews",
+    canonicalToolMethodId: null,
     externalIdField: "viewId"
   },
   {
     surfaceKey: "linkedin-followers-list",
     sectionKey: "followersList",
+    canonicalToolMethodId: null,
     externalIdField: "entryId"
   },
   {
     surfaceKey: "linkedin-following-list",
     sectionKey: "followingList",
+    canonicalToolMethodId: null,
     externalIdField: "entryId"
   }
 ];
+const LINKEDIN_CAPTURE_SURFACE_KEYS = new Set(
+  LINKEDIN_CAPTURE_SURFACE_DEFINITIONS.map((definition) => definition.surfaceKey),
+);
 
 /**
  * @param {unknown} rawUser
  * @param {{
  *   accountId?: string | null,
+ *   surfaceKeys?: string[] | null,
  *   capture: unknown
  * }} input
  */
@@ -47,6 +67,8 @@ export function buildLinkedinInboundSyncPayload(rawUser, input) {
   const user = userSchema.parse(rawUser);
   const account = resolveLinkedinAccount(user, input.accountId ?? null);
   const normalized = normalizeLinkedinCaptureInput(input.capture);
+  const requestedSurfaceKeys = normalizeLinkedinCaptureSurfaceKeys(input.surfaceKeys ?? null);
+  const requestedSurfaceKeySet = new Set(requestedSurfaceKeys);
 
   const canonicalBuilt = buildInboundSyncPayloadFromCanonicalToolResults({
     accountId: account.id,
@@ -54,14 +76,16 @@ export function buildLinkedinInboundSyncPayload(rawUser, input) {
     results: normalized.results
   });
   const legacySurfaces = normalized.legacyCapture
-    ? LEGACY_LINKEDIN_SURFACE_BUILDERS.map((definition) =>
+    ? LINKEDIN_CAPTURE_SURFACE_DEFINITIONS
+      .filter((definition) => !definition.canonicalToolMethodId)
+      .map((definition) =>
       buildLegacySurface(definition, normalized.legacyCapture[definition.sectionKey])
     )
     : [];
   const builtSurfaces = [
     ...canonicalBuilt.payload.accounts[0].surfaces,
     ...legacySurfaces
-  ];
+  ].filter((surface) => requestedSurfaceKeySet.has(surface.surfaceKey));
 
   return {
     capture: buildCaptureSummary(normalized.mode, builtSurfaces),
@@ -75,6 +99,31 @@ export function buildLinkedinInboundSyncPayload(rawUser, input) {
       ]
     }
   };
+}
+
+/**
+ * @param {string[] | null | undefined} surfaceKeys
+ */
+export function normalizeLinkedinCaptureSurfaceKeys(surfaceKeys) {
+  if (!surfaceKeys?.length) {
+    return LINKEDIN_CAPTURE_SURFACE_DEFINITIONS.map((definition) => definition.surfaceKey);
+  }
+
+  const normalized = [...new Set(
+    surfaceKeys
+      .map((surfaceKey) => normalizeNullableString(surfaceKey)?.toLowerCase() ?? null)
+      .filter(Boolean)
+  )];
+
+  for (const surfaceKey of normalized) {
+    if (!LINKEDIN_CAPTURE_SURFACE_KEYS.has(surfaceKey)) {
+      throw new Error(`Unsupported LinkedIn surface key: ${surfaceKey}`);
+    }
+  }
+
+  return LINKEDIN_CAPTURE_SURFACE_DEFINITIONS
+    .map((definition) => definition.surfaceKey)
+    .filter((surfaceKey) => normalized.includes(surfaceKey));
 }
 
 /**
@@ -160,6 +209,11 @@ function buildLegacySurface(definition, section) {
   const paginationAttempted = typeof section.paginationAttempted === "boolean" ? section.paginationAttempted : null;
   const terminalSignalSeen = typeof section.terminalSignalSeen === "boolean" ? section.terminalSignalSeen : null;
   const stalledPassCount = Number.isInteger(section.stalledPassCount) ? section.stalledPassCount : null;
+  const continuationStartedAt = normalizeNullableString(section.continuationStartedAt);
+  const nextCursor = normalizeNullableString(section.nextCursor);
+  const nextStartOffset = Number.isInteger(section.nextStartOffset) && section.nextStartOffset >= 0
+    ? section.nextStartOffset
+    : null;
 
   if (section.status === "success" && section.error) {
     throw new Error(`Successful LinkedIn captures cannot include an error: ${definition.surfaceKey}`);
@@ -248,6 +302,7 @@ function buildLegacySurface(definition, section) {
     motionId: item.motionId,
     companyId: item.companyId,
     prospectId: item.prospectId,
+    actorCompanyProfile: item.actorCompanyProfile ?? null,
     notes: item.notes,
     messages: item.messages ?? []
   }));
@@ -268,6 +323,9 @@ function buildLegacySurface(definition, section) {
     paginationAttempted,
     terminalSignalSeen,
     stalledPassCount,
+    continuationStartedAt,
+    nextCursor,
+    nextStartOffset,
     error: section.error,
     observations
   };

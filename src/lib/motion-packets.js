@@ -1,6 +1,7 @@
 // @ts-check
 
 import { prospectSchema, targetAccountSchema } from "../schema/target-account.js";
+import { selectBestEmailContactPoint, selectBestLinkedinContactPoint } from "./prospect-contacts.js";
 import { applyManualTargetAccountQueueState, withDerivedTargetAccountQueueState } from "./motion-queue.js";
 
 /**
@@ -243,6 +244,16 @@ export function applyCompleteMotionProspectPacket(rawProspect, input, now) {
     throw new Error(`${formatPacketKind(prospect.packetState.kind)} packet is claimed by ${prospect.packetState.workerLabel}, not ${input.workerLabel}.`);
   }
 
+  if (
+    input.nextStatus === "exhausted"
+    && !hasReachableProspectChannel(prospect)
+    && !hasAttemptedGovernedLinkedinSearch(prospect)
+  ) {
+    throw new Error(
+      "Cannot mark a no-channel prospect exhausted until governed LinkedIn search is attempted and recorded as source-tried linkedin_connected_search."
+    );
+  }
+
   const nextQueueState = input.nextStatus
     ? {
         status: input.nextStatus,
@@ -262,6 +273,29 @@ export function applyCompleteMotionProspectPacket(rawProspect, input, now) {
       notes: normalizeNullableString(input.notes) ?? prospect.packetState.notes ?? null
     }
   });
+}
+
+/**
+ * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ */
+function hasReachableProspectChannel(prospect) {
+  if (selectBestLinkedinContactPoint(prospect) || selectBestEmailContactPoint(prospect)) {
+    return true;
+  }
+
+  return (prospect.contactPoints ?? []).some((point) => (
+    point.kind === "phone"
+    && point.matchStatus !== "rejected"
+    && point.verificationStatus !== "rejected"
+    && (point.usableForOutreach || point.verificationStatus === "verified" || point.verificationStatus === "observed")
+  ));
+}
+
+/**
+ * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ */
+function hasAttemptedGovernedLinkedinSearch(prospect) {
+  return (prospect.contactEnrichmentState?.sourcesTried ?? []).some((source) => source === "linkedin_connected_search");
 }
 
 /**

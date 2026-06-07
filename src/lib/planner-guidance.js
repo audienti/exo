@@ -1,6 +1,7 @@
 // @ts-check
 
 import fs from "node:fs";
+import { readWorkspaceSettings, resolveWorkspaceEnrichmentPolicy } from "./workspace-settings.js";
 
 const GUIDANCE_CACHE = new Map();
 
@@ -12,7 +13,10 @@ export function buildPlannerGuidance(key, context = {}) {
   const normalizedKey = normalizePlannerGuidanceKey(key);
   const relativePath = `docs/planner/${normalizedKey}.md`;
   const template = loadPlannerGuidance(relativePath);
-  const promptSource = template.body || fallbackTaskPrompt(normalizedKey, context);
+  const promptSource = applyWorkspaceGuidancePolicy(
+    normalizedKey,
+    template.body || fallbackTaskPrompt(normalizedKey, context),
+  );
 
   return {
     key: normalizedKey,
@@ -23,6 +27,36 @@ export function buildPlannerGuidance(key, context = {}) {
     avoid: template.avoid.map((item) => interpolate(item, context)),
     writeback: template.writeback.map((item) => interpolate(item, context))
   };
+}
+
+/**
+ * @param {string} key
+ * @param {string} promptSource
+ */
+function applyWorkspaceGuidancePolicy(key, promptSource) {
+  if (key !== "find_contact_points") {
+    return promptSource;
+  }
+
+  const policy = resolveWorkspaceEnrichmentPolicy(readWorkspaceSettings());
+  const emailProviders = policy.email.providers.length
+    ? policy.email.providers.join(", ")
+    : "none";
+  const validators = policy.email.validators.length
+    ? policy.email.validators.join(", ")
+    : "none";
+  const phoneProviders = policy.phone.providers.length
+    ? policy.phone.providers.join(", ")
+    : "none";
+  const phoneRules = [
+    policy.phone.mobileOnly ? "mobile-only" : "not mobile-only",
+    policy.phone.preferWhatsappCapable ? "prefer WhatsApp-capable evidence when a provider can prove it" : "do not prefer WhatsApp-capable evidence",
+  ].join("; ");
+
+  return [
+    promptSource.trim(),
+    `Workspace enrichment policy. The direct email provider order for this workspace is ${emailProviders}. The validation providers enabled for direct email are ${validators}. The direct phone provider order for this workspace is ${phoneProviders}. Phone rules: ${phoneRules}. Follow this workspace policy when choosing provider paths.`,
+  ].join("\n\n");
 }
 
 /**

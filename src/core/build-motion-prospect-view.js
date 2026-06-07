@@ -1,6 +1,7 @@
 // @ts-check
 
 import { motionSchema } from "../schema/motion.js";
+import { inboundObservationSchema } from "../schema/inbound.js";
 import { withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
 import { hasUsableEmailFallback, selectBestEmailContactPoint } from "../lib/prospect-contacts.js";
 
@@ -12,16 +13,32 @@ const ENGAGEABLE_ACTIVITY_TYPES = new Set([
   "comment",
   "interview-share"
 ]);
+const THREAD_MESSAGE_LIMIT = 8;
+const PROSPECT_TIMELINE_OBSERVATION_KINDS = new Set([
+  "connection_request_pending",
+  "connection_request_received",
+  "connection_request_accepted",
+  "connection_request_declined",
+  "connection_request_withdraw_requested",
+  "connection_request_withdrawn",
+  "connection_request_no_longer_pending",
+  "connection_request_received_no_longer_pending",
+  "follower_added",
+  "follower_confirmed",
+]);
 
 /**
  * @param {unknown} rawMotion
  * @param {{
  *   companyId?: string | null,
- *   prospectId?: string | null
+ *   prospectId?: string | null,
+ *   rawObservations?: unknown[] | null
  * }} [options]
  */
 export function buildMotionProspectView(rawMotion, options = {}) {
   const motion = motionSchema.parse(rawMotion);
+  const rawObservations = Array.isArray(options.rawObservations) ? options.rawObservations : [];
+  const observations = rawObservations.map((item) => inboundObservationSchema.parse(item));
   const companyAccounts = motion.targetMap.accounts
     .map((account) => withDerivedTargetAccountQueueState(account))
     .filter((account) => !options.companyId || account.companyId === options.companyId);
@@ -31,7 +48,7 @@ export function buildMotionProspectView(rawMotion, options = {}) {
   }
 
   const prospectViews = companyAccounts
-    .flatMap((account) => account.prospects.map((prospect) => buildProspectView(account, prospect)))
+    .flatMap((account) => account.prospects.map((prospect) => buildProspectView(account, prospect, observations)))
     .sort(compareProspectViews);
 
   const selectedProspect = options.prospectId
@@ -85,12 +102,14 @@ export function buildMotionProspectView(rawMotion, options = {}) {
 /**
  * @param {import("../schema/target-account.js").targetAccountSchema._type} account
  * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type[]} observations
  */
-function buildProspectView(account, prospect) {
+function buildProspectView(account, prospect, observations) {
   const signalMatches = account.signalMatches.filter((match) => prospect.signalMatchIds.includes(match.id));
   const recentPost = buildRecentPostReadiness(prospect);
   const messageTestReady = prospect.cadenceState.status === "ready";
   const latestSignalMatch = signalMatches[0] ?? null;
+  const conversationContext = buildProspectConversationContext(account, prospect, observations);
 
   return {
     companyId: account.companyId,
@@ -126,6 +145,9 @@ function buildProspectView(account, prospect) {
     signalMatches,
     signalMatchCount: signalMatches.length,
     latestSignalSummary: latestSignalMatch?.summary ?? null,
+    threadMessages: conversationContext.threadMessages,
+    latestInboundMessage: conversationContext.latestInboundMessage,
+    timelineObservations: conversationContext.timelineObservations,
     touches: prospect.touches,
     cadenceStatus: prospect.cadenceState.status,
     messageTestReady,
@@ -194,6 +216,122 @@ function buildRecentPostReadiness(prospect) {
     engageable: true,
     reason: "A recent LinkedIn activity signal exists and is fresh enough to support legitimate warmup."
   };
+}
+
+/**
+ * @param {import("../schema/target-account.js").targetAccountSchema._type} account
+ * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type[]} observations
+ */
+function buildProspectConversationContext(account, prospect, observations) {
+  const related = observations.filter((observation) => matchesProspectObservation(account, prospect, observation));
+  const latestThreadObservation = related
+    .filter((observation) => Array.isArray(observation.messages) && observation.messages.some(hasMessageBody))
+    .sort(compareObservedDescending)[0] ?? null;
+
+  const timelineObservations = related
+    .filter((observation) =>
+      PROSPECT_TIMELINE_OBSERVATION_KINDS.has(observation.kind)
+      && !(Array.isArray(observation.messages) && observation.messages.some(hasMessageBody)),
+    )
+    .map((observation) => ({
+      id: observation.id,
+      kind: observation.kind,
+      surfaceKey: observation.surfaceKey,
+      observedAt: observation.observedAt,
+      eventAt: observation.eventAt ?? null,
+      summary: observation.summary,
+      sourceUrl: observation.sourceUrl ?? null,
+      threadUrl: observation.threadUrl ?? null,
+      notes: observation.notes ?? null,
+    }));
+
+  if (!latestThreadObservation) {
+    return {
+      threadMessages: [],
+      latestInboundMessage: null,
+      timelineObservations,
+    };
+  }
+
+  const threadMessages = (latestThreadObservation.messages ?? [])
+    .filter(hasMessageBody)
+    .slice()
+    .sort((left, right) => (Date.parse(left.sentAt ?? "") || 0) - (Date.parse(right.sentAt ?? "") || 0))
+    .slice(-THREAD_MESSAGE_LIMIT)
+    .map((message) => ({
+      id: message.id ?? null,
+      direction: message.direction ?? "unknown",
+      sentAt: message.sentAt ?? null,
+      fromName: normalizeNullableString(message.fromName) ?? null,
+      fromHandle: normalizeNullableString(message.fromHandle) ?? null,
+      body: message.body.trim(),
+    }));
+
+  return {
+    threadMessages,
+    latestInboundMessage: threadMessages.findLast((message) => message.direction === "inbound") ?? threadMessages.at(-1) ?? null,
+    timelineObservations,
+  };
+}
+
+/**
+ * @param {import("../schema/target-account.js").targetAccountSchema._type} account
+ * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ */
+function matchesProspectObservation(account, prospect, observation) {
+  if (observation.prospectId && observation.prospectId === prospect.id) {
+    return true;
+  }
+
+  const prospectProfileUrl = normalizeNullableString(prospect.linkedinProfileUrl)?.toLowerCase() ?? null;
+  const observationProfileUrl = normalizeNullableString(observation.actorProfileUrl)?.toLowerCase() ?? null;
+  if (
+    observation.companyId === account.companyId
+    && prospectProfileUrl
+    && observationProfileUrl
+    && prospectProfileUrl === observationProfileUrl
+  ) {
+    return true;
+  }
+
+  const prospectSourceUrl = normalizeNullableString(prospect.sourceUrl);
+  return Boolean(
+    observation.companyId === account.companyId
+    && prospectSourceUrl
+    && (
+      normalizeNullableString(observation.threadUrl) === prospectSourceUrl
+      || normalizeNullableString(observation.sourceUrl) === prospectSourceUrl
+    )
+  );
+}
+
+/**
+ * @param {{ body?: string | null | undefined }} message
+ */
+function hasMessageBody(message) {
+  return typeof message?.body === "string" && message.body.trim().length > 0;
+}
+
+/**
+ * @param {{ observedAt: string, recordedAt: string }} left
+ * @param {{ observedAt: string, recordedAt: string }} right
+ */
+function compareObservedDescending(left, right) {
+  return right.observedAt.localeCompare(left.observedAt) || right.recordedAt.localeCompare(left.recordedAt);
+}
+
+/**
+ * @param {string | null | undefined} value
+ */
+function normalizeNullableString(value) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
 }
 
 /**

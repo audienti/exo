@@ -23,13 +23,15 @@ const CARD_DEFINITIONS = [
  * @param {{
  *   companyId?: string | null,
  *   prospectId: string,
+ *   rawObservations?: unknown[] | null,
  *   surface?: string | null
  * }} options
  */
 export function buildMotionDraftView(rawMotion, options) {
   const prospectView = buildMotionProspectView(rawMotion, {
     companyId: options.companyId ?? null,
-    prospectId: options.prospectId
+    prospectId: options.prospectId,
+    rawObservations: options.rawObservations ?? null,
   });
 
   if (!prospectView.writingBrief) {
@@ -56,7 +58,8 @@ export function buildMotionDraftView(rawMotion, options) {
  * @param {unknown} rawMotion
  * @param {{
  *   companyId?: string | null,
- *   prospectId: string,
+   *   prospectId: string,
+ *   rawObservations?: unknown[] | null,
  *   surface: string
  * }} options
  */
@@ -95,6 +98,7 @@ export function buildMotionDraftBrief(rawMotion, options) {
         "Honor the operatorGuidance (operator notes + steers) before anything else. If a steer says not to contact this person, do not draft.",
         "Write from the operator stance: a market operator networking, never a salesperson pitching (see docs/writing-voice.md).",
         "Stay inside the stored why-relevant, signal-match, cadence, and live-signal evidence.",
+        "When threadMessages exist, answer the actual conversation instead of resetting it.",
         "Respect prior touches so the message fits what already happened.",
         "If the surface is unavailable, explain why instead of drafting."
       ]
@@ -129,8 +133,12 @@ function buildDraftCard(brief, definition) {
       direction: touch.direction,
       outcome: touch.outcome,
       occurredAt: touch.occurredAt,
-      summary: touch.summary
+      summary: touch.summary,
+      subject: touch.subject ?? null,
+      body: touch.body ?? null,
     })),
+    threadMessages: brief.prospect.threadMessages,
+    latestInboundMessage: brief.prospect.latestInboundMessage,
     signalMatches: brief.signalMatches.map((match) => ({
       id: match.id,
       signalName: match.signalName,
@@ -144,6 +152,8 @@ function buildDraftCard(brief, definition) {
       recentPost: brief.recentPost,
       whyRelevant: brief.prospect.whyRelevant,
       signalMatches: brief.signalMatches,
+      threadMessages: brief.prospect.threadMessages,
+      latestInboundMessage: brief.prospect.latestInboundMessage,
       email: brief.prospect.email,
       profileViewedAt: brief.prospect.profileViewedAt
     }
@@ -189,6 +199,8 @@ function buildDraftRules(surface) {
     case "inbound_reply":
       return [
         "Respond conversationally to the inbound context.",
+        "Respond to the actual inbound thread when threadMessages are present. Do not reset the conversation with a fresh opener.",
+        "If they answered a question, build on their answer instead of asking a generic discovery question.",
         "Advance the conversation without overexplaining.",
         "Match the prospect's apparent level of interest."
       ];

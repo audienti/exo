@@ -19,7 +19,6 @@
 // Pure-ish: it mutates motion/company/observation objects and returns them for
 // the caller to persist (no direct DB writes).
 
-import { addCompany } from "./add-company.js";
 import { linkCompanyToMotion } from "./link-company-to-motion.js";
 import { recordMotionProspect } from "./record-prospect.js";
 import { resolveInboundObservationCompany } from "./resolve-inbound-observation-company.js";
@@ -98,6 +97,13 @@ const DEFAULT_STATE = {
  *   rawCompanies: unknown[],
  *   seedObservation: any,
  *   relatedObservations: any[],
+ *   resolvedCompanyProfile?: {
+ *     name?: string | null | undefined,
+ *     domain?: string | null | undefined,
+ *     websiteUrl?: string | null | undefined,
+ *     linkedinCompanyUrl?: string | null | undefined,
+ *     logoSourceUrl?: string | null | undefined,
+ *   } | null | undefined,
  *   now?: string,
  * }} input
  */
@@ -114,6 +120,9 @@ export function promoteInboundPersonToProspect(input) {
     ? companies.find((candidate) => candidate.id === seed.companyId) ?? null
     : null;
   let companyCreated = false;
+  if (company && isPlaceholderCompanyName(company.name)) {
+    company = null;
+  }
   if (!company) {
     const resolved = resolveInboundObservationCompany(
       {
@@ -121,17 +130,16 @@ export function promoteInboundPersonToProspect(input) {
         motionId: seed.motionId ?? motionId,
       },
       companies,
-      { createIfMissing: true },
+      {
+        createIfMissing: true,
+        companyProfile: input.resolvedCompanyProfile ?? null,
+      },
     );
     company = resolved.company;
     companyCreated = resolved.companyCreated;
   }
   if (!company) {
-    company = companies.find((candidate) => isPlaceholderCompanyName(candidate.name)) ?? null;
-    if (!company) {
-      company = addCompany({ name: "Unknown company" });
-      companyCreated = true;
-    }
+    throw new Error(`Cannot promote ${(seed.actorName ?? "this person").trim() || "this person"} until a real company is resolved. Shared placeholder company fallback is disabled.`);
   }
   // 2 — link the company to the transition motion (company-side tracking).
   company = linkCompanyToMotion(company, motionId);
@@ -148,7 +156,6 @@ export function promoteInboundPersonToProspect(input) {
     whyRelevant: truncate(`Transitioned from ${surfaceLabel} — in-flight before Exo.`, 200),
     observedAt: seed.observedAt ?? now,
     sourceUrl: seed.sourceUrl ?? seed.threadUrl ?? undefined,
-    ignoreStakeholderTargetLimit: isPlaceholderCompanyName(company.name),
   });
 
   // Find the prospect we just created (match on LinkedIn URL, else name).
@@ -160,6 +167,7 @@ export function promoteInboundPersonToProspect(input) {
 
   // 4 — carry the in-flight state: record the original touch + set cadence.
   const state = STATE_MAP[seed.kind] ?? DEFAULT_STATE;
+  const latestInboundMessage = findLatestStructuredMessage(related, "inbound");
   if (state.surface) {
     motion = recordMotionProspectTouch(motion, company, {
       prospectId: prospect.id,
@@ -168,6 +176,9 @@ export function promoteInboundPersonToProspect(input) {
       outcome: state.outcome,
       occurredAt: seed.observedAt ?? now,
       summary: truncate(seed.summary ?? `${surfaceLabel} carried in from transition.`, 240),
+      subject: state.direction === "inbound" ? seed.subject ?? null : null,
+      body: state.direction === "inbound" ? latestInboundMessage?.body ?? null : null,
+      sourceUrl: seed.sourceUrl ?? seed.threadUrl ?? undefined,
     });
   }
   motion = setMotionProspectCadence(motion, company, {
@@ -230,4 +241,20 @@ function humanizeSurface(surfaceKey) {
 function truncate(text, max) {
   if (!text || text.length <= max) return text;
   return `${text.slice(0, max - 1)}…`;
+}
+
+/**
+ * @param {Array<{ messages?: Array<{ direction?: string | null, sentAt?: string | null, body?: string | null }> | null }>} observations
+ * @param {"inbound" | "outbound"} direction
+ */
+function findLatestStructuredMessage(observations, direction) {
+  return observations
+    .flatMap((observation) => observation?.messages ?? [])
+    .filter((message) =>
+      typeof message?.body === "string"
+      && message.body.trim().length > 0
+      && String(message.direction ?? "").toLowerCase() === direction
+    )
+    .sort((left, right) => (Date.parse(left.sentAt ?? "") || 0) - (Date.parse(right.sentAt ?? "") || 0))
+    .at(-1) ?? null;
 }

@@ -162,6 +162,8 @@ export function buildDrainPrompt(input) {
  *   runnerPath: string,
  *   repo: string,
  *   stateDir: string,
+ *   homeDir: string,
+ *   username: string,
  *   codexHome: string,
  *   pathEnv: string,
  *   startInterval: number,
@@ -189,6 +191,12 @@ export function buildLaunchAgentPlist(input) {
     "",
     "  <key>EnvironmentVariables</key>",
     "  <dict>",
+    "    <key>HOME</key>",
+    `    <string>${escapeXml(input.homeDir)}</string>`,
+    "    <key>USER</key>",
+    `    <string>${escapeXml(input.username)}</string>`,
+    "    <key>LOGNAME</key>",
+    `    <string>${escapeXml(input.username)}</string>`,
     "    <key>CODEX_HOME</key>",
     `    <string>${escapeXml(input.codexHome)}</string>`,
     "    <key>EXO_STATE_DIR</key>",
@@ -223,6 +231,8 @@ export function buildLaunchAgentPlist(input) {
  *   lockDir: string,
  *   runnerPath: string,
  *   codexBin?: string,
+ *   homeDir: string,
+ *   username: string,
  *   codexHome: string,
  *   pathEnv: string,
  *   label: string,
@@ -249,8 +259,14 @@ export function buildCodexHostRunner(input) {
     "PASS_RUNNER_SCRIPT=\"$ROOT/scripts/run-agent-host-pass.js\"",
     `PREFLIGHT_JSON=${quoteShell(preflightPath)}`,
     `CODEX_BIN=${quoteShell(codexBin)}`,
+    `HOME=\"\${HOME:-${escapeShellDoubleQuoted(input.homeDir)}}\"`,
+    `USER=\"\${USER:-${escapeShellDoubleQuoted(input.username)}}\"`,
+    `LOGNAME=\"\${LOGNAME:-${escapeShellDoubleQuoted(input.username)}}\"`,
     `CODEX_HOME=\"\${CODEX_HOME:-${escapeShellDoubleQuoted(input.codexHome)}}\"`,
     `export PATH=${quoteShell(input.pathEnv || DEFAULT_PATH)}`,
+    "export HOME",
+    "export USER",
+    "export LOGNAME",
     "export CODEX_HOME",
     "export CODEX_SHELL=1",
     "export EXO_STATE_DIR=\"$STATE_DIR\"",
@@ -352,11 +368,15 @@ export function buildCodexHostRunner(input) {
  *   pathEnv: string,
  *   label: string,
  *   sendMode?: "live" | "verify" | "canary",
+ *   homeDir?: string,
+ *   username?: string,
  * }} input
  */
 function buildDeterministicHostRunner(input) {
   const stateDir = input.stateDir;
   const preflightPath = path.join(stateDir, "agent-preflight.json");
+  const homeDir = input.homeDir ?? os.homedir();
+  const username = input.username ?? os.userInfo().username;
   return [
     "#!/usr/bin/env bash",
     `# exo_agent_routine_version=${ROUTINE_ARTIFACT_VERSION}`,
@@ -373,6 +393,9 @@ function buildDeterministicHostRunner(input) {
     "PASS_RUNNER_SCRIPT=\"$ROOT/scripts/run-agent-host-pass.js\"",
     `PREFLIGHT_JSON=${quoteShell(preflightPath)}`,
     `export PATH=${quoteShell(input.pathEnv || DEFAULT_PATH)}`,
+    `export HOME="${escapeShellDoubleQuoted(homeDir)}"`,
+    `export USER="${escapeShellDoubleQuoted(username)}"`,
+    `export LOGNAME="${escapeShellDoubleQuoted(username)}"`,
     "export EXO_STATE_DIR=\"$STATE_DIR\"",
     `export EXO_AGENT_SEND_MODE="${escapeShellDoubleQuoted(input.sendMode === "verify" ? "verify" : input.sendMode === "canary" ? "canary" : "live")}"`,
     input.sendMode === "verify"
@@ -518,6 +541,8 @@ export function buildRoutinePlan(input) {
       pathEnv,
       label,
       sendMode,
+      homeDir,
+      username,
     });
     artifacts.push({ path: hostRunnerPath, content: runner, mode: 0o755 });
     return {
@@ -549,6 +574,8 @@ export function buildRoutinePlan(input) {
     lockDir,
     runnerPath: hostRunnerPath,
     codexBin: input.codexBin ?? DEFAULT_CODEX_BIN,
+    homeDir,
+    username,
     codexHome,
     pathEnv,
     label,
@@ -559,6 +586,8 @@ export function buildRoutinePlan(input) {
     runnerPath: hostRunnerPath,
     repo: input.repo,
     stateDir: input.stateDir,
+    homeDir,
+    username,
     codexHome,
     pathEnv,
     startInterval: interval.seconds,

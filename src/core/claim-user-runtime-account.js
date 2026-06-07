@@ -17,6 +17,7 @@ import { userSchema } from "../schema/user.js";
  *   providerAccountId?: string | null | undefined,
  *   label?: string | null | undefined,
  *   preferred?: boolean | null | undefined,
+ *   metadata?: Record<string, unknown> | null | undefined,
  *   notes?: string | null | undefined,
  *   codexHome?: string | null | undefined,
  *   claudeCli?: string | null | undefined
@@ -58,6 +59,7 @@ export function claimUserRuntimeAccount(rawUser, input) {
     harnessConnectionId: harnessConnection.id,
     providerAccountId: normalizeNullableString(input.providerAccountId) ?? null,
     preferred: normalizeBoolean(input.preferred),
+    metadata: input.metadata && typeof input.metadata === "object" ? input.metadata : null,
     notes: normalizeNullableString(input.notes) ?? null,
   });
   const account = updatedUser.accounts.find(

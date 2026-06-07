@@ -11,6 +11,7 @@
 // primitives.
 
 import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
+import { isCleanupLaneItem } from "./cleanup-lane.js";
 
 /**
  * @typedef {Object} OperatorViewModel
@@ -45,6 +46,15 @@ import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
  * @property {boolean} canRunNow
  * @property {string | null} runLabel
  *
+ * @typedef {Object} OperatorUiAction
+ * @property {string} label
+ * @property {"compose" | "detail"} mode
+ * @property {string | null} href
+ * @property {string | null} writer
+ * @property {Record<string, any> | null} args
+ * @property {"primary" | "secondary" | "ghost" | "danger"} variant
+ * @property {string | null} icon
+ *
  * @typedef {Object} OperatorNextMove
  * @property {string} title
  * @property {string | null} subject
@@ -58,6 +68,7 @@ import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
  * @property {string | null} truthAt
  * @property {string | null} surface
  * @property {string} action
+ * @property {"compose" | "detail"} actionMode
  * @property {string | null} actionStatus
  * @property {string | null} actionWriter
  * @property {Record<string, any> | null} actionArgs
@@ -67,6 +78,7 @@ import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
  * @property {string | null} previewSubject
  * @property {string | null} previewText
  * @property {Array<{ id: string, name: string, stage: string, queueStatus?: string | null, href: string | null }> | null} backlogCompanies
+ * @property {OperatorUiAction[]} actions
  *
  * @typedef {Object} OperatorDecisionCard
  * @property {string} id
@@ -84,6 +96,7 @@ import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
  * @property {string | null} surface
  * @property {string} actionStatus
  * @property {string} primaryActionLabel
+ * @property {"compose" | "detail"} primaryActionMode
  * @property {string | null} primaryHref
  * @property {string} secondaryActionLabel
  * @property {string | null} secondaryHref
@@ -91,6 +104,7 @@ import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
  * @property {string | null} previewLabel
  * @property {string | null} previewSubject
  * @property {string | null} previewText
+ * @property {OperatorUiAction[]} actions
  *
  * @typedef {Object} OperatorQueueItem
  * @property {string} id
@@ -102,6 +116,9 @@ import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
  * @property {string | null} dueAt
  * @property {string | null} dueAtIso
  * @property {string | null} waitingFor
+ * @property {"checked_out" | null} checkoutState
+ * @property {string | null} checkedOutBy
+ * @property {string | null} checkedOutAt
  * @property {string | null} href
  *
  * @typedef {Object} OperatorBlockedAction
@@ -114,10 +131,14 @@ import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
  * @property {string} subject
  * @property {string} reason
  * @property {string} detail
- * @property {"assignment" | "capability" | "failed"} blockType
+ * @property {"assignment" | "capability" | "failed" | "stale_draft"} blockType
  * @property {string} resolveLabel
  * @property {string} channel
  * @property {OperatorBlockedAction[]} actions
+ * @property {string | null} prospectId
+ * @property {string | null} personId
+ * @property {"compose" | "detail" | null} resolveMode
+ * @property {string | null} resolveHref
  *
  * @typedef {Object} OperatorStaleRow
  * @property {string} id
@@ -151,6 +172,7 @@ import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
  * @returns {OperatorViewModel}
  */
 export function buildOperatorViewModel(input) {
+  const now = input.generatedAt ? new Date(input.generatedAt) : new Date();
   // Items the operator has already resolved must not show as "Need decision".
   // Once a first message is approved/queued (now the agent's to send), already
   // sent, steer-excluded, or the invite is resolved/declined, there's nothing
@@ -168,11 +190,12 @@ export function buildOperatorViewModel(input) {
     "resolved_declined",
   ]);
   const decisionItems = (input.decisionQueue?.items ?? []).filter(
-    (item) => !HANDLED_STATES.has(item.state),
+    (item) => !HANDLED_STATES.has(item.state) && !isCleanupLaneItem(item, { now }),
   );
-  // The Next-move hero is promoted from the top decision; don't render it again
-  // in "Need decision" below.
-  const promotedDecision = decisionItems.find((item) => item.priority === "high") ?? null;
+  // The Next-move hero should follow the governed planner summary when it
+  // points at a concrete decision item. Falling back to the raw top decision
+  // is what made Operator disagree with `exo next`.
+  const promotedDecision = pickPromotedDecision(input.operatorSummary ?? null, decisionItems);
   const nextMove = shapeNextMove(input.operatorSummary ?? null, promotedDecision);
   const promotedId = nextMove && promotedDecision ? promotedDecision.id : null;
 
@@ -212,38 +235,107 @@ export function buildOperatorViewModel(input) {
  * @returns {OperatorNextMove | null}
  */
 function shapeNextMove(summary, topDecision) {
-  if (!summary) return null;
+  if (!topDecision) return null;
+  const actions = shapeDecisionActions(topDecision);
+  const primaryAction = actions[0] ?? null;
 
-  // Prefer a real person-anchored decision as the hero when one exists.
-  // Autonomous queue work belongs in Agent queue, not in Operator as a
-  // single-click pseudo-decision.
-  if (topDecision) {
-    return {
-      title: topDecision.recommendedAction || topDecision.summary,
-      subject: topDecision.subject,
-      prospectId: topDecision.prospectId ?? null,
-      personId: topDecision.id ?? null,
-      avatarUrl: topDecision.avatarUrl ?? null,
-      subtitle: composeSubtitle(topDecision.actorTitle, topDecision.actorCompanyName ?? topDecision.companyName),
-      motionName: topDecision.motionName,
-      motionStatus: "active",
-      truth: pickDecisionTruth(topDecision),
-      truthAt: relativeFromIso(topDecision.observedAt),
-      surface: humanizeSurfaceKey(topDecision.surfaceKey),
-      action: pickPrimaryActionLabel(topDecision),
-      actionStatus: actionStatusForState(topDecision.state ?? ""),
-      actionWriter: null,
-      actionArgs: null,
-      actionHref: topDecision.actorProfileUrl ?? topDecision.sourceUrl ?? null,
-      why: topDecision.why ?? null,
-      previewLabel: topDecision.previewLabel ?? null,
-      previewSubject: topDecision.previewSubject ?? null,
-      previewText: topDecision.previewText ?? null,
-      backlogCompanies: null,
-    };
+  return {
+    title: summary?.nextMove ?? topDecision.recommendedAction ?? topDecision.summary,
+    subject: topDecision.subject,
+    prospectId: topDecision.prospectId ?? null,
+    personId: topDecision.id ?? null,
+    avatarUrl: topDecision.avatarUrl ?? null,
+    subtitle: composeSubtitle(topDecision.actorTitle, topDecision.actorCompanyName ?? topDecision.companyName),
+    motionName: topDecision.motionName,
+    motionStatus: "active",
+    truth: pickDecisionTruth(topDecision),
+    truthAt: relativeFromIso(topDecision.observedAt),
+    surface: humanizeSurfaceKey(topDecision.surfaceKey),
+    action: primaryAction?.label ?? pickPrimaryActionLabel(topDecision),
+    actionMode: primaryAction?.mode ?? pickPrimaryActionMode(topDecision),
+    actionStatus: actionStatusForState(topDecision.state ?? ""),
+    actionWriter: primaryAction?.writer ?? null,
+    actionArgs: primaryAction?.args ?? null,
+    actionHref: primaryAction?.href ?? topDecision.actorProfileUrl ?? topDecision.sourceUrl ?? null,
+    why: summary?.why ?? topDecision.why ?? null,
+    previewLabel: topDecision.previewLabel ?? null,
+    previewSubject: topDecision.previewSubject ?? null,
+    previewText: topDecision.previewText ?? null,
+    backlogCompanies: null,
+    actions,
+  };
+}
+
+/**
+ * @param {any} summary
+ * @param {any[]} items
+ * @returns {any | null}
+ */
+function pickPromotedDecision(summary, items) {
+  const decisionItems = Array.isArray(items) ? items : [];
+  if (decisionItems.length === 0) return null;
+
+  const preferredAction = normalizeDecisionMatch(summary?.checklist?.[0]?.action ?? summary?.nextMove ?? null);
+  const preferredSubject = normalizeDecisionMatch(extractChecklistSubject(summary?.checklist?.[0]?.subject ?? null));
+  const preferredDueAt = normalizeDecisionMatch(summary?.checklist?.[0]?.dueAt ?? null);
+
+  const scored = decisionItems
+    .map((item, index) => ({
+      item,
+      index,
+      score: scorePromotedDecision(item, {
+        preferredAction,
+        preferredSubject,
+        preferredDueAt,
+      }),
+    }))
+    .sort((left, right) => right.score - left.score || left.index - right.index);
+
+  if (preferredAction || preferredSubject || preferredDueAt) {
+    return scored[0]?.score > 0 ? scored[0].item : null;
   }
 
-  return null;
+  return decisionItems.find((item) => item.priority === "high") ?? decisionItems[0] ?? null;
+}
+
+/**
+ * @param {any} item
+ * @param {{ preferredAction: string | null, preferredSubject: string | null, preferredDueAt: string | null }} preferred
+ * @returns {number}
+ */
+function scorePromotedDecision(item, preferred) {
+  let score = 0;
+
+  const action = normalizeDecisionMatch(item?.recommendedAction ?? item?.summary ?? null);
+  const subject = normalizeDecisionMatch(item?.subject ?? null);
+  const dueAt = normalizeDecisionMatch(item?.observedAt ?? null);
+
+  if (preferred.preferredAction && action === preferred.preferredAction) score += 8;
+  if (preferred.preferredSubject && subject === preferred.preferredSubject) score += 4;
+  if (preferred.preferredDueAt && dueAt === preferred.preferredDueAt) score += 2;
+
+  return score;
+}
+
+/**
+ * @param {string | null | undefined} subject
+ * @returns {string | null}
+ */
+function extractChecklistSubject(subject) {
+  const normalized = normalizeDecisionMatch(subject);
+  if (!normalized) return null;
+  const segments = normalized.split(" / ").map((segment) => segment.trim()).filter(Boolean);
+  return segments.at(-1) ?? normalized;
+}
+
+/**
+ * @param {string | null | undefined} value
+ * @returns {string | null}
+ */
+function normalizeDecisionMatch(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized.length ? normalized : null;
 }
 
 /**
@@ -253,6 +345,7 @@ function shapeNextMove(summary, topDecision) {
 function shapeDecisions(items) {
   return items.map((item) => {
     const stakes = item.priority === "high" ? "high" : null;
+    const actions = shapeDecisionActions(item);
     return {
       id: String(item.id),
       person: item.subject ?? "Unknown",
@@ -269,6 +362,7 @@ function shapeDecisions(items) {
       surface: humanizeSurfaceKey(item.surfaceKey),
       actionStatus: actionStatusForState(item.state ?? ""),
       primaryActionLabel: pickPrimaryActionLabel(item),
+      primaryActionMode: pickPrimaryActionMode(item),
       primaryHref: item.actorProfileUrl ?? item.sourceUrl ?? null,
       secondaryActionLabel: pickSecondaryActionLabel(item),
       secondaryHref: null,
@@ -276,8 +370,77 @@ function shapeDecisions(items) {
       previewLabel: item.previewLabel ?? null,
       previewSubject: item.previewSubject ?? null,
       previewText: item.previewText ?? null,
+      actions,
     };
   });
+}
+
+/**
+ * @param {any} item
+ * @returns {OperatorUiAction[]}
+ */
+function shapeDecisionActions(item) {
+  const options = decisionOptionsFor(item);
+  return options
+    .map((option) => shapeDecisionAction(String(option), item))
+    .filter(Boolean);
+}
+
+/**
+ * @param {string} option
+ * @param {any} item
+ * @returns {OperatorUiAction | null}
+ */
+function shapeDecisionAction(option, item) {
+  const fallbackHref = item?.actorProfileUrl ?? item?.sourceUrl ?? null;
+  switch (option) {
+    case "reply-now":
+      return {
+        label: "Reply now",
+        mode: "compose",
+        href: fallbackHref,
+        writer: null,
+        args: null,
+        variant: "primary",
+        icon: "arrowR",
+      };
+    case "message":
+      return {
+        label: "Send message",
+        mode: "compose",
+        href: fallbackHref,
+        writer: null,
+        args: null,
+        variant: "primary",
+        icon: "arrowR",
+      };
+    case "accept":
+      return item?.id
+        ? {
+            label: "Accept",
+            mode: "detail",
+            href: fallbackHref,
+            writer: "recordInboundObservation",
+            args: { observationId: String(item.id), nextKind: "connection_request_accepted" },
+            variant: "primary",
+            icon: "check",
+          }
+        : null;
+    case "decline":
+      return item?.id
+        ? {
+            label: "Reject",
+            mode: "detail",
+            href: fallbackHref,
+            writer: "recordInboundObservation",
+            args: { observationId: String(item.id), nextKind: "connection_request_decline_requested" },
+            variant: "danger",
+            icon: "x",
+          }
+        : null;
+    default:
+      return null;
+  }
 }
 
 /**
@@ -312,6 +475,8 @@ function queueItemHref(item) {
       return "/connections";
     case "outbound_capacity":
       return "/workspace";
+    case "company_discovery":
+      return item.motionId ? `/motions/${encodeURIComponent(item.motionId)}` : "/motions";
     default:
       return null;
   }
@@ -337,6 +502,9 @@ function shapeQueue(items) {
       // due-now. Past tense ("5m") for already-overdue items, future tense for
       // items still ramping up.
       waitingFor: waitingLabel(item.dueAt),
+      checkoutState: item.checkoutState === "checked_out" ? "checked_out" : null,
+      checkedOutBy: item.checkedOutBy ?? null,
+      checkedOutAt: item.checkedOutAt ?? null,
       // Where the operator goes to review/act on this queued work.
       href: queueItemHref(item),
     }));
@@ -358,6 +526,11 @@ function shapeBlocked(blockers) {
         resolveLabel: blocker.resolveLabel ?? "Review",
         channel: blocker.channel ?? "",
         actions: normalizeBlockedActions(blocker),
+        prospectId: blocker.prospectId ?? null,
+        personId: blocker.personId ?? null,
+        resolveMode: blocker.resolveMode
+          ?? (blocker.blockType === "stale_draft" ? "compose" : (blocker.prospectId || blocker.personId ? "detail" : null)),
+        resolveHref: blocker.resolveHref ?? null,
       };
     }
 
@@ -375,14 +548,14 @@ function shapeBlocked(blockers) {
           : "Run failed";
     const detail =
       blockType === "assignment"
-        ? `${blocker.blockedReadyCount} ready branch${blocker.blockedReadyCount === 1 ? "" : "es"} across ${blocker.blockedCompanyCount} compan${blocker.blockedCompanyCount === 1 ? "y" : "ies"} can't move until an owner is pinned.`
+        ? `${blocker.blockedReadyCount} ready branch${blocker.blockedReadyCount === 1 ? "" : "es"} across ${blocker.blockedCompanyCount} compan${blocker.blockedCompanyCount === 1 ? "y" : "ies"} can't move until an owner is assigned.`
         : `${blocker.channel ?? "This channel"} is blocked — clear the upstream issue before retrying.`;
     const actions = Array.isArray(blocker.stateActions)
       ? blocker.stateActions
           .filter((act) => act && act.kind === "assign_company_user" && act.companyId && act.userId)
           .map((act) => ({
             writer: "assignCompanyUser",
-            label: act.companyName ? `Pin ${act.companyName}` : act.label ?? "Pin owner",
+            label: act.companyName ? `Assign ${act.companyName}` : act.label ?? "Assign owner",
             args: {
               companyId: act.companyId,
               userId: act.userId,
@@ -397,9 +570,13 @@ function shapeBlocked(blockers) {
       reason,
       detail,
       blockType,
-      resolveLabel: blockType === "assignment" ? "Pin owner" : blockType === "failed" ? "Retry" : "Fix capability",
+      resolveLabel: blockType === "assignment" ? "Assign owner" : blockType === "failed" ? "Retry" : "Fix capability",
       channel: blocker.channel ?? "",
       actions,
+      prospectId: blocker.prospectId ?? null,
+      personId: blocker.personId ?? null,
+      resolveMode: blocker.kind === "stale_send_ready_draft" ? "compose" : (blocker.prospectId || blocker.personId ? "detail" : null),
+      resolveHref: blocker.resolveHref ?? null,
     };
   });
 }
@@ -442,6 +619,7 @@ function shapeAgentRuntime(runtime, queueCount) {
   const scheduler = runtime.scheduler ?? null;
   const routine = runtime.routine ?? null;
   const lastPass = runtime.lastPass ?? null;
+  const cadence = runtime.cadence ?? null;
   const activeBackoff = findActiveAgentBackoff(runtime, queueCount);
   const cadenceLabel = formatCadenceLabel(scheduler?.runIntervalSeconds ?? null);
   const sendMode = typeof routine?.sendMode === "string" && routine.sendMode.trim()
@@ -452,6 +630,12 @@ function shapeAgentRuntime(runtime, queueCount) {
     : queueCount;
   const lastPassSummary = summarizeLastPass(lastPass);
   const verifyHoldingSends = isVerifyModeHoldingSends({ sendMode, lastPass, verificationSendCount });
+  const overdueBySeconds = Number.isFinite(cadence?.overdueBySeconds) ? Number(cadence.overdueBySeconds) : 0;
+  const schedulerBehind = Boolean(scheduler?.loaded)
+    && !scheduler?.running
+    && queueCount > 0
+    && Boolean(cadence?.overdue)
+    && overdueBySeconds > 0;
 
   if (lock?.active) {
     const pidLabel = Number.isInteger(lock.pid) ? ` (pid ${lock.pid})` : "";
@@ -497,6 +681,20 @@ function shapeAgentRuntime(runtime, queueCount) {
       verificationSendCount,
       canRunNow: true,
       runLabel: "Run proof pass",
+    };
+  }
+
+  if (schedulerBehind) {
+    return {
+      state: "on",
+      headline: "Agent is behind",
+      detail: `${queueCount} queued task${queueCount === 1 ? "" : "s"} waiting to run. No pass is running right now. The next scheduled pass is already ${formatDelayLabel(overdueBySeconds)} late.`,
+      cadenceLabel,
+      sendMode,
+      lastPassSummary,
+      queueCount,
+      canRunNow: true,
+      runLabel: "Run agent now",
     };
   }
 
@@ -569,7 +767,7 @@ function pickDecisionTruth(item) {
 
 /** @param {any} item */
 function pickPrimaryActionLabel(item) {
-  const options = Array.isArray(item.options) ? item.options : [];
+  const options = decisionOptionsFor(item);
   if (options.includes("reply-now")) return "Reply now";
   if (options.includes("message")) return "Send message";
   if (options.includes("accept")) return "Accept";
@@ -580,11 +778,29 @@ function pickPrimaryActionLabel(item) {
 }
 
 /** @param {any} item */
+function pickPrimaryActionMode(item) {
+  const options = decisionOptionsFor(item);
+  if (options.includes("reply-now") || options.includes("message")) return "compose";
+  if (item.state === "needs_reply" || item.state === "ready_for_post_accept") return "compose";
+  return "detail";
+}
+
+/** @param {any} item */
 function pickSecondaryActionLabel(item) {
-  const options = Array.isArray(item.options) ? item.options : [];
+  const options = decisionOptionsFor(item);
   if (options.includes("wait")) return "Hold";
   if (options.includes("decline")) return "Pass";
   return "Profile";
+}
+
+/**
+ * @param {any} item
+ * @returns {string[]}
+ */
+function decisionOptionsFor(item) {
+  if (Array.isArray(item?.options)) return item.options;
+  if (Array.isArray(item?.decisionOptions)) return item.decisionOptions;
+  return [];
 }
 
 /** @param {string} state */
@@ -688,6 +904,16 @@ function buildAgentBackoffDetail(backoff, cadenceLabel, schedulerLoaded) {
   return `${schedulerLabel} ${laneLabel} is blocked right now.`;
 }
 
+/** @param {number | null | undefined} seconds */
+function formatDelayLabel(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+}
+
 /**
  * Format how long the queue has been holding this item. Past-due items return
  * "waiting 5m" / "waiting 3h"; not-yet-due items return "due in 5m".
@@ -765,6 +991,7 @@ function deriveCapabilityLabel(item) {
   const match = subject.match(/^([a-z][a-z-]+):/i);
   if (match) return match[1];
   if (item.sourceType === "company_research_packet") return "company research";
+  if (item.sourceType === "company_discovery") return "company discovery";
   if (item.sourceType?.includes("inbound")) return "inbound sync";
   if (item.sourceType === "maintenance") return "maintenance";
   return "exo";
@@ -781,7 +1008,7 @@ function normalizeBlockedActions(blocker) {
         .filter((act) => act && act.kind === "assign_company_user" && act.companyId && act.userId)
         .map((act) => ({
           writer: "assignCompanyUser",
-          label: act.companyName ? `Pin ${act.companyName}` : act.label ?? "Pin owner",
+          label: act.companyName ? `Assign ${act.companyName}` : act.label ?? "Assign owner",
           args: {
             companyId: act.companyId,
             userId: act.userId,

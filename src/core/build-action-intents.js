@@ -26,6 +26,7 @@ const BRANCH_MOVE = {
   "pre-connect": { step: "connection-request", surface: "profile_view", outcome: "sent", verb: "Warm before connecting" },
   "connection-requested": { step: "direct-message", surface: "follow_up_direct_message", outcome: "pending", verb: "Schedule follow-up" },
   connected: { step: "direct-message", surface: "post_accept_message", outcome: "sent", verb: "Draft opening message" },
+  "reply-accepted": { step: "direct-message", surface: "follow_up_direct_message", outcome: "sent", verb: "Continue conversation" },
   ready: { step: "connection-request", surface: "connection_request", outcome: "sent", verb: "Queue first move" },
   waiting: { step: "quarterly-retouch", surface: "follow_up_direct_message", outcome: "nurture", verb: "Hold for retouch" },
   blocked: { step: "value-add-email", surface: "email", outcome: "pending", verb: "Try email fallback" },

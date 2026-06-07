@@ -145,7 +145,7 @@ function renderIntro(model, meta = {}) {
     `<div class="op-intro">` +
     `<div>` +
     `<h1>Motions</h1>` +
-    `<p class="op-line">Your active GTM motions. Open one to see its offer, premise, signals and matched evidence.</p>` +
+    `<p class="op-line">Your active GTM motions. Open one to see its offer, premise, signals, matched evidence, and recent activity.</p>` +
     `</div>` +
     `<div class="op-intro-actions">` +
     `<div class="op-stat"><span><b>${model.motions.length}</b> motions</span></div>` +
@@ -306,6 +306,7 @@ function renderList(motions, meta) {
           `<div class="mc-cap mc-cap-pr">${iconSvg("target", 10)}Premise${m.premise ? truthTag(m.premiseTruth) : ""}</div>` +
           `<p class="mc-premise-t">${escapeHtml(m.premise ?? "No premise authored yet.")}</p>` +
           `</div>` +
+          renderMotionCardActivity(m.activity) +
           `<div class="mc-stats">` +
           `<span><b>${m.signalCount}</b> signals</span>` +
           `<span><b>${m.companyCount}</b> companies</span>` +
@@ -506,6 +507,7 @@ function renderDetail(m, meta = {}) {
     renderSignals(m.signals) +
     renderAudiences(m.audiences) +
     renderMatches(m, meta) +
+    renderActivity(m.activity) +
     renderPlan(m) +
     `</section>`
   );
@@ -523,6 +525,7 @@ function renderOperationalDetail(m, meta = {}) {
     renderHead(m, meta) +
     renderAudiences(m.audiences) +
     renderMatches(m, meta) +
+    renderActivity(m.activity) +
     renderPlan(m) +
     `</section>`
   );
@@ -544,6 +547,7 @@ function renderSettingsDetail(m, meta = {}) {
     `<section class="settings-pane" id="premise" role="tabpanel" aria-labelledby="${escapeAttr(tabsetId)}-tab-premise" data-tab-panel="premise">${renderPremise(m.premise)}</section>` +
     `<section class="settings-pane" id="offer" role="tabpanel" aria-labelledby="${escapeAttr(tabsetId)}-tab-offer" data-tab-panel="offer" hidden>${renderOffer(m.offer)}</section>` +
     `<section class="settings-pane" id="signals" role="tabpanel" aria-labelledby="${escapeAttr(tabsetId)}-tab-signals" data-tab-panel="signals" hidden>${renderSignals(m.signals, { motionId: m.id, editable: Boolean(meta.interactive) })}</section>` +
+    `<section class="settings-pane" id="execution" role="tabpanel" aria-labelledby="${escapeAttr(tabsetId)}-tab-execution" data-tab-panel="execution" hidden>${renderExecutionSettings(m, meta)}</section>` +
     `</div>` +
     `</section>`
   );
@@ -561,11 +565,23 @@ function renderHead(m, meta = {}) {
     : `<a class="mh-back" href="${escapeAttr(meta.interactive ? "/motions" : "#motions-top")}">${iconSvg("chevron", 12)} All motions</a>`;
   const settingsHref = meta.interactive ? `/motions/${encodeURIComponent(m.id)}/settings` : null;
   const motionHref = meta.interactive ? `/motions/${encodeURIComponent(m.id)}` : null;
+  const setLiveAction = meta.interactive && m.state !== "active"
+    ? liveActionBtn({
+        writer: "restartMotion",
+        args: { motionId: m.id },
+        variant: "primary",
+        icon: "check",
+        label: "Set live",
+        title: "Mark this motion active so it becomes the live working motion.",
+      })
+    : "";
   const actions = meta.settingsPage
     ? [
+        setLiveAction,
         motionHref ? btn({ variant: "primary", size: "sm", icon: "layers", label: "Open motion", href: motionHref }) : "",
       ].filter(Boolean).join("")
     : [
+        setLiveAction,
         settingsHref ? btn({ variant: "secondary", size: "sm", icon: "sliders", label: "Settings", href: settingsHref }) : "",
         btn({ variant: "secondary", size: "sm", icon: "refresh", label: "Sync via agent", disabled: true, title: "Re-targeting and capture run from the agent, not the UI." }),
       ].filter(Boolean).join("");
@@ -590,6 +606,7 @@ function renderSettingsTabs(tabsetId) {
     `<button class="settings-tab is-active" id="${escapeAttr(tabsetId)}-tab-premise" type="button" role="tab" aria-selected="true" aria-controls="premise" tabindex="0" data-tab-target="premise">Premise</button>` +
     `<button class="settings-tab" id="${escapeAttr(tabsetId)}-tab-offer" type="button" role="tab" aria-selected="false" aria-controls="offer" tabindex="-1" data-tab-target="offer">Offer</button>` +
     `<button class="settings-tab" id="${escapeAttr(tabsetId)}-tab-signals" type="button" role="tab" aria-selected="false" aria-controls="signals" tabindex="-1" data-tab-target="signals">Signals</button>` +
+    `<button class="settings-tab" id="${escapeAttr(tabsetId)}-tab-execution" type="button" role="tab" aria-selected="false" aria-controls="execution" tabindex="-1" data-tab-target="execution">Execution</button>` +
     `</div>`
   );
 }
@@ -701,6 +718,58 @@ function renderSignalComposer(motionId) {
     `<div class="compose-actions">` +
     `<button class="btn btn-primary btn-sm" type="button">${iconSvg("spark", 14)}<span>Add questions</span></button>` +
     `</div>` +
+    `</div>`
+  );
+}
+
+/**
+ * @param {any} motion
+ * @param {{ interactive?: boolean, user?: { id?: string | null, label?: string | null } | null }} [meta]
+ */
+function renderExecutionSettings(motion, meta = {}) {
+  const assignment = motion.executionAssignment ?? null;
+  const currentUserId = meta.user?.id ?? null;
+  const currentUserLabel = meta.user?.label ?? null;
+  const currentUserPinned = Boolean(currentUserId) && assignment?.userId === currentUserId;
+  const assignmentSummary = assignment
+    ? `${assignment.label} is pinned as the acting user for this motion.`
+    : "No acting user is pinned for this motion yet.";
+  const assignmentDetail = assignment
+    ? `Launch will inherit ${Array.isArray(assignment.accountRefs) && assignment.accountRefs.length ? assignment.accountRefs.join(", ") : "the pinned user's mapped accounts"}.`
+    : "This is why the motion plan warns that Exo cannot resolve one ready execution identity before launch.";
+  const button = meta.interactive && currentUserId && !currentUserPinned
+    ? liveActionBtn({
+        writer: "assignMotionUser",
+        args: {
+          motionId: motion.id,
+          userId: currentUserId,
+          reason: "Keep one execution identity for this motion",
+        },
+        variant: "primary",
+        icon: "check",
+        label: currentUserLabel ? `Use ${currentUserLabel}` : "Pin current user",
+        title: "Pin the current workspace user to this motion so launch can resolve a governed execution identity.",
+      })
+    : "";
+  const footer = currentUserPinned
+    ? `<p class="premise-note">The current workspace user already governs this motion.</p>`
+    : currentUserLabel
+      ? `<p class="premise-note">Current workspace user: ${escapeHtml(currentUserLabel)}.</p>`
+      : `<p class="premise-note">Open the UI as a governed execution user to pin a motion owner here.</p>`;
+
+  return (
+    `<div class="offer-card">` +
+    `<div class="offer-head">` +
+    `<span class="def-cap">${iconSvg("userPlus", 12)}Execution · who can launch this motion</span>` +
+    `</div>` +
+    `<div class="offer-title">${escapeHtml(assignment?.label ?? "Unassigned")}</div>` +
+    `<p class="offer-summary">${escapeHtml(assignmentSummary)}</p>` +
+    `<p class="offer-summary">${escapeHtml(assignmentDetail)}</p>` +
+    `<div class="premise-meta">` +
+    ownerTag({ ownerName: assignment?.label ?? null, initials: assignment?.label?.slice(0, 1)?.toUpperCase() ?? null }) +
+    `</div>` +
+    footer +
+    (button ? `<div class="compose-actions">${button}</div>` : "") +
     `</div>`
   );
 }
@@ -831,6 +900,133 @@ function renderPlan(m) {
     `<div class="md-tile">${stateDot(m.plan.packet === "ready" ? "ready" : m.plan.packet === "partial" ? "waiting" : "draft", m.plan.packet)}<em>Packet</em></div>` +
     `</div>`;
   return head + gap + steps + tiles;
+}
+
+/** @param {any} activity */
+function renderMotionCardActivity(activity) {
+  const phase = motionActivityPhase(activity);
+  return (
+    `<div class="mc-activity mc-activity-${escapeAttr(phase)}">` +
+    `<div class="mc-cap">${iconSvg("activity", 10)}Activity</div>` +
+    `<div class="mc-activity-t">${escapeHtml(motionActivityHeadline(activity))}</div>` +
+    `<p class="mc-activity-note">${escapeHtml(motionActivityNote(activity))}</p>` +
+    `</div>`
+  );
+}
+
+/** @param {any} activity */
+function renderActivity(activity) {
+  const head = `<div class="md-section">Motion activity <span>${escapeHtml(String(activity?.touchCount ?? 0))}</span></div>`;
+  if (!activity || (!activity.touchCount && !activity.stagedDraftCount)) {
+    return head + emptyState({ icon: "activity", message: "No touches or staged drafts are recorded on this motion yet." });
+  }
+
+  const note = (
+    `<div class="activity-note">` +
+    iconSvg("activity", 13) +
+    `<div>${escapeHtml(motionActivityLongNote(activity))}</div>` +
+    `</div>`
+  );
+  const tiles =
+    `<div class="md-stats">` +
+    `<div class="md-tile"><b>${activity.touchCount}</b><em>Touches</em></div>` +
+    `<div class="md-tile"><b>${activity.inboundTouchCount}</b><em>Inbound</em></div>` +
+    `<div class="md-tile"><b>${activity.outboundTouchCount}</b><em>Outbound</em></div>` +
+    `<div class="md-tile"><b>${activity.stagedDraftCount}</b><em>Staged drafts</em></div>` +
+    `</div>`;
+  const timeline = activity.events?.length
+    ? `<div class="motion-activity-timeline"><ol class="tl">${activity.events.map(renderActivityEvent).join("")}</ol></div>`
+    : "";
+  return head + note + tiles + timeline;
+}
+
+/** @param {any} event */
+function renderActivityEvent(event) {
+  const rowTone = event.tone === "bad"
+    ? "tl-bad"
+    : event.tone === "in"
+      ? "tl-in"
+      : event.tone === "out"
+        ? "tl-out"
+        : "tl-sys";
+  return (
+    `<li class="tl-item ${escapeAttr(rowTone)}">` +
+    `<span class="tl-dot">${iconSvg(event.kind === "draft" ? "spark" : "activity", 12)}</span>` +
+    `<div class="tl-body">` +
+    `<div class="tl-head">` +
+    `<span class="tl-title">${escapeHtml(event.title)}</span>` +
+    `<span class="tl-status ${activityStatusClass(event.status)}">${escapeHtml(activityStatusLabel(event.status))}</span>` +
+    `<span class="tl-time">${escapeHtml(formatActivityStamp(event.at))}</span>` +
+    `</div>` +
+    (event.detail ? `<p class="tl-detail">${escapeHtml(event.detail)}</p>` : "") +
+    `</div>` +
+    `</li>`
+  );
+}
+
+/** @param {any} activity */
+function motionActivityPhase(activity) {
+  if ((activity?.touchCount ?? 0) > 0) return "live";
+  if ((activity?.stagedDraftCount ?? 0) > 0) return "staged";
+  return "empty";
+}
+
+/** @param {any} activity */
+function motionActivityHeadline(activity) {
+  if ((activity?.touchCount ?? 0) > 0) {
+    return `${activity.touchCount} recorded touch${activity.touchCount === 1 ? "" : "es"}`;
+  }
+  if ((activity?.stagedDraftCount ?? 0) > 0) {
+    return `${activity.stagedDraftCount} staged draft${activity.stagedDraftCount === 1 ? "" : "s"}`;
+  }
+  return "No activity recorded";
+}
+
+/** @param {any} activity */
+function motionActivityNote(activity) {
+  if ((activity?.touchCount ?? 0) > 0) {
+    const parts = [];
+    if (activity.inboundTouchCount) parts.push(`${activity.inboundTouchCount} inbound`);
+    if (activity.outboundTouchCount) parts.push(`${activity.outboundTouchCount} outbound`);
+    if (activity.stagedDraftCount) parts.push(`${activity.stagedDraftCount} staged draft${activity.stagedDraftCount === 1 ? "" : "s"}`);
+    if (activity.latestAt) parts.push(`last ${formatActivityStamp(activity.latestAt)}`);
+    return parts.join(" · ");
+  }
+  if ((activity?.stagedDraftCount ?? 0) > 0) {
+    return `Planning exists, but no touch is recorded as sent or received${activity.latestAt ? ` · last ${formatActivityStamp(activity.latestAt)}` : ""}.`;
+  }
+  return "No touches or staged drafts are recorded on this motion yet.";
+}
+
+/** @param {any} activity */
+function motionActivityLongNote(activity) {
+  if ((activity?.touchCount ?? 0) > 0) {
+    return `This motion has live recorded history: ${motionActivityNote(activity)}.`;
+  }
+  return `Exo has staged work here, but live engagement has not started yet: ${motionActivityNote(activity)}`;
+}
+
+/** @param {string | null | undefined} status */
+function activityStatusClass(status) {
+  if (status === "blocked") return "tl-status-blocked";
+  if (status === "received") return "tl-status-received";
+  if (status === "queued") return "tl-status-queued";
+  if (status === "ready") return "tl-status-ready";
+  if (status === "drafting") return "tl-status-drafting";
+  return "tl-status-sent";
+}
+
+/** @param {string | null | undefined} status */
+function activityStatusLabel(status) {
+  if (!status) return "event";
+  return String(status).replace(/_/g, " ");
+}
+
+/** @param {string | null | undefined} value */
+function formatActivityStamp(value) {
+  if (!value) return "unknown";
+  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  return match ? `${match[1]} ${match[2]}Z` : String(value);
 }
 
 /** @param {{ generatedAt?: string, regenerateCommand?: string }} meta */

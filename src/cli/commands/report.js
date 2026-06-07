@@ -200,6 +200,7 @@ Rules:
       const model = buildMotionsViewModel({
         motionSummaries: data.motionSummaries,
         motionDetails: data.motionDetails,
+        rawMotions: listMotions(),
       });
 
       if (options.json) {
@@ -385,6 +386,7 @@ Rules:
       });
       const data = projection.data;
       const model = buildConnectionsViewModel({
+        observations: data.observations,
         reviewItems: data.reviewItems,
         truthAccounts: data.truthAccounts,
       });

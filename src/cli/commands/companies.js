@@ -22,7 +22,7 @@ import { claimMotionTargetAccountPacket } from "../../core/claim-target-account-
 import { completeMotionProspectPacket } from "../../core/complete-motion-prospect-packet.js";
 import { completeMotionTargetAccountPacket } from "../../core/complete-target-account-packet.js";
 import { warmImageProxy } from "../../lib/image-proxy.js";
-import { isSendableDraftStatus } from "../../lib/draft-policy.js";
+import { isAutonomousSendReadyDraft, isSendableDraftStatus } from "../../lib/draft-policy.js";
 import { approveMotionProspectDraft, markMotionProspectDraftSent, setMotionProspectDraft } from "../../core/set-prospect-draft.js";
 import { recordActionResult } from "../../core/record-action-result.js";
 import { recordMotionProspect, updateMotionProspect } from "../../core/record-prospect.js";
@@ -233,11 +233,11 @@ Examples:
 
   companyProfile
     .command("assign")
-    .description("Pin one registered browser profile to a company for sticky engagement identity.")
+    .description("Assign one registered browser profile to a company for sticky engagement identity.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--profile <profile-id>", "Browser profile identifier")
     .option("--by <actor>", "Who made the assignment")
-    .option("--reason <reason>", "Why this profile is being pinned")
+    .option("--reason <reason>", "Why this profile is being assigned")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
       "after",
@@ -247,8 +247,8 @@ Examples:
 
 Rules:
   - The profile must already be registered in Exo.
-  - The profile must be ready before it can be pinned.
-  - Once pinned, profile resolution for this company should stay sticky.
+  - The profile must be ready before it can be assigned.
+  - Once assigned, profile resolution for this company should stay sticky.
 `
     )
     .action((companyId, options) => {
@@ -289,18 +289,18 @@ Rules:
 
   companyUser
     .command("assign")
-    .description("Pin one execution user to a company so each capability can resolve through the right account.")
+    .description("Assign one execution user to a company so each capability can resolve through the right account.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--user <user-id>", "Execution user identifier")
     .option("--by <actor>", "Who made the assignment")
-    .option("--reason <reason>", "Why this user is being pinned")
+    .option("--reason <reason>", "Why this user is being assigned")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
       "after",
       `
 Examples:
   exo companies user assign <company-id> --user <user-id> --reason "Use one human identity across LinkedIn and email"
-  exo companies user assign <company-id> --user <user-id> --account linkedin:williamflanagan --account gmail:william@customer-a.com --reason "Pin William plus the correct inbox"
+  exo companies user assign <company-id> --user <user-id> --account linkedin:williamflanagan --account gmail:william@customer-a.com --reason "Assign William plus the correct inbox"
 
 Rules:
   - The user must already exist in Exo.
@@ -309,7 +309,7 @@ Rules:
   - Legacy browser-profile mappings are not projected into a governed execution path.
 `
     )
-    .option("--account <capability:handle>", "Pin one exact account ref for this assignment; repeat for multiple capabilities", collect, [])
+    .option("--account <capability:handle>", "Assign one exact account ref for this assignment; repeat for multiple capabilities", collect, [])
     .action((companyId, options) => {
       const rawCompany = findCompanyById(companyId);
       if (!rawCompany) {
@@ -345,7 +345,7 @@ Rules:
     .description("Show the resolved execution plan for one company capability.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--capability <capability>", "generic-web | linkedin | sales-navigator | gmail | hubspot")
-    .option("--motion <motion-id>", "Honor a motion-level execution default when the company itself is not pinned")
+    .option("--motion <motion-id>", "Honor a motion-level execution default when the company itself is not assigned")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
       "after",
@@ -356,8 +356,8 @@ Examples:
   exo companies execution show <company-id> --capability linkedin --json
 
 Use this before live browser-backed work when you need one canonical answer to:
-  - which user and profile are pinned to this company?
-  - whether the company is inheriting its sticky identity from a motion default instead of a company pin
+  - which user and profile are assigned to this company?
+  - whether the company is inheriting its sticky identity from a motion default instead of a company assignment
   - which transport should I try first in this runtime?
   - what recovery pattern should I use if Chrome or the relay fails?
 `
@@ -1333,6 +1333,7 @@ Rules:
   - Completing a prospect packet does not magically make the branch ready. The stored cadence and queue state still have to support readiness.
   - If the packet is completed but the prospect is still selected, it should naturally return to the claimable backlog.
   - Use terminal overrides only when the prospect should be suppressed or exhausted.
+  - A no-channel prospect cannot be completed into exhausted until governed connected-account LinkedIn search was attempted and recorded as --source-tried linkedin_connected_search on the prospect enrichment state.
 `
     )
     .action((companyId, options) => {
@@ -1503,7 +1504,7 @@ Rules:
         for (const account of motion.targetMap.accounts) {
           for (const prospect of account.prospects) {
             for (const d of prospect.drafts ?? []) {
-              if (d.status === "approved" || d.status === "queued") {
+              if (isAutonomousSendReadyDraft(d)) {
                 queued.push({
                   motionId: motion.id,
                   motionName: motion.name,
@@ -1534,7 +1535,7 @@ Rules:
       }
         console.log(`${queued.length} draft(s) queued for send:`);
       for (const d of queued) {
-        console.log(`  ${d.prospectName} · ${d.surface} (${d.channel})${d.subject ? ` · "${d.subject}"` : ""}${d.editedByOperator ? " · edited" : ""}${d.status === "approved" ? " · operator-approved" : " · auto-queued"}`);
+        console.log(`  ${d.prospectName} · ${d.surface} (${d.channel})${d.subject ? ` · "${d.subject}"` : ""}${d.editedByOperator ? " · edited" : ""}${d.status === "approved" ? " · operator-approved" : " · operator-queued"}`);
       }
     });
 

@@ -6,6 +6,7 @@ import { inboundObservationKindSchema, inboundObservationSchema, inboundSurfaceK
 import { userSchema } from "../schema/user.js";
 import { findInboundSurfaceDefinition } from "../lib/inbound-surface-catalog.js";
 import { normalizeImageProxyFields } from "../lib/image-proxy.js";
+import { listInboundObservations } from "../db/database.js";
 import {
   buildLinkedinProfileUrlFromPublicId,
   extractLinkedinPublicId,
@@ -37,6 +38,7 @@ import { resolveInboundObservationLinks } from "./resolve-inbound-observation-li
  *   motionId?: string | null,
  *   companyId?: string | null,
  *   prospectId?: string | null,
+ *   providerSharedSecret?: string | null,
  *   notes?: string | null,
  *   messages?: Array<{
  *     id?: string | null,
@@ -71,7 +73,8 @@ export function recordInboundObservation(rawUser, input, options = {}) {
     throw new Error(`Observation kind ${kind} does not apply to inbound surface ${surfaceKey}.`);
   }
 
-  const resolvedLinks = resolveInboundObservationLinks(options.rawMotions ?? [], {
+  const explicitLinks = resolveInboundObservationLinks(options.rawMotions ?? [], {
+    surfaceKey,
     motionId: input.motionId,
     companyId: input.companyId,
     prospectId: input.prospectId,
@@ -80,6 +83,18 @@ export function recordInboundObservation(rawUser, input, options = {}) {
     actorLinkedinPublicId: input.actorLinkedinPublicId,
     actorLinkedinMemberId: input.actorLinkedinMemberId
   });
+  const claimedLinks = shouldInheritClaimedLinks(explicitLinks)
+    ? resolveClaimedInboundObservationLinks(listInboundObservations({ userId: user.id }), {
+        accountId: account.id,
+        capability: account.capability,
+        surfaceKey,
+        actorHandle: input.actorHandle,
+        actorProfileUrl: input.actorProfileUrl,
+        actorLinkedinPublicId: input.actorLinkedinPublicId,
+        actorLinkedinMemberId: input.actorLinkedinMemberId,
+      })
+    : null;
+  const resolvedLinks = claimedLinks ?? explicitLinks;
   const now = new Date().toISOString();
   const normalizedExternalId = normalizeNullableString(input.externalId);
   const avatar = normalizeImageProxyFields(input.actorAvatarSourceUrl);
@@ -117,6 +132,7 @@ export function recordInboundObservation(rawUser, input, options = {}) {
     motionId: resolvedLinks.motionId,
     companyId: resolvedLinks.companyId,
     prospectId: resolvedLinks.prospectId,
+    providerSharedSecret: normalizeNullableString(input.providerSharedSecret),
     notes: normalizeNullableString(input.notes),
     messages: normalizeInboundMessages(input.messages)
   });
@@ -191,6 +207,7 @@ export function mergeInboundObservation(rawExisting, nextObservation) {
     motionId: nextObservation.motionId ?? existing.motionId,
     companyId: nextObservation.companyId ?? existing.companyId,
     prospectId: nextObservation.prospectId ?? existing.prospectId,
+    providerSharedSecret: nextObservation.providerSharedSecret ?? existing.providerSharedSecret,
     notes: nextObservation.notes ?? existing.notes,
     messages: nextObservation.messages.length ? nextObservation.messages : existing.messages
   });
@@ -200,16 +217,48 @@ export function mergeInboundObservation(rawExisting, nextObservation) {
  * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
  */
 export function buildInboundObservationIdentityKeys(observation) {
+  return buildInboundIdentityKeys(observation, { includeExternalId: true, includeBroadLinkedinIdentity: false });
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type | {
+ *   accountId?: string | null,
+ *   capability?: string | null,
+ *   surfaceKey?: string | null,
+ *   actorHandle?: string | null,
+ *   actorProfileUrl?: string | null,
+ *   actorLinkedinPublicId?: string | null,
+ *   actorLinkedinMemberId?: string | null,
+ * }} observation
+ */
+export function buildInboundObservationPersonIdentityKeys(observation) {
+  return buildInboundIdentityKeys(observation, { includeExternalId: false, includeBroadLinkedinIdentity: true });
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type | {
+ *   accountId?: string | null,
+ *   capability?: string | null,
+ *   surfaceKey?: string | null,
+ *   actorHandle?: string | null,
+ *   actorProfileUrl?: string | null,
+ *   actorLinkedinPublicId?: string | null,
+ *   actorLinkedinMemberId?: string | null,
+ *   externalId?: string | null,
+ * }} observation
+ * @param {{ includeExternalId: boolean, includeBroadLinkedinIdentity: boolean }} options
+ */
+function buildInboundIdentityKeys(observation, options) {
   const keys = new Set();
-  if (observation.externalId) {
+  if (options.includeExternalId && observation.externalId) {
     keys.add(`external:${observation.externalId}`);
   }
 
-  if (isLinkedinIdentitySurface(observation.surfaceKey) && observation.actorProfileUrl) {
+  if (supportsLinkedinIdentityKeys(observation.surfaceKey, options) && observation.actorProfileUrl) {
     keys.add(`linkedin_profile:${normalizeContactValue("linkedin_profile", observation.actorProfileUrl)}`);
   }
 
-  if (isLinkedinIdentitySurface(observation.surfaceKey)) {
+  if (supportsLinkedinIdentityKeys(observation.surfaceKey, options)) {
     const derivedPublicId = observation.actorLinkedinPublicId ?? extractLinkedinPublicId(observation.actorProfileUrl);
     if (derivedPublicId) {
       const normalizedPublicId = normalizeContactValue("linkedin_public_id", derivedPublicId);
@@ -258,9 +307,49 @@ export function inboundObservationsShareIdentity(left, right) {
 }
 
 /**
- * @param {import("../schema/inbound.js").inboundSurfaceKeySchema._type} surfaceKey
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type | {
+ *   accountId?: string | null,
+ *   capability?: string | null,
+ *   surfaceKey?: string | null,
+ *   actorHandle?: string | null,
+ *   actorProfileUrl?: string | null,
+ *   actorLinkedinPublicId?: string | null,
+ *   actorLinkedinMemberId?: string | null,
+ * }} left
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type | {
+ *   accountId?: string | null,
+ *   capability?: string | null,
+ *   surfaceKey?: string | null,
+ *   actorHandle?: string | null,
+ *   actorProfileUrl?: string | null,
+ *   actorLinkedinPublicId?: string | null,
+ *   actorLinkedinMemberId?: string | null,
+ * }} right
  */
-function isLinkedinIdentitySurface(surfaceKey) {
+export function inboundObservationsSharePersonIdentity(left, right) {
+  const rightKeys = buildInboundObservationPersonIdentityKeys(right);
+  for (const key of buildInboundObservationPersonIdentityKeys(left)) {
+    if (rightKeys.has(key)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundSurfaceKeySchema._type | string | null | undefined} surfaceKey
+ * @param {{ includeBroadLinkedinIdentity: boolean }} options
+ */
+function supportsLinkedinIdentityKeys(surfaceKey, options) {
+  if (!surfaceKey) {
+    return false;
+  }
+
+  if (options.includeBroadLinkedinIdentity) {
+    return String(surfaceKey).startsWith("linkedin-");
+  }
+
   return surfaceKey === "linkedin-sent-invitations"
     || surfaceKey === "linkedin-received-invitations"
     || surfaceKey === "linkedin-followers-list"
@@ -305,4 +394,49 @@ function normalizeInboundMessages(messages) {
       body: String(message?.body ?? "").trim(),
     }))
     .filter((message) => message.body.length > 0);
+}
+
+/**
+ * @param {{ motionId: string | null, companyId: string | null, prospectId: string | null }} links
+ */
+function shouldInheritClaimedLinks(links) {
+  return !links.motionId && !links.companyId && !links.prospectId;
+}
+
+/**
+ * @param {unknown[]} rawObservations
+ * @param {{
+ *   accountId: string,
+ *   capability: string,
+ *   surfaceKey: string,
+ *   actorHandle?: string | null,
+ *   actorProfileUrl?: string | null,
+ *   actorLinkedinPublicId?: string | null,
+ *   actorLinkedinMemberId?: string | null,
+ * }} input
+ */
+function resolveClaimedInboundObservationLinks(rawObservations, input) {
+  const observations = parseInboundObservations(rawObservations);
+  const claimed = observations
+    .filter((candidate) =>
+      candidate.motionId
+      && candidate.companyId
+      && candidate.prospectId
+      && inboundObservationsSharePersonIdentity(candidate, input)
+    )
+    .sort((left, right) =>
+      right.observedAt.localeCompare(left.observedAt)
+      || right.recordedAt.localeCompare(left.recordedAt)
+    );
+
+  const winner = claimed[0] ?? null;
+  if (!winner) {
+    return null;
+  }
+
+  return {
+    motionId: winner.motionId,
+    companyId: winner.companyId,
+    prospectId: winner.prospectId,
+  };
 }

@@ -11,10 +11,9 @@ import {
   cliPath,
   runCliJson,
   runCliText,
-  setupReadyChromeProfile,
   writeFakeCodexCaptureScript,
-  writeFakeClaudeScript,
-  createLinkedProspectContext
+  createLinkedProspectContext,
+  uniqueTestLabel
 } from "./support/live-runtime.js";
 
 test("inbound sync gmail turns one Gmail capture cassette into governed writeback and can apply it", () => {
@@ -212,65 +211,32 @@ test("inbound sync linkedin turns one quick capture cassette into governed write
 
     const observations = runCliJson(tempDir, ["inbound", "observations", "list", user.id, "--json"]);
     assert.equal(observations.observations[0].kind, "connection_request_received");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
+    assert.equal(observations.observations[0].motionId, null);
+    assert.equal(observations.observations[0].companyId, null);
+    assert.equal(observations.observations[0].prospectId, null);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("inbound sync live orchestrates one mixed-runtime cassette pass and applies one governed writeback", () => {
+test("inbound sync live returns a mixed-runtime landing plan when one account still needs agent capture", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-live-cassette-"));
   const codexHome = path.join(tempDir, ".codex");
   const fakeCodexPath = path.join(tempDir, "fake-codex");
-  const fakeClaudePath = path.join(tempDir, "fake-claude");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/"]
-  });
 
   fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(path.join(codexHome, "config.toml"), ['[plugins."gmail@openai-curated"]', "enabled = true", ""].join("\n"));
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    '[plugins."gmail@openai-curated"]',
+    "enabled = true",
+    "",
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    ""
+  ].join("\n"));
   writeFakeCodexCaptureScript(fakeCodexPath, loadJsonCassette("inbound/gmail-live/codex-success.json"));
-  writeFakeClaudeScript(fakeClaudePath, {
-    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
-    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
-    structuredOutput: loadJsonCassette("inbound/linkedin-live/claude-mixed-success.json")
-  });
 
   try {
-    const profile = runCliJson(tempDir, [
-      "profiles",
-      "add",
-      "--browser",
-      "chrome",
-      "--label",
-      "combined-live-profile",
-      "--user-data-dir",
-      chrome.userDataDir,
-      "--profile-directory",
-      chrome.profileDirectory,
-      "--browser-command",
-      chrome.browserCommand,
-      "--capability",
-      "linkedin",
-      "--json"
-    ]);
-
-    const { motion, company, prospect } = createLinkedProspectContext(tempDir, {
-      premise: "This offer matters when inbound truth has to land from both Gmail and LinkedIn in one governed pass.",
-      signal: "company::Is there active workflow pressure that makes inbound replies or invites important?",
-      prospectName: "Alicia Buyer",
-      prospectTitle: "VP Revenue Operations",
-      whyRelevant: "Owns the workflow pain that makes both the email reply and LinkedIn invite operationally relevant.",
-      email: "alicia@buyer.example",
-      linkedinProfileUrl: "https://www.linkedin.com/in/alicia-buyer/"
-    });
-
-    const user = runCliJson(tempDir, ["users", "add", "--label", "combined-live-user", "--owner", "william", "--json"]);
-    runCliJson(tempDir, ["users", "harness", "add", user.id, "--runtime", "codex", "--connector", "gmail", "--status", "unknown", "--json"]);
-    runCliJson(tempDir, ["users", "harness", "add", user.id, "--runtime", "claude", "--connector", "chrome", "--status", "unknown", "--json"]);
-
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "combined-live-user"), "--owner", "william", "--json"]);
     const withLinkedin = runCliJson(tempDir, [
       "users",
       "accounts",
@@ -280,8 +246,10 @@ test("inbound sync live orchestrates one mixed-runtime cassette pass and applies
       "linkedin",
       "--handle",
       "combined-live-user",
-      "--profile",
-      profile.id,
+      "--runtime",
+      "codex",
+      "--connector",
+      "unipile",
       "--preferred",
       "--json"
     ]);
@@ -310,28 +278,22 @@ test("inbound sync live orchestrates one mixed-runtime cassette pass and applies
       "sync",
       "live",
       user.id,
-      "--apply",
-      "--refresh",
       "--json"
     ], {
       CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath,
-      EXO_CLAUDE_CLI: fakeClaudePath
+      EXO_CODEX_CLI: fakeCodexPath
     });
 
     assert.equal(result.mode, "quick");
     assert.equal(result.accounts.length, 2);
-    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).probe.runtime, "claude");
+    assert.equal(result.transportStatus, "agent_capture_required");
+    assert.equal(result.canApply, false);
+    assert.equal(result.payload, null);
+    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).probe.runtime, "codex");
     assert.equal(result.accounts.find((account) => account.account.id === gmailAccountId).probe.runtime, "codex");
-    assert.equal(result.applied.counts.observationCount, 2);
-    assert.equal(result.applied.refreshed.inbox.itemCount, 2);
-
-    const observations = runCliJson(tempDir, ["inbound", "observations", "list", user.id, "--json"]);
-    assert.equal(observations.observations.some((observation) => observation.kind === "email_reply_received"), true);
-    assert.equal(observations.observations.some((observation) => observation.kind === "connection_request_received"), true);
-    assert.equal(observations.observations.every((observation) => observation.motionId === motion.id), true);
-    assert.equal(observations.observations.every((observation) => observation.companyId === company.id), true);
-    assert.equal(observations.observations.some((observation) => observation.prospectId === prospect.id), true);
+    assert.equal(result.accounts.find((account) => account.account.id === gmailAccountId).capture.status, "success");
+    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).transport.kind, "agent_handoff");
+    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).payload, null);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

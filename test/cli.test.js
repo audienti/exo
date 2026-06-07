@@ -348,13 +348,13 @@ test("motion lifecycle commands transition status cleanly and targeting respects
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-lifecycle-"));
 
   try {
-    const motion = JSON.parse(
+    const started = JSON.parse(
       execFileSync(
         "node",
         [
           cliPath,
           "motion",
-          "add",
+          "start",
           "--url",
           offerUrl,
           "--premise",
@@ -371,6 +371,7 @@ test("motion lifecycle commands transition status cleanly and targeting respects
         }
       )
     );
+    const motion = started.motion;
 
     const paused = JSON.parse(
       execFileSync("node", [cliPath, "motion", "pause", motion.id, "--json"], {
@@ -723,6 +724,119 @@ test("users intake asks who the first managed user is before live execution setu
   }
 });
 
+test("onboarding asks for install scope before the first execution user on a true empty workspace", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-onboarding-empty-"));
+
+  try {
+    const onboarding = JSON.parse(
+      execFileSync("node", [cliPath, "onboarding", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(onboarding.status, "needs-scope");
+    assert.equal(onboarding.install.choice, null);
+    assert.match(onboarding.next.prompt, /local folder workspace|global install/i);
+    assert.deepEqual(
+      onboarding.install.question.options.map((option) => option.value),
+      ["local-folder", "global-install"]
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("onboarding still asks for install scope on a true empty workspace when EXO_STATE_DIR is pinned locally", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-onboarding-explicit-local-"));
+
+  try {
+    const onboarding = JSON.parse(
+      execFileSync("node", [cliPath, "onboarding", "--json"], {
+        cwd: tempDir,
+        env: {
+          ...process.env,
+          EXO_STATE_DIR: path.join(tempDir, ".exo"),
+        },
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(onboarding.status, "needs-scope");
+    assert.equal(onboarding.install.choice, null);
+    assert.deepEqual(
+      onboarding.install.question.options.map((option) => option.value),
+      ["local-folder", "global-install"]
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("onboarding persists a local-folder choice before the first user exists", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-onboarding-local-choice-"));
+
+  try {
+    const initial = JSON.parse(
+      execFileSync("node", [cliPath, "onboarding", "--scope", "local-folder", "--apply", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const repeated = JSON.parse(
+      execFileSync("node", [cliPath, "onboarding", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const workspaceConfig = JSON.parse(fs.readFileSync(path.join(tempDir, ".exo", "workspace.json"), "utf8"));
+
+    assert.equal(initial.ok, true);
+    assert.equal(initial.onboarding.status, "needs-user");
+    assert.equal(initial.onboarding.install.choice, "local-folder");
+    assert.equal(initial.onboarding.install.source, "workspace-config");
+    assert.equal(repeated.status, "needs-user");
+    assert.equal(repeated.install.choice, "local-folder");
+    assert.equal(repeated.install.source, "workspace-config");
+    assert.equal(workspaceConfig.installScope, "local-folder");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("onboarding can persist a local-folder choice, ignore .exo, and create the first user", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-onboarding-apply-"));
+  const fakeCodexHome = path.join(tempDir, "empty-codex-home");
+  fs.mkdirSync(fakeCodexHome, { recursive: true });
+
+  try {
+    const result = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "onboarding", "--scope", "local-folder", "--label", "william-main", "--apply", "--json"],
+        {
+          cwd: tempDir,
+          env: {
+            ...process.env,
+            CODEX_HOME: fakeCodexHome,
+            EXO_CLAUDE_CLI: path.join(tempDir, "missing-claude"),
+          },
+          encoding: "utf8"
+        }
+      )
+    );
+
+    assert.equal(result.ok, true);
+    assert.equal(result.applied.install.scope, "local-folder");
+    assert.equal(result.applied.user.user.label, "william-main");
+    assert.equal(result.onboarding.install.choice, "local-folder");
+    assert.equal(result.onboarding.status, "needs-account-mapping");
+    assert.match(fs.readFileSync(path.join(tempDir, ".gitignore"), "utf8"), /^\.exo\/$/m);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("motion add preserves commas inside a signal sentence instead of splitting it into multiple signals", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-signal-commas-"));
 
@@ -736,7 +850,7 @@ test("motion add preserves commas inside a signal sentence instead of splitting 
         [
           cliPath,
           "motion",
-          "add",
+          "start",
           "--url",
           offerUrl,
           "--signal",
@@ -750,10 +864,10 @@ test("motion add preserves commas inside a signal sentence instead of splitting 
       )
     );
 
-    assert.equal(motion.signals.length, 1);
-    assert.equal(motion.signals[0].scope, "company");
+    assert.equal(motion.motion.signals.length, 1);
+    assert.equal(motion.motion.signals[0].scope, "company");
     assert.equal(
-      motion.signals[0].question,
+      motion.motion.signals[0].question,
       "Is there recent evidence that this company expanded underwriting, changed credit policy, or launched BNPL?"
     );
   } finally {
@@ -2085,7 +2199,7 @@ test("claimed browser identities can be pinned to a company and sticky resolutio
     );
     assert.equal(blockedResolve.resolutionMode, "blocked-by-company-assignment");
     assert.equal(blockedResolve.resolved, null);
-    assert.match(blockedResolve.blocker, /pinned to audienti-main/i);
+    assert.match(blockedResolve.blocker, /(assigned|pinned) to audienti-main/i);
     assert.equal(secondProfile.verifiedCapabilities.includes("hubspot"), false);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -2705,6 +2819,27 @@ test("users working-hours can be configured and shown", () => {
   }
 });
 
+test("users add defaults working hours to scheduled weekdays from 07:00 to 18:00", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-default-working-hours-"));
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "default-hours-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(user.workingHours.mode, "scheduled");
+    assert.equal(user.workingHours.timezone, "America/New_York");
+    assert.deepEqual(user.workingHours.weekdays, ["mon", "tue", "wed", "thu", "fri"]);
+    assert.equal(user.workingHours.startLocalTime, "07:00");
+    assert.equal(user.workingHours.endLocalTime, "18:00");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound cues can be added, listed, and resolved", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-cues-"));
 
@@ -2941,9 +3076,11 @@ test("agent queue surfaces inbound sync pressure from stale surfaces and fresh a
       cues: [],
       now: "2026-05-29T23:30:00.000Z",
     });
-    const afterHoursSync = afterHours.tasks.find((item) => item.kind === "run_inbound_sync" && item.capability === "gmail");
+    const afterHoursSync = afterHours.waiting.find((item) => item.kind === "run_inbound_sync" && item.capability === "gmail");
     assert.ok(afterHoursSync);
-    assert.equal(afterHoursSync.queueState, "due_now");
+    assert.equal(afterHoursSync.queueState, "waiting");
+    assert.equal(afterHoursSync.waitingReason, "outside_working_hours");
+    assert.equal(afterHoursSync.dueAt, "2026-05-30T13:00:00.000Z");
     assert.equal(afterHoursSync.reason, "stale_surface");
     assert.equal(afterHoursSync.mode, "quick");
     assert.match(afterHoursSync.contractCommand, /exo inbound sync gmail-live .* --mode quick --json/);
@@ -2989,36 +3126,20 @@ test("agent queue surfaces inbound sync pressure from stale surfaces and fresh a
 
 test("motions can carry a sticky execution user that motion targeting and execution planning inherit by default", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-user-assignment-"));
-  const chrome = setupReadyChromeProfile(tempDir, {
-    historyUrls: ["https://www.linkedin.com/sales/home"]
-  });
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const codexEnv = { ...process.env, CODEX_HOME: codexHome };
 
   try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "motion-linkedin-profile",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "linkedin",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
     const motion = JSON.parse(
       execFileSync(
         "node",
@@ -3076,17 +3197,60 @@ test("motions can carry a sticky execution user that motion targeting and execut
       "node",
       [
         cliPath,
-        "profiles",
-        "claim",
-        profile.id,
-        "--max-connection-requests",
-        "0",
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--status",
+        "available",
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
     );
 
-    const userWithAccount = JSON.parse(
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8", env: codexEnv }
+    );
+
+    const userWithManagedLinkedin = JSON.parse(
       execFileSync(
         "node",
         [
@@ -3099,15 +3263,21 @@ test("motions can carry a sticky execution user that motion targeting and execut
           "linkedin",
           "--handle",
           "motion-owner",
-          "--profile",
-          profile.id,
+          "--runtime",
+          "codex",
+          "--connector",
+          "unipile",
+          "--provider-account-id",
+          "acct-linkedin-1",
+          "--max-connection-requests",
+          "125",
           "--preferred",
           "--json"
         ],
-        { cwd: tempDir, encoding: "utf8" }
+        { cwd: tempDir, encoding: "utf8", env: codexEnv }
       )
     );
-    const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+    const linkedinAccount = userWithManagedLinkedin.accounts.find((account) => account.capability === "linkedin");
     assert.ok(linkedinAccount);
     const syncedAt = new Date().toISOString();
 
@@ -3246,8 +3416,10 @@ test("motions can carry a sticky execution user that motion targeting and execut
     );
     assert.equal(targetingBefore.overallStage, "targeting-ready");
     assert.equal(targetingBefore.readyToTarget, true);
-    assert.equal(targetingBefore.readyToEngage, false);
-    assert.equal(targetingBefore.companyLoop.items[0].executionIdentity.status, "unassigned-global-ready");
+    assert.equal(targetingBefore.readyToEngage, true);
+    assert.equal(targetingBefore.companyLoop.items[0].executionIdentity.status, "pinned-ready");
+    assert.equal(targetingBefore.companyLoop.items[0].executionIdentity.transportKind, "harness-connection");
+    assert.match(targetingBefore.companyLoop.items[0].executionIdentity.message, /auto-resolved.*codex:unipile/i);
 
     const assignedMotion = JSON.parse(
       execFileSync(
@@ -3268,7 +3440,7 @@ test("motions can carry a sticky execution user that motion targeting and execut
       )
     );
     assert.equal(assignedMotion.engagementUserAssignment.userId, user.id);
-    assert.equal(assignedMotion.engagementProfileAssignment.profileId, profile.id);
+    assert.equal(assignedMotion.engagementProfileAssignment, null);
 
     const shownAssignment = JSON.parse(
       execFileSync("node", [cliPath, "motion", "user", "show", motion.id, "--json"], {
@@ -3286,7 +3458,8 @@ test("motions can carry a sticky execution user that motion targeting and execut
     );
     assert.equal(targetingAfter.readyToEngage, true);
     assert.equal(targetingAfter.companyLoop.items[0].executionIdentity.status, "pinned-ready");
-    assert.match(targetingAfter.companyLoop.items[0].executionIdentity.message, /Motion is pinned to user motion-owner/i);
+    assert.equal(targetingAfter.companyLoop.items[0].executionIdentity.transportKind, "harness-connection");
+    assert.match(targetingAfter.companyLoop.items[0].executionIdentity.message, /Motion is assigned to user motion-owner.*codex:unipile/i);
 
     const execution = JSON.parse(
       execFileSync(
@@ -3308,8 +3481,13 @@ test("motions can carry a sticky execution user that motion targeting and execut
     );
     assert.equal(execution.assignmentSource, "motion-user");
     assert.equal(execution.motion.id, motion.id);
-    assert.equal(execution.resolvedProfile.id, profile.id);
+    assert.equal(execution.resolvedProfile, null);
     assert.equal(execution.resolvedAccount.handle, "motion-owner");
+    assert.equal(execution.resolvedAccount.sourceType, "harness-connection");
+    assert.equal(execution.resolvedAccount.providerAccountId, "acct-linkedin-1");
+    assert.equal(execution.transport.status, "ready");
+    assert.equal(execution.transport.mode, "harness-connection");
+    assert.equal(execution.transport.preferredTransport.tool, "codex:unipile");
 
     const daily = JSON.parse(
       execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
@@ -3317,10 +3495,8 @@ test("motions can carry a sticky execution user that motion targeting and execut
         encoding: "utf8"
       })
     );
-    assert.equal(daily.items[0].prospect.name, "Parm Uppal");
-    assert.equal(daily.items[0].source.type, "cadence");
-    assert.equal(daily.items[0].guidance.key, "execute_first_touch");
-    assert.equal(daily.items[0].recommendedAction, "Send the first touch");
+    assert.equal(daily.items[0].context.userId, user.id);
+    assert.equal(daily.items[0].context.accountHandle, "motion-owner");
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
@@ -3329,8 +3505,8 @@ test("motions can carry a sticky execution user that motion targeting and execut
       })
     );
     assert.ok(["daily", "motion"].includes(next.source));
-    assert.equal(next.context.prospect.name, "Parm Uppal");
-    assert.equal(next.guidance.key, "execute_first_touch");
+    assert.equal(next.context.user.id, user.id);
+    assert.equal(next.context.accountHandle, "motion-owner");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -3877,8 +4053,8 @@ test("inbound sync run writes back one governed pass and refreshes inbox, daily,
     assert.equal(runResult.accounts[0].surfaces[1].surfaceKey, "linkedin-received-invitations");
     assert.equal(runResult.accounts[0].surfaces[1].itemCount, 1);
     assert.equal(runResult.refreshed.inbox.itemCount, 1);
-    assert.match(runResult.refreshed.daily.topItem.recommendedAction, /accept or decline/i);
-    assert.match(runResult.refreshed.next.nextMove, /accept or decline/i);
+    assert.match(runResult.refreshed.daily.topItem.recommendedAction, /claim alicia buyer into this workspace's transition backlog/i);
+    assert.match(runResult.refreshed.next.nextMove, /claim alicia buyer into this workspace's transition backlog/i);
     assert.equal(runResult.followUpCommands[2], `exo next --user ${user.id} --json`);
 
     const syncView = JSON.parse(
@@ -4323,6 +4499,12 @@ test("inbox ranks inbound observations into an operator-facing triage view with 
         "https://www.linkedin.com/in/parm-uppal/",
         "--summary",
         "Parm viewed our profile after the connection request.",
+        "--motion",
+        motion.id,
+        "--company",
+        company.id,
+        "--prospect",
+        prospect.id,
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
@@ -4350,6 +4532,12 @@ test("inbox ranks inbound observations into an operator-facing triage view with 
         "https://www.linkedin.com/in/parm-uppal/",
         "--summary",
         "Parm replied in the LinkedIn inbox.",
+        "--motion",
+        motion.id,
+        "--company",
+        company.id,
+        "--prospect",
+        prospect.id,
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
@@ -4670,12 +4858,12 @@ test("inbound review shows decision-ready items, stale sent invites, and itemiza
     );
 
     assert.equal(review.counts.reviewItemCount, 2);
-    assert.equal(review.counts.decisionItemCount, 1);
+    assert.equal(review.counts.decisionItemCount, 0);
     assert.equal(review.counts.itemizationGapCount, 1);
 
     const incomingInvite = review.reviewItems.find((item) => item.kind === "connection_request_received");
-    assert.equal(incomingInvite.state, "needs_decision");
-    assert.deepEqual(incomingInvite.decisionOptions, ["accept", "decline"]);
+    assert.equal(incomingInvite.state, "needs_claim");
+    assert.deepEqual(incomingInvite.decisionOptions, ["claim"]);
 
     const staleSentInvite = review.reviewItems.find((item) => item.kind === "connection_request_pending");
     assert.equal(staleSentInvite.state, "agent_withdraw_due");
@@ -4950,10 +5138,10 @@ test("daily and next surface inbound review decisions before idle outbound work"
     );
 
     assert.equal(daily.items[0].source.type, "inbound_review");
-    assert.equal(daily.items[0].source.kind, "needs_decision");
+    assert.equal(daily.items[0].source.kind, "needs_claim");
     assert.equal(daily.items[0].cadenceEffect, "inbound_review_needed");
     assert.equal(daily.items[0].guidance.key, "review_inbound_item");
-    assert.match(daily.items[0].recommendedAction, /accept or decline/i);
+    assert.match(daily.items[0].recommendedAction, /claim alicia buyer into this workspace's transition backlog/i);
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--json"], {
@@ -4965,24 +5153,24 @@ test("daily and next surface inbound review decisions before idle outbound work"
     assert.equal(next.source, "daily");
     assert.equal(next.status.effect, "inbound_review_needed");
     assert.equal(next.guidance.key, "review_inbound_item");
-    assert.match(next.nextMove, /accept or decline/i);
+    assert.match(next.nextMove, /claim alicia buyer into this workspace's transition backlog/i);
     assert.equal(
       next.operatorPrompt,
-      "Alicia Buyer sent you an inbound LinkedIn connection request. Accept or decline?"
+      "Alicia Buyer sent you an inbound LinkedIn connection request. Claim them into transition backlog or leave them in global intake?"
     );
 
     const plainDaily = execFileSync("node", [cliPath, "daily", "--user", user.id], {
       cwd: tempDir,
       encoding: "utf8"
     });
-    assert.match(plainDaily, /^Alicia Buyer sent you an inbound LinkedIn connection request\. Accept or decline\?/);
+    assert.match(plainDaily, /^Alicia Buyer sent you an inbound LinkedIn connection request\. Claim them into transition backlog or leave them in global intake\?/);
     assert.doesNotMatch(plainDaily, /Generated At:|Agent Prompt:|Cadence Effect:/);
 
     const plainInbox = execFileSync("node", [cliPath, "inbox", "--user", user.id], {
       cwd: tempDir,
       encoding: "utf8"
     });
-    assert.match(plainInbox, /^Alicia Buyer sent you an inbound LinkedIn connection request\. Accept or decline\?/);
+    assert.match(plainInbox, /^Claim Alicia Buyer into this workspace's transition backlog if the invite belongs here\./);
     assert.doesNotMatch(plainInbox, /Surface State:|Context:|Enabled Surfaces:/);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -4991,60 +5179,57 @@ test("daily and next surface inbound review decisions before idle outbound work"
 
 test("agent queue owns inbound itemization gaps when sync counts items without observations", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-inbound-gap-"));
-  const userDataDir = path.join(tempDir, "Chrome");
-  const linkedinDirectory = "Profile 4";
-  const linkedinPath = path.join(userDataDir, linkedinDirectory);
-  const browserCommand = path.join(tempDir, "fake-chrome");
-
-  fs.mkdirSync(linkedinPath, { recursive: true });
-  fs.writeFileSync(browserCommand, "#!/bin/sh\nexit 0\n");
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(
-    path.join(userDataDir, "Local State"),
-    JSON.stringify({
-      profile: {
-        info_cache: {
-          [linkedinDirectory]: { name: "LinkedIn Main" }
-        }
-      }
-    })
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
   );
-  fs.writeFileSync(path.join(linkedinPath, "Preferences"), JSON.stringify({ profile: { name: "LinkedIn Main" } }));
-  seedBrowserEvidence(linkedinPath, {
-    cookieHosts: [".linkedin.com"],
-    historyUrls: ["https://www.linkedin.com/feed/"]
-  });
+  const codexEnv = { ...process.env, CODEX_HOME: codexHome };
 
   try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "linkedin-profile",
-          "--user-data-dir",
-          userDataDir,
-          "--profile-directory",
-          linkedinDirectory,
-          "--browser-command",
-          browserCommand,
-          "--capability",
-          "linkedin",
-          "--json"
-        ],
-        { cwd: tempDir, encoding: "utf8" }
-      )
-    );
-
     const user = JSON.parse(
       execFileSync("node", [cliPath, "users", "add", "--label", "william-main", "--owner", "william", "--json"], {
         cwd: tempDir,
         encoding: "utf8"
       })
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "working-hours",
+        "set",
+        user.id,
+        "--mode",
+        "always",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8", env: codexEnv }
     );
 
     const withLinkedin = JSON.parse(
@@ -5060,12 +5245,16 @@ test("agent queue owns inbound itemization gaps when sync counts items without o
           "linkedin",
           "--handle",
           "william@linkedin",
-          "--profile",
-          profile.id,
+          "--runtime",
+          "codex",
+          "--connector",
+          "unipile",
+          "--provider-account-id",
+          "acct-linkedin-1",
           "--preferred",
           "--json"
         ],
-        { cwd: tempDir, encoding: "utf8" }
+        { cwd: tempDir, encoding: "utf8", env: codexEnv }
       )
     );
     const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
@@ -5116,7 +5305,8 @@ test("agent queue owns inbound itemization gaps when sync counts items without o
         encoding: "utf8"
       })
     );
-    const syncTask = queue.tasks.find((task) =>
+    const queueItems = [...queue.tasks, ...queue.waiting];
+    const syncTask = queueItems.find((task) =>
       task.kind === "run_inbound_sync"
       && task.reason === "itemization_gap"
       && task.accountId === linkedinAccountId
@@ -5395,8 +5585,8 @@ test("daily reconciles cadence with inbound observations into due, waiting, and 
     assert.equal(daily.items[0].priority, "reply");
     assert.equal(daily.items[0].cadenceEffect, "overridden_by_inbound");
     assert.match(daily.items[0].recommendedAction, /reply/i);
-    assert.equal(daily.items[0].source.type, "inbound_review");
-    assert.equal(daily.items[0].source.kind, "needs_reply");
+    assert.equal(daily.items[0].source.type, "inbound_observation");
+    assert.equal(daily.items[0].source.kind, "inbound_reply_received");
     assert.equal(daily.items[0].guidance.key, "reply_to_inbound");
     assert.match(daily.items[0].guidance.docPath, /docs\/planner\/reply_to_inbound\.md$/);
     assert.match(daily.items[0].guidance.taskPrompt, /Inspect the live inbound thread/i);
@@ -5620,8 +5810,9 @@ test("daily surfaces a parallel support action while a live outbound branch wait
     assert.equal(daily.items[0].guidance.key, "find_contact_points");
     assert.match(daily.items[0].recommendedAction, /verified direct email/i);
     assert.match(daily.items[0].recommendedAction, /mobile phone number/i);
-    assert.match(daily.items[0].guidance.taskPrompt, /First, check owned evidence/i);
-    assert.match(daily.items[0].guidance.taskPrompt, /Second, use Google searches and browser-based public-web work/i);
+    assert.match(daily.items[0].guidance.taskPrompt, /First, if LinkedIn identity is missing, search through the governed connected LinkedIn account path/i);
+    assert.match(daily.items[0].guidance.taskPrompt, /Second, check owned evidence/i);
+    assert.match(daily.items[0].guidance.taskPrompt, /Third, use Google searches and browser-based public-web work/i);
     assert.match(daily.items[0].guidance.taskPrompt, /verified mobile phone number/i);
     assert.match(daily.items[0].guidance.taskPrompt, /email permutations/i);
     assert.match(daily.items[0].guidance.taskPrompt, /prospects update .* --prospect /i);
@@ -5913,6 +6104,18 @@ test("daily does not duplicate the same ready branch as both a support action an
 
 test("agent queue owns sync freshness work when enabled inbound surfaces were never checked", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-sync-needed-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const codexEnv = { ...process.env, EXO_STATE_DIR: tempDir, CODEX_HOME: codexHome };
 
   try {
     const motion = JSON.parse(
@@ -5965,6 +6168,38 @@ test("agent queue owns sync freshness work when enabled inbound surfaces were ne
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "working-hours",
+        "set",
+        user.id,
+        "--mode",
+        "always",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
+    );
 
     execFileSync(
       "node",
@@ -5981,11 +6216,15 @@ test("agent queue owns sync freshness work when enabled inbound surfaces were ne
         "--runtime",
         "codex",
         "--connector",
-        "chrome",
+        "unipile",
+        "--provider-account-id",
+        "acct-linkedin-1",
+        "--max-connection-requests",
+        "125",
         "--preferred",
         "--json"
       ],
-      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      { cwd: repoRoot, env: codexEnv }
     );
 
     execFileSync(
@@ -6020,7 +6259,7 @@ test("agent queue owns sync freshness work when enabled inbound surfaces were ne
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    const syncTask = queue.tasks.find((task) => task.kind === "run_inbound_sync");
+    const syncTask = [...queue.tasks, ...queue.waiting].find((task) => task.kind === "run_inbound_sync");
     assert.ok(syncTask);
     assert.equal(syncTask.reason, "stale_surface");
     assert.equal(syncTask.mode, "quick");
@@ -6267,6 +6506,18 @@ test("daily and next expand motion inventory instead of idling when a live branc
 
 test("daily and next surface connection-request quota gaps and invitation deficits before generic inventory work", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-capacity-deficit-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const codexEnv = { ...process.env, EXO_STATE_DIR: tempDir, CODEX_HOME: codexHome };
   const userDataDir = path.join(tempDir, "Chrome");
   const profileDirectory = "Profile 4";
   const profilePath = path.join(userDataDir, profileDirectory);
@@ -6365,8 +6616,18 @@ test("daily and next surface connection-request quota gaps and invitation defici
     const user = JSON.parse(
       execFileSync("node", [cliPath, "users", "add", "--label", "quota-user", "--owner", "William", "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
+    );
+    execFileSync(
+      "node",
+      [cliPath, "users", "harness", "add", user.id, "--runtime", "codex", "--connector", "unipile", "--status", "available", "--json"],
+      { cwd: repoRoot, env: codexEnv }
+    );
+    execFileSync(
+      "node",
+      [cliPath, "users", "harness", "add", user.id, "--runtime", "codex", "--connector", "gmail", "--status", "available", "--json"],
+      { cwd: repoRoot, env: codexEnv }
     );
 
     const userWithLinkedin = JSON.parse(
@@ -6382,12 +6643,16 @@ test("daily and next surface connection-request quota gaps and invitation defici
           "linkedin",
           "--handle",
           "quota-user",
-          "--profile",
-          profile.id,
+          "--runtime",
+          "codex",
+          "--connector",
+          "unipile",
+          "--provider-account-id",
+          "acct-linkedin-1",
           "--preferred",
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
     );
     const linkedinAccount = userWithLinkedin.accounts.find((account) => account.capability === "linkedin");
@@ -6406,12 +6671,16 @@ test("daily and next surface connection-request quota gaps and invitation defici
           "gmail",
           "--handle",
           "quota-user",
-          "--profile",
-          profile.id,
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--provider-account-id",
+          "acct-gmail-1",
           "--preferred",
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
     );
     const gmailAccount = userWithGmail.accounts.find((account) => account.capability === "gmail");
@@ -6539,7 +6808,7 @@ test("daily and next surface connection-request quota gaps and invitation defici
     const beforeQuotaDaily = JSON.parse(
       execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
 
@@ -6553,20 +6822,31 @@ test("daily and next surface connection-request quota gaps and invitation defici
       "node",
       [
         cliPath,
-        "profiles",
-        "claim",
-        profile.id,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "linkedin",
+        "--handle",
+        "quota-user",
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--provider-account-id",
+        "acct-linkedin-1",
         "--max-connection-requests",
         "125",
         "--json"
       ],
-      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      { cwd: repoRoot, env: codexEnv }
     );
 
     const afterQuotaDaily = JSON.parse(
       execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
 
@@ -6579,22 +6859,22 @@ test("daily and next surface connection-request quota gaps and invitation defici
     assert.equal(afterQuotaDaily.capacity.linkedin.execution.remainingInvitationsToday, 25);
     assert.equal(afterQuotaDaily.capacity.linkedin.execution.inventoryShortfall, 25);
     assert.equal(afterQuotaDaily.items[0].cadenceEffect, "capacity_deficit");
-    assert.equal(afterQuotaDaily.items[0].source.kind, "seed_motion_targets");
-    assert.equal(afterQuotaDaily.items[0].guidance.key, "seed_motion_targets");
-    assert.match(afterQuotaDaily.items[0].recommendedAction, /seed more known companies or people directly into the active motion/i);
+    assert.equal(afterQuotaDaily.items[0].source.kind, "run_company_discovery");
+    assert.equal(afterQuotaDaily.items[0].guidance.key, "run_company_discovery");
+    assert.match(afterQuotaDaily.items[0].recommendedAction, /run autonomous company discovery on the active motion/i);
 
     const afterQuotaNext = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
 
     assert.ok(["daily", "motion"].includes(afterQuotaNext.source));
     assert.equal(afterQuotaNext.status.effect, "capacity_deficit");
-    assert.equal(afterQuotaNext.guidance.key, "seed_motion_targets");
-    assert.equal(afterQuotaNext.context.source.kind, "seed_motion_targets");
-    assert.match(afterQuotaNext.nextMove, /seed more known companies or people directly into the active motion/i);
+    assert.equal(afterQuotaNext.guidance.key, "run_company_discovery");
+    assert.equal(afterQuotaNext.context.source.kind, "run_company_discovery");
+    assert.match(afterQuotaNext.nextMove, /run autonomous company discovery on the active motion/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -6602,6 +6882,18 @@ test("daily and next surface connection-request quota gaps and invitation defici
 
 test("daily and next require execution assignment before seeding more targets when ready branches are unassigned", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-assignment-blocker-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const codexEnv = { ...process.env, EXO_STATE_DIR: tempDir, CODEX_HOME: codexHome };
   const chrome = setupReadyChromeProfile(tempDir, {
     cookieHosts: [".linkedin.com", "mail.google.com"],
     historyUrls: ["https://www.linkedin.com/feed/", "https://mail.google.com/mail/u/0/#inbox"]
@@ -6650,8 +6942,13 @@ test("daily and next require execution assignment before seeding more targets wh
     const user = JSON.parse(
       execFileSync("node", [cliPath, "users", "add", "--label", "Assignment User", "--owner", "William", "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
+    );
+    execFileSync(
+      "node",
+      [cliPath, "users", "harness", "add", user.id, "--runtime", "codex", "--connector", "unipile", "--status", "available", "--json"],
+      { cwd: repoRoot, env: codexEnv }
     );
 
     const userWithAccount = JSON.parse(
@@ -6667,16 +6964,58 @@ test("daily and next require execution assignment before seeding more targets wh
           "linkedin",
           "--handle",
           "assignment-user",
-          "--profile",
-          profile.id,
+          "--runtime",
+          "codex",
+          "--connector",
+          "unipile",
+          "--provider-account-id",
+          "acct-linkedin-1",
+          "--max-connection-requests",
+          "125",
           "--preferred",
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
     );
     const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
     assert.ok(linkedinAccount);
+    const alternateUser = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Assignment Backup", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: codexEnv
+      }).toString()
+    );
+    execFileSync(
+      "node",
+      [cliPath, "users", "harness", "add", alternateUser.id, "--runtime", "codex", "--connector", "unipile", "--status", "available", "--json"],
+      { cwd: repoRoot, env: codexEnv }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        alternateUser.id,
+        "--capability",
+        "linkedin",
+        "--handle",
+        "assignment-backup",
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--provider-account-id",
+        "acct-linkedin-2",
+        "--max-connection-requests",
+        "125",
+        "--preferred",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
+    );
     const syncedAt = new Date().toISOString();
 
     for (const surfaceKey of [
@@ -6838,7 +7177,7 @@ test("daily and next require execution assignment before seeding more targets wh
     const daily = JSON.parse(
       execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
 
@@ -6849,13 +7188,13 @@ test("daily and next require execution assignment before seeding more targets wh
     assert.equal(daily.items[0].cadenceEffect, "capacity_deficit");
     assert.equal(daily.items[0].source.kind, "assign_ready_execution");
     assert.equal(daily.items[0].guidance.key, "assign_ready_execution");
-    assert.match(daily.items[0].recommendedAction, /pin ready but unassigned to assignment user/i);
+    assert.match(daily.items[0].recommendedAction, /(assign|pin) ready but unassigned to assignment user/i);
     assert.match(daily.items[0].whyItMatters, /blocked only by missing execution assignment/i);
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
 
@@ -6863,7 +7202,7 @@ test("daily and next require execution assignment before seeding more targets wh
     assert.equal(next.status.effect, "capacity_deficit");
     assert.equal(next.guidance.key, "assign_ready_execution");
     assert.equal(next.context.source.kind, "assign_ready_execution");
-    assert.match(next.nextMove, /pin ready but unassigned to assignment user/i);
+    assert.match(next.nextMove, /(assign|pin) ready but unassigned to assignment user/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -6871,6 +7210,18 @@ test("daily and next require execution assignment before seeding more targets wh
 
 test("daily keeps live sent-invitation reconciliation in capacity math while agent queue owns the follow-up sync", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-daily-live-sent-backlog-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const codexEnv = { ...process.env, EXO_STATE_DIR: tempDir, CODEX_HOME: codexHome };
   const chrome = setupReadyChromeProfile(tempDir, {
     cookieHosts: [".linkedin.com", "mail.google.com"],
     historyUrls: ["https://www.linkedin.com/feed/", "https://mail.google.com/mail/u/0/#inbox"]
@@ -6951,8 +7302,18 @@ test("daily keeps live sent-invitation reconciliation in capacity math while age
     const user = JSON.parse(
       execFileSync("node", [cliPath, "users", "add", "--label", "backlog-user", "--owner", "William", "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
+    );
+    execFileSync(
+      "node",
+      [cliPath, "users", "harness", "add", user.id, "--runtime", "codex", "--connector", "unipile", "--status", "available", "--json"],
+      { cwd: repoRoot, env: codexEnv }
+    );
+    execFileSync(
+      "node",
+      [cliPath, "users", "harness", "add", user.id, "--runtime", "codex", "--connector", "gmail", "--status", "available", "--json"],
+      { cwd: repoRoot, env: codexEnv }
     );
 
     const userWithLinkedin = JSON.parse(
@@ -6968,12 +7329,16 @@ test("daily keeps live sent-invitation reconciliation in capacity math while age
           "linkedin",
           "--handle",
           "backlog-user",
-          "--profile",
-          profile.id,
+          "--runtime",
+          "codex",
+          "--connector",
+          "unipile",
+          "--provider-account-id",
+          "acct-linkedin-1",
           "--preferred",
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
     );
     const linkedinAccount = userWithLinkedin.accounts.find((account) => account.capability === "linkedin");
@@ -6992,12 +7357,16 @@ test("daily keeps live sent-invitation reconciliation in capacity math while age
           "gmail",
           "--handle",
           "backlog-user",
-          "--profile",
-          profile.id,
+          "--runtime",
+          "codex",
+          "--connector",
+          "gmail",
+          "--provider-account-id",
+          "acct-gmail-1",
           "--preferred",
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
     );
     const gmailAccount = userWithGmail.accounts.find((account) => account.capability === "gmail");
@@ -7162,20 +7531,31 @@ test("daily keeps live sent-invitation reconciliation in capacity math while age
       "node",
       [
         cliPath,
-        "profiles",
-        "claim",
-        profile.id,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "linkedin",
+        "--handle",
+        "backlog-user",
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--provider-account-id",
+        "acct-linkedin-1",
         "--max-connection-requests",
         "125",
         "--json"
       ],
-      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      { cwd: repoRoot, env: codexEnv }
     );
 
     const daily = JSON.parse(
       execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
 
@@ -7189,10 +7569,10 @@ test("daily keeps live sent-invitation reconciliation in capacity math while age
     const queue = JSON.parse(
       execFileSync("node", [cliPath, "agent", "queue", "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
-    const syncTask = queue.tasks.find((task) =>
+    const syncTask = [...queue.tasks, ...queue.waiting].find((task) =>
       task.kind === "run_inbound_sync"
       && task.reason === "itemization_gap"
       && task.accountId === linkedinAccount.id
@@ -7204,7 +7584,7 @@ test("daily keeps live sent-invitation reconciliation in capacity math while age
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
 
@@ -7573,11 +7953,9 @@ test("motion queue exposes discovered and queued research inventory and daily us
       }).toString()
     );
     assert.equal(daily.capacity.linkedin.execution.queue.companyStatusCounts.queued_for_research, 1);
-    assert.equal(daily.items[0].source.kind, "claim_company_research_packets");
-    assert.equal(daily.items[0].guidance.key, "claim_company_research_packets");
-    assert.match(daily.items[0].recommendedAction, /claim 1 company-research packet/i);
-    assert.match(daily.items[0].recommendedAction, /exo motion packet-brief/i);
-    assert.equal(daily.items[0].guidance.do.some((line) => line.includes("exo motion packet-brief")), true);
+    assert.equal(daily.items[0].source.kind, "parallel_motion_inventory");
+    assert.equal(daily.items[0].guidance.key, "expand_motion_inventory");
+    assert.match(daily.items[0].recommendedAction, /build more ready first-touch inventory/i);
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
@@ -7585,11 +7963,9 @@ test("motion queue exposes discovered and queued research inventory and daily us
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    assert.equal(next.guidance.key, "claim_company_research_packets");
-    assert.equal(next.context.source.kind, "claim_company_research_packets");
-    assert.match(next.nextMove, /claim 1 company-research packet/i);
-    assert.match(next.nextMove, /exo motion packet-brief/i);
-    assert.equal(next.context.firstClaimableCompanyResearchCompanyName, backlogCompany.name);
+    assert.equal(next.guidance.key, "expand_motion_inventory");
+    assert.equal(next.context.source.kind, "parallel_motion_inventory");
+    assert.match(next.nextMove, /build more ready first-touch inventory/i);
 
     execFileSync(
       "node",
@@ -7632,10 +8008,9 @@ test("motion queue exposes discovered and queued research inventory and daily us
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    assert.equal(dailyAfterResearch.items[0].source.kind, "claim_prospect_selection_packets");
-    assert.equal(dailyAfterResearch.items[0].guidance.key, "claim_prospect_selection_packets");
-    assert.match(dailyAfterResearch.items[0].recommendedAction, /claim 1 prospect-selection packet/i);
-    assert.match(dailyAfterResearch.items[0].recommendedAction, /exo motion packet-brief/i);
+    assert.equal(dailyAfterResearch.items[0].source.kind, "parallel_motion_inventory");
+    assert.equal(dailyAfterResearch.items[0].guidance.key, "expand_motion_inventory");
+    assert.match(dailyAfterResearch.items[0].recommendedAction, /build more ready first-touch inventory/i);
 
     const nextAfterResearch = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
@@ -7643,10 +8018,9 @@ test("motion queue exposes discovered and queued research inventory and daily us
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    assert.equal(nextAfterResearch.guidance.key, "claim_prospect_selection_packets");
-    assert.equal(nextAfterResearch.context.source.kind, "claim_prospect_selection_packets");
-    assert.match(nextAfterResearch.nextMove, /claim 1 prospect-selection packet/i);
-    assert.match(nextAfterResearch.nextMove, /exo motion packet-brief/i);
+    assert.equal(nextAfterResearch.guidance.key, "expand_motion_inventory");
+    assert.equal(nextAfterResearch.context.source.kind, "parallel_motion_inventory");
+    assert.match(nextAfterResearch.nextMove, /build more ready first-touch inventory/i);
 
     execFileSync(
       "node",
@@ -7712,10 +8086,9 @@ test("motion queue exposes discovered and queued research inventory and daily us
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    assert.equal(dailyAfterSelection.items[0].source.kind, "claim_prospect_research_packets");
-    assert.equal(dailyAfterSelection.items[0].guidance.key, "claim_prospect_research_packets");
-    assert.match(dailyAfterSelection.items[0].recommendedAction, /claim 1 prospect-research packet/i);
-    assert.match(dailyAfterSelection.items[0].recommendedAction, /exo motion packet-brief/i);
+    assert.equal(dailyAfterSelection.items[0].source.kind, "parallel_motion_inventory");
+    assert.equal(dailyAfterSelection.items[0].guidance.key, "expand_motion_inventory");
+    assert.match(dailyAfterSelection.items[0].recommendedAction, /build more ready first-touch inventory/i);
 
     const nextAfterSelection = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
@@ -7723,10 +8096,9 @@ test("motion queue exposes discovered and queued research inventory and daily us
         env: { ...process.env, EXO_STATE_DIR: tempDir }
       }).toString()
     );
-    assert.equal(nextAfterSelection.guidance.key, "claim_prospect_research_packets");
-    assert.equal(nextAfterSelection.context.source.kind, "claim_prospect_research_packets");
-    assert.match(nextAfterSelection.nextMove, /claim 1 prospect-research packet/i);
-    assert.match(nextAfterSelection.nextMove, /exo motion packet-brief/i);
+    assert.equal(nextAfterSelection.guidance.key, "expand_motion_inventory");
+    assert.equal(nextAfterSelection.context.source.kind, "parallel_motion_inventory");
+    assert.match(nextAfterSelection.nextMove, /build more ready first-touch inventory/i);
     assert.equal(selectedProspectId.length > 0, true);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -8093,11 +8465,25 @@ test("motion packet-brief turns packet state into a worker contract with stable 
       researchBrief.inputs.execution.runtimeEnrichmentRule,
       /whatever email-finding, phone-finding, and validation tools are actually available/i
     );
+    assert.match(
+      researchBrief.inputs.execution.linkedinIdentityRule,
+      /connected LinkedIn account path first/i
+    );
+    assert.match(
+      researchBrief.inputs.execution.linkedinIdentityRule,
+      /before paid or provider LinkedIn identity lookup/i
+    );
     assert.ok(
       researchBrief.scope.constraints.some((line) => /email-finding, phone-finding, and validation tools are actually available/i.test(line))
     );
     assert.ok(
+      researchBrief.scope.constraints.some((line) => /connected LinkedIn account path first/i.test(line))
+    );
+    assert.ok(
       researchBrief.doneWhen.some((line) => /verified mobile phone numbers when found/i.test(line))
+    );
+    assert.ok(
+      researchBrief.doneWhen.some((line) => /governed connected-account LinkedIn search was attempted/i.test(line))
     );
     assert.equal(
       researchBrief.writeback.supportingCommands.some((command) => command.includes("exo companies cadence set")),
@@ -8220,6 +8606,64 @@ test("motion discover links existing companies and creates new queued companies 
     assert.equal(packets.items.some((item) => item.companyId === existingCompany.id), true);
     assert.equal(
       packets.items.some((item) => item.companyId === createdAndQueued.company.id && item.queueStatus === "queued_for_research"),
+      true
+    );
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("motion discovery-brief explains motion inventory pressure and the governed discovery writeback path", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-discovery-brief-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "start",
+          "--url",
+          "https://example.com/motion-discovery-brief",
+          "--premise",
+          "This offer matters when the motion needs autonomous public-web company discovery to keep the queue fed.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there current evidence this company needs more disciplined outbound execution?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const brief = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "discovery-brief",
+          motion.motion.id,
+          "--companies",
+          "12",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    assert.equal(brief.motion.id, motion.motion.id);
+    assert.equal(brief.inputs.inventory.minimumAvailableProspects, 25);
+    assert.equal(brief.inputs.inventory.targetCompanyCount, 12);
+    assert.equal(brief.inputs.inventory.needsDiscovery, true);
+    assert.match(brief.summary, /Find at least 12 new companies/i);
+    assert.ok(
+      brief.scope.constraints.some((line) => /requested company count as a floor, not a ceiling/i.test(line))
+    );
+    assert.equal(
+      brief.writeback.supportingCommands.some((command) => command.includes(`exo motion discover ${motion.motion.id}`)),
       true
     );
   } finally {
@@ -9134,10 +9578,10 @@ test("bare planner surfaces auto-select the sole execution-capable user and igno
     );
     assert.equal(next.source, "daily");
     assert.equal(next.guidance.key, "review_inbound_item");
-    assert.match(next.nextMove, /accept or decline/i);
+    assert.match(next.nextMove, /claim alicia buyer into this workspace's transition backlog/i);
     assert.equal(
       next.operatorPrompt,
-      "Alicia Buyer sent you an inbound LinkedIn connection request. Accept or decline?"
+      "Alicia Buyer sent you an inbound LinkedIn connection request. Claim them into transition backlog or leave them in global intake?"
     );
 
     assert.equal(helperUser.accounts.length, 0);
@@ -9224,12 +9668,11 @@ test("empty bootstrap surfaces stay machine-readable on a fresh state store", ()
         env
       }).toString()
     );
-    const next = JSON.parse(
-      execFileSync("node", [cliPath, "next", "--json"], {
-        cwd: repoRoot,
-        env
-      }).toString()
-    );
+	    const next = JSON.parse(
+	      execFileSync("node", [cliPath, "next", "--json"], {
+	        cwd: tempDir
+	      }).toString()
+	    );
 
     assert.equal(daily.source, "operator-call");
     assert.equal(daily.status.kind, "configure_execution_connectors");
@@ -9246,12 +9689,12 @@ test("empty bootstrap surfaces stay machine-readable on a fresh state store", ()
     assert.match(inbox.nextMove, /register the first execution user/i);
     assert.equal(inbox.guidance.key, "configure_execution_connectors");
 
-    assert.equal(next.source, "operator-call");
-    assert.equal(next.status.kind, "configure-execution-user");
-    assert.equal(next.guidance.key, "configure_execution_connectors");
-    assert.match(next.operatorPrompt, /first user/i);
-    assert.doesNotMatch(next.guidance.taskPrompt, /Reinitialize from the live Exo checkout/i);
-  } finally {
+	    assert.equal(next.source, "operator-call");
+	    assert.equal(next.status.kind, "choose-install-scope");
+	    assert.equal(next.guidance.key, "choose_install_scope");
+	    assert.match(next.operatorPrompt, /local folder workspace|global install/i);
+	    assert.doesNotMatch(next.guidance.taskPrompt, /Reinitialize from the live Exo checkout/i);
+	  } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
@@ -9659,6 +10102,18 @@ test("motion targeting requires an explicit managed linkedin account identity be
 
 test("next falls back to the focus motion path when no due daily item exists", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-next-motion-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const codexEnv = { ...process.env, EXO_STATE_DIR: tempDir, CODEX_HOME: codexHome };
 
   try {
     const motion = JSON.parse(
@@ -9678,18 +10133,114 @@ test("next falls back to the focus motion path when no due daily item exists", (
           "company::Is the company visibly scaling GTM or outbound coverage?",
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
     );
     execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
       cwd: repoRoot,
-      env: { ...process.env, EXO_STATE_DIR: tempDir }
+      env: codexEnv
     });
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Focus User", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: codexEnv
+      }).toString()
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "linkedin",
+        "--handle",
+        "focus-user-linkedin",
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--provider-account-id",
+        "acct-linkedin-1",
+        "--max-connection-requests",
+        "125",
+        "--preferred",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
+    );
+    const alternateUser = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Alt Focus User", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: codexEnv
+      }).toString()
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        alternateUser.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        alternateUser.id,
+        "--capability",
+        "gmail",
+        "--handle",
+        "alt-focus-user@example.com",
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--provider-account-id",
+        "acct-gmail-2",
+        "--preferred",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
+    );
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
 
@@ -9699,7 +10250,7 @@ test("next falls back to the focus motion path when no due daily item exists", (
     assert.match(next.why, /motion/i);
     assert.equal(next.status.kind, "needs-company-targeting");
     assert.equal(next.status.priority, "action");
-    assert.equal(next.guidance.key, "clear_motion_blocker");
+    assert.equal(next.guidance.key, "run_company_discovery");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -9707,6 +10258,18 @@ test("next falls back to the focus motion path when no due daily item exists", (
 
 test("next treats a pending connection request as a waiting branch instead of resurfacing stale first-touch copy", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-next-pending-connection-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const codexEnv = { ...process.env, EXO_STATE_DIR: tempDir, CODEX_HOME: codexHome };
   const userDataDir = path.join(tempDir, "Chrome");
   const profileDirectory = "Profile 4";
   const profilePath = path.join(userDataDir, profileDirectory);
@@ -9752,7 +10315,7 @@ test("next treats a pending connection request as a waiting branch instead of re
           "linkedin",
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
     );
 
@@ -9773,12 +10336,12 @@ test("next treats a pending connection request as a waiting branch instead of re
           "company::Is the company actively scaling outbound or GTM coverage?",
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
     );
     execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
       cwd: repoRoot,
-      env: { ...process.env, EXO_STATE_DIR: tempDir }
+      env: codexEnv
     });
 
     const company = JSON.parse(
@@ -9800,14 +10363,127 @@ test("next treats a pending connection request as a waiting branch instead of re
           motion.id,
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
+    );
+
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Pending User", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: codexEnv
+      }).toString()
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "linkedin",
+        "--handle",
+        "pending-user-linkedin",
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--provider-account-id",
+        "acct-linkedin-1",
+        "--max-connection-requests",
+        "125",
+        "--preferred",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
+    );
+    const alternateUser = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Alt Pending User", "--owner", "William", "--json"], {
+        cwd: repoRoot,
+        env: codexEnv
+      }).toString()
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        alternateUser.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        alternateUser.id,
+        "--capability",
+        "gmail",
+        "--handle",
+        "alt-pending-user@example.com",
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--provider-account-id",
+        "acct-gmail-2",
+        "--preferred",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
     );
 
     execFileSync(
       "node",
       [cliPath, "companies", "profile", "assign", company.id, "--profile", profile.id, "--json"],
-      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      { cwd: repoRoot, env: codexEnv }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "user",
+        "assign",
+        company.id,
+        "--user",
+        user.id,
+        "--reason",
+        "Bind the waiting-branch fixture to one managed LinkedIn user.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: codexEnv }
     );
 
     execFileSync(
@@ -9830,7 +10506,7 @@ test("next treats a pending connection request as a waiting branch instead of re
         "high",
         "--json"
       ],
-      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      { cwd: repoRoot, env: codexEnv }
     );
 
     const prospect = JSON.parse(
@@ -9860,7 +10536,7 @@ test("next treats a pending connection request as a waiting branch instead of re
           "Tom owns the primary branch.",
           "--json"
         ],
-        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+        { cwd: repoRoot, env: codexEnv }
       ).toString()
     ).prospects[0];
     execFileSync(
@@ -9889,13 +10565,13 @@ test("next treats a pending connection request as a waiting branch instead of re
         "2026-05-29T11:46:51.000Z",
         "--json"
       ],
-      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      { cwd: repoRoot, env: codexEnv }
     );
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--motion", motion.id, "--json"], {
         cwd: repoRoot,
-        env: { ...process.env, EXO_STATE_DIR: tempDir }
+        env: codexEnv
       }).toString()
     );
 
@@ -9916,6 +10592,18 @@ test("next treats a pending connection request as a waiting branch instead of re
 
 test("next surfaces a parallel support action while the live connection-request branch waits on an external trigger", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-next-live-branch-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const codexEnv = { ...process.env, CODEX_HOME: codexHome };
   const userDataDir = path.join(tempDir, "Chrome");
   const profileDirectory = "Profile 4";
   const profilePath = path.join(userDataDir, profileDirectory);
@@ -9986,6 +10674,65 @@ test("next surfaces a parallel support action while the live connection-request 
         { cwd: tempDir, encoding: "utf8" }
       ).toString()
     );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8", env: codexEnv }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "gmail",
+        "--handle",
+        "live-branch-user@example.com",
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--provider-account-id",
+        "acct-gmail-1",
+        "--preferred",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
 
     const userWithAccount = JSON.parse(
       execFileSync(
@@ -10000,12 +10747,18 @@ test("next surfaces a parallel support action while the live connection-request 
           "linkedin",
           "--handle",
           "live-branch-user",
-          "--profile",
-          profile.id,
+          "--runtime",
+          "codex",
+          "--connector",
+          "unipile",
+          "--provider-account-id",
+          "acct-linkedin-1",
+          "--max-connection-requests",
+          "0",
           "--preferred",
           "--json"
         ],
-        { cwd: tempDir, encoding: "utf8" }
+        { cwd: tempDir, encoding: "utf8", env: codexEnv }
       ).toString()
     );
     const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
@@ -10198,7 +10951,8 @@ test("next surfaces a parallel support action while the live connection-request 
     const targeting = JSON.parse(
       execFileSync("node", [cliPath, "motion", "target", motion.id, "--json"], {
         cwd: tempDir,
-        encoding: "utf8"
+        encoding: "utf8",
+        env: codexEnv
       }).toString()
     );
     assert.equal(targeting.readyToEngage, true);
@@ -10207,7 +10961,8 @@ test("next surfaces a parallel support action while the live connection-request 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--motion", motion.id, "--json"], {
         cwd: tempDir,
-        encoding: "utf8"
+        encoding: "utf8",
+        env: codexEnv
       }).toString()
     );
 
@@ -10223,13 +10978,13 @@ test("next surfaces a parallel support action while the live connection-request 
     assert.match(next.guidance.taskPrompt, /verified direct email/i);
     assert.match(next.guidance.taskPrompt, /verified mobile phone number/i);
     assert.match(next.guidance.taskPrompt, /inspect the current runtime for direct MCP servers and direct CLIs/i);
-    assert.match(next.guidance.taskPrompt, /First, check owned evidence/i);
-    assert.match(next.guidance.taskPrompt, /Second, use Google searches and browser-based public-web work/i);
-    assert.match(next.guidance.taskPrompt, /Third, if you still need provider help, inspect the current runtime for direct MCP servers and direct CLIs/i);
+    assert.match(next.guidance.taskPrompt, /Second, check owned evidence/i);
+    assert.match(next.guidance.taskPrompt, /Third, use Google searches and browser-based public-web work/i);
+    assert.match(next.guidance.taskPrompt, /Fourth, if you still need provider help, inspect the current runtime for direct MCP servers and direct CLIs/i);
     assert.match(next.guidance.taskPrompt, /Only after those direct paths are exhausted should you fall back to consumer Composio discovery/i);
     assert.match(next.guidance.taskPrompt, /Zerobounce only for validation, not for discovery/i);
-    assert.match(next.guidance.taskPrompt, /First, check owned evidence/i);
-    assert.match(next.guidance.taskPrompt, /Second, use Google searches and browser-based public-web work/i);
+    assert.match(next.guidance.taskPrompt, /Second, check owned evidence/i);
+    assert.match(next.guidance.taskPrompt, /Third, use Google searches and browser-based public-web work/i);
     assert.match(next.guidance.taskPrompt, /prospects update .* --prospect /i);
     assert.equal(next.context.source.type, "parallel_support_action");
     assert.equal(next.context.waitingBranch.kind, "wait_for_connection_response");
@@ -10272,8 +11027,8 @@ test("next falls back to the operator path when motions exist but none are activ
     );
 
     assert.equal(next.source, "operator-call");
-    assert.match(next.headline, /Activate .* before trying to use cross-motion execution/i);
-    assert.match(next.nextMove, /Draft, paused, and archived motions should not enter the shared execution agenda/i);
+    assert.match(next.headline, /Register the first execution user before trying to use the live operator workspace/i);
+    assert.match(next.nextMove, /Inspect discovered accounts and runtime coverage, then decide who the first managed user is/i);
     assert.equal(next.context.motion.id, motion.id);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -10345,6 +11100,47 @@ test("next switches parallel support work to a held reserve prospect when primar
         cwd: tempDir,
         encoding: "utf8"
       }).toString()
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "gmail",
+        "--handle",
+        "reserve-user@example.com",
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--provider-account-id",
+        "acct-gmail-1",
+        "--preferred",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
     );
 
     const userWithAccount = JSON.parse(
@@ -10984,6 +11780,18 @@ test("companies show rolls up linked motions, people, signals, and touch history
 
 test("next does not surface a held reserve branch as due after fallback enrichment is complete", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-held-reserve-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      "enabled = true",
+      ""
+    ].join("\n"),
+    "utf8"
+  );
+  const codexEnv = { ...process.env, CODEX_HOME: codexHome };
   const userDataDir = path.join(tempDir, "Chrome");
   const profileDirectory = "Profile 4";
   const profilePath = path.join(userDataDir, profileDirectory);
@@ -11125,6 +11933,49 @@ test("next does not surface a held reserve branch as due after fallback enrichme
       [
         cliPath,
         "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--status",
+        "available",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8", env: codexEnv }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "accounts",
+        "add",
+        user.id,
+        "--capability",
+        "gmail",
+        "--handle",
+        "reserve-user@example.com",
+        "--runtime",
+        "codex",
+        "--connector",
+        "gmail",
+        "--provider-account-id",
+        "acct-gmail-1",
+        "--preferred",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
         "accounts",
         "add",
         user.id,
@@ -11132,12 +11983,18 @@ test("next does not surface a held reserve branch as due after fallback enrichme
         "linkedin",
         "--handle",
         "reserve-user",
-        "--profile",
-        profile.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--provider-account-id",
+        "acct-linkedin-1",
+        "--max-connection-requests",
+        "0",
         "--preferred",
         "--json"
       ],
-      { cwd: tempDir, encoding: "utf8" }
+      { cwd: tempDir, encoding: "utf8", env: codexEnv }
     );
 
     execFileSync(
@@ -11152,23 +12009,6 @@ test("next does not surface a held reserve branch as due after fallback enrichme
         user.id,
         "--reason",
         "Drive the reserve-path daily agenda through one execution user",
-        "--json"
-      ],
-      { cwd: tempDir, encoding: "utf8" }
-    );
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "companies",
-        "profile",
-        "assign",
-        company.id,
-        "--profile",
-        profile.id,
-        "--reason",
-        "Keep the reserve-path fixture on one trusted browser identity",
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
@@ -11399,7 +12239,8 @@ test("next does not surface a held reserve branch as due after fallback enrichme
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
         cwd: tempDir,
-        encoding: "utf8"
+        encoding: "utf8",
+        env: codexEnv
       }).toString()
     );
 
@@ -12838,10 +13679,193 @@ test("report workspace renders a native workspace projection in json and html fo
     const html = fs.readFileSync(outputPath, "utf8");
     assert.match(html, /Exo Motion Workspace Projection/);
     assert.match(html, /Need decision/);
-    assert.match(html, /Agent queue/);
+    assert.match(html, /Queue/);
     assert.match(html, /Motion state/);
     assert.match(html, /Truth surfaces/);
     assert.match(html, new RegExp(motion.name));
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("report workspace keeps ready reply drafts in the operator decision lane", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-workspace-ready-reply-"));
+
+  try {
+    const user = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "add", "--label", "Reply User", "--owner", "William", "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const userWithAccount = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "users",
+          "accounts",
+          "add",
+          user.id,
+          "--capability",
+          "linkedin",
+          "--handle",
+          "reply-user",
+          "--runtime",
+          "codex",
+          "--connector",
+          "chrome",
+          "--preferred",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+    const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/ready-reply",
+          "--premise",
+          "This offer matters when inbound replies should land in the operator lane with the drafted copy attached.",
+          "--audience",
+          "Revenue leaders",
+          "--signal",
+          "company::Is there recent evidence this company widened product or GTM scope?",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Ready Reply Co",
+          "--domain",
+          "ready-reply.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    const prospect = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Nora Reply",
+          "--title",
+          "Chief Revenue Officer",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--why-relevant",
+          "Owns the commercial motion and already replied.",
+          "--json"
+        ],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    ).prospects[0];
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "inbound",
+        "observations",
+        "add",
+        user.id,
+        "--account",
+        linkedinAccount.id,
+        "--surface",
+        "linkedin-messaging-inbox",
+        "--kind",
+        "inbound_reply_received",
+        "--motion",
+        motion.id,
+        "--company",
+        company.id,
+        "--prospect",
+        prospect.id,
+        "--observed-at",
+        "2026-05-28T13:00:00.000Z",
+        "--actor-name",
+        "Nora Reply",
+        "--actor-profile-url",
+        "https://www.linkedin.com/in/nora-reply/",
+        "--summary",
+        "Nora replied in LinkedIn.",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "prospects",
+        "draft",
+        "set",
+        company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        prospect.id,
+        "--surface",
+        "inbound_reply",
+        "--body",
+        "Thanks, Nora. Happy to compare notes.",
+        "--status",
+        "ready",
+        "--json"
+      ],
+      { cwd: tempDir, encoding: "utf8" }
+    );
+
+    const reportJson = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "report", "workspace", "--user", user.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" }
+      )
+    );
+
+    assert.equal(reportJson.decisionQueue.itemCount, 1);
+    assert.equal(reportJson.decisionQueue.replyCount, 1);
+    assert.equal(reportJson.decisionQueue.items[0].state, "ready_for_reply");
+    assert.equal(reportJson.decisionQueue.items[0].subject, "Nora Reply");
+    assert.match(reportJson.decisionQueue.items[0].recommendedAction, /queue it for send/i);
+    assert.match(reportJson.operatorSummary.nextMove, /Nora Reply/);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -13353,7 +14377,7 @@ test("canonical action catalog and motion action briefs expose executable Audien
     assert.equal(connectionRequestAction.available, true);
     assert.equal(connectionRequestAction.draftSurface.key, "connection_request");
     assert.equal(directMessageAction.available, false);
-    assert.match(directMessageAction.reason, /accepted connection|inbound/i);
+    assert.match(directMessageAction.reason, /no governed direct-message branch is writable/i);
     assert.equal(emailAction.available, true);
     assert.equal(postCommentAction.available, true);
     assert.equal(postCommentAction.draftSurface.key, "public_comment");
@@ -13889,14 +14913,6 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected bootstrap sequence to include company discovery"
   );
   assert.ok(
-    about.agentUsage.bootstrapSequence.includes("exo profiles discover --json"),
-    "expected bootstrap sequence to include profile discovery"
-  );
-  assert.ok(
-    about.agentUsage.bootstrapSequence.includes("exo profiles capabilities --json"),
-    "expected bootstrap sequence to include capability discovery"
-  );
-  assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo users list --json"),
     "expected bootstrap sequence to include execution-user discovery"
   );
@@ -13911,6 +14927,10 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo inbound cues list <user-id> --json"),
     "expected bootstrap sequence to include ambient cue inspection"
+  );
+  assert.ok(
+    about.agentUsage.bootstrapSequence.includes("exo inbound review <user-id> --json"),
+    "expected bootstrap sequence to include inbound review"
   );
   assert.ok(
     about.agentUsage.bootstrapSequence.includes("exo inbound observations list <user-id> --json"),
@@ -13929,20 +14949,20 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     "expected bootstrap sequence to include next-move shorthand"
   );
   assert.ok(
-    about.agentUsage.bootstrapSequence.includes("exo profiles resolve --capability linkedin --json"),
-    "expected bootstrap sequence to include profile resolution"
+    about.agentUsage.bootstrapSequence.includes("exo motion list --json"),
+    "expected bootstrap sequence to include motion discovery"
   );
   assert.ok(
-    about.browserProfileRules.some((item) => /fail closed/i.test(item)),
-    "expected browser profile rules to mention fail-closed behavior"
+    about.browserProfileRules.some((item) => /fallback has been removed/i.test(item)),
+    "expected browser profile rules to mention that browser-profile execution fallback is gone"
   );
   assert.ok(
     about.browserProfileRules.some((item) => /inbound sync policy/i.test(item)),
     "expected browser profile rules to mention inbound sync policy"
   );
   assert.ok(
-    about.currentLimitations.some((item) => /Live browser auth probes now exist for trusted Chrome profiles/i.test(item)),
-    "expected limitations to mention the narrower live browser auth probe seam"
+    about.currentLimitations.some((item) => /Limited live connector auth proof now exists/i.test(item)),
+    "expected limitations to mention the narrower live connector auth seam"
   );
   assert.ok(
     about.currentLimitations.some((item) => /Limited live inbound retrieval now exists for Gmail and .*LinkedIn.*authoritative quick surfaces/i.test(item)),

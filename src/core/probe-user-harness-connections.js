@@ -21,14 +21,19 @@ const CODEX_PLUGIN_CONNECTOR_MAP = {
   "google-calendar": ["google-calendar@openai-curated"],
   "google-drive": ["google-drive@openai-curated"],
   hubspot: ["hubspot@openai-curated"],
+  icypeas: ["icypeas"],
+  leadmagic: ["leadmagic"],
   netlify: ["netlify@openai-curated"],
   notion: ["notion@openai-curated"],
   posthog: ["posthog@posthog"],
+  prospeo: ["prospeo"],
   presentations: ["presentations@openai-primary-runtime"],
   slack: ["slack@openai-curated"],
   spreadsheets: ["spreadsheets@openai-primary-runtime"],
   superpowers: ["superpowers@openai-curated"],
-  unipile: ["unipile"]
+  unipile: ["unipile"],
+  findymail: ["findymail"],
+  zerobounce: ["zerobounce"],
 };
 
 const CLAUDE_PLUGIN_CONNECTOR_MAP = {
@@ -43,7 +48,12 @@ const EXECUTION_CONNECTOR_DISCOVERY_ALLOWLIST = new Set([
   "chrome",
   "gmail",
   "hubspot",
-  "unipile"
+  "unipile",
+  "icypeas",
+  "leadmagic",
+  "prospeo",
+  "findymail",
+  "zerobounce",
 ]);
 
 const CLAUDE_PROBE_TIMEOUT_MS = 1500;

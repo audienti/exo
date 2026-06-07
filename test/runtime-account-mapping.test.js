@@ -126,6 +126,9 @@ test("mapUserRuntimeAccounts discovers managed linkedin, gmail, and hubspot mapp
           providerAccountId: "acct-linkedin",
           handle: "operator-linkedin",
           label: "Operator LinkedIn",
+          metadata: {
+            premiumFeatures: ["sales_navigator"],
+          },
         },
       ],
     });
@@ -202,6 +205,9 @@ test("mapUserRuntimeAccounts can persist managed mappings and optionally mark th
           providerAccountId: "acct-linkedin",
           handle: "operator-linkedin",
           label: "Operator LinkedIn",
+          metadata: {
+            premiumFeatures: ["sales_navigator"],
+          },
         },
       ],
     });
@@ -225,6 +231,7 @@ test("mapUserRuntimeAccounts can persist managed mappings and optionally mark th
     assert.equal(gmailManaged?.preferred, true);
     assert.equal(linkedinManaged?.providerAccountId, "acct-linkedin");
     assert.equal(gmailManaged?.providerAccountId, "link-gmail");
+    assert.deepEqual(linkedinManaged?.metadata?.premiumFeatures, ["sales_navigator"]);
     assert.equal(linkedinBrowser?.preferred, false);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -320,42 +327,44 @@ test("mapUserRuntimeAccounts is idempotent after managed mappings are attached",
   );
 
   try {
+    const runtimeAccountHints = [
+      {
+        runtime: "codex",
+        connector: "gmail",
+        capability: "gmail",
+        providerAccountId: "link-gmail",
+        handle: "operator@example.com",
+        label: "Operator Gmail",
+      },
+      {
+        runtime: "codex",
+        connector: "hubspot",
+        capability: "hubspot",
+        providerAccountId: "link-hubspot",
+        handle: "245546701",
+        label: "Knit HubSpot",
+      },
+      {
+        runtime: "codex",
+        connector: "unipile",
+        capability: "linkedin",
+        providerAccountId: "acct-linkedin",
+        handle: "operator-linkedin",
+        label: "Operator LinkedIn",
+      },
+    ];
     const first = mapUserRuntimeAccounts(userFixture(), {
       runtime: "codex",
       codexHome,
       apply: true,
-      runtimeAccountHints: [
-        {
-          runtime: "codex",
-          connector: "gmail",
-          capability: "gmail",
-          providerAccountId: "link-gmail",
-          handle: "operator@example.com",
-          label: "Operator Gmail",
-        },
-        {
-          runtime: "codex",
-          connector: "hubspot",
-          capability: "hubspot",
-          providerAccountId: "link-hubspot",
-          handle: "245546701",
-          label: "Knit HubSpot",
-        },
-        {
-          runtime: "codex",
-          connector: "unipile",
-          capability: "linkedin",
-          providerAccountId: "acct-linkedin",
-          handle: "operator-linkedin",
-          label: "Operator LinkedIn",
-        },
-      ],
+      runtimeAccountHints,
     });
 
     const second = mapUserRuntimeAccounts(first.updatedUser, {
       runtime: "codex",
       codexHome,
-      apply: false
+      apply: false,
+      runtimeAccountHints,
     });
 
     assert.equal(second.counts.mappingCount, 4);

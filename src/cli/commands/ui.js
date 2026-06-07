@@ -24,7 +24,11 @@ export function registerUi(program) {
         console.log(status.lock ? "Exo UI is not running (stale lock cleared)." : "Exo UI is not running.");
         return;
       }
-      console.log(`Exo UI is running at ${status.url} (pid ${status.pid}, user ${status.userId}, since ${status.startedAt}).`);
+      console.log(
+        `Exo UI is running at ${status.url} (pid ${status.pid}, ${
+          status.userId ? `user ${status.userId}` : "onboarding mode"
+        }, since ${status.startedAt}).`
+      );
     });
 
   program
@@ -42,7 +46,7 @@ Examples:
   exo ui --user <user-id>
 
 Rules:
-  - Serves Operator / Motions / Prospects / Users / Connections / Workspace from live Exo state.
+  - Serves Operator / Motions / Prospects / Users / Connections / Workspace / Settings / Clean up from live Exo state.
   - Nav routes between surfaces; action buttons execute real cadence/queue/touch writes.
   - Read-and-write: clicking an action mutates the .exo store, then the surface reloads.
 `
@@ -63,8 +67,8 @@ Rules:
         return;
       }
 
-      const user = resolveUiUser(options.user);
-      if (!user) {
+      const launch = resolveUiLaunch(options.user);
+      if (!launch) {
         return;
       }
 
@@ -73,7 +77,7 @@ Rules:
         if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) {
           throw new Error(`Invalid --port: ${options.port}`);
         }
-        const server = await startExoUiServer({ userId: user.id, capability: options.capability, port });
+        const server = await startExoUiServer({ userId: launch.userId, capability: options.capability, port });
         console.log(`Exo UI listening at ${server.url}`);
         console.log(`  Operator    ${server.url}operator`);
         console.log(`  Motions     ${server.url}motions`);
@@ -81,6 +85,8 @@ Rules:
         console.log(`  Users       ${server.url}users`);
         console.log(`  Connections ${server.url}connections`);
         console.log(`  Workspace   ${server.url}workspace`);
+        console.log(`  Settings    ${server.url}settings`);
+        console.log(`  Clean up    ${server.url}cleanup`);
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
@@ -110,7 +116,7 @@ async function resolveUiStatus() {
 /**
  * @param {string | undefined} explicitUserId
  */
-function resolveUiUser(explicitUserId) {
+function resolveUiLaunch(explicitUserId) {
   if (explicitUserId) {
     const user = findUserById(explicitUserId);
     if (!user) {
@@ -118,22 +124,26 @@ function resolveUiUser(explicitUserId) {
       process.exitCode = 1;
       return null;
     }
-    return user;
+    return { userId: user.id };
   }
 
   const users = listUsers();
   const { totalUserCount, eligibleUserCount, eligibleUsers } = summarizeExecutionUsers(users);
   if (eligibleUserCount === 1) {
-    return eligibleUsers[0];
+    return { userId: eligibleUsers[0].id };
   }
 
-  if (!totalUserCount) {
-    console.error("No execution users exist yet. Start with `exo users intake --json`, then add a user or pass --user explicitly.");
-  } else if (!eligibleUserCount) {
-    console.error("No execution-capable users exist yet. Start with `exo users intake --json`, then map at least one connected account or pass --user explicitly.");
-  } else {
+  if (eligibleUserCount > 1) {
     console.error("More than one execution-capable user exists. Pass --user to choose the UI owner.");
+    process.exitCode = 1;
+    return null;
   }
-  process.exitCode = 1;
-  return null;
+
+  if (totalUserCount > 1) {
+    console.error("Multiple execution users exist, but none is uniquely ready. Pass --user to continue onboarding for one of them.");
+    process.exitCode = 1;
+    return null;
+  }
+
+  return { userId: users[0]?.id ?? null };
 }

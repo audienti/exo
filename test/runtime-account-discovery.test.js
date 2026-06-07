@@ -51,6 +51,7 @@ test("discoverRuntimeConnectorAccounts enumerates multiple Codex Gmail links as 
       connector: "gmail",
       capability: "gmail",
       codexHome,
+      hints: [],
     });
 
     assert.equal(result.length, 2);
@@ -143,6 +144,7 @@ test("discoverRuntimeConnectorAccounts surfaces Unipile session-unavailable stat
       connector: "unipile",
       capability: "linkedin",
       codexHome,
+      hints: [],
       httpGetImpl: () => ({
         status: 503,
         bodyText: JSON.stringify({
@@ -173,6 +175,7 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed LinkedIn accou
       connector: "unipile",
       capability: "linkedin",
       codexHome,
+      hints: [],
       httpGetImpl: () => ({
         status: 200,
         bodyText: JSON.stringify({
@@ -182,6 +185,7 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed LinkedIn accou
               id: "acct-linkedin-1",
               type: "LINKEDIN",
               name: "William Flanagan",
+              premiumFeatures: ["sales_navigator"],
               connection_params: {
                 im: {
                   id: "urn:li:member:1",
@@ -211,6 +215,7 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed LinkedIn accou
     assert.ok(result.every((item) => item.identityState === "confirmed"));
     assert.deepEqual(result.map((item) => item.handle).sort(), ["knit-operator", "williamflanagan"]);
     assert.deepEqual(result.map((item) => item.providerAccountId).sort(), ["acct-linkedin-1", "acct-linkedin-2"]);
+    assert.deepEqual(result.find((item) => item.providerAccountId === "acct-linkedin-1")?.metadata?.premiumFeatures, ["sales_navigator"]);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -229,6 +234,7 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed mail accounts 
       connector: "unipile",
       capability: "gmail",
       codexHome,
+      hints: [],
       httpGetImpl: () => ({
         status: 200,
         bodyText: JSON.stringify({
@@ -313,6 +319,7 @@ test("discoverRuntimeConnectorAccounts uses the configured Unipile DSN instead o
       connector: "unipile",
       capability: "linkedin",
       codexHome,
+      hints: [],
       httpGetImpl: (url) => {
         seenUrl = url;
         return {

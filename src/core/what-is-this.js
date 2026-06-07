@@ -2,6 +2,7 @@
 
 import { listBrowserProfiles, listCompanies, listMotions, listUsers } from "../db/database.js";
 import { describeStatePathRule } from "../db/paths.js";
+import { buildOnboardingState } from "./onboarding.js";
 
 /**
  * @returns {{
@@ -79,6 +80,7 @@ import { describeStatePathRule } from "../db/paths.js";
  *       blockers: string[]
  *     }
  *   },
+ *   onboarding: ReturnType<typeof buildOnboardingState>,
  *   gettingStarted: Array<{
  *     title: string,
  *     reason: string,
@@ -94,7 +96,13 @@ export function describeExo() {
   const browserProfiles = listBrowserProfiles();
   const users = listUsers();
   const stateSummary = buildStateSummary(motions, companies, browserProfiles, users);
-  const recommendedPath = buildRecommendedPath(stateSummary);
+  const onboarding = buildOnboardingState({
+    rawUsers: users,
+    rawProfiles: browserProfiles,
+    rawMotions: motions,
+    rawCompanies: companies,
+  });
+  const recommendedPath = buildRecommendedPath(stateSummary, onboarding);
   const operatorInterface = buildOperatorInterface(recommendedPath);
 
   return {
@@ -131,6 +139,10 @@ export function describeExo() {
       {
         command: "exo what-is-this",
         purpose: "Return the product identity, operating rules, capabilities, and limitations."
+      },
+      {
+        command: "exo onboarding",
+        purpose: "Inspect or apply the first-run install-scope and execution-user onboarding flow."
       },
       {
         command: "exo actions list/show/result",
@@ -206,6 +218,7 @@ export function describeExo() {
       preferJson: true,
       bootstrapSequence: [
         "exo what-is-this --json",
+        "exo onboarding --json",
         "exo companies list --json",
         "exo users list --json",
         "exo inbound surfaces --json",
@@ -255,12 +268,22 @@ export function describeExo() {
         principle:
           "Do not just enumerate Exo commands. First identify what the operator is trying to do, then guide them through the relevant Exo path and persist durable findings back into Exo.",
         firstQuestion:
-          "Are we continuing an existing motion, creating a new motion, configuring connector-backed execution, absorbing transition backlog, or managing canonical company state?",
+          "Are we choosing install scope for a fresh workspace, continuing an existing motion, creating a new motion, configuring connector-backed execution, absorbing transition backlog, or managing canonical company state?",
         modes: [
+          {
+            name: "choose-install-scope",
+            when: "Use this on a true empty workspace before the first execution user exists, so Exo does not silently guess between local-folder and global-install storage.",
+            commands: [
+              "exo onboarding --json",
+              "exo onboarding --scope local-folder --apply --json",
+              "exo onboarding --scope global-install --apply --json"
+            ]
+          },
           {
             name: "configure-execution-user",
             when: "Use this on a fresh state store or any half-bootstrapped store where Exo still does not know who the first managed execution user is.",
             commands: [
+              "exo onboarding --label operator-main --apply --json",
               "exo users intake --json",
               "exo users add --label operator-main --json",
               "exo users harness probe <user-id> --runtime codex --json",
@@ -370,18 +393,18 @@ export function describeExo() {
       ]
     },
     stateSummary,
+    onboarding,
     operatorInterface,
-    gettingStarted: buildGettingStarted(stateSummary),
+    gettingStarted: buildGettingStarted(stateSummary, onboarding),
     currentLimitations: [
       "No MCP wrapper yet.",
       "Limited live connector auth proof now exists through supported runtime adapters, but Exo still does not do full cross-runtime auth proof by itself.",
       "Limited live inbound retrieval now exists for Gmail and for LinkedIn's authoritative quick surfaces through supported runtime adapters, including full reconciliation mode for those LinkedIn quick surfaces, but Exo still does not do broader LinkedIn or other inbound retrieval by itself. In Codex desktop shell mode, native live capture still has to be performed by the outer agent and then landed through Exo's governed writeback path.",
       "Ambient inbound cues and working-hours-aware sync pressure now exist, but cues are still suspicion rather than truth and the planner still depends on governed sync runs to confirm what actually changed.",
       "Motion-level sticky execution defaults now exist, but canonical company execution still needs explicit motion context when the same company belongs to more than one motion.",
-      "No automatic company population from motion retrieval yet.",
+      "Automatic public-web company discovery can now replenish thin motion backlog, but Exo still does not do live Sales Navigator retrieval or proprietary database sourcing by itself.",
+      "Packet-driven prospect selection and prospect research now exist, but the autonomous pipeline still depends on governed public-web and live-enrichment writeback rather than a first-party prospect corpus.",
       "No real Sales Navigator retrieval yet.",
-      "No automatic target-map or stakeholder-map generation yet, even though Exo can now persist manual target-account signal matches, prospects, and cadence state.",
-      "No automatic prospect selection yet. Agents still need to choose and write back the people and their first governed cadence branch explicitly.",
       "Limited runtime auto-discovery now exists for Codex harness connectors through local Codex config inspection and for Claude through CLI plugin and MCP inspection, but Exo still does not do full cross-runtime availability inspection or live connector auth probes by itself.",
       "No full multi-channel pacing model yet. Exo can now compute LinkedIn invitation deficit when the governed LinkedIn account has a stored quota, but broader channel saturation and capacity balancing are still future work.",
       "No public bug-reporting or feature-request intake yet. That is a future alpha feature, not current scope."
@@ -472,17 +495,30 @@ function buildStateSummary(motions, companies, browserProfiles, users) {
  *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> },
  *   users: { count: number, executionCapableCount: number, preview: Array<{ id: string, label: string, accountCount: number }> }
  * }} stateSummary
+ * @param {ReturnType<typeof buildOnboardingState>} onboarding
  */
-function buildGettingStarted(stateSummary) {
+function buildGettingStarted(stateSummary, onboarding) {
   /** @type {Array<{ title: string, reason: string, commands: string[] }>} */
   const steps = [];
 
-  if (stateSummary.users.count === 0) {
+  if (onboarding.status === "needs-scope") {
+    steps.push({
+      title: "Choose install scope before first-run setup",
+      reason:
+        "A truly empty folder should not silently fall into one storage mode. Decide whether this workspace keeps local Exo state or attaches to the global install before anything durable is created.",
+      commands: [
+        "exo onboarding --json",
+        "exo onboarding --scope local-folder --apply --json",
+        "exo onboarding --scope global-install --apply --json"
+      ]
+    });
+  } else if (stateSummary.users.count === 0) {
     steps.push({
       title: "Register the first execution user",
       reason:
         "Before the live operator workspace, inbox, daily agenda, or managed-account execution can mean anything, Exo needs to know who the first governed user is and which runtime accounts may belong to them.",
       commands: [
+        "exo onboarding --label operator-main --apply --json",
         "exo users intake --json",
         "exo users add --label operator-main --json",
         "exo users harness probe <user-id> --runtime codex --json",
@@ -590,11 +626,23 @@ function buildGettingStarted(stateSummary) {
  *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> },
  *   users: { count: number, executionCapableCount: number, preview: Array<{ id: string, label: string, accountCount: number }> }
  * }} stateSummary
+ * @param {ReturnType<typeof buildOnboardingState>} onboarding
  */
-function buildRecommendedPath(stateSummary) {
+function buildRecommendedPath(stateSummary, onboarding) {
   /** @type {string[]} */
   const blockers = [];
   const focusMotion = stateSummary.motions.preview[0] ?? null;
+
+  if (onboarding.status === "needs-scope") {
+    return {
+      mode: "choose-install-scope",
+      reason: onboarding.next.reason,
+      focusMotionId: null,
+      focusMotionName: null,
+      blockers: ["Install scope has not been chosen yet."],
+      commands: onboarding.next.commands,
+    };
+  }
 
   if (stateSummary.users.count === 0) {
     return {
@@ -714,7 +762,9 @@ function buildOperatorInterface(recommendedPath) {
     ],
     currentCall: {
       headline:
-        recommendedPath.mode === "configure-execution-user"
+        recommendedPath.mode === "choose-install-scope"
+          ? "Choose whether this folder is local-only or attached to the global Exo install before first-run setup."
+          : recommendedPath.mode === "configure-execution-user"
           ? "Register the first execution user before trying to use the live operator workspace."
           : recommendedPath.mode === "configure-execution-connectors"
             ? "Map the first governed account before trying to use the live operator workspace."
@@ -726,7 +776,9 @@ function buildOperatorInterface(recommendedPath) {
                   ? "Create the first motion before trying to do anything downstream."
                   : "Follow the current governed path before expanding scope.",
       nextMove:
-        recommendedPath.mode === "configure-execution-user"
+        recommendedPath.mode === "choose-install-scope"
+          ? "Decide whether this folder keeps its own Exo state or attaches to the shared global install, then continue onboarding."
+          : recommendedPath.mode === "configure-execution-user"
           ? "Inspect discovered accounts and runtime coverage, then decide who the first managed user is."
           : recommendedPath.mode === "configure-execution-connectors"
             ? "Inspect discovered accounts and map the first governed account onto the existing execution user."
@@ -738,7 +790,9 @@ function buildOperatorInterface(recommendedPath) {
                   ? "Define a new motion with premise, audience hypothesis, and first signal."
                   : "Use the recommended path as the next governed move.",
       operatorPrompt:
-        recommendedPath.mode === "configure-execution-user"
+        recommendedPath.mode === "choose-install-scope"
+          ? "Is this a local folder workspace or a global install?"
+          : recommendedPath.mode === "configure-execution-user"
           ? "Who is the first user we're managing in Exo?"
           : recommendedPath.mode === "configure-execution-connectors"
             ? "Which discovered account should we map first?"

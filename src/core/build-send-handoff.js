@@ -2,7 +2,7 @@
 
 import { buildCompanyExecutionView } from "./build-company-execution-view.js";
 import { buildLinkedinSendHandoff } from "./build-linkedin-send.js";
-import { extractUsableDraftBody, isSendableDraftStatus } from "../lib/draft-policy.js";
+import { extractUsableDraftBody, isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
 
 const EMAIL_ACTION = "send_email";
 
@@ -44,7 +44,7 @@ function resolveSendDraftContext(rawCompany, rawMotion, input) {
   if (!prospect) throw new Error(`Prospect ${input.prospectId} is not targeted on ${company.name}.`);
 
   const sendReady = (prospect.drafts ?? []).filter(
-    (draft) => isSendableDraftStatus(draft.status) && (!input.surface || draft.surface === input.surface),
+    (draft) => isAutonomousSendReadyDraft(draft) && (!input.surface || draft.surface === input.surface),
   );
   if (!sendReady.length) {
     throw new Error("No send-ready draft to send for this prospect" + (input.surface ? ` on surface ${input.surface}.` : "."));

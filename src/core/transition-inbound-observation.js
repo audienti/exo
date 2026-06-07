@@ -15,6 +15,8 @@ import {
 
 const SUPPORTED_TRANSITIONS = new Set([
   "connection_request_accepted",
+  "connection_request_withdraw_requested",
+  "connection_request_withdrawn",
   // Operator queued a reject — the agent declines it on LinkedIn, then writes
   // back the final connection_request_declined. decline_requested is the "queued
   // for the agent" intermediate state.
@@ -78,7 +80,10 @@ export function transitionInboundObservation(args) {
     { rawMotions: listMotions() },
   );
 
-  const existingForDedupe = findInboundObservationByDedupeKey(next.dedupeKey);
+  // Identity-only rows may not carry a stable external id, so their transition
+  // still needs to mutate the original observation instead of creating a second
+  // sibling row for the same person and surface.
+  const existingForDedupe = findInboundObservationByDedupeKey(next.dedupeKey) ?? existing;
   const merged = mergeInboundObservation(existingForDedupe, next);
   upsertInboundObservation(merged);
 

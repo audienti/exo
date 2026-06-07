@@ -44,14 +44,16 @@ const STATUS_STATE = {
 };
 
 /**
- * @param {{ motionSummaries: any[], motionDetails: any[] }} input
+ * @param {{ motionSummaries: any[], motionDetails: any[], rawMotions?: any[] }} input
  */
 export function buildMotionsViewModel(input) {
   const detailById = new Map(input.motionDetails.map((detail) => [detail.motionId, detail]));
+  const rawMotionById = new Map((input.rawMotions ?? []).map((motion) => [motion.id, motion]));
 
   const motions = input.motionSummaries.map((summary) => {
     const readiness = STAGE_READINESS[summary.overallStage] ?? 0.15;
     const detail = detailById.get(summary.id) ?? null;
+    const rawMotion = rawMotionById.get(summary.id) ?? null;
     return {
       id: summary.id,
       name: summary.name,
@@ -72,13 +74,17 @@ export function buildMotionsViewModel(input) {
       prospectCount: summary.prospectCount ?? 0,
       actionCount: summary.dueNowCount ?? 0,
       blocker: deriveListBlocker(summary, detail),
+      activity: summarizeMotionActivity(rawMotion),
     };
   });
 
   const details = input.motionSummaries
-    .map((summary) => detailById.get(summary.id))
-    .filter(Boolean)
-    .map((detail) => shapeDetail(detail, detailById.size));
+    .map((summary) => ({
+      detail: detailById.get(summary.id),
+      rawMotion: rawMotionById.get(summary.id) ?? null,
+    }))
+    .filter((entry) => entry.detail)
+    .map(({ detail, rawMotion }) => shapeDetail(detail, detailById.size, rawMotion));
 
   return { motions, details };
 }
@@ -95,12 +101,12 @@ function deriveTruth(detail) {
  * @param {any} detail
  */
 function deriveListBlocker(summary, detail) {
-  if (detail?.blocker) return detail.blocker;
+  if (detail?.blocker) return summarizeListBlocker(detail.blocker);
   if (summary.overallStage === "needs-company-targeting") return "No companies targeted yet.";
-  if (summary.overallStage === "needs-company-research") return "Company research incomplete.";
-  if (summary.overallStage === "needs-prospect-selection") return "Prospects not selected yet.";
+  if (summary.overallStage === "needs-company-research") return "Research backlog open.";
+  if (summary.overallStage === "needs-prospect-selection") return "Prospect selection still open.";
   if (summary.overallStage === "targeting-ready" && summary.readyToEngage === false && summary.dueNowCount > 0) {
-    return "Pin a trusted identity before engagement.";
+    return "Launch owner not pinned yet.";
   }
   return null;
 }
@@ -108,8 +114,9 @@ function deriveListBlocker(summary, detail) {
 /**
  * @param {any} detail
  * @param {number} _total
+ * @param {any} rawMotion
  */
-function shapeDetail(detail, _total) {
+function shapeDetail(detail, _total, rawMotion = null) {
   const signals = (detail.signals ?? []).map((signal, index) => ({
     id: signal.id,
     index: index + 1,
@@ -138,7 +145,7 @@ function shapeDetail(detail, _total) {
     matchedSignalIndexes: company.matchedSignalIndexes ?? [],
     topMatch: (company.matchedSignals ?? [])[0]?.summary ?? null,
     enrichment: company.executionIdentity?.status === "pinned-ready" ? "ready" : "waiting",
-    enrichmentLabel: company.executionIdentity?.status === "pinned-ready" ? "pinned" : "unassigned",
+    enrichmentLabel: company.executionIdentity?.status === "pinned-ready" ? "assigned" : "unassigned",
   }));
   const backlogCompanies = (detail.backlogCompanies ?? []).map((company) => ({
     id: company.companyId,
@@ -148,7 +155,7 @@ function shapeDetail(detail, _total) {
     stage: company.stage ?? "needs-company-research",
     queueStatus: company.queueStatus ?? "discovered",
     enrichment: company.executionIdentity?.status === "pinned-ready" ? "ready" : "waiting",
-    enrichmentLabel: company.executionIdentity?.status === "pinned-ready" ? "pinned" : "research backlog",
+    enrichmentLabel: company.executionIdentity?.status === "pinned-ready" ? "assigned" : "research backlog",
   }));
 
   const people = (detail.people ?? []).map((person) => ({
@@ -193,6 +200,7 @@ function shapeDetail(detail, _total) {
     backlogCompanies,
     people,
     blocker: detail.blocker ?? null,
+    activity: summarizeMotionActivity(rawMotion),
     plan: {
       nextSteps: (plan.nextSteps ?? []).map((step) => ({
         text: step.text,
@@ -206,6 +214,129 @@ function shapeDetail(detail, _total) {
       packet: derivePacketState(plan),
     },
   };
+}
+
+/** @param {string} text */
+function summarizeListBlocker(text) {
+  if (!text) return text;
+  if (/cannot yet resolve one ready execution identity/i.test(text)) {
+    return "Launch owner not pinned yet.";
+  }
+  if (/reconcile these in-flight relationships and re-home them into real motions/i.test(text)) {
+    return "Transition backlog still needs re-homing.";
+  }
+  return text;
+}
+
+/**
+ * @param {any} rawMotion
+ */
+function summarizeMotionActivity(rawMotion) {
+  const summary = {
+    touchCount: 0,
+    inboundTouchCount: 0,
+    outboundTouchCount: 0,
+    stagedDraftCount: 0,
+    latestAt: null,
+    events: [],
+  };
+  if (!rawMotion?.targetMap?.accounts?.length) return summary;
+
+  for (const account of rawMotion.targetMap.accounts ?? []) {
+    for (const prospect of account.prospects ?? []) {
+      for (const touch of prospect.touches ?? []) {
+        summary.touchCount += 1;
+        if (touch.direction === "inbound") summary.inboundTouchCount += 1;
+        if (touch.direction === "outbound") summary.outboundTouchCount += 1;
+        const event = shapeTouchEvent(touch, prospect, account);
+        if (event) {
+          summary.events.push(event);
+          if (!summary.latestAt || event.at > summary.latestAt) summary.latestAt = event.at;
+        }
+      }
+
+      for (const draft of prospect.drafts ?? []) {
+        if (draft.status === "sent" || draft.status === "discarded") continue;
+        summary.stagedDraftCount += 1;
+        const event = shapeDraftEvent(draft, prospect, account);
+        if (event) {
+          summary.events.push(event);
+          if (!summary.latestAt || event.at > summary.latestAt) summary.latestAt = event.at;
+        }
+      }
+    }
+  }
+
+  summary.events.sort((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0));
+  summary.events = summary.events.slice(0, 5);
+  return summary;
+}
+
+/**
+ * @param {any} touch
+ * @param {any} prospect
+ * @param {any} account
+ */
+function shapeTouchEvent(touch, prospect, account) {
+  const at = normalizeIso(touch.occurredAt);
+  if (!at) return null;
+  return {
+    kind: "touch",
+    at,
+    tone: touch.outcome === "blocked" || touch.outcome === "declined"
+      ? "bad"
+      : touch.direction === "inbound"
+        ? "in"
+        : "out",
+    status: touch.direction === "inbound"
+      ? "received"
+      : touch.outcome === "blocked" || touch.outcome === "declined"
+        ? "blocked"
+        : "sent",
+    title: humanizeTouchTitle(touch),
+    detail: touch.summary ?? [prospect?.name, account?.companyName].filter(Boolean).join(" · "),
+  };
+}
+
+/**
+ * @param {any} draft
+ * @param {any} prospect
+ * @param {any} account
+ */
+function shapeDraftEvent(draft, prospect, account) {
+  const at = normalizeIso(draft.updatedAt ?? draft.approvedAt ?? draft.createdAt ?? null);
+  if (!at) return null;
+  return {
+    kind: "draft",
+    at,
+    tone: "sys",
+    status: draft.status === "queued" ? "queued" : draft.status === "drafting" ? "drafting" : "ready",
+    title: `${humanizeSurface(draft.surface)} draft ${draft.status === "queued" ? "queued" : draft.status === "drafting" ? "in progress" : "ready"}`,
+    detail: [prospect?.name, account?.companyName].filter(Boolean).join(" · "),
+  };
+}
+
+/** @param {string | null | undefined} value */
+function normalizeIso(value) {
+  if (!value) return null;
+  const iso = String(value);
+  return /^\d{4}-\d{2}-\d{2}T/.test(iso) ? iso : null;
+}
+
+/** @param {{ surface?: string | null, direction?: string | null, outcome?: string | null }} touch */
+function humanizeTouchTitle(touch) {
+  const surface = humanizeSurface(touch.surface);
+  if (touch.direction === "inbound") return `Inbound ${surface}`;
+  if (touch.outcome === "blocked") return `${surface} blocked`;
+  if (touch.outcome === "declined") return `${surface} declined`;
+  return `${surface} sent`;
+}
+
+/** @param {string | null | undefined} surface */
+function humanizeSurface(surface) {
+  return String(surface ?? "activity")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 // ---------------------------------------------------------------------------

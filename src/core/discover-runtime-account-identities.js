@@ -349,6 +349,11 @@ function selectUnipileCapabilityAccounts(items, capability) {
             accountType: item.type ?? null,
             publicIdentifier: normalizeNullableString(im.publicIdentifier) ?? null,
             username: normalizeNullableString(im.username) ?? null,
+            premiumFeatures: Array.isArray(item?.premiumFeatures)
+              ? item.premiumFeatures
+                  .map((feature) => normalizeNullableString(feature))
+                  .filter(Boolean)
+              : [],
           },
         };
       });

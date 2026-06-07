@@ -77,6 +77,8 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
           sourceType: resolvedAccount.sourceType,
           status: resolvedAccount.status,
           reason: resolvedAccount.reason,
+          metadata: resolvedAccount.metadata ?? null,
+          connectionNoteCapable: resolvedAccount.connectionNoteCapable ?? false,
           browserProfile: resolvedAccount.browserProfile,
           harnessConnection: resolvedAccount.harnessConnection
         }

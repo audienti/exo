@@ -261,6 +261,7 @@ function buildInboundReviewPlannerItems(review) {
       const dueAt = item.observedAt;
       const plannerMeta = inboundReviewPlannerMeta(item.state);
       const guidanceKey = item.state === "needs_reply"
+        || item.state === "ready_for_reply"
         ? "reply_to_inbound"
         : item.state === "ready_for_post_accept"
           ? "advance_after_connection_accept"
@@ -322,11 +323,14 @@ function buildInboundReviewPlannerItems(review) {
 function inboundReviewPlannerMeta(state) {
   switch (state) {
     case "needs_reply":
+    case "ready_for_reply":
       return { priority: "reply", priorityRank: 0, cadenceEffect: "overridden_by_inbound" };
     case "thread_change_review":
       return { priority: "action", priorityRank: 0.25, cadenceEffect: "inbound_review_needed" };
     case "ready_for_post_accept":
       return { priority: "action", priorityRank: 0.5, cadenceEffect: "advanced_by_inbound" };
+    case "needs_claim":
+      return { priority: "action", priorityRank: 0.75, cadenceEffect: "inbound_review_needed" };
     case "needs_decision":
       return { priority: "action", priorityRank: 0.75, cadenceEffect: "inbound_review_needed" };
     case "needs_status_reconciliation":
@@ -393,10 +397,13 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
         || latestInboxItem.status === "resolved"
         || latestInboxItem.reviewState === "queued_for_send"
         || latestInboxItem.reviewState === "reply_unavailable"
+        || latestInboxItem.reviewState === "agent_draft_due"
       ) {
         return null;
       }
-      const whyItMatters = "A live reply overtook the planned cadence branch. The next move is to respond, not to continue the old follow-up.";
+      const whyItMatters = latestInboxItem.reviewState === "ready_for_reply"
+        ? "A private inbound message already has a drafted response. The operator can review the actual copy before it enters the send queue."
+        : "A live reply overtook the planned cadence branch. The next move is to respond, not to continue the old follow-up.";
       const recommendedAction = latestInboxItem.recommendedAction;
       return {
         ...base,
@@ -516,11 +523,16 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
       && (!cadence.nextActionDueAt || cadence.nextActionDueAt > now)
     )
   ) {
+    const inviteViewedAfterTouch = latestInboxItem?.kind === "profile_view_after_touch";
     const waitingWhy = isConnectionRequestInFlight(cadence)
-      ? `${prospect.name} already has a connection request in flight, so the primary branch is waiting on an external trigger.`
+      ? inviteViewedAfterTouch
+        ? `${prospect.name} viewed your profile after the connection request. Attention already happened, so the branch should stay patient while you work another ready branch.`
+        : `${prospect.name} already has a connection request in flight, so the primary branch is waiting on an external trigger.`
       : `${prospect.name} already has an outbound branch in flight, so the primary branch is waiting on an external trigger.`;
     const waitingNextMove = isConnectionRequestInFlight(cadence)
-      ? `Wait for ${prospect.name} to accept or reply to the connection request before escalating.`
+      ? inviteViewedAfterTouch
+        ? `Do not add another touch to ${prospect.name} right now. Keep the invite patient and move to the next ready branch.`
+        : `Wait for ${prospect.name} to accept or reply to the connection request before escalating.`
       : `Wait on ${prospect.name}'s current outbound branch unless a stronger inbound event or due checkpoint changes the plan.`;
     const supportAction = selectParallelSupportAction(motionSupportProspects, currentSupportProspect);
 
@@ -709,8 +721,10 @@ function compareDailyItems(left, right) {
 function shouldSurfaceInboundReviewItem(item) {
   return (
     item.state === "needs_reply"
+    || item.state === "ready_for_reply"
     || item.state === "thread_change_review"
     || item.state === "ready_for_post_accept"
+    || item.state === "needs_claim"
     || item.state === "needs_decision"
     || item.state === "needs_status_reconciliation"
   );
@@ -721,6 +735,8 @@ function shouldSurfaceInboundReviewItem(item) {
  */
 function humanizeReviewState(state) {
   switch (state) {
+    case "needs_claim":
+      return "Needs claim";
     case "needs_decision":
       return "Needs decision";
     case "needs_status_reconciliation":
@@ -729,6 +745,8 @@ function humanizeReviewState(state) {
       return "Agent withdraw due";
     case "needs_reply":
       return "Needs reply";
+    case "ready_for_reply":
+      return "Reply draft ready";
     case "ready_for_post_accept":
       return "Post-accept ready";
     case "agent_draft_due":
@@ -773,9 +791,12 @@ function buildInboundDailyDedupKey(item) {
   if (item.source?.type === "inbound_review") {
     switch (item.source.kind) {
       case "needs_reply":
+      case "ready_for_reply":
         return `${prospectId}::reply`;
       case "ready_for_post_accept":
         return `${prospectId}::post_accept_review`;
+      case "needs_claim":
+        return `${prospectId}::claim`;
       case "needs_decision":
         return `${prospectId}::connection_decision`;
       default:

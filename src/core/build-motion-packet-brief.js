@@ -4,6 +4,7 @@ import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
 import { withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
 import { buildMotionPacketSummary } from "../lib/motion-packets.js";
+import { readWorkspaceSettings, resolveWorkspaceEnrichmentPolicy } from "../lib/workspace-settings.js";
 import { buildMotionProspectView } from "./build-motion-prospect-view.js";
 
 /**
@@ -209,6 +210,7 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
   if (!packet.prospectId) {
     throw new Error(`Prospect research packet ${packet.packetId} is missing a prospect id.`);
   }
+  const runtimeEnrichmentRule = buildWorkspaceEnrichmentRule();
 
   const prospectView = buildMotionProspectView(motion, {
     companyId: company.id,
@@ -231,7 +233,8 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
       constraints: [
         "Stay on one prospect. Do not open side quests on the rest of the account.",
         "Use only defensible signals and contact points.",
-        "When contact enrichment is still open, inspect the current runtime and use whatever email-finding, phone-finding, and validation tools are actually available.",
+        "If LinkedIn identity is missing, search through the governed connected LinkedIn account path first before paid or provider LinkedIn identity lookup.",
+        runtimeEnrichmentRule,
         "The packet is not done until the branch is actually ready for a first-touch decision."
       ]
     },
@@ -257,7 +260,8 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
         companyExecutionCommand: `exo companies execution show ${company.id} --capability linkedin --json`,
         serialWriteRule: `Do not run parallel writes against ${company.name}. One worker should finish this company's prospect state changes before another worker touches the same account.`,
         liveBrowserRule: "Before any browser-backed LinkedIn step, load the company execution plan and honor its preferred transport, fallback transport, and failure classes.",
-        runtimeEnrichmentRule: "For contact enrichment, inspect the current runtime and use whatever email-finding, phone-finding, and validation tools are actually available rather than assuming a fixed provider stack."
+        linkedinIdentityRule: "If the prospect lacks a stored LinkedIn profile URL or alias, search through the governed connected LinkedIn account path first. In Codex this means the resolved Unipile-backed LinkedIn account. Use that connected-account search before paid or provider LinkedIn identity lookup. If the governed search is unavailable or exhausted, then move to provider identity lookup. If that governed search runs and still finds no defensible profile URL, record source-tried linkedin_connected_search before marking the prospect exhausted.",
+        runtimeEnrichmentRule,
       },
       signalMatches: brief.signalMatches.map((match) => ({
         id: match.id,
@@ -278,6 +282,7 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
     doneWhen: [
       "Role truth, trigger window, identity tells, and live signal are stored or explicitly exhausted.",
       "Contact enrichment state is updated and the best usable contact points are stored, including verified direct email and verified mobile phone numbers when found.",
+      "Before a no-channel prospect is completed as exhausted, governed connected-account LinkedIn search was attempted and recorded as source-tried linkedin_connected_search.",
       "Cadence state is ready in Exo with a concrete next action.",
       "Any live browser-backed validation followed the company execution plan instead of an unqualified browser session.",
       "The packet is completed or explicitly suppressed/exhausted with notes."
@@ -303,6 +308,21 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
       "The worker did not bypass the company execution plan or split the same company across racing writes."
     ]
   };
+}
+
+function buildWorkspaceEnrichmentRule() {
+  const policy = resolveWorkspaceEnrichmentPolicy(readWorkspaceSettings());
+  const emailProviders = policy.email.providers.length ? policy.email.providers.join(", ") : "none";
+  const validators = policy.email.validators.length ? policy.email.validators.join(", ") : "none";
+  const phoneProviders = policy.phone.providers.length ? policy.phone.providers.join(", ") : "none";
+  const phoneRule = policy.phone.mobileOnly
+    ? "Store mobile numbers only."
+    : "Mobile-only filtering is off.";
+  const whatsappRule = policy.phone.preferWhatsappCapable
+    ? "Prefer WhatsApp-capable evidence when a provider can prove it."
+    : "Do not prioritize WhatsApp-capable evidence.";
+
+  return `When contact enrichment is still open, inspect the current runtime and use whatever email-finding, phone-finding, and validation tools are actually available. For this workspace, the direct email provider order is ${emailProviders}; email validation providers are ${validators}; direct phone provider order is ${phoneProviders}. ${phoneRule} ${whatsappRule}`;
 }
 
 /**

@@ -4,25 +4,39 @@ import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveCodexCliCommand } from "../lib/codex-cli.js";
 import { deriveLinkedinCompanyName } from "../lib/linkedin-headline.js";
+import { deriveLinkedinRelativeEventAt } from "../lib/linkedin-relative-time.js";
 import { buildLinkedinQuickSurfaceHints } from "../lib/live-surface-hints.js";
 import { buildLinkedinQuickCaptureScaffold } from "../lib/linkedin-quick-capture-scaffold.js";
 import { readUnipileConfig } from "../lib/unipile-config.js";
-import { browserProfileSchema } from "../schema/browser-profile.js";
 import { linkedinInboundSyncCaptureSchema } from "../schema/linkedin-capture.js";
 import { userSchema } from "../schema/user.js";
-import { buildLinkedinInboundSyncPayload, resolveLinkedinAccount } from "./inbound-linkedin-sync.js";
+import {
+  buildLinkedinInboundSyncPayload,
+  normalizeLinkedinCaptureSurfaceKeys,
+  resolveLinkedinAccount
+} from "./inbound-linkedin-sync.js";
 import {
   buildAgentHandoffTransport,
-  buildChromeProfileSelection,
-  buildCodexAgentHandoffTransport,
   buildDirectLiveTransport,
   shouldUseCodexAgentHandoff
 } from "./live-agent-handoff.js";
 import { probeUserHarnessConnections } from "./probe-user-harness-connections.js";
-import { resolveRuntimeHarnessConnection } from "./runtime-harness-resolution.js";
 
 const DEFAULT_LINKEDIN_ITEM_LIMIT = 20;
+const DEFAULT_LINKEDIN_PROXY_PAGE_SIZE = 50;
+const LINKEDIN_COLLECTION_MAX_PAGE_SIZE = 100;
+const LINKEDIN_FOLLOWERS_MAX_PAGE_SIZE = 100;
+const LINKEDIN_PROFILE_VIEWS_QUERY_ID = "voyagerPremiumDashAnalyticsObject.c31102e906e7098910f44e0cecaa5b5c";
+const LINKEDIN_FOLLOWING_QUERY_ID = "voyagerSearchDashClusters.843215f2a3455f1bed85762a45d71be8";
+const UNIPILE_HTTP_TIMEOUT_MS = normalizePositiveInteger(
+  process.env.EXO_UNIPILE_HTTP_TIMEOUT_MS ? Number.parseInt(process.env.EXO_UNIPILE_HTTP_TIMEOUT_MS, 10) : null,
+  30000,
+  "EXO_UNIPILE_HTTP_TIMEOUT_MS",
+);
+const UNIPILE_HTTP_CONNECT_TIMEOUT_SECONDS = Math.max(1, Math.min(10, Math.ceil(UNIPILE_HTTP_TIMEOUT_MS / 1000)));
+const UNIPILE_HTTP_MAX_TIME_SECONDS = Math.max(1, Math.ceil(UNIPILE_HTTP_TIMEOUT_MS / 1000));
 
 const linkedinActorFieldsSchema = {
   actorName: { type: ["string", "null"] },
@@ -113,6 +127,17 @@ const linkedinSurfaceSchema = {
       type: ["integer", "null"],
       minimum: 0
     },
+    continuationStartedAt: {
+      type: ["string", "null"],
+      format: "date-time"
+    },
+    nextCursor: {
+      type: ["string", "null"]
+    },
+    nextStartOffset: {
+      type: ["integer", "null"],
+      minimum: 0
+    },
     error: {
       type: ["string", "null"]
     },
@@ -148,7 +173,7 @@ const linkedinLiveCaptureOutputSchema = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["invitationId", "kind", "observedAt", "eventAt", "summary", ...Object.keys(linkedinActorFieldsSchema)],
+            required: ["invitationId", "kind", "observedAt", "eventAt", "summary", "providerSharedSecret", ...Object.keys(linkedinActorFieldsSchema)],
             properties: {
               invitationId: { type: "string", minLength: 1 },
               kind: {
@@ -158,6 +183,7 @@ const linkedinLiveCaptureOutputSchema = {
               observedAt: { type: "string", format: "date-time" },
               eventAt: { type: ["string", "null"], format: "date-time" },
               summary: { type: "string", minLength: 1, maxLength: 280 },
+              providerSharedSecret: { type: ["string", "null"] },
               ...linkedinActorFieldsSchema
             }
           }
@@ -173,7 +199,7 @@ const linkedinLiveCaptureOutputSchema = {
           items: {
             type: "object",
             additionalProperties: false,
-            required: ["invitationId", "kind", "observedAt", "summary", ...Object.keys(linkedinActorFieldsSchema)],
+            required: ["invitationId", "kind", "observedAt", "summary", "providerSharedSecret", ...Object.keys(linkedinActorFieldsSchema)],
             properties: {
               invitationId: { type: "string", minLength: 1 },
               kind: {
@@ -182,6 +208,7 @@ const linkedinLiveCaptureOutputSchema = {
               },
               observedAt: { type: "string", format: "date-time" },
               summary: { type: "string", minLength: 1, maxLength: 280 },
+              providerSharedSecret: { type: ["string", "null"] },
               ...linkedinActorFieldsSchema
             }
           }
@@ -317,19 +344,25 @@ const linkedinLiveCaptureOutputSchema = {
  *   mode?: import("../schema/inbound.js").inboundSyncPlanModeSchema._type | null,
  *   runtime?: string | null,
  *   connector?: string | null,
+ *   surfaceKeys?: string[] | null,
  *   limit?: number | null,
+ *   maxPages?: number | null,
+ *   pageSize?: number | null,
+ *   resumeCursor?: string | null,
+ *   resumeStartOffset?: number | null,
  *   codexCli?: string | null,
  *   codexHome?: string | null,
  *   claudeCli?: string | null
  *   unipileHttpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null
+ *   unipileHttpPostImpl?: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null
  * }} [options]
  */
 export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, options = {}) {
   const user = userSchema.parse(rawUser);
-  const profiles = rawProfiles.map((profile) => browserProfileSchema.parse(profile));
   const account = resolveLinkedinAccount(user, normalizeNullableString(options.accountId));
   const mode = options.mode ?? "quick";
-  const liveSource = resolveLinkedinLiveSource(user, profiles, account, {
+  const requestedSurfaceKeys = normalizeLinkedinCaptureSurfaceKeys(options.surfaceKeys ?? null);
+  const liveSource = resolveLinkedinLiveSource(user, account, {
     runtime: options.runtime ?? null,
     connector: options.connector ?? null,
     codexHome: options.codexHome ?? null,
@@ -338,6 +371,10 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
   const profile = liveSource.profile;
   const harnessConnection = liveSource.harnessConnection;
   const limit = normalizePositiveInteger(options.limit, DEFAULT_LINKEDIN_ITEM_LIMIT, "limit");
+  const maxPages = normalizeOptionalPositiveInteger(options.maxPages, "maxPages");
+  const pageSize = normalizeOptionalPositiveInteger(options.pageSize, "pageSize");
+  const resumeCursor = normalizeNullableString(options.resumeCursor) ?? null;
+  const resumeStartOffset = normalizeOptionalNonNegativeInteger(options.resumeStartOffset, "resumeStartOffset");
 
   const probe = liveSource.probe ?? buildStoredHarnessProbe(user, harnessConnection, {
     codexHome: options.codexHome ?? null,
@@ -373,8 +410,14 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
       connector,
       mode,
       limit,
+      maxPages,
+      pageSize,
+      resumeCursor,
+      resumeStartOffset,
+      surfaceKeys: requestedSurfaceKeys,
       codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
-      httpGetImpl: options.unipileHttpGetImpl ?? null
+      httpGetImpl: options.unipileHttpGetImpl ?? null,
+      httpPostImpl: options.unipileHttpPostImpl ?? null,
     });
     if (directUnipileCapture) {
       rawCapture = directUnipileCapture;
@@ -382,12 +425,11 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
       const shouldUseAgentHandoff = shouldUseCodexAgentHandoff({
         runtime,
         codexCli: options.codexCli ?? null
-      }) || (profile === null && ["codex", "claude"].includes(runtime));
+      }) || ["codex", "claude"].includes(runtime);
       if (shouldUseAgentHandoff) {
         const surfaceHints = buildLinkedinQuickSurfaceHints({ limit });
         const outputGuide = buildLinkedinCaptureOutputGuide({ mode, limit });
         const captureScaffold = buildLinkedinQuickCaptureScaffold({ limit });
-        const handoffBuilder = profile === null ? buildAgentHandoffTransport : buildCodexAgentHandoffTransport;
 
         return {
           user: {
@@ -403,24 +445,14 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
             browserProfileId: account.browserProfileId,
             harnessConnectionId: account.harnessConnectionId
           },
-          profile: profile
-            ? {
-                id: profile.id,
-                label: profile.label,
-                browser: profile.browser,
-                profileDirectory: profile.profileDirectory,
-                profilePath: profile.profilePath,
-                detectedProfileName: profile.detectedProfileName,
-                identityAccounts: profile.identity.accounts
-              }
-            : null,
+          profile: null,
           probe,
-          transport: handoffBuilder({
+          transport: buildAgentHandoffTransport({
             capability: "linkedin",
             runtime,
             connector,
             source: liveSource.source,
-            captureTransportMode: profile ? "browser_native_only" : "connector_native_only",
+            captureTransportMode: "connector_native_only",
             prompt: buildLinkedinLiveCapturePrompt({
               connector,
               handle: account.handle,
@@ -440,13 +472,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
               `exo next --user ${user.id} --json`
             ],
             surfaceHints,
-            profileSelection: profile
-              ? buildChromeProfileSelection({
-                  capability: "linkedin",
-                  expectedHandle: account.handle,
-                  profile
-                })
-              : null
+            profileSelection: null
           }),
           capture: null,
           payload: null
@@ -460,7 +486,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
           handle: account.handle,
           profile,
           limit,
-          codexCli: options.codexCli ?? normalizeNullableString(process.env.EXO_CODEX_CLI) ?? "codex",
+          codexCli: resolveCodexCliCommand({ codexCli: options.codexCli ?? null }),
           codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
           claudeCli: options.claudeCli ?? normalizeNullableString(process.env.EXO_CLAUDE_CLI) ?? "claude",
           prompt
@@ -473,6 +499,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
 
   const built = buildLinkedinInboundSyncPayload(user, {
     accountId: account.id,
+    surfaceKeys: requestedSurfaceKeys,
     capture: rawCapture
   });
 
@@ -490,17 +517,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
       browserProfileId: account.browserProfileId,
       harnessConnectionId: account.harnessConnectionId
     },
-    profile: profile
-      ? {
-          id: profile.id,
-          label: profile.label,
-          browser: profile.browser,
-          profileDirectory: profile.profileDirectory,
-          profilePath: profile.profilePath,
-          detectedProfileName: profile.detectedProfileName,
-          identityAccounts: profile.identity.accounts
-        }
-      : null,
+    profile: null,
     probe,
     transport,
     capture: built.capture,
@@ -510,11 +527,10 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
 
 /**
  * @param {import("../schema/user.js").userSchema._type} user
- * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
  * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
  * @param {{ runtime?: string | null, connector?: string | null, codexHome?: string | null, claudeCli?: string | null }} input
  */
-function resolveLinkedinLiveSource(user, profiles, account, input) {
+function resolveLinkedinLiveSource(user, account, input) {
   if (account.sourceType === "browser-profile") {
     throw new Error("Profile-backed LinkedIn accounts are no longer supported for live sync. Map a managed connector account instead.");
   }
@@ -525,53 +541,6 @@ function resolveLinkedinLiveSource(user, profiles, account, input) {
     probe: null,
     source: "stored_harness_connection"
   };
-}
-
-/**
- * @param {import("../schema/browser-profile.js").browserProfileSchema._type[]} profiles
- * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
- */
-function resolveLinkedinBrowserProfile(profiles, account) {
-  if (account.sourceType !== "browser-profile") {
-    throw new Error(`LinkedIn live sync currently requires a browser-profile-backed LinkedIn account. Account ${account.id} is ${account.sourceType}.`);
-  }
-
-  const profile = profiles.find((candidate) => candidate.id === account.browserProfileId) ?? null;
-  if (!profile) {
-    throw new Error(`Browser profile not found for LinkedIn account ${account.id}.`);
-  }
-
-  if (profile.browser !== "chrome") {
-    throw new Error(`LinkedIn live sync currently supports Chrome-backed profiles only. ${profile.label} is ${profile.browser}.`);
-  }
-
-  if (profile.status !== "ready" || !profile.verifiedCapabilities.includes("linkedin")) {
-    throw new Error(`LinkedIn live sync requires a trusted Chrome profile with verified linkedin capability. ${profile.label} is ${profile.status}.`);
-  }
-
-  return profile;
-}
-
-/**
- * @param {import("../schema/user.js").userSchema._type} user
- * @param {{ runtime?: string | null, connector?: string | null }} input
- */
-function resolveLinkedinBrowserHarnessConnection(user, input) {
-  const runtimeFilter = normalizeNullableString(input.runtime)?.toLowerCase() ?? null;
-  const connectorFilter = normalizeNullableString(input.connector)?.toLowerCase() ?? "chrome";
-
-  if (connectorFilter !== "chrome") {
-    throw new Error(`LinkedIn live sync currently supports runtime:chrome harness connections only. Received connector ${connectorFilter}.`);
-  }
-
-  return resolveRuntimeHarnessConnection(user, {
-    runtime: runtimeFilter,
-    connector: connectorFilter,
-    codexHome: input.codexHome ?? null,
-    claudeCli: input.claudeCli ?? null,
-    multipleMessage: (choices) =>
-      `Multiple supported LinkedIn browser harnesses exist for ${user.label} (${choices.join(", ")}). Pass --runtime explicitly.`
-  });
 }
 
 /**
@@ -591,6 +560,11 @@ function requireLinkedinHarnessConnection(user, account, input) {
 
   const connectorFilter = normalizeNullableString(input.connector)?.toLowerCase() ?? null;
   const resolvedConnector = harnessConnection.connector.trim().toLowerCase();
+  if (resolvedConnector !== "unipile") {
+    throw new Error(
+      `LinkedIn live sync now requires a managed Unipile account. Account ${account.id} resolves through ${harnessConnection.runtime}:${harnessConnection.connector}.`
+    );
+  }
   if (connectorFilter && resolvedConnector !== connectorFilter) {
     throw new Error(`LinkedIn account ${account.id} resolves through ${harnessConnection.runtime}:${harnessConnection.connector}, not ${harnessConnection.runtime}:${connectorFilter}.`);
   }
@@ -745,8 +719,14 @@ async function captureLinkedinQuickSurfacesThroughClaude(input) {
  *   connector: string,
  *   mode: string,
  *   limit: number,
+ *   maxPages: number | null,
+ *   pageSize: number | null,
+ *   resumeCursor: string | null,
+ *   resumeStartOffset: number | null,
+ *   surfaceKeys: string[],
  *   codexHome: string | null,
  *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null
+ *   httpPostImpl: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null
  * }} input
  */
 async function maybeCaptureLinkedinQuickSurfacesThroughUnipile(input) {
@@ -759,7 +739,7 @@ async function maybeCaptureLinkedinQuickSurfacesThroughUnipile(input) {
     return null;
   }
 
-  const { apiKey, baseUrl } = readUnipileConfig(input.codexHome);
+  const { apiKey, baseUrl, v2ApiKey, v2BaseUrl } = readUnipileConfig(input.codexHome);
   if (!apiKey) {
     return null;
   }
@@ -767,10 +747,18 @@ async function maybeCaptureLinkedinQuickSurfacesThroughUnipile(input) {
   return captureLinkedinQuickSurfacesThroughUnipile({
     apiKey,
     baseUrl,
+    v2ApiKey,
+    v2BaseUrl,
     providerAccountId,
     mode: input.mode,
     limit: input.limit,
-    httpGetImpl: input.httpGetImpl
+    maxPages: input.maxPages,
+    pageSize: input.pageSize,
+    resumeCursor: input.resumeCursor,
+    resumeStartOffset: input.resumeStartOffset,
+    surfaceKeys: input.surfaceKeys,
+    httpGetImpl: input.httpGetImpl,
+    httpPostImpl: input.httpPostImpl,
   });
 }
 
@@ -778,55 +766,135 @@ async function maybeCaptureLinkedinQuickSurfacesThroughUnipile(input) {
  * @param {{
  *   apiKey: string,
  *   baseUrl: string,
+ *   v2ApiKey: string | null,
+ *   v2BaseUrl: string,
  *   providerAccountId: string,
  *   mode: string,
  *   limit: number,
+ *   maxPages: number | null,
+ *   pageSize: number | null,
+ *   resumeCursor: string | null,
+ *   resumeStartOffset: number | null,
+ *   surfaceKeys: string[],
  *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null
+ *   httpPostImpl: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null
  * }} input
  */
 async function captureLinkedinQuickSurfacesThroughUnipile(input) {
   const mode = normalizeNullableString(input.mode)?.toLowerCase() === "full" ? "full" : "quick";
-  const [sentInvitations, receivedInvitations, messagingInbox, followersList, followingList] = await Promise.all([
-    captureUnipileSentInvitationsSurface({
-      apiKey: input.apiKey,
-      baseUrl: input.baseUrl,
-      providerAccountId: input.providerAccountId,
-      mode,
-      limit: input.limit,
-      httpGetImpl: input.httpGetImpl
-    }),
-    captureUnipileReceivedInvitationsSurface({
-      apiKey: input.apiKey,
-      baseUrl: input.baseUrl,
-      providerAccountId: input.providerAccountId,
-      mode,
-      limit: input.limit,
-      httpGetImpl: input.httpGetImpl
-    }),
-    captureUnipileMessagingInboxSurface({
-      apiKey: input.apiKey,
-      baseUrl: input.baseUrl,
-      providerAccountId: input.providerAccountId,
-      mode,
-      limit: input.limit,
-      httpGetImpl: input.httpGetImpl
-    }),
-    captureUnipileFollowersSurface({
-      apiKey: input.apiKey,
-      baseUrl: input.baseUrl,
-      providerAccountId: input.providerAccountId,
-      mode,
-      limit: input.limit,
-      httpGetImpl: input.httpGetImpl
-    }),
-    captureUnipileFollowingSurface({
-      apiKey: input.apiKey,
-      baseUrl: input.baseUrl,
-      providerAccountId: input.providerAccountId,
-      mode,
-      limit: input.limit,
-      httpGetImpl: input.httpGetImpl
-    })
+  const requestedSurfaceKeys = new Set(input.surfaceKeys);
+  /** @type {Map<string, Promise<null | {
+   *   providerId: string | null,
+   *   publicIdentifier: string | null,
+   *   headline: string | null,
+   *   companyName: string | null,
+   *   companyId: string | null,
+   *   companyPublicIdentifier: string | null,
+   *   companyProfileUrl: string | null,
+   *   companyPictureUrl: string | null,
+   *   profileUrl: string | null,
+   *   pictureUrl: string | null,
+   * }>>} */
+  const profileCache = new Map();
+  /** @type {Map<string, Promise<null | {
+   *   name: string | null,
+   *   domain: string | null,
+   *   websiteUrl: string | null,
+   *   linkedinCompanyUrl: string | null,
+   *   logoSourceUrl: string | null,
+   * }>>} */
+  const companyCache = new Map();
+  const [sentInvitations, receivedInvitations, messagingInbox, profileViews, followersList, followingList] = await Promise.all([
+    requestedSurfaceKeys.has("linkedin-sent-invitations")
+      ? captureUnipileSentInvitationsSurface({
+          apiKey: input.apiKey,
+          baseUrl: input.baseUrl,
+          providerAccountId: input.providerAccountId,
+          mode,
+          limit: input.limit,
+          maxPages: input.maxPages,
+          pageSize: input.pageSize,
+          resumeCursor: input.resumeCursor,
+          httpGetImpl: input.httpGetImpl,
+          profileCache,
+          companyCache
+        })
+      : Promise.resolve(buildSkippedLinkedinSurface(mode)),
+    requestedSurfaceKeys.has("linkedin-received-invitations")
+      ? captureUnipileReceivedInvitationsSurface({
+          apiKey: input.apiKey,
+          baseUrl: input.baseUrl,
+          providerAccountId: input.providerAccountId,
+          mode,
+          limit: input.limit,
+          httpGetImpl: input.httpGetImpl,
+          profileCache,
+          companyCache
+        })
+      : Promise.resolve(buildSkippedLinkedinSurface(mode)),
+    requestedSurfaceKeys.has("linkedin-messaging-inbox")
+      ? captureUnipileMessagingInboxSurface({
+          apiKey: input.apiKey,
+          baseUrl: input.baseUrl,
+          providerAccountId: input.providerAccountId,
+          mode,
+          limit: input.limit,
+          httpGetImpl: input.httpGetImpl,
+          profileCache,
+          companyCache
+        })
+      : Promise.resolve(buildSkippedLinkedinSurface(mode)),
+    requestedSurfaceKeys.has("linkedin-profile-views")
+      ? captureUnipileProfileViewsSurface({
+          apiKey: input.apiKey,
+          baseUrl: input.baseUrl,
+          v2ApiKey: input.v2ApiKey,
+          v2BaseUrl: input.v2BaseUrl,
+          providerAccountId: input.providerAccountId,
+          mode,
+          limit: input.limit,
+          maxPages: input.maxPages,
+          pageSize: input.pageSize,
+          resumeStartOffset: input.resumeStartOffset,
+          httpPostImpl: input.httpPostImpl,
+          profileCache,
+          companyCache,
+          httpGetImpl: input.httpGetImpl
+        })
+      : Promise.resolve(buildSkippedLinkedinSurface(mode)),
+    requestedSurfaceKeys.has("linkedin-followers-list")
+      ? captureUnipileFollowersSurface({
+          apiKey: input.apiKey,
+          baseUrl: input.baseUrl,
+          providerAccountId: input.providerAccountId,
+          mode,
+          limit: input.limit,
+          maxPages: input.maxPages,
+          pageSize: input.pageSize,
+          resumeCursor: input.resumeCursor,
+          httpGetImpl: input.httpGetImpl,
+          profileCache,
+          companyCache
+        })
+      : Promise.resolve(buildSkippedLinkedinSurface(mode)),
+    requestedSurfaceKeys.has("linkedin-following-list")
+      ? captureUnipileFollowingSurface({
+          apiKey: input.apiKey,
+          baseUrl: input.baseUrl,
+          v2ApiKey: input.v2ApiKey,
+          v2BaseUrl: input.v2BaseUrl,
+          providerAccountId: input.providerAccountId,
+          mode,
+          limit: input.limit,
+          maxPages: input.maxPages,
+          pageSize: input.pageSize,
+          resumeStartOffset: input.resumeStartOffset,
+          httpPostImpl: input.httpPostImpl,
+          profileCache,
+          companyCache,
+          httpGetImpl: input.httpGetImpl
+        })
+      : Promise.resolve(buildSkippedLinkedinSurface(mode))
   ]);
 
   return linkedinInboundSyncCaptureSchema.parse({
@@ -834,17 +902,14 @@ async function captureLinkedinQuickSurfacesThroughUnipile(input) {
     sentInvitations,
     receivedInvitations,
     messagingInbox,
-    profileViews: buildUnsupportedLinkedinSurface(
-      mode,
-      "Unipile does not expose a direct LinkedIn profile views route for Exo live sync."
-    ),
+    profileViews,
     followersList,
     followingList
   });
 }
 
 /**
- * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null }} input
+ * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
  */
 async function captureUnipileSentInvitationsSurface(input) {
   return captureUnipileLinkedinCollectionSurface({
@@ -855,7 +920,7 @@ async function captureUnipileSentInvitationsSurface(input) {
     providerAccountId: input.providerAccountId,
     mode: input.mode,
     limit: input.limit,
-    maxPageSize: 250,
+    maxPageSize: LINKEDIN_COLLECTION_MAX_PAGE_SIZE,
     partialError: "Unipile returned more pending sent invitations than this quick pass itemized.",
     httpGetImpl: input.httpGetImpl,
     mapItem: (item, fallbackObservedAt) => {
@@ -866,32 +931,52 @@ async function captureUnipileSentInvitationsSurface(input) {
 
       const actorName = normalizeNullableString(item?.invited_user) ?? "Unknown LinkedIn user";
       const actorHandle = normalizeNullableString(item?.invited_user_public_id) ?? null;
-      return {
+      const actorTitle = normalizeNullableString(item?.invited_user_description) ?? null;
+      const actorLinkedinMemberId = normalizeNullableString(item?.invited_user_id) ?? null;
+      return enrichUnipileLinkedinActorIdentity({
+        providerAccountId: input.providerAccountId,
+        apiKey: input.apiKey,
+        baseUrl: input.baseUrl,
+        httpGetImpl: input.httpGetImpl,
+        profileCache: input.profileCache,
+        companyCache: input.companyCache,
+        actorTitle,
+        actorCompanyName: normalizeNullableString(item?.invited_user_company_name)
+          ?? normalizeNullableString(item?.company_name)
+          ?? deriveLinkedinCompanyName(actorTitle),
+        actorHandle,
+        actorProfileUrl: buildLinkedinProfileUrlFromPublicId(actorHandle),
+        actorLinkedinPublicId: actorHandle,
+        actorLinkedinMemberId,
+        actorAvatarSourceUrl: null,
+      }).then((actor) => ({
         invitationId,
         kind: "connection_request_pending",
         observedAt: coerceIsoDatetime(item?.parsed_datetime ?? item?.date, fallbackObservedAt),
         eventAt: coerceIsoDatetime(item?.parsed_datetime ?? item?.date, fallbackObservedAt),
         summary: `${actorName} is still pending on LinkedIn.`,
+        providerSharedSecret: normalizeNullableString(item?.specifics?.shared_secret) ?? null,
         actorName,
-        actorTitle: normalizeNullableString(item?.invited_user_description) ?? null,
-        actorCompanyName: deriveLinkedinCompanyName(normalizeNullableString(item?.invited_user_description) ?? null),
-        actorHandle,
-        actorProfileUrl: buildLinkedinProfileUrlFromPublicId(actorHandle),
-        actorLinkedinPublicId: actorHandle,
-        actorLinkedinMemberId: normalizeNullableString(item?.invited_user_id) ?? null,
-        actorAvatarSourceUrl: null,
+        actorTitle: actor.actorTitle,
+        actorCompanyName: actor.actorCompanyName,
+        actorHandle: actor.actorHandle,
+        actorProfileUrl: actor.actorProfileUrl,
+        actorLinkedinPublicId: actor.actorLinkedinPublicId,
+        actorLinkedinMemberId: actor.actorLinkedinMemberId,
+        actorAvatarSourceUrl: actor.actorAvatarSourceUrl,
+        actorCompanyProfile: actor.actorCompanyProfile,
         sourceUrl: "https://www.linkedin.com/mynetwork/invitation-manager/sent/",
         motionId: null,
         companyId: null,
         prospectId: null,
         notes: normalizeNullableString(item?.invitation_text) ?? null
-      };
+      }));
     }
   });
 }
 
 /**
- * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null }} input
+ * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
  */
 async function captureUnipileReceivedInvitationsSurface(input) {
   return captureUnipileLinkedinCollectionSurface({
@@ -902,7 +987,7 @@ async function captureUnipileReceivedInvitationsSurface(input) {
     providerAccountId: input.providerAccountId,
     mode: input.mode,
     limit: input.limit,
-    maxPageSize: 100,
+    maxPageSize: LINKEDIN_COLLECTION_MAX_PAGE_SIZE,
     partialError: "Unipile returned more received LinkedIn invitations than this quick pass itemized.",
     httpGetImpl: input.httpGetImpl,
     mapItem: (item, fallbackObservedAt) => {
@@ -914,31 +999,51 @@ async function captureUnipileReceivedInvitationsSurface(input) {
       const inviter = item?.inviter ?? {};
       const actorName = normalizeNullableString(inviter.inviter_name) ?? "Unknown LinkedIn user";
       const actorHandle = normalizeNullableString(inviter.inviter_public_identifier) ?? null;
-      return {
+      const actorTitle = normalizeNullableString(inviter.inviter_description) ?? null;
+      const actorLinkedinMemberId = normalizeNullableString(inviter.inviter_id) ?? null;
+      return enrichUnipileLinkedinActorIdentity({
+        providerAccountId: input.providerAccountId,
+        apiKey: input.apiKey,
+        baseUrl: input.baseUrl,
+        httpGetImpl: input.httpGetImpl,
+        profileCache: input.profileCache,
+        companyCache: input.companyCache,
+        actorTitle,
+        actorCompanyName: normalizeNullableString(inviter.company_name)
+          ?? normalizeNullableString(item?.company_name)
+          ?? deriveLinkedinCompanyName(actorTitle),
+        actorHandle,
+        actorProfileUrl: buildLinkedinProfileUrlFromPublicId(actorHandle),
+        actorLinkedinPublicId: actorHandle,
+        actorLinkedinMemberId,
+        actorAvatarSourceUrl: null,
+      }).then((actor) => ({
         invitationId,
         kind: "connection_request_received",
         observedAt: coerceIsoDatetime(item?.parsed_datetime ?? item?.date, fallbackObservedAt),
         summary: `${actorName} sent a new inbound LinkedIn connection request.`,
+        providerSharedSecret: normalizeNullableString(item?.specifics?.shared_secret) ?? null,
         actorName,
-        actorTitle: normalizeNullableString(inviter.inviter_description) ?? null,
-        actorCompanyName: deriveLinkedinCompanyName(normalizeNullableString(inviter.inviter_description) ?? null),
-        actorHandle,
-        actorProfileUrl: buildLinkedinProfileUrlFromPublicId(actorHandle),
-        actorLinkedinPublicId: actorHandle,
-        actorLinkedinMemberId: normalizeNullableString(inviter.inviter_id) ?? null,
-        actorAvatarSourceUrl: null,
+        actorTitle: actor.actorTitle,
+        actorCompanyName: actor.actorCompanyName,
+        actorHandle: actor.actorHandle,
+        actorProfileUrl: actor.actorProfileUrl,
+        actorLinkedinPublicId: actor.actorLinkedinPublicId,
+        actorLinkedinMemberId: actor.actorLinkedinMemberId,
+        actorAvatarSourceUrl: actor.actorAvatarSourceUrl,
+        actorCompanyProfile: actor.actorCompanyProfile,
         sourceUrl: "https://www.linkedin.com/mynetwork/invitation-manager/",
         motionId: null,
         companyId: null,
         prospectId: null,
         notes: normalizeNullableString(item?.invitation_text) ?? null
-      };
+      }));
     }
   });
 }
 
 /**
- * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null }} input
+ * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
  */
 async function captureUnipileMessagingInboxSurface(input) {
   /** @type {Map<string, Promise<null | {
@@ -968,7 +1073,7 @@ async function captureUnipileMessagingInboxSurface(input) {
     providerAccountId: input.providerAccountId,
     mode: input.mode,
     limit: input.limit,
-    maxPageSize: 100,
+    maxPageSize: LINKEDIN_COLLECTION_MAX_PAGE_SIZE,
     partialError: "Unipile returned more unread LinkedIn chats than this quick pass itemized.",
     httpGetImpl: input.httpGetImpl,
     extraQuery: {
@@ -988,6 +1093,8 @@ async function captureUnipileMessagingInboxSurface(input) {
         baseUrl: input.baseUrl,
         httpGetImpl: input.httpGetImpl,
         cache: attendeeCache,
+        profileCache: input.profileCache,
+        companyCache: input.companyCache,
       });
       const actorName = attendee?.name ?? "Unknown LinkedIn user";
       const actorTitle = attendee?.occupation ?? null;
@@ -1020,6 +1127,7 @@ async function captureUnipileMessagingInboxSurface(input) {
         actorLinkedinPublicId: attendee?.publicIdentifier ?? null,
         actorLinkedinMemberId: attendee?.providerId ?? attendeeProviderId,
         actorAvatarSourceUrl: attendee?.pictureUrl ?? null,
+        actorCompanyProfile: attendee?.companyProfile ?? null,
         sourceUrl: buildLinkedinThreadUrl(threadProviderId),
         subject,
         motionId: null,
@@ -1035,7 +1143,112 @@ async function captureUnipileMessagingInboxSurface(input) {
 }
 
 /**
- * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null }} input
+ * @param {{
+ *   apiKey: string,
+ *   baseUrl: string,
+ *   v2ApiKey: string | null,
+ *   v2BaseUrl: string,
+ *   providerAccountId: string,
+ *   mode: "quick" | "full",
+ *   limit: number,
+ *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
+ *   httpPostImpl: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null
+ *   profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>>
+ * }} input
+ */
+async function captureUnipileProfileViewsSurface(input) {
+  return captureUnipileLinkedinProxyCollectionSurface({
+    apiKey: input.apiKey,
+    baseUrl: input.baseUrl,
+    v2ApiKey: input.v2ApiKey,
+    v2BaseUrl: input.v2BaseUrl,
+    providerAccountId: input.providerAccountId,
+    routeLabel: "profile views capture",
+    mode: input.mode,
+    limit: input.limit,
+    pageSize: input.mode === "full"
+      ? DEFAULT_LINKEDIN_PROXY_PAGE_SIZE
+      : Math.max(1, input.limit),
+    partialError: "Unipile returned more LinkedIn profile views than this quick pass itemized.",
+    httpPostImpl: input.httpPostImpl,
+    buildRequest: (start, count) => ({
+      url: "https://www.linkedin.com/voyager/api/graphql",
+      queryParams: {
+        queryId: LINKEDIN_PROFILE_VIEWS_QUERY_ID,
+        variables: `(start:${start},count:${count},query:(),analyticsEntityUrn:(activityUrn:urn%3Ali%3Adummy%3A-1),surfaceType:WVMP)`
+      }
+    }),
+    extractItems: (parsed) => extractLinkedinProxyPayload(parsed)?.premiumDashAnalyticsObjectByAnalyticsEntity?.elements ?? null,
+    resolveVisibleTotalCount: (parsed) => {
+      const total = Number(extractLinkedinProxyPayload(parsed)?.premiumDashAnalyticsObjectByAnalyticsEntity?.paging?.total);
+      return Number.isFinite(total) && total > 0 ? total : null;
+    },
+    mapItem: async (item, fallbackObservedAt) => {
+      const entityLockup = item?.content?.analyticsEntityLockup?.entityLockup ?? null;
+      const actorName = normalizeNullableString(entityLockup?.title?.text) ?? "Unknown LinkedIn user";
+      const actorTitle = normalizeNullableString(item?.content?.ctaItem?.actionData?.entityProfile?.headline)
+        ?? normalizeNullableString(entityLockup?.subtitle?.text)
+        ?? null;
+      const actorProfileUrl = normalizeLinkedinProfileUrl(
+        normalizeNullableString(entityLockup?.navigationUrl)
+        ?? buildLinkedinProfileUrlFromPublicId(
+          normalizeNullableString(item?.content?.ctaItem?.actionData?.entityProfile?.publicIdentifier) ?? null
+        )
+      );
+      const actorHandle = normalizeNullableString(item?.content?.ctaItem?.actionData?.entityProfile?.publicIdentifier)
+        ?? extractLinkedinPublicId(actorProfileUrl);
+      const actorLinkedinMemberId = normalizeNullableString(item?.content?.ctaItem?.actionData?.entityProfile?.entityUrn)
+        ?? normalizeNullableString(entityLockup?.image?.attributes?.[0]?.detailData?.profilePicture?.entityUrn)
+        ?? null;
+      const actor = await enrichUnipileLinkedinActorIdentity({
+        providerAccountId: input.providerAccountId,
+        apiKey: input.apiKey,
+        baseUrl: input.baseUrl,
+        httpGetImpl: input.httpGetImpl,
+        profileCache: input.profileCache,
+        companyCache: input.companyCache,
+        actorTitle,
+        actorCompanyName: null,
+        actorHandle,
+        actorProfileUrl,
+        actorLinkedinPublicId: actorHandle,
+        actorLinkedinMemberId,
+        actorAvatarSourceUrl: extractLinkedinImageUrl(entityLockup?.image),
+      });
+      const caption = normalizeNullableString(entityLockup?.caption?.text) ?? null;
+      const eventAt = deriveLinkedinRelativeEventAt(caption, fallbackObservedAt);
+      const viewIdBase = actor.actorProfileUrl ?? `${actorName}:${caption ?? fallbackObservedAt}`;
+      return {
+        viewId: `${viewIdBase}::${eventAt ?? fallbackObservedAt}`,
+        kind: "profile_view_received",
+        observedAt: fallbackObservedAt,
+        eventAt,
+        summary: caption
+          ? `${actorName} appeared in your LinkedIn profile viewers. ${caption}.`
+          : `${actorName} appeared in your LinkedIn profile viewers.`,
+        actorName,
+        actorTitle: actor.actorTitle,
+        actorCompanyName: actor.actorCompanyName,
+        actorHandle: actor.actorHandle,
+        actorProfileUrl: actor.actorProfileUrl,
+        actorLinkedinPublicId: actor.actorLinkedinPublicId,
+        actorLinkedinMemberId: actor.actorLinkedinMemberId,
+        actorAvatarSourceUrl: actor.actorAvatarSourceUrl,
+        actorCompanyProfile: actor.actorCompanyProfile,
+        sourceUrl: actor.actorProfileUrl,
+        motionId: null,
+        companyId: null,
+        prospectId: null,
+        notes: normalizeNullableString(entityLockup?.label?.text)
+          ? `LinkedIn viewer label: ${normalizeNullableString(entityLockup?.label?.text)}`
+          : null
+      };
+    }
+  });
+}
+
+/**
+ * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, maxPages?: number | null, pageSize?: number | null, resumeCursor?: string | null, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
  */
 async function captureUnipileFollowersSurface(input) {
   return captureUnipileLinkedinCollectionSurface({
@@ -1046,10 +1259,14 @@ async function captureUnipileFollowersSurface(input) {
     providerAccountId: input.providerAccountId,
     mode: input.mode,
     limit: input.limit,
-    maxPageSize: 250,
+    maxPages: input.maxPages ?? null,
+    pageSize: input.pageSize ?? null,
+    resumeCursor: input.resumeCursor ?? null,
+    maxPageSize: LINKEDIN_FOLLOWERS_MAX_PAGE_SIZE,
     partialError: "Unipile returned more LinkedIn followers than this quick pass itemized.",
+    acceptTrailingEmptyCursor: true,
     httpGetImpl: input.httpGetImpl,
-    mapItem: (item, fallbackObservedAt) => {
+    mapItem: async (item, fallbackObservedAt) => {
       const entryId = normalizeNullableString(item?.id);
       if (!entryId) {
         return null;
@@ -1058,20 +1275,39 @@ async function captureUnipileFollowersSurface(input) {
       const actorProfileUrl = normalizeNullableString(item?.profile_url) ?? null;
       const actorHandle = extractLinkedinPublicId(actorProfileUrl);
       const actorName = normalizeNullableString(item?.name) ?? "Unknown LinkedIn user";
+      const actorTitle = normalizeNullableString(item?.headline) ?? null;
+      const actorLinkedinMemberId = normalizeNullableString(item?.id) ?? normalizeNullableString(item?.urn) ?? null;
+      const actor = await enrichUnipileLinkedinActorIdentity({
+        providerAccountId: input.providerAccountId,
+        apiKey: input.apiKey,
+        baseUrl: input.baseUrl,
+        httpGetImpl: input.httpGetImpl,
+        profileCache: input.profileCache,
+        companyCache: input.companyCache,
+        actorTitle,
+        actorCompanyName: normalizeNullableString(item?.company_name)
+          ?? deriveLinkedinCompanyName(actorTitle),
+        actorHandle,
+        actorProfileUrl,
+        actorLinkedinPublicId: actorHandle,
+        actorLinkedinMemberId,
+        actorAvatarSourceUrl: normalizeNullableString(item?.profile_picture_url_large) ?? normalizeNullableString(item?.profile_picture_url) ?? null,
+      });
       return {
         entryId,
         kind: "follower_confirmed",
         observedAt: fallbackObservedAt,
         summary: `${actorName} is present in the LinkedIn follower list.`,
         actorName,
-        actorTitle: normalizeNullableString(item?.headline) ?? null,
-        actorCompanyName: deriveLinkedinCompanyName(normalizeNullableString(item?.headline) ?? null),
-        actorHandle,
-        actorProfileUrl,
-        actorLinkedinPublicId: actorHandle,
-        actorLinkedinMemberId: normalizeNullableString(item?.id) ?? normalizeNullableString(item?.urn) ?? null,
-        actorAvatarSourceUrl: normalizeNullableString(item?.profile_picture_url_large) ?? normalizeNullableString(item?.profile_picture_url) ?? null,
-        sourceUrl: actorProfileUrl,
+        actorTitle: actor.actorTitle,
+        actorCompanyName: actor.actorCompanyName,
+        actorHandle: actor.actorHandle,
+        actorProfileUrl: actor.actorProfileUrl,
+        actorLinkedinPublicId: actor.actorLinkedinPublicId,
+        actorLinkedinMemberId: actor.actorLinkedinMemberId,
+        actorAvatarSourceUrl: actor.actorAvatarSourceUrl,
+        actorCompanyProfile: actor.actorCompanyProfile,
+        sourceUrl: actor.actorProfileUrl,
         motionId: null,
         companyId: null,
         prospectId: null,
@@ -1082,48 +1318,106 @@ async function captureUnipileFollowersSurface(input) {
 }
 
 /**
- * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null }} input
+ * @param {{
+ *   apiKey: string,
+ *   baseUrl: string,
+ *   v2ApiKey: string | null,
+ *   v2BaseUrl: string,
+ *   providerAccountId: string,
+ *   mode: "quick" | "full",
+ *   limit: number,
+ *   maxPages?: number | null,
+ *   pageSize?: number | null,
+ *   resumeStartOffset?: number | null,
+ *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
+ *   httpPostImpl: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null
+ *   profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>>
+ * }} input
  */
 async function captureUnipileFollowingSurface(input) {
-  return captureUnipileLinkedinCollectionSurface({
+  return captureUnipileLinkedinProxyCollectionSurface({
     apiKey: input.apiKey,
     baseUrl: input.baseUrl,
-    pathname: "/api/v1/users/following",
-    routeLabel: "following capture",
+    v2ApiKey: input.v2ApiKey,
+    v2BaseUrl: input.v2BaseUrl,
     providerAccountId: input.providerAccountId,
+    routeLabel: "following capture",
     mode: input.mode,
     limit: input.limit,
-    maxPageSize: 250,
+    maxPages: input.maxPages ?? null,
+    pageSize: input.mode === "full"
+      ? normalizePositiveInteger(input.pageSize ?? DEFAULT_LINKEDIN_PROXY_PAGE_SIZE, DEFAULT_LINKEDIN_PROXY_PAGE_SIZE, "following page size")
+      : Math.max(1, input.limit),
+    resumeStartOffset: input.resumeStartOffset ?? null,
     partialError: "Unipile returned more followed LinkedIn accounts than this quick pass itemized.",
-    httpGetImpl: input.httpGetImpl,
-    mapItem: (item, fallbackObservedAt) => {
-      const entryId = normalizeNullableString(item?.connection_urn)
-        ?? normalizeNullableString(item?.member_id)
-        ?? normalizeNullableString(item?.public_identifier);
+    httpPostImpl: input.httpPostImpl,
+    buildRequest: (start, count) => ({
+      url: "https://www.linkedin.com/voyager/api/graphql",
+      queryParams: {
+        queryId: LINKEDIN_FOLLOWING_QUERY_ID,
+        variables: `(start:${start},count:${count},origin:CurationHub,query:(flagshipSearchIntent:MYNETWORK_CURATION_HUB,includeFiltersInResponse:true,queryParameters:List((key:resultType,value:List(PEOPLE_FOLLOW)))))`
+      }
+    }),
+    extractItems: (parsed) => extractLinkedinProxyPayload(parsed)?.searchDashClustersByAll?.elements?.[0]?.items ?? null,
+    resolveVisibleTotalCount: (parsed) => {
+      const payload = extractLinkedinProxyPayload(parsed)?.searchDashClustersByAll ?? null;
+      const total = Number(payload?.paging?.total ?? payload?.metadata?.totalResultCount);
+      return Number.isFinite(total) && total > 0 ? total : null;
+    },
+    mapItem: async (item, fallbackObservedAt) => {
+      const entityResult = item?.item?.entityResult ?? item?.entityResult ?? null;
+      const actorProfileUrl = normalizeLinkedinProfileUrl(
+        normalizeNullableString(entityResult?.navigationUrl)
+        ?? normalizeNullableString(entityResult?.navigationContext?.url)
+      );
+      const actorHandle = extractLinkedinPublicId(actorProfileUrl);
+      const followAction = entityResult?.primaryActions
+        ?.map((action) => action?.actionDetails?.followAction ?? null)
+        .find(Boolean) ?? null;
+      const entryId = normalizeNullableString(followAction?.entityUrn)
+        ?? normalizeNullableString(entityResult?.trackingUrn)
+        ?? actorProfileUrl;
       if (!entryId) {
         return null;
       }
 
-      const actorName = joinNonEmptyParts([
-        normalizeNullableString(item?.first_name),
-        normalizeNullableString(item?.last_name)
-      ]) ?? "Unknown LinkedIn user";
-      const actorHandle = normalizeNullableString(item?.public_identifier) ?? null;
-      const actorProfileUrl = normalizeNullableString(item?.public_profile_url) ?? buildLinkedinProfileUrlFromPublicId(actorHandle);
-      return {
-        entryId,
-        kind: "follow_state_confirmed",
-        observedAt: coerceIsoDatetime(item?.created_at, fallbackObservedAt),
-        summary: `${actorName} is still present in the LinkedIn following list.`,
-        actorName,
-        actorTitle: normalizeNullableString(item?.headline) ?? null,
-        actorCompanyName: deriveLinkedinCompanyName(normalizeNullableString(item?.headline) ?? null),
+      const actorName = normalizeNullableString(entityResult?.title?.text) ?? "Unknown LinkedIn user";
+      const actorTitle = normalizeNullableString(entityResult?.primarySubtitle?.text) ?? null;
+      const actorLinkedinMemberId = normalizeNullableString(entityResult?.trackingUrn)
+        ?? normalizeNullableString(followAction?.entityUrn)
+        ?? null;
+      const actor = await enrichUnipileLinkedinActorIdentity({
+        providerAccountId: input.providerAccountId,
+        apiKey: input.apiKey,
+        baseUrl: input.baseUrl,
+        httpGetImpl: input.httpGetImpl,
+        profileCache: input.profileCache,
+        companyCache: input.companyCache,
+        actorTitle,
+        actorCompanyName: normalizeNullableString(entityResult?.companyName)
+          ?? normalizeNullableString(item?.company_name)
+          ?? deriveLinkedinCompanyName(actorTitle),
         actorHandle,
         actorProfileUrl,
         actorLinkedinPublicId: actorHandle,
-        actorLinkedinMemberId: normalizeNullableString(item?.member_id) ?? null,
-        actorAvatarSourceUrl: normalizeNullableString(item?.profile_picture_url) ?? null,
-        sourceUrl: actorProfileUrl,
+        actorLinkedinMemberId,
+        actorAvatarSourceUrl: extractLinkedinImageUrl(entityResult?.image),
+      });
+      return {
+        entryId,
+        kind: "follow_state_confirmed",
+        observedAt: fallbackObservedAt,
+        summary: `${actorName} is still present in the LinkedIn following list.`,
+        actorName,
+        actorTitle: actor.actorTitle,
+        actorCompanyName: actor.actorCompanyName,
+        actorHandle: actor.actorHandle,
+        actorProfileUrl: actor.actorProfileUrl,
+        actorLinkedinPublicId: actor.actorLinkedinPublicId,
+        actorLinkedinMemberId: actor.actorLinkedinMemberId,
+        actorAvatarSourceUrl: actor.actorAvatarSourceUrl,
+        actorCompanyProfile: actor.actorCompanyProfile,
+        sourceUrl: actor.actorProfileUrl,
         motionId: null,
         companyId: null,
         prospectId: null,
@@ -1142,8 +1436,12 @@ async function captureUnipileFollowingSurface(input) {
  *   providerAccountId: string,
  *   mode: "quick" | "full",
  *   limit: number,
+ *   maxPages?: number | null,
+ *   pageSize?: number | null,
+ *   resumeCursor?: string | null,
  *   maxPageSize: number,
  *   partialError: string,
+ *   acceptTrailingEmptyCursor?: boolean,
  *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   extraQuery?: Record<string, string> | null,
  *   mapItem: (item: any, fallbackObservedAt: string) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null
@@ -1151,11 +1449,12 @@ async function captureUnipileFollowingSurface(input) {
  */
 async function captureUnipileLinkedinCollectionSurface(input) {
   const targetCount = input.mode === "full" ? Number.POSITIVE_INFINITY : input.limit;
+  const maxPages = input.mode === "full" ? normalizeOptionalPositiveInteger(input.maxPages ?? null, "maxPages") : null;
   const pageSize = input.mode === "full"
-    ? input.maxPageSize
+    ? Math.max(1, Math.min(input.pageSize ?? input.maxPageSize, input.maxPageSize))
     : Math.max(1, Math.min(input.limit, input.maxPageSize));
   const items = [];
-  let cursor = null;
+  let cursor = input.resumeCursor ?? null;
   let pageCount = 0;
 
   while (items.length < targetCount) {
@@ -1204,6 +1503,7 @@ async function captureUnipileLinkedinCollectionSurface(input) {
     }
 
     const nextCursor = normalizeUnipileCursor(page.parsed?.cursor);
+    const paginationAttempted = pageCount > 1 || Boolean(input.resumeCursor);
     if (!nextCursor) {
       return {
         status: "success",
@@ -1217,9 +1517,11 @@ async function captureUnipileLinkedinCollectionSurface(input) {
         reconcileReason: null,
         exhaustionStatus: "complete",
         exhaustionReason: "api_cursor_exhausted",
-        paginationAttempted: pageCount > 1,
+        paginationAttempted,
         terminalSignalSeen: true,
         stalledPassCount: 0,
+        nextCursor: null,
+        nextStartOffset: null,
         error: null,
         items
       };
@@ -1241,17 +1543,64 @@ async function captureUnipileLinkedinCollectionSurface(input) {
         paginationAttempted: true,
         terminalSignalSeen: false,
         stalledPassCount: 0,
+        nextCursor,
+        nextStartOffset: null,
         error: input.partialError,
         items
       };
     }
 
     if (!rawItems.length) {
+      if (input.acceptTrailingEmptyCursor && items.length > 0) {
+        return {
+          status: "success",
+          checkedAt,
+          itemCount: items.length,
+          visibleTotalCount: items.length,
+          captureCompleteness: "complete",
+          requestedMode: input.mode,
+          actualMode: input.mode,
+          reconcileRequired: false,
+          reconcileReason: null,
+          exhaustionStatus: "complete",
+          exhaustionReason: "provider_empty_cursor_tail",
+          paginationAttempted,
+          terminalSignalSeen: true,
+          stalledPassCount: 0,
+          nextCursor: null,
+          nextStartOffset: null,
+          error: null,
+          items
+        };
+      }
       return buildFailedSurface(
         `Unipile ${input.routeLabel} returned an empty page while advertising another cursor.`,
         checkedAt,
         input.mode
       );
+    }
+
+    if (maxPages !== null && pageCount >= maxPages) {
+      return {
+        status: "warning",
+        checkedAt,
+        itemCount: items.length,
+        visibleTotalCount: null,
+        captureCompleteness: "partial_visible_slice",
+        requestedMode: input.mode,
+        actualMode: input.mode,
+        reconcileRequired: true,
+        reconcileReason: "page_budget_stopped_early",
+        exhaustionStatus: "incomplete",
+        exhaustionReason: "page_budget_stopped_early",
+        paginationAttempted,
+        terminalSignalSeen: false,
+        stalledPassCount: 0,
+        nextCursor,
+        nextStartOffset: null,
+        error: "Full reconciliation stopped at the configured page budget and should resume from the next cursor.",
+        items
+      };
     }
 
     cursor = nextCursor;
@@ -1269,12 +1618,330 @@ async function captureUnipileLinkedinCollectionSurface(input) {
     reconcileReason: null,
     exhaustionStatus: "complete",
     exhaustionReason: "capture_limit_exhausted",
-    paginationAttempted: pageCount > 1,
+    paginationAttempted: pageCount > 1 || Boolean(input.resumeCursor),
     terminalSignalSeen: true,
     stalledPassCount: 0,
+    nextCursor: null,
+    nextStartOffset: null,
     error: null,
     items
   };
+}
+
+/**
+ * @param {{
+ *   apiKey: string,
+ *   baseUrl: string,
+ *   v2ApiKey: string | null,
+ *   v2BaseUrl: string,
+ *   providerAccountId: string,
+ *   routeLabel: string,
+ *   mode: "quick" | "full",
+ *   limit: number,
+ *   maxPages?: number | null,
+ *   pageSize: number,
+ *   resumeStartOffset?: number | null,
+ *   partialError: string,
+ *   httpPostImpl: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null,
+ *   buildRequest: (start: number, count: number) => { url: string, queryParams: Record<string, string | null> },
+ *   extractItems: (parsed: any) => any[] | null,
+ *   resolveVisibleTotalCount?: ((parsed: any) => number | null) | null,
+ *   mapItem: (item: any, fallbackObservedAt: string) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null
+ * }} input
+ */
+async function captureUnipileLinkedinProxyCollectionSurface(input) {
+  const targetCount = input.mode === "full" ? Number.POSITIVE_INFINITY : input.limit;
+  const maxPages = input.mode === "full" ? normalizeOptionalPositiveInteger(input.maxPages ?? null, "maxPages") : null;
+  const requestedPageSize = input.mode === "full"
+    ? Math.max(1, input.pageSize)
+    : Math.max(1, Math.min(input.limit, input.pageSize));
+  const items = [];
+  let start = input.resumeStartOffset ?? 0;
+  let pageCount = 0;
+  let visibleTotalCount = null;
+
+  while (items.length < targetCount) {
+    const response = await fetchUnipileLinkedinProxyJson({
+      apiKey: input.apiKey,
+      baseUrl: input.baseUrl,
+      v2ApiKey: input.v2ApiKey,
+      v2BaseUrl: input.v2BaseUrl,
+      providerAccountId: input.providerAccountId,
+      request: input.buildRequest(start, requestedPageSize),
+      httpPostImpl: input.httpPostImpl
+    });
+    const checkedAt = new Date().toISOString();
+    if (!response.ok) {
+      return buildFailedSurface(
+        response.error ?? formatUnipileRouteFailure(input.routeLabel, response.status, response.parsed),
+        checkedAt,
+        input.mode,
+        isUnipileUnsupportedSurfaceFailure(response.status, response.parsed)
+          ? "connector_surface_unsupported"
+          : "transport_or_surface_failure"
+      );
+    }
+
+    const rawItems = input.extractItems(response.parsed);
+    if (!Array.isArray(rawItems)) {
+      return buildFailedSurface(
+        `Unipile ${input.routeLabel} returned an invalid payload without an items array.`,
+        checkedAt,
+        input.mode
+      );
+    }
+
+    pageCount += 1;
+    const resolvedVisibleTotal = input.resolveVisibleTotalCount?.(response.parsed) ?? null;
+    if (resolvedVisibleTotal !== null) {
+      visibleTotalCount = resolvedVisibleTotal;
+    }
+
+    for (const rawItem of rawItems) {
+      if (items.length >= targetCount) {
+        break;
+      }
+      const mapped = await input.mapItem(rawItem, checkedAt);
+      if (mapped) {
+        items.push(mapped);
+      }
+    }
+
+    const paginationAttempted = pageCount > 1 || start > 0;
+    const exhaustedByTotal = visibleTotalCount !== null && (start + items.length) >= visibleTotalCount;
+    const exhaustedByShortPage = rawItems.length < requestedPageSize;
+    if (exhaustedByTotal || exhaustedByShortPage) {
+      return {
+        status: "success",
+        checkedAt,
+        itemCount: items.length,
+        visibleTotalCount: visibleTotalCount ?? items.length,
+        captureCompleteness: "complete",
+        requestedMode: input.mode,
+        actualMode: input.mode,
+        reconcileRequired: false,
+        reconcileReason: null,
+        exhaustionStatus: "complete",
+        exhaustionReason: exhaustedByTotal ? "reported_total_exhausted" : "short_page_exhausted",
+        paginationAttempted,
+        terminalSignalSeen: true,
+        stalledPassCount: 0,
+        nextCursor: null,
+        nextStartOffset: null,
+        error: null,
+        items
+      };
+    }
+
+    if (input.mode !== "full" && items.length >= input.limit) {
+      return {
+        status: "warning",
+        checkedAt,
+        itemCount: items.length,
+        visibleTotalCount,
+        captureCompleteness: "partial_visible_slice",
+        requestedMode: input.mode,
+        actualMode: input.mode,
+        reconcileRequired: true,
+        reconcileReason: "bounded_capture_stopped_early",
+        exhaustionStatus: "incomplete",
+        exhaustionReason: "bounded_capture_stopped_early",
+        paginationAttempted: rawItems.length > 0,
+        terminalSignalSeen: false,
+        stalledPassCount: 0,
+        nextCursor: null,
+        nextStartOffset: start + rawItems.length,
+        error: input.partialError,
+        items
+      };
+    }
+
+    if (!rawItems.length) {
+      return buildFailedSurface(
+        `Unipile ${input.routeLabel} returned an empty page before the live surface was exhausted.`,
+        checkedAt,
+        input.mode
+      );
+    }
+
+    if (maxPages !== null && pageCount >= maxPages) {
+      return {
+        status: "warning",
+        checkedAt,
+        itemCount: items.length,
+        visibleTotalCount,
+        captureCompleteness: "partial_visible_slice",
+        requestedMode: input.mode,
+        actualMode: input.mode,
+        reconcileRequired: true,
+        reconcileReason: "page_budget_stopped_early",
+        exhaustionStatus: "incomplete",
+        exhaustionReason: "page_budget_stopped_early",
+        paginationAttempted,
+        terminalSignalSeen: false,
+        stalledPassCount: 0,
+        nextCursor: null,
+        nextStartOffset: start + rawItems.length,
+        error: "Full reconciliation stopped at the configured page budget and should resume from the next offset.",
+        items
+      };
+    }
+
+    start += rawItems.length;
+  }
+
+  return {
+    status: "success",
+    checkedAt: new Date().toISOString(),
+    itemCount: items.length,
+    visibleTotalCount: visibleTotalCount ?? items.length,
+    captureCompleteness: "complete",
+    requestedMode: input.mode,
+    actualMode: input.mode,
+    reconcileRequired: false,
+    reconcileReason: null,
+    exhaustionStatus: "complete",
+    exhaustionReason: "capture_limit_exhausted",
+    paginationAttempted: pageCount > 1 || (input.resumeStartOffset ?? 0) > 0,
+    terminalSignalSeen: true,
+    stalledPassCount: 0,
+    nextCursor: null,
+    nextStartOffset: null,
+    error: null,
+    items
+  };
+}
+
+/**
+ * @param {{
+ *   apiKey: string,
+ *   baseUrl: string,
+ *   v2ApiKey: string | null,
+ *   v2BaseUrl: string,
+ *   providerAccountId: string,
+ *   request: { url: string, queryParams: Record<string, string | null> },
+ *   httpPostImpl: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null,
+ * }} input
+ */
+async function fetchUnipileLinkedinProxyJson(input) {
+  const useV2Proxy = /^acc_/.test(input.providerAccountId) && Boolean(input.v2ApiKey);
+  if (useV2Proxy) {
+    const proxyUrl = `${input.v2BaseUrl.replace(/\/+$/g, "")}/${encodeURIComponent(input.providerAccountId)}/linkedin`;
+    return fetchUnipileJsonPost({
+      url: proxyUrl,
+      apiKey: input.v2ApiKey ?? "",
+      bodyText: JSON.stringify({
+        method: "GET",
+        url: input.request.url,
+        query_params: input.request.queryParams,
+        bypass_url_encoding: true
+      }),
+      httpPostImpl: input.httpPostImpl
+    });
+  }
+
+  return fetchUnipileJsonPost({
+    url: `${input.baseUrl.replace(/\/+$/g, "")}/api/v1/linkedin`,
+    apiKey: input.apiKey,
+    bodyText: JSON.stringify({
+      account_id: input.providerAccountId,
+      request_url: buildLinkedinProxyRequestUrl(input.request.url, input.request.queryParams)
+    }),
+    httpPostImpl: input.httpPostImpl
+  });
+}
+
+/**
+ * @param {any} parsed
+ */
+function extractLinkedinProxyPayload(parsed) {
+  return parsed?.data?.data ?? parsed?.data ?? null;
+}
+
+/**
+ * @param {string} url
+ * @param {Record<string, string | null>} queryParams
+ */
+function buildLinkedinProxyRequestUrl(url, queryParams) {
+  const entries = Object.entries(queryParams).filter(([, value]) => value !== null);
+  if (!entries.length) {
+    return url;
+  }
+  const query = entries.map(([key, value]) => `${encodeURIComponent(key)}=${String(value)}`).join("&");
+  return `${url}?${query}`;
+}
+
+/**
+ * @param {"quick" | "full"} mode
+ */
+function buildSkippedLinkedinSurface(mode) {
+  return {
+    status: "success",
+    checkedAt: null,
+    itemCount: 0,
+    visibleTotalCount: 0,
+    captureCompleteness: "complete",
+    requestedMode: mode,
+    actualMode: mode,
+    reconcileRequired: false,
+    reconcileReason: null,
+    exhaustionStatus: "complete",
+    exhaustionReason: "surface_not_requested",
+    paginationAttempted: false,
+    terminalSignalSeen: true,
+    stalledPassCount: 0,
+    error: null,
+    items: []
+  };
+}
+
+/**
+ * Resolve a canonical company profile for a LinkedIn actor by using the live
+ * Unipile identity path Exo already trusts during inbound sync capture.
+ *
+ * @param {{
+ *   providerAccountId: string | null | undefined,
+ *   apiKey?: string | null | undefined,
+ *   baseUrl?: string | null | undefined,
+ *   codexHome?: string | null | undefined,
+ *   httpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null | undefined,
+ *   actorTitle?: string | null | undefined,
+ *   actorCompanyName?: string | null | undefined,
+ *   actorHandle?: string | null | undefined,
+ *   actorProfileUrl?: string | null | undefined,
+ *   actorLinkedinPublicId?: string | null | undefined,
+ *   actorLinkedinMemberId?: string | null | undefined,
+ *   actorAvatarSourceUrl?: string | null | undefined,
+ * }} input
+ */
+export async function resolveLinkedinActorCompanyProfile(input) {
+  if (!normalizeNullableString(input.providerAccountId)) {
+    return null;
+  }
+
+  const unipileConfig = readUnipileConfig(input.codexHome ?? null);
+  const apiKey = normalizeNullableString(input.apiKey) ?? unipileConfig.apiKey;
+  if (!apiKey) {
+    return null;
+  }
+
+  const enrichment = await enrichUnipileLinkedinActorIdentity({
+    providerAccountId: input.providerAccountId,
+    apiKey,
+    baseUrl: normalizeNullableString(input.baseUrl) ?? unipileConfig.baseUrl,
+    httpGetImpl: input.httpGetImpl ?? null,
+    profileCache: new Map(),
+    companyCache: new Map(),
+    actorTitle: normalizeNullableString(input.actorTitle) ?? null,
+    actorCompanyName: normalizeNullableString(input.actorCompanyName) ?? null,
+    actorHandle: normalizeNullableString(input.actorHandle) ?? null,
+    actorProfileUrl: normalizeLinkedinProfileUrl(input.actorProfileUrl ?? null),
+    actorLinkedinPublicId: normalizeNullableString(input.actorLinkedinPublicId) ?? null,
+    actorLinkedinMemberId: normalizeNullableString(input.actorLinkedinMemberId) ?? null,
+    actorAvatarSourceUrl: normalizeNullableString(input.actorAvatarSourceUrl) ?? null,
+  });
+
+  return enrichment?.actorCompanyProfile ?? null;
 }
 
 /**
@@ -1292,6 +1959,25 @@ async function captureUnipileLinkedinCollectionSurface(input) {
  *     profileUrl: string | null,
  *     pictureUrl: string | null,
  *     providerId: string | null,
+ *   }>>,
+ *   profileCache: Map<string, Promise<null | {
+ *     providerId: string | null,
+ *     publicIdentifier: string | null,
+ *     headline: string | null,
+ *     companyName: string | null,
+ *     companyId: string | null,
+ *     companyPublicIdentifier: string | null,
+ *     companyProfileUrl: string | null,
+ *     companyPictureUrl: string | null,
+ *     profileUrl: string | null,
+ *     pictureUrl: string | null,
+ *   }>>,
+ *   companyCache: Map<string, Promise<null | {
+ *     name: string | null,
+ *     domain: string | null,
+ *     websiteUrl: string | null,
+ *     linkedinCompanyUrl: string | null,
+ *     logoSourceUrl: string | null,
  *   }>>,
  * }} input
  */
@@ -1318,10 +2004,25 @@ async function resolveUnipileChatAttendee(input) {
     const providerId = normalizeNullableString(response.parsed?.provider_id) ?? input.attendeeProviderId;
     const profile = await resolveUnipileLinkedinUserProfile({
       providerAccountId: input.providerAccountId,
-      providerId,
+      providerIds: [providerId, normalizeNullableString(specifics?.public_identifier) ?? null],
       apiKey: input.apiKey,
       baseUrl: input.baseUrl,
       httpGetImpl: input.httpGetImpl,
+      cache: input.profileCache,
+    });
+    const companyProfile = await resolveUnipileLinkedinCompanyProfile({
+      providerAccountId: input.providerAccountId,
+      companyIdentifiers: [
+        profile?.companyId,
+        profile?.companyPublicIdentifier,
+      ],
+      companyName: profile?.companyName ?? normalizeNullableString(specifics?.company_name) ?? null,
+      companyProfileUrl: profile?.companyProfileUrl ?? normalizeNullableString(specifics?.company_url) ?? null,
+      companyLogoSourceUrl: profile?.companyPictureUrl ?? null,
+      apiKey: input.apiKey,
+      baseUrl: input.baseUrl,
+      httpGetImpl: input.httpGetImpl,
+      cache: input.companyCache,
     });
     const publicIdentifier = profile?.publicIdentifier ?? normalizeNullableString(specifics?.public_identifier) ?? null;
     const occupation = profile?.headline
@@ -1331,7 +2032,8 @@ async function resolveUnipileChatAttendee(input) {
     return {
       name: normalizeNullableString(response.parsed?.name) ?? null,
       occupation,
-      companyName: profile?.companyName ?? normalizeNullableString(specifics?.company_name) ?? null,
+      companyName: profile?.companyName ?? companyProfile?.name ?? normalizeNullableString(specifics?.company_name) ?? null,
+      companyProfile,
       publicIdentifier,
       profileUrl: profile?.profileUrl
         ?? normalizeNullableString(response.parsed?.profile_url)
@@ -1351,40 +2053,399 @@ async function resolveUnipileChatAttendee(input) {
 /**
  * @param {{
  *   providerAccountId: string,
- *   providerId: string | null,
+ *   providerIds: Array<string | null | undefined>,
  *   apiKey: string,
  *   baseUrl: string,
  *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
+ *   cache: Map<string, Promise<null | {
+ *     providerId: string | null,
+ *     publicIdentifier: string | null,
+ *     headline: string | null,
+ *     companyName: string | null,
+ *     companyId: string | null,
+ *     companyPublicIdentifier: string | null,
+ *     companyProfileUrl: string | null,
+ *     companyPictureUrl: string | null,
+ *     profileUrl: string | null,
+ *     pictureUrl: string | null,
+ *   }>>,
  * }} input
  */
 async function resolveUnipileLinkedinUserProfile(input) {
-  if (!input.providerId) {
-    return null;
-  }
-  const response = await fetchUnipileJsonPage({
-    apiKey: input.apiKey,
-    baseUrl: input.baseUrl,
-    pathname: `/api/v1/users/${encodeURIComponent(input.providerId)}`,
-    query: {
-      account_id: input.providerAccountId,
-    },
-    httpGetImpl: input.httpGetImpl,
-  });
-  if (!response.ok) {
+  const candidates = buildUnipileLinkedinUserLookupCandidates(input.providerIds);
+  if (!candidates.length) {
     return null;
   }
 
-  const publicIdentifier = normalizeNullableString(response.parsed?.public_identifier) ?? null;
-  const headline = normalizeNullableString(response.parsed?.headline) ?? null;
+  for (const providerId of candidates) {
+    const cached = input.cache.get(providerId);
+    const lookup = cached ?? (async () => {
+      const response = await fetchUnipileJsonPage({
+        apiKey: input.apiKey,
+        baseUrl: input.baseUrl,
+        pathname: `/api/v1/users/${encodeURIComponent(providerId)}`,
+        query: {
+          account_id: input.providerAccountId,
+          linkedin_sections: ["experience"],
+        },
+        httpGetImpl: input.httpGetImpl,
+      });
+      if (!response.ok) {
+        return null;
+      }
+
+      const publicIdentifier = normalizeNullableString(response.parsed?.public_identifier)
+        ?? normalizeNullableString(response.parsed?.username)
+        ?? null;
+      const headline = normalizeNullableString(response.parsed?.headline) ?? null;
+      const currentExperience = findCurrentUnipileWorkExperience(response.parsed?.work_experience);
+      const companyProfileUrl = normalizeLinkedinCompanyUrl(
+        normalizeNullableString(currentExperience?.company_url)
+        ?? normalizeNullableString(response.parsed?.company?.profile_url)
+        ?? normalizeNullableString(response.parsed?.company_url)
+        ?? normalizeNullableString(response.parsed?.current_company_url)
+        ?? buildLinkedinCompanyUrlFromPublicId(
+          normalizeNullableString(response.parsed?.company?.public_identifier)
+          ?? extractLinkedinCompanyPublicId(normalizeNullableString(currentExperience?.company_url) ?? null)
+        )
+      );
+      return {
+        providerId: normalizeNullableString(response.parsed?.provider_id) ?? providerId,
+        publicIdentifier,
+        headline,
+        companyName: normalizeNullableString(response.parsed?.current_company_name)
+          ?? normalizeNullableString(response.parsed?.company_name)
+          ?? normalizeNullableString(currentExperience?.company)
+          ?? normalizeNullableString(response.parsed?.company?.name)
+          ?? deriveLinkedinCompanyName(headline),
+        companyId: normalizeNullableString(response.parsed?.current_company_id)
+          ?? normalizeNullableString(response.parsed?.company_id)
+          ?? normalizeNullableString(currentExperience?.company_id)
+          ?? normalizeNullableString(response.parsed?.company?.id)
+          ?? null,
+        companyPublicIdentifier: normalizeNullableString(response.parsed?.company?.public_identifier)
+          ?? extractLinkedinCompanyPublicId(companyProfileUrl)
+          ?? null,
+        companyProfileUrl,
+        companyPictureUrl: normalizeNullableString(currentExperience?.company_picture_url)
+          ?? normalizeNullableString(response.parsed?.company?.logo)
+          ?? normalizeNullableString(response.parsed?.company?.logo_url)
+          ?? normalizeNullableString(response.parsed?.company_logo_url)
+          ?? null,
+        profileUrl: normalizeLinkedinProfileUrl(
+          normalizeNullableString(response.parsed?.public_profile_url)
+          ?? normalizeNullableString(response.parsed?.profile_url)
+          ?? buildLinkedinProfileUrlFromPublicId(publicIdentifier)
+        ),
+        pictureUrl: normalizeNullableString(response.parsed?.profile_picture_url)
+          ?? normalizeNullableString(response.parsed?.profile_picture_url_large)
+          ?? null,
+      };
+    })();
+    if (!cached) {
+      input.cache.set(providerId, lookup);
+    }
+    const resolved = await lookup;
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * @param {{
+ *   providerAccountId: string,
+ *   companyIdentifiers: Array<string | null | undefined>,
+ *   companyName: string | null,
+ *   companyProfileUrl: string | null,
+ *   companyLogoSourceUrl: string | null,
+ *   apiKey: string,
+ *   baseUrl: string,
+ *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
+ *   cache: Map<string, Promise<null | {
+ *     name: string | null,
+ *     domain: string | null,
+ *     websiteUrl: string | null,
+ *     linkedinCompanyUrl: string | null,
+ *     logoSourceUrl: string | null,
+ *   }>>,
+ * }} input
+ */
+async function resolveUnipileLinkedinCompanyProfile(input) {
+  const candidates = buildUnipileLinkedinCompanyLookupCandidates(
+    input.companyIdentifiers,
+    input.companyProfileUrl,
+  );
+  const fallbackCompany = buildFallbackUnipileCompanyProfile(input);
+  if (!candidates.length) {
+    return fallbackCompany;
+  }
+
+  for (const companyIdentifier of candidates) {
+    const cached = input.cache.get(companyIdentifier);
+    const lookup = cached ?? (async () => {
+      const response = await fetchUnipileJsonPage({
+        apiKey: input.apiKey,
+        baseUrl: input.baseUrl,
+        pathname: `/api/v1/linkedin/company/${encodeURIComponent(companyIdentifier)}`,
+        query: {
+          account_id: input.providerAccountId,
+        },
+        httpGetImpl: input.httpGetImpl,
+      });
+      if (!response.ok) {
+        return fallbackCompany;
+      }
+
+      const linkedinCompanyUrl = normalizeLinkedinCompanyUrl(
+        normalizeNullableString(response.parsed?.profile_url)
+        ?? buildLinkedinCompanyUrlFromPublicId(normalizeNullableString(response.parsed?.public_identifier))
+        ?? input.companyProfileUrl
+      );
+      const websiteUrl = normalizeNullableString(response.parsed?.website)
+        ?? normalizeNullableString(response.parsed?.company_url)
+        ?? fallbackCompany?.websiteUrl
+        ?? null;
+      return buildNormalizedUnipileCompanyProfile({
+        name: normalizeNullableString(response.parsed?.name) ?? input.companyName,
+        domain: domainFromUrl(websiteUrl) ?? fallbackCompany?.domain ?? null,
+        websiteUrl,
+        linkedinCompanyUrl,
+        logoSourceUrl: normalizeNullableString(response.parsed?.logo)
+          ?? normalizeNullableString(response.parsed?.logo_url)
+          ?? input.companyLogoSourceUrl
+          ?? fallbackCompany?.logoSourceUrl
+          ?? null,
+      });
+    })();
+    if (!cached) {
+      input.cache.set(companyIdentifier, lookup);
+    }
+    const resolved = await lookup;
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  return fallbackCompany;
+}
+
+/**
+ * @param {{
+ *   providerAccountId: string,
+ *   apiKey: string,
+ *   baseUrl: string,
+ *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
+ *   profileCache: Map<string, Promise<null | {
+ *     providerId: string | null,
+ *     publicIdentifier: string | null,
+ *     headline: string | null,
+ *     companyName: string | null,
+ *     companyId: string | null,
+ *     companyPublicIdentifier: string | null,
+ *     companyProfileUrl: string | null,
+ *     companyPictureUrl: string | null,
+ *     profileUrl: string | null,
+ *     pictureUrl: string | null,
+ *   }>>,
+ *   companyCache: Map<string, Promise<null | {
+ *     name: string | null,
+ *     domain: string | null,
+ *     websiteUrl: string | null,
+ *     linkedinCompanyUrl: string | null,
+ *     logoSourceUrl: string | null,
+ *   }>>,
+ *   actorTitle: string | null,
+ *   actorCompanyName: string | null,
+ *   actorHandle: string | null,
+ *   actorProfileUrl: string | null,
+ *   actorLinkedinPublicId: string | null,
+ *   actorLinkedinMemberId: string | null,
+ *   actorAvatarSourceUrl: string | null,
+ * }} input
+ */
+async function enrichUnipileLinkedinActorIdentity(input) {
+  const profile = await resolveUnipileLinkedinUserProfile({
+    providerAccountId: input.providerAccountId,
+    providerIds: [
+      input.actorLinkedinMemberId,
+      normalizeLinkedinMemberLookupId(input.actorLinkedinMemberId),
+      input.actorLinkedinPublicId,
+      input.actorHandle,
+      extractLinkedinPublicId(input.actorProfileUrl),
+    ],
+    apiKey: input.apiKey,
+    baseUrl: input.baseUrl,
+    httpGetImpl: input.httpGetImpl,
+    cache: input.profileCache,
+  });
+  const companyProfile = await resolveUnipileLinkedinCompanyProfile({
+    providerAccountId: input.providerAccountId,
+    companyIdentifiers: [
+      profile?.companyId,
+      profile?.companyPublicIdentifier,
+    ],
+    companyName: normalizeNullableString(input.actorCompanyName) ?? profile?.companyName ?? null,
+    companyProfileUrl: profile?.companyProfileUrl ?? null,
+    companyLogoSourceUrl: profile?.companyPictureUrl ?? null,
+    apiKey: input.apiKey,
+    baseUrl: input.baseUrl,
+    httpGetImpl: input.httpGetImpl,
+    cache: input.companyCache,
+  });
+  const actorTitle = input.actorTitle ?? profile?.headline ?? null;
+  const actorHandle = input.actorHandle ?? profile?.publicIdentifier ?? extractLinkedinPublicId(input.actorProfileUrl) ?? null;
+  const actorProfileUrl = normalizeLinkedinProfileUrl(
+    input.actorProfileUrl
+    ?? profile?.profileUrl
+    ?? buildLinkedinProfileUrlFromPublicId(actorHandle)
+  );
   return {
-    publicIdentifier,
-    headline,
-    companyName: deriveLinkedinCompanyName(headline),
-    profileUrl: buildLinkedinProfileUrlFromPublicId(publicIdentifier),
-    pictureUrl: normalizeNullableString(response.parsed?.profile_picture_url)
-      ?? normalizeNullableString(response.parsed?.profile_picture_url_large)
-      ?? null,
+    actorTitle,
+    actorCompanyName: normalizeNullableString(input.actorCompanyName)
+      ?? profile?.companyName
+      ?? companyProfile?.name
+      ?? deriveLinkedinCompanyName(actorTitle),
+    actorHandle,
+    actorProfileUrl,
+    actorLinkedinPublicId: input.actorLinkedinPublicId ?? profile?.publicIdentifier ?? actorHandle,
+    actorLinkedinMemberId: input.actorLinkedinMemberId ?? profile?.providerId ?? null,
+    actorAvatarSourceUrl: input.actorAvatarSourceUrl ?? profile?.pictureUrl ?? null,
+    actorCompanyProfile: companyProfile,
   };
+}
+
+/**
+ * @param {Array<string | null | undefined>} providerIds
+ */
+function buildUnipileLinkedinUserLookupCandidates(providerIds) {
+  const unique = new Set();
+  for (const rawProviderId of providerIds) {
+    const normalized = normalizeNullableString(rawProviderId);
+    if (!normalized || unique.has(normalized)) {
+      continue;
+    }
+    unique.add(normalized);
+  }
+  return [...unique];
+}
+
+/**
+ * @param {Array<string | null | undefined>} companyIdentifiers
+ * @param {string | null | undefined} companyProfileUrl
+ */
+function buildUnipileLinkedinCompanyLookupCandidates(companyIdentifiers, companyProfileUrl) {
+  const unique = new Set();
+  for (const rawIdentifier of companyIdentifiers) {
+    const normalized = normalizeNullableString(rawIdentifier);
+    if (!normalized || unique.has(normalized)) {
+      continue;
+    }
+    unique.add(normalized);
+  }
+
+  const companyPublicId = extractLinkedinCompanyPublicId(companyProfileUrl);
+  if (companyPublicId && !unique.has(companyPublicId)) {
+    unique.add(companyPublicId);
+  }
+
+  return [...unique];
+}
+
+/**
+ * @param {string | null | undefined} memberId
+ */
+function normalizeLinkedinMemberLookupId(memberId) {
+  const normalized = normalizeNullableString(memberId);
+  if (!normalized) {
+    return null;
+  }
+  const urnMatch = normalized.match(/^urn:li:member:(.+)$/i);
+  if (urnMatch?.[1]) {
+    return normalizeNullableString(urnMatch[1]);
+  }
+  const fsdProfileMatch = normalized.match(/^urn:li:fsd_profile:(.+)$/i);
+  if (fsdProfileMatch?.[1]) {
+    return normalizeNullableString(fsdProfileMatch[1]);
+  }
+  return null;
+}
+
+/**
+ * @param {any} workExperience
+ */
+function findCurrentUnipileWorkExperience(workExperience) {
+  if (!Array.isArray(workExperience)) {
+    return null;
+  }
+  return workExperience.find((entry) => entry?.current === true) ?? workExperience[0] ?? null;
+}
+
+/**
+ * @param {{
+ *   companyName: string | null,
+ *   companyProfileUrl: string | null,
+ *   companyLogoSourceUrl: string | null,
+ * }} input
+ */
+function buildFallbackUnipileCompanyProfile(input) {
+  return buildNormalizedUnipileCompanyProfile({
+    name: input.companyName,
+    domain: null,
+    websiteUrl: null,
+    linkedinCompanyUrl: input.companyProfileUrl,
+    logoSourceUrl: input.companyLogoSourceUrl,
+  });
+}
+
+/**
+ * @param {{
+ *   name: string | null,
+ *   domain: string | null,
+ *   websiteUrl: string | null,
+ *   linkedinCompanyUrl: string | null,
+ *   logoSourceUrl: string | null,
+ * }} input
+ */
+function buildNormalizedUnipileCompanyProfile(input) {
+  const websiteUrl = normalizeNullableUrl(input.websiteUrl);
+  const websiteDomain = domainFromUrl(websiteUrl);
+  const inputDomain = normalizeNullableString(input.domain);
+  const normalized = {
+    name: normalizeNullableString(input.name),
+    domain: shouldReplaceDomainWithWebsiteDomain(inputDomain, websiteDomain)
+      ? websiteDomain
+      : (inputDomain ?? websiteDomain),
+    websiteUrl,
+    linkedinCompanyUrl: normalizeLinkedinCompanyUrl(input.linkedinCompanyUrl),
+    logoSourceUrl: normalizeNullableUrl(input.logoSourceUrl),
+  };
+  if (
+    !normalized.name
+    && !normalized.domain
+    && !normalized.websiteUrl
+    && !normalized.linkedinCompanyUrl
+    && !normalized.logoSourceUrl
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+/**
+ * @param {string | null} inputDomain
+ * @param {string | null} websiteDomain
+ */
+function shouldReplaceDomainWithWebsiteDomain(inputDomain, websiteDomain) {
+  if (!websiteDomain) {
+    return false;
+  }
+  if (!inputDomain) {
+    return true;
+  }
+  return inputDomain.toLowerCase() === "linkedin.com" && websiteDomain.toLowerCase() !== "linkedin.com";
 }
 
 /**
@@ -1463,11 +2524,19 @@ function coerceUnipileMessageDirection(item) {
 }
 
 /**
- * @param {{ apiKey: string, baseUrl: string, pathname: string, query: Record<string, string | null>, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null }} input
+ * @param {{ apiKey: string, baseUrl: string, pathname: string, query: Record<string, string | string[] | null>, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null }} input
  */
 async function fetchUnipileJsonPage(input) {
   const url = new URL(input.pathname, input.baseUrl);
   for (const [key, value] of Object.entries(input.query)) {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (entry !== null) {
+          url.searchParams.append(key, entry);
+        }
+      }
+      continue;
+    }
     if (value !== null) {
       url.searchParams.set(key, value);
     }
@@ -1490,6 +2559,10 @@ async function fetchUnipileJsonPage(input) {
     const raw = execFileSync("curl", [
       "-sS",
       "-L",
+      "--connect-timeout",
+      String(UNIPILE_HTTP_CONNECT_TIMEOUT_SECONDS),
+      "--max-time",
+      String(UNIPILE_HTTP_MAX_TIME_SECONDS),
       "-H",
       "accept: application/json",
       "-H",
@@ -1500,6 +2573,80 @@ async function fetchUnipileJsonPage(input) {
     ], {
       encoding: "utf8",
       maxBuffer: 2 * 1024 * 1024,
+      timeout: UNIPILE_HTTP_TIMEOUT_MS,
+    });
+    const marker = "\n__EXO_STATUS__:";
+    const index = raw.lastIndexOf(marker);
+    if (index === -1) {
+      return {
+        ok: false,
+        status: 0,
+        parsed: null,
+        error: "Unipile request did not return an HTTP status marker."
+      };
+    }
+
+    const bodyText = raw.slice(0, index);
+    const status = Number(raw.slice(index + marker.length).trim());
+    return {
+      ok: Number.isFinite(status) && status >= 200 && status < 300,
+      status: Number.isFinite(status) ? status : 0,
+      parsed: safeJsonParse(bodyText),
+      error: null
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: 0,
+      parsed: null,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+/**
+ * @param {{ url: string, apiKey: string, bodyText: string, httpPostImpl: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null }} input
+ */
+async function fetchUnipileJsonPost(input) {
+  try {
+    if (input.httpPostImpl) {
+      const response = input.httpPostImpl(input.url, {
+        accept: "application/json",
+        "content-type": "application/json",
+        "X-API-KEY": input.apiKey
+      }, input.bodyText);
+      return {
+        ok: !!response && response.status >= 200 && response.status < 300,
+        status: response?.status ?? 0,
+        parsed: safeJsonParse(response?.bodyText ?? ""),
+        error: response ? null : "Unipile request failed before a response was returned."
+      };
+    }
+
+    const raw = execFileSync("curl", [
+      "-sS",
+      "-L",
+      "--connect-timeout",
+      String(UNIPILE_HTTP_CONNECT_TIMEOUT_SECONDS),
+      "--max-time",
+      String(UNIPILE_HTTP_MAX_TIME_SECONDS),
+      "-X",
+      "POST",
+      "-H",
+      "accept: application/json",
+      "-H",
+      "content-type: application/json",
+      "-H",
+      `X-API-KEY: ${input.apiKey}`,
+      "--data",
+      input.bodyText,
+      "-w",
+      "\n__EXO_STATUS__:%{http_code}",
+      input.url,
+    ], {
+      encoding: "utf8",
+      maxBuffer: 2 * 1024 * 1024,
+      timeout: UNIPILE_HTTP_TIMEOUT_MS,
     });
     const marker = "\n__EXO_STATUS__:";
     const index = raw.lastIndexOf(marker);
@@ -1636,6 +2783,22 @@ function buildLinkedinProfileUrlFromPublicId(publicId) {
 }
 
 /**
+ * @param {string | null | undefined} publicId
+ */
+function buildLinkedinCompanyUrlFromPublicId(publicId) {
+  const normalized = normalizeNullableString(publicId);
+  if (!normalized) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(normalized)) {
+    return normalized;
+  }
+
+  return `https://www.linkedin.com/company/${normalized.replace(/^\/+|\/+$/g, "")}/`;
+}
+
+/**
  * @param {string | null | undefined} providerId
  */
 function buildLinkedinThreadUrl(providerId) {
@@ -1660,11 +2823,148 @@ function extractLinkedinPublicId(profileUrl) {
 }
 
 /**
+ * @param {string | null | undefined} companyUrl
+ */
+function extractLinkedinCompanyPublicId(companyUrl) {
+  const normalized = normalizeNullableString(companyUrl);
+  if (!normalized) {
+    return null;
+  }
+
+  const match = normalized.match(/linkedin\.com\/company\/([^/?#]+)/i);
+  return normalizeNullableString(match?.[1] ?? null);
+}
+
+/**
  * @param {(string | null)[]} parts
  */
 function joinNonEmptyParts(parts) {
   const filtered = parts.filter(Boolean);
   return filtered.length ? filtered.join(" ") : null;
+}
+
+/**
+ * @param {string | null | undefined} rawUrl
+ */
+function normalizeLinkedinProfileUrl(rawUrl) {
+  const normalized = normalizeNullableString(rawUrl);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const url = new URL(normalized);
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch (_error) {
+    return normalized;
+  }
+}
+
+/**
+ * @param {string | null | undefined} rawUrl
+ */
+function normalizeLinkedinCompanyUrl(rawUrl) {
+  const normalized = normalizeNullableString(rawUrl);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const url = new URL(normalized);
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch (_error) {
+    return null;
+  }
+}
+
+/**
+ * @param {string | null | undefined} rawUrl
+ */
+function normalizeNullableUrl(rawUrl) {
+  const normalized = normalizeNullableString(rawUrl);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const url = new URL(normalized);
+    const redirectTarget = extractLinkedinRedirectTarget(url);
+    if (redirectTarget) {
+      return redirectTarget;
+    }
+    // Keep the original string shape when it is already valid.
+    return normalized;
+  } catch (_error) {
+    return null;
+  }
+}
+
+/**
+ * @param {URL} url
+ * @returns {string | null}
+ */
+function extractLinkedinRedirectTarget(url) {
+  if (!/(\.|^)linkedin\.com$/i.test(url.hostname)) {
+    return null;
+  }
+  if (!/\/redir\//i.test(url.pathname)) {
+    return null;
+  }
+  const target = normalizeNullableString(url.searchParams.get("url"));
+  if (!target) {
+    return null;
+  }
+
+  try {
+    return new URL(target).toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {string | null | undefined} rawUrl
+ */
+function domainFromUrl(rawUrl) {
+  const normalized = normalizeNullableString(rawUrl);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    return normalizeNullableString(new URL(normalized).hostname.replace(/^www\./i, ""));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {any} image
+ */
+function extractLinkedinImageUrl(image) {
+  const attributes = Array.isArray(image?.attributes) ? image.attributes : [];
+  for (const attribute of attributes) {
+    const detailData = attribute?.detailData ?? {};
+    const vectorImage = detailData?.profilePicture?.profilePicture?.displayImageReferenceResolutionResult?.vectorImage
+      ?? detailData?.profilePicture?.displayImageReferenceResolutionResult?.vectorImage
+      ?? detailData?.vectorImage
+      ?? null;
+    const rootUrl = normalizeNullableString(vectorImage?.rootUrl);
+    const artifacts = Array.isArray(vectorImage?.artifacts) ? vectorImage.artifacts : [];
+    const bestArtifact = [...artifacts]
+      .filter((artifact) => normalizeNullableString(artifact?.fileIdentifyingUrlPathSegment))
+      .sort((left, right) => Number(right?.width ?? 0) - Number(left?.width ?? 0))[0] ?? null;
+    const pathSegment = normalizeNullableString(bestArtifact?.fileIdentifyingUrlPathSegment);
+    if (rootUrl && pathSegment) {
+      return `${rootUrl}${pathSegment}`;
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1759,10 +3059,10 @@ function buildLinkedinCaptureOutputGuide(input) {
       status: "Set status to success when the surface was checked, warning when it was only partially checked or itemized, and failed when it could not be checked.",
       checkedAt: "Set checkedAt to when you finished that surface.",
       itemCount: "Set itemCount to the number of rows or concrete items you actually itemized. Use 0 on failed surfaces.",
-      visibleTotalCount: "Set visibleTotalCount to the full count visibly shown by LinkedIn for that surface when the UI exposes one; otherwise use itemCount when the surface is fully exhausted or null when no trustworthy total is visible.",
-      exhaustionStatus: "Set exhaustionStatus to complete only when the live surface was exhausted enough that disappearance or silence is trustworthy. Use incomplete for visible-slice-only or early-stop captures. Use blocked only for structural failures such as identity mismatch, authwall, or a page that never rendered the required surface.",
-      captureCompleteness: "Set captureCompleteness to complete when exhaustionStatus is complete, partial_visible_slice when you stopped before full reconciliation, and failed only when the surface could not be checked.",
-      reconcileFields: "Set requestedMode and actualMode for every surface. Set reconcileRequired true whenever the visible total is larger than the itemized rows and exhaustionStatus is not complete, or whenever surfaceHints say the operator still needs a full reconciliation. Use a short snake_case reconcileReason such as visible_total_exceeds_itemized_rows or bounded_capture_stopped_early.",
+      visibleTotalCount: "Set visibleTotalCount to the full count reported by the connector or visibly shown by LinkedIn for that surface when one exists; otherwise use itemCount when the surface is fully exhausted or null when no trustworthy total is available.",
+      exhaustionStatus: "Set exhaustionStatus to complete only when the live surface was exhausted enough that disappearance or silence is trustworthy. Use incomplete for bounded quick-pass or early-stop captures. Use blocked only for structural failures such as identity mismatch, authwall, or a page that never rendered the required surface.",
+      captureCompleteness: "Set captureCompleteness to complete when exhaustionStatus is complete, partial_visible_slice when you stopped at the bounded quick-pass limit before full reconciliation, and failed only when the surface could not be checked.",
+      reconcileFields: "Set requestedMode and actualMode for every surface. Set reconcileRequired true whenever the reported total is larger than the itemized rows and exhaustionStatus is not complete, or whenever surfaceHints say the operator still needs a full reconciliation. Use a short snake_case reconcileReason such as visible_total_exceeds_itemized_rows or bounded_capture_stopped_early.",
       paginationFields: "Set paginationAttempted true when you actually used the known scroll or load-more path. Set terminalSignalSeen true only when the surfaceHints completion rule was genuinely reached. Set stalledPassCount to how many terminal no-new-results passes you observed before stopping.",
       summaries: "Use clear operator-ready summaries under 280 characters.",
       earlyStopPolicy: "Do not mark a surface failed just because you stopped early. Early stop is incomplete reconciliation, not transport failure."
@@ -1878,6 +3178,38 @@ function normalizePositiveInteger(value, fallback, label) {
 
   if (!Number.isInteger(value) || value < 1) {
     throw new Error(`${label} must be a positive integer.`);
+  }
+
+  return value;
+}
+
+/**
+ * @param {number | null | undefined} value
+ * @param {string} label
+ */
+function normalizeOptionalPositiveInteger(value, label) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+
+  return value;
+}
+
+/**
+ * @param {number | null | undefined} value
+ * @param {string} label
+ */
+function normalizeOptionalNonNegativeInteger(value, label) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative integer.`);
   }
 
   return value;

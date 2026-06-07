@@ -215,7 +215,7 @@ export function buildNextView(input) {
         prospect: null,
         source: {
           type: "motion_report",
-          kind: report.targeting.inventoryTarget?.shortfall > 0 ? "seed_motion_targets" : report.targeting.overallStage
+          kind: report.targeting.inventoryTarget?.shortfall > 0 ? "run_company_discovery" : report.targeting.overallStage
         }
       }
     };
@@ -260,6 +260,10 @@ export function buildNextView(input) {
  * @param {string} mode
  */
 function operatorCallGuidanceKey(mode) {
+  if (mode === "choose-install-scope") {
+    return "choose_install_scope";
+  }
+
   if (mode === "configure-execution-user" || mode === "configure-execution-connectors") {
     return "configure_execution_connectors";
   }
@@ -316,7 +320,7 @@ function selectMotionNextMove(report) {
  */
 function motionGuidanceKey(report) {
   if ((report.targeting.inventoryTarget?.shortfall ?? 0) > 0) {
-    return "seed_motion_targets";
+    return "run_company_discovery";
   }
 
   if (

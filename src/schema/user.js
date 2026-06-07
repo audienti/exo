@@ -14,11 +14,11 @@ export const userWorkingHoursWeekdaySchema = z.enum(["sun", "mon", "tue", "wed",
 const localTimeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Expected HH:MM 24-hour local time.");
 
 export const userWorkingHoursSchema = z.object({
-  mode: userWorkingHoursModeSchema.default("always"),
+  mode: userWorkingHoursModeSchema.default("scheduled"),
   timezone: z.string().trim().min(1).default("America/New_York"),
   weekdays: z.array(userWorkingHoursWeekdaySchema).default(["mon", "tue", "wed", "thu", "fri"]),
-  startLocalTime: localTimeSchema.default("09:00"),
-  endLocalTime: localTimeSchema.default("17:00")
+  startLocalTime: localTimeSchema.default("07:00"),
+  endLocalTime: localTimeSchema.default("18:00")
 }).superRefine((value, context) => {
   if (value.mode !== "scheduled") {
     return;
@@ -70,6 +70,7 @@ export const userConnectedAccountSchema = z
         messages: null
       }
     }),
+    metadata: z.record(z.unknown()).nullable().default(null),
     notes: z.string().nullable().default(null),
     inboundSync: inboundSyncPolicySchema.default({
       surfaces: []
@@ -117,11 +118,11 @@ export const userSchema = z.object({
   owner: z.string().trim().min(1).nullable().default(null),
   notes: z.string().nullable().default(null),
   workingHours: userWorkingHoursSchema.default({
-    mode: "always",
+    mode: "scheduled",
     timezone: "America/New_York",
     weekdays: ["mon", "tue", "wed", "thu", "fri"],
-    startLocalTime: "09:00",
-    endLocalTime: "17:00"
+    startLocalTime: "07:00",
+    endLocalTime: "18:00"
   }),
   accounts: z.array(userConnectedAccountSchema).default([]),
   harnessConnections: z.array(userHarnessConnectionSchema).default([]),

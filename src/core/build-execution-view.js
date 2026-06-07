@@ -171,6 +171,7 @@ function buildRuntimeClaimRows(user, options) {
               connector: mapping.connector,
               preferred: true,
               ...(mapping.discoveredAccount?.providerAccountId ? { providerAccountId: mapping.discoveredAccount.providerAccountId } : {}),
+              ...(mapping.discoveredAccount?.metadata ? { metadata: mapping.discoveredAccount.metadata } : {}),
               ...(label ? { label } : {}),
               ...(handle ? { handle } : {}),
             }
@@ -211,6 +212,9 @@ function buildRuntimeAccountSubtitle(mapping, display) {
   return mapping.reason;
 }
 
+/**
+ * @param {string | null} reason
+ */
 /**
  * @param {any} motion
  * @param {any} user

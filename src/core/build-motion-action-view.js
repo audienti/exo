@@ -15,6 +15,7 @@ import {
  * @param {{
  *   companyId?: string | null,
  *   prospectId: string,
+ *   rawObservations?: unknown[] | null,
  *   includeUnavailable?: boolean
  * }} options
  * @param {unknown | null} [rawCompany]
@@ -22,7 +23,8 @@ import {
 export function buildMotionActionView(rawMotion, options, rawCompany = null) {
   const prospectView = buildMotionProspectView(rawMotion, {
     companyId: options.companyId ?? null,
-    prospectId: options.prospectId
+    prospectId: options.prospectId,
+    rawObservations: options.rawObservations ?? null,
   });
 
   if (!prospectView.writingBrief) {
@@ -31,7 +33,8 @@ export function buildMotionActionView(rawMotion, options, rawCompany = null) {
 
   const draftView = buildMotionDraftView(rawMotion, {
     companyId: options.companyId ?? null,
-    prospectId: options.prospectId
+    prospectId: options.prospectId,
+    rawObservations: options.rawObservations ?? null,
   });
 
   const brief = prospectView.writingBrief;
@@ -64,6 +67,7 @@ export function buildMotionActionView(rawMotion, options, rawCompany = null) {
  * @param {{
  *   companyId?: string | null,
  *   prospectId: string,
+ *   rawObservations?: unknown[] | null,
  *   action: string
  * }} options
  * @param {unknown | null} [rawCompany]
@@ -71,7 +75,8 @@ export function buildMotionActionView(rawMotion, options, rawCompany = null) {
 export function buildMotionActionBrief(rawMotion, options, rawCompany = null) {
   const prospectView = buildMotionProspectView(rawMotion, {
     companyId: options.companyId ?? null,
-    prospectId: options.prospectId
+    prospectId: options.prospectId,
+    rawObservations: options.rawObservations ?? null,
   });
 
   if (!prospectView.writingBrief) {
@@ -81,7 +86,8 @@ export function buildMotionActionBrief(rawMotion, options, rawCompany = null) {
   const normalizedAction = normalizeActionKey(options.action);
   const actionView = buildMotionActionView(rawMotion, {
     companyId: options.companyId ?? null,
-    prospectId: options.prospectId
+    prospectId: options.prospectId,
+    rawObservations: options.rawObservations ?? null,
   }, rawCompany);
   const action = actionView.actions.find((candidate) => candidate.key === normalizedAction);
 
@@ -406,7 +412,7 @@ function isRecommendedAction(brief, actionKey) {
  */
 function buildExecutionSteps(actionView, action) {
   const steps = [
-    "Resolve the pinned company identity first and keep the same execution user or browser profile for the whole engagement."
+    "Resolve the assigned company identity first and keep the same execution user or browser profile for the whole engagement."
   ];
 
   if (action.platform === "linkedin" || action.platform === "email") {
@@ -615,7 +621,7 @@ function buildExecutionIdentity(rawCompany, rawMotion) {
 
     return {
       status: "unassigned",
-      message: "No sticky execution user is pinned yet. Resolve or assign one before live governed work.",
+      message: "No sticky execution user is assigned yet. Resolve or assign one before live governed work.",
       label: null,
       userId: null,
       profileId: null,

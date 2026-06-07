@@ -32,7 +32,7 @@ Canonical transition interface:
   exo transition promote-all --user <user-id> --surface linkedin-sent-invitations
 
 Rules:
-  - Everyone lands in one catch-all "transition" motion; re-home them into real motions later.
+  - Promote means "claim into this workspace's catch-all transition motion." Re-home into real motions later.
   - Promote carries the in-flight state: a sent invite becomes a prospect awaiting accept, a reply becomes an active conversation, etc.
   - A company is resolved or created (best-effort) so the person is always trackable.
 `
@@ -54,10 +54,9 @@ Rules:
 
   transition
     .command("promote")
-    .description("Promote one inbound person (by observation id) into the transition motion as a prospect.")
+    .description("Claim one inbound person (by observation id) into this workspace's transition motion as a prospect.")
     .argument("<observation-id>", "Inbound observation identifier for the person")
     .option("--user <user-id>", "Execution user identifier (scopes the observation set)")
-    .option("--motion <motion-id>", "Target motion (defaults to the transition motion)")
     .option("--json", "Emit machine-readable JSON")
     .action(async (observationId, options) => {
       const seed = findInboundObservationById(observationId);
@@ -67,7 +66,7 @@ Rules:
         return;
       }
 
-      const motion = await resolveTargetMotion(options.motion);
+      const motion = await resolveTargetMotion();
       if (!motion) {
         return;
       }
@@ -78,14 +77,13 @@ Rules:
 
   transition
     .command("promote-all")
-    .description("Bulk-promote every inbound person on a surface into the transition motion.")
+    .description("Bulk-claim every inbound person on a surface into this workspace's transition motion.")
     .requiredOption("--user <user-id>", "Execution user identifier")
     .option("--surface <surface-key>", "Only promote people on this surface, e.g. linkedin-sent-invitations")
-    .option("--motion <motion-id>", "Target motion (defaults to the transition motion)")
     .option("--limit <n>", "Maximum number of people to promote")
     .option("--json", "Emit machine-readable JSON")
     .action(async (options) => {
-      const motion = await resolveTargetMotion(options.motion);
+      const motion = await resolveTargetMotion();
       if (!motion) {
         return;
       }
@@ -177,18 +175,8 @@ Rules:
 }
 
 /**
- * @param {string | undefined} motionId
  */
-async function resolveTargetMotion(motionId) {
-  if (motionId) {
-    const motion = findMotionById(motionId);
-    if (!motion) {
-      console.error(`Motion not found: ${motionId}`);
-      process.exitCode = 1;
-      return null;
-    }
-    return motion;
-  }
+async function resolveTargetMotion() {
   return ensureTransitionMotion();
 }
 

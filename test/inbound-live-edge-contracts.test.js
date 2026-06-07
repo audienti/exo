@@ -6,14 +6,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { loadJsonCassette } from "./support/cassettes.js";
 import {
   cliPath,
   runCliJson,
   setupReadyChromeProfile,
-  writeFakeCodexCaptureScript,
-  writeFakeClaudeScript,
-  createLinkedProspectContext
+  uniqueTestLabel,
+  writeFakeCodexCaptureScript
 } from "./support/live-runtime.js";
 
 function writeCodexPluginConfig(codexHome, pluginKey, enabled) {
@@ -30,7 +28,7 @@ test("inbound sync gmail-live records governed failure when the Codex Gmail conn
   writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
 
   try {
-    const user = runCliJson(tempDir, ["users", "add", "--label", "gmail-live-fail-user", "--owner", "william", "--json"]);
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "gmail-live-fail-user"), "--owner", "william", "--json"]);
     const withGmail = runCliJson(tempDir, [
       "users",
       "accounts",
@@ -81,7 +79,7 @@ test("inbound sync gmail-live records governed failure when the Codex Gmail conn
   }
 });
 
-test("inbound sync gmail-live records governed failure when the selected runtime chrome harness is unavailable for a profile-backed Gmail account", () => {
+test("inbound sync gmail-live rejects a legacy profile-backed Gmail account before probing runtime availability", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-profile-fail-cassette-"));
   const codexHome = path.join(tempDir, ".codex");
   const fakeCodexPath = path.join(tempDir, "fake-codex");
@@ -112,7 +110,7 @@ test("inbound sync gmail-live records governed failure when the selected runtime
       "--json"
     ]);
 
-    const user = runCliJson(tempDir, ["users", "add", "--label", "gmail-live-profile-fail-user", "--owner", "william", "--json"]);
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "gmail-live-profile-fail-user"), "--owner", "william", "--json"]);
     runCliJson(tempDir, ["users", "harness", "add", user.id, "--runtime", "codex", "--connector", "chrome", "--status", "unknown", "--json"]);
     const withGmail = runCliJson(tempDir, [
       "users",
@@ -130,41 +128,35 @@ test("inbound sync gmail-live records governed failure when the selected runtime
     ]);
     const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
 
-    const result = runCliJson(tempDir, [
-      "inbound",
-      "sync",
-      "gmail-live",
-      user.id,
-      "--account",
-      gmailAccountId,
-      "--runtime",
-      "codex",
-      "--apply",
-      "--json"
-    ], {
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath
-    });
+    let error = null;
+    try {
+      runCliJson(tempDir, [
+        "inbound",
+        "sync",
+        "gmail-live",
+        user.id,
+        "--account",
+        gmailAccountId,
+        "--runtime",
+        "codex",
+        "--apply",
+        "--json"
+      ], {
+        CODEX_HOME: codexHome,
+        EXO_CODEX_CLI: fakeCodexPath
+      });
+    } catch (caught) {
+      error = caught;
+    }
 
-    assert.equal(result.probe.detectedStatus, "unavailable");
-    assert.equal(result.capture.status, "failed");
-    assert.equal(result.capture.threadCount, 0);
-    assert.match(result.capture.error, /not available/i);
-    assert.equal(result.applied.counts.failedSurfaceCount, 1);
-    assert.equal(result.applied.counts.observationCount, 0);
-
-    const syncView = runCliJson(tempDir, ["inbound", "sync", "show", user.id, "--json"]);
-    const gmailSurface = syncView.accounts
-      .find((account) => account.accountId === gmailAccountId)
-      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
-    assert.equal(gmailSurface.lastRunStatus, "failed");
-    assert.match(gmailSurface.lastError, /not available/i);
+    assert.ok(error);
+    assert.match(String(error.stderr), /profile-backed Gmail accounts are no longer supported/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("inbound sync linkedin-live records governed failure when the selected runtime chrome harness is unavailable", () => {
+test("inbound sync linkedin-live rejects a legacy profile-backed LinkedIn account before probing runtime availability", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-fail-cassette-"));
   const codexHome = path.join(tempDir, ".codex");
   const fakeCodexPath = path.join(tempDir, "fake-codex");
@@ -194,7 +186,7 @@ test("inbound sync linkedin-live records governed failure when the selected runt
       "--json"
     ]);
 
-    const user = runCliJson(tempDir, ["users", "add", "--label", "linkedin-live-fail-user", "--owner", "william", "--json"]);
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "linkedin-live-fail-user"), "--owner", "william", "--json"]);
     runCliJson(tempDir, ["users", "harness", "add", user.id, "--runtime", "codex", "--connector", "chrome", "--status", "unknown", "--json"]);
     const withLinkedin = runCliJson(tempDir, [
       "users",
@@ -212,75 +204,83 @@ test("inbound sync linkedin-live records governed failure when the selected runt
     ]);
     const linkedinAccountId = withLinkedin.accounts.find((account) => account.capability === "linkedin").id;
 
-    const result = runCliJson(tempDir, [
-      "inbound",
-      "sync",
-      "linkedin-live",
-      user.id,
-      "--account",
-      linkedinAccountId,
-      "--runtime",
-      "codex",
-      "--apply",
-      "--json"
-    ], {
-      CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath
-    });
+    let error = null;
+    try {
+      runCliJson(tempDir, [
+        "inbound",
+        "sync",
+        "linkedin-live",
+        user.id,
+        "--account",
+        linkedinAccountId,
+        "--runtime",
+        "codex",
+        "--apply",
+        "--json"
+      ], {
+        CODEX_HOME: codexHome,
+        EXO_CODEX_CLI: fakeCodexPath
+      });
+    } catch (caught) {
+      error = caught;
+    }
 
-    assert.equal(result.probe.detectedStatus, "unavailable");
-    assert.equal(result.capture.mode, "quick");
-    assert.equal(result.capture.sectionCount, 6);
-    assert.equal(result.capture.sections.every((section) => section.status === "failed"), true);
-    assert.equal(result.applied.counts.failedSurfaceCount, 6);
-    assert.equal(result.applied.counts.observationCount, 0);
-
-    const syncView = runCliJson(tempDir, ["inbound", "sync", "show", user.id, "--json"]);
-    const linkedinSurface = syncView.accounts
-      .find((account) => account.accountId === linkedinAccountId)
-      .surfaces.find((surface) => surface.key === "linkedin-received-invitations");
-    assert.equal(linkedinSurface.lastRunStatus, "failed");
-    assert.match(linkedinSurface.lastError, /not available/i);
+    assert.ok(error);
+    assert.match(String(error.stderr), /profile-backed LinkedIn accounts are no longer supported/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("inbound sync live auto-discovers codex chrome for browser-backed accounts and returns an agent handoff contract in Codex shell", () => {
+test("inbound sync live returns managed-account handoff contracts in Codex shell", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-live-codex-handoff-cassette-"));
   const codexHome = path.join(tempDir, ".codex");
   const fakeCodexPath = path.join(tempDir, "ignored-codex-shell-binary");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    cookieHosts: [".linkedin.com", ".google.com"],
-    historyUrls: ["https://www.linkedin.com/feed/", "https://mail.google.com/mail/u/0/#inbox"]
-  });
 
-  writeCodexPluginConfig(codexHome, "chrome@openai-bundled", true);
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "",
+    '[plugins."gmail@openai-curated"]',
+    "enabled = true",
+    ""
+  ].join("\n"));
 
   try {
-    const profile = runCliJson(tempDir, [
-      "profiles",
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "codex-handoff-user"), "--owner", "william", "--json"]);
+    runCliJson(tempDir, [
+      "users",
+      "accounts",
       "add",
-      "--browser",
-      "chrome",
-      "--label",
-      "codex-handoff-profile",
-      "--user-data-dir",
-      chrome.userDataDir,
-      "--profile-directory",
-      chrome.profileDirectory,
-      "--browser-command",
-      chrome.browserCommand,
+      user.id,
       "--capability",
       "linkedin",
-      "--capability",
-      "gmail",
+      "--handle",
+      "codex-handoff-user",
+      "--runtime",
+      "codex",
+      "--connector",
+      "unipile",
+      "--preferred",
       "--json"
     ]);
-
-    const user = runCliJson(tempDir, ["users", "add", "--label", "codex-handoff-user", "--owner", "william", "--json"]);
-    runCliJson(tempDir, ["users", "accounts", "add", user.id, "--capability", "linkedin", "--handle", "codex-handoff-user", "--profile", profile.id, "--preferred", "--json"]);
-    runCliJson(tempDir, ["users", "accounts", "add", user.id, "--capability", "gmail", "--handle", "codex-handoff-user@example.com", "--profile", profile.id, "--preferred", "--json"]);
+    runCliJson(tempDir, [
+      "users",
+      "accounts",
+      "add",
+      user.id,
+      "--capability",
+      "gmail",
+      "--handle",
+      "codex-handoff-user@example.com",
+      "--runtime",
+      "codex",
+      "--connector",
+      "gmail",
+      "--preferred",
+      "--json"
+    ]);
 
     const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--json"], {
       CODEX_HOME: codexHome,
@@ -305,15 +305,14 @@ test("inbound sync live auto-discovers codex chrome for browser-backed accounts 
     assert.equal(linkedin.probe.detectedStatus, "available");
     assert.equal(linkedin.transport.kind, "agent_handoff");
     assert.equal(linkedin.transport.runtime, "codex");
-    assert.equal(linkedin.transport.connector, "chrome");
+    assert.equal(linkedin.transport.connector, "unipile");
     assert.equal(linkedin.transport.captureRequest.executionMode, "native_tools_only");
-    assert.equal(linkedin.transport.captureRequest.captureTransportMode, "browser_native_only");
+    assert.equal(linkedin.transport.captureRequest.captureTransportMode, "connector_native_only");
     assert.equal(linkedin.transport.captureRequest.shellFallbackAllowed, false);
     assert.equal(linkedin.transport.captureRequest.exoCliWritebackRequired, true);
     assert.equal(linkedin.transport.captureRequest.noRepoRediscoveryRequired, true);
-    assert.equal(linkedin.transport.captureRequest.profileSelection.expectedProfile.profileDirectory, chrome.profileDirectory);
-    assert.equal(linkedin.transport.captureRequest.profileSelection.expectedHandle, "codex-handoff-user");
-    assert.match(linkedin.transport.captureRequest.prompt, /native Chrome\/browser-control surface/i);
+    assert.equal(linkedin.transport.captureRequest.profileSelection, null);
+    assert.match(linkedin.transport.captureRequest.prompt, /native unipile connector available in this runtime/i);
     assert.match(linkedin.transport.captureRequest.prompt, /captureGuide/i);
     assert.match(linkedin.transport.captureRequest.prompt, /captureScaffold/i);
     assert.match(linkedin.transport.captureRequest.prompt, /outputGuide\.surfaceStateRules/i);
@@ -330,17 +329,16 @@ test("inbound sync live auto-discovers codex chrome for browser-backed accounts 
     assert.equal(gmail.probe.detectedStatus, "available");
     assert.equal(gmail.transport.kind, "agent_handoff");
     assert.equal(gmail.transport.runtime, "codex");
-    assert.equal(gmail.transport.connector, "chrome");
+    assert.equal(gmail.transport.connector, "gmail");
     assert.equal(gmail.transport.captureRequest.executionMode, "native_tools_only");
-    assert.equal(gmail.transport.captureRequest.captureTransportMode, "browser_native_only");
+    assert.equal(gmail.transport.captureRequest.captureTransportMode, "connector_native_only");
     assert.equal(gmail.transport.captureRequest.shellFallbackAllowed, false);
     assert.equal(gmail.transport.captureRequest.exoCliWritebackRequired, true);
     assert.equal(gmail.transport.captureRequest.noRepoRediscoveryRequired, true);
-    assert.equal(gmail.transport.captureRequest.profileSelection.expectedProfile.profileDirectory, chrome.profileDirectory);
-    assert.equal(gmail.transport.captureRequest.profileSelection.expectedHandle, "codex-handoff-user@example.com");
+    assert.equal(gmail.transport.captureRequest.profileSelection, null);
     assert.match(gmail.transport.captureRequest.prompt, /inspect one live Gmail inbox/i);
-    assert.match(gmail.transport.captureRequest.prompt, /captureGuide/i);
-    assert.match(gmail.transport.captureRequest.prompt, /Use captureGuide\.writebackRules and verificationCommands/i);
+    assert.match(gmail.transport.captureRequest.prompt, /gmail connector available in this runtime/i);
+    assert.match(gmail.transport.captureRequest.prompt, /Return only JSON that matches the provided schema/i);
     assert.ok(gmail.transport.captureRequest.captureGuide.captureRules.some((line) => /Do not shell out through codex exec, EXO_CODEX_CLI/i.test(line)));
     assert.match(gmail.transport.captureRequest.captureGuide.rediscoveryPolicy, /Do not reopen repo source files, CLI help, or prior chat history/i);
     assert.match(gmail.transport.captureRequest.buildPayloadCommand, /exo inbound sync gmail .* --input - --json/i);
@@ -373,34 +371,32 @@ test("inbound sync live auto-discovers codex chrome for browser-backed accounts 
 test("inbound sync live supports full-mode Codex handoff for LinkedIn reconciliation", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-live-full-handoff-cassette-"));
   const codexHome = path.join(tempDir, ".codex");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    cookieHosts: [".linkedin.com"],
-    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/invitation-manager/sent/"]
-  });
 
-  writeCodexPluginConfig(codexHome, "chrome@openai-bundled", true);
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    ""
+  ].join("\n"));
 
   try {
-    const profile = runCliJson(tempDir, [
-      "profiles",
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "codex-full-handoff-user"), "--owner", "william", "--json"]);
+    runCliJson(tempDir, [
+      "users",
+      "accounts",
       "add",
-      "--browser",
-      "chrome",
-      "--label",
-      "codex-full-handoff-profile",
-      "--user-data-dir",
-      chrome.userDataDir,
-      "--profile-directory",
-      chrome.profileDirectory,
-      "--browser-command",
-      chrome.browserCommand,
+      user.id,
       "--capability",
       "linkedin",
+      "--handle",
+      "codex-full-handoff-user",
+      "--runtime",
+      "codex",
+      "--connector",
+      "unipile",
+      "--preferred",
       "--json"
     ]);
-
-    const user = runCliJson(tempDir, ["users", "add", "--label", "codex-full-handoff-user", "--owner", "william", "--json"]);
-    runCliJson(tempDir, ["users", "accounts", "add", user.id, "--capability", "linkedin", "--handle", "codex-full-handoff-user", "--profile", profile.id, "--preferred", "--json"]);
 
     const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--capability", "linkedin", "--mode", "full", "--json"], {
       CODEX_HOME: codexHome,
@@ -415,7 +411,8 @@ test("inbound sync live supports full-mode Codex handoff for LinkedIn reconcilia
     assert.equal(result.accounts[0].account.capability, "linkedin");
     assert.equal(result.accounts[0].transport.kind, "agent_handoff");
     assert.equal(result.accounts[0].transport.captureRequest.executionMode, "native_tools_only");
-    assert.equal(result.accounts[0].transport.captureRequest.profileSelection.expectedProfile.profileDirectory, chrome.profileDirectory);
+    assert.equal(result.accounts[0].transport.captureRequest.captureTransportMode, "connector_native_only");
+    assert.equal(result.accounts[0].transport.captureRequest.profileSelection, null);
     assert.match(result.accounts[0].transport.captureRequest.prompt, /requested mode is full/i);
     assert.match(result.accounts[0].transport.captureRequest.prompt, /fully reconcile|full reconciliation|reconcile/i);
   } finally {
@@ -423,56 +420,24 @@ test("inbound sync live supports full-mode Codex handoff for LinkedIn reconcilia
   }
 });
 
-test("inbound sync live preserves mixed-account partial failure when Gmail fails and LinkedIn succeeds", () => {
+test("inbound sync live reports mixed-account failure plus managed-account handoff without inventing a payload", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-live-partial-fail-cassette-"));
   const codexHome = path.join(tempDir, ".codex");
   const fakeCodexPath = path.join(tempDir, "fake-codex");
-  const fakeClaudePath = path.join(tempDir, "fake-claude");
-  const chrome = setupReadyChromeProfile(tempDir, {
-    historyUrls: ["https://www.linkedin.com/feed/", "https://www.linkedin.com/mynetwork/"]
-  });
 
-  writeCodexPluginConfig(codexHome, "gmail@openai-curated", false);
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "",
+    '[plugins."gmail@openai-curated"]',
+    "enabled = false",
+    ""
+  ].join("\n"));
   writeFakeCodexCaptureScript(fakeCodexPath, {}, { exitCode: 91 });
-  writeFakeClaudeScript(fakeClaudePath, {
-    plugins: ["chrome-devtools-mcp@claude-plugins-official"],
-    mcpLines: ["plugin:chrome-devtools-mcp:chrome-devtools: connected - ✓ Connected"],
-    structuredOutput: loadJsonCassette("inbound/linkedin-live/claude-partial-failure-success.json")
-  });
 
   try {
-    const profile = runCliJson(tempDir, [
-      "profiles",
-      "add",
-      "--browser",
-      "chrome",
-      "--label",
-      "combined-live-partial-profile",
-      "--user-data-dir",
-      chrome.userDataDir,
-      "--profile-directory",
-      chrome.profileDirectory,
-      "--browser-command",
-      chrome.browserCommand,
-      "--capability",
-      "linkedin",
-      "--json"
-    ]);
-
-    const { motion, company, prospect } = createLinkedProspectContext(tempDir, {
-      premise: "This offer matters when inbound truth has to survive partial connector failure.",
-      signal: "company::Is there active workflow pressure that makes inbound replies or invites important?",
-      prospectName: "Alicia Buyer",
-      prospectTitle: "VP Revenue Operations",
-      whyRelevant: "Owns the workflow pain that makes inbound routing operationally relevant.",
-      email: "alicia@buyer.example",
-      linkedinProfileUrl: "https://www.linkedin.com/in/alicia-buyer/"
-    });
-
-    const user = runCliJson(tempDir, ["users", "add", "--label", "combined-live-partial-user", "--owner", "william", "--json"]);
-    runCliJson(tempDir, ["users", "harness", "add", user.id, "--runtime", "codex", "--connector", "gmail", "--status", "unknown", "--json"]);
-    runCliJson(tempDir, ["users", "harness", "add", user.id, "--runtime", "claude", "--connector", "chrome", "--status", "unknown", "--json"]);
-
+    const user = runCliJson(tempDir, ["users", "add", "--label", uniqueTestLabel(tempDir, "combined-live-partial-user"), "--owner", "william", "--json"]);
     const withLinkedin = runCliJson(tempDir, [
       "users",
       "accounts",
@@ -482,8 +447,10 @@ test("inbound sync live preserves mixed-account partial failure when Gmail fails
       "linkedin",
       "--handle",
       "combined-live-partial-user",
-      "--profile",
-      profile.id,
+      "--runtime",
+      "codex",
+      "--connector",
+      "unipile",
       "--preferred",
       "--json"
     ]);
@@ -507,38 +474,21 @@ test("inbound sync live preserves mixed-account partial failure when Gmail fails
     ]);
     const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
 
-    const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--apply", "--refresh", "--json"], {
+    const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--json"], {
       CODEX_HOME: codexHome,
-      EXO_CODEX_CLI: fakeCodexPath,
-      EXO_CLAUDE_CLI: fakeClaudePath
+      EXO_CODEX_CLI: fakeCodexPath
     });
 
     assert.equal(result.accounts.length, 2);
+    assert.equal(result.transportStatus, "agent_capture_required");
+    assert.equal(result.canApply, false);
+    assert.equal(result.payload, null);
     assert.equal(result.accounts.find((account) => account.account.id === gmailAccountId).probe.detectedStatus, "unavailable");
     assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).probe.detectedStatus, "available");
-    assert.equal(result.applied.counts.checkedSurfaceCount, 7);
-    assert.equal(result.applied.counts.successSurfaceCount, 6);
-    assert.equal(result.applied.counts.failedSurfaceCount, 1);
-    assert.equal(result.applied.counts.observationCount, 1);
-
-    const syncView = runCliJson(tempDir, ["inbound", "sync", "show", user.id, "--json"]);
-    const gmailSurface = syncView.accounts
-      .find((account) => account.accountId === gmailAccountId)
-      .surfaces.find((surface) => surface.key === "gmail-inbox-threads");
-    const linkedinSurface = syncView.accounts
-      .find((account) => account.accountId === linkedinAccountId)
-      .surfaces.find((surface) => surface.key === "linkedin-received-invitations");
-    assert.equal(gmailSurface.lastRunStatus, "failed");
-    assert.match(gmailSurface.lastError, /not available/i);
-    assert.equal(linkedinSurface.lastRunStatus, "success");
-    assert.equal(linkedinSurface.lastItemCount, 1);
-
-    const observations = runCliJson(tempDir, ["inbound", "observations", "list", user.id, "--json"]);
-    assert.equal(observations.counts.observationCount, 1);
-    assert.equal(observations.observations[0].kind, "connection_request_received");
-    assert.equal(observations.observations[0].motionId, motion.id);
-    assert.equal(observations.observations[0].companyId, company.id);
-    assert.equal(observations.observations[0].prospectId, prospect.id);
+    assert.equal(result.accounts.find((account) => account.account.id === gmailAccountId).capture.status, "failed");
+    assert.match(result.accounts.find((account) => account.account.id === gmailAccountId).capture.error, /not available/i);
+    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).transport.kind, "agent_handoff");
+    assert.equal(result.accounts.find((account) => account.account.id === linkedinAccountId).capture, null);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

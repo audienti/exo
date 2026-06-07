@@ -87,6 +87,7 @@ export function buildWorkspaceProjection(input) {
 
   return buildWorkspaceModel({
     user,
+    observations: workspaceContext.observations,
     inboundReview,
     inbox,
     daily,

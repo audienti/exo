@@ -20,6 +20,7 @@ import { buildLinkedinInboundSyncPayload } from "../../core/inbound-linkedin-syn
 import { buildInboundSyncRefreshSummary, prepareUserInboundSyncRun } from "../../core/inbound-sync-run.js";
 import { updateMotionProspect } from "../../core/record-prospect.js";
 import { resolveInboundObservationCompany } from "../../core/resolve-inbound-observation-company.js";
+import { updateCompanyRecord } from "../../core/update-company.js";
 import {
   buildUserInboundSyncPlan,
   buildUserInboundSyncView,
@@ -91,7 +92,7 @@ Canonical inbound interface:
   exo inbound sync plan <user-id> --mode quick
   exo inbound sync live <user-id> --apply --refresh --json
   exo inbound sync linkedin <user-id> --account <account-id> --input ./linkedin-capture.json --apply --refresh --json
-  exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --apply --refresh --json
+  exo inbound sync linkedin-live <user-id> --account <account-id> --runtime codex --surface linkedin-followers-list --apply --refresh --json
   exo inbound sync gmail <user-id> --account <account-id> --input ./gmail-capture.json --apply --refresh --json
   exo inbound sync gmail-live <user-id> --account <account-id> --apply --refresh --json
   exo inbound sync run <user-id> --input ./inbound-sync.json --refresh --json
@@ -587,13 +588,18 @@ Rules:
 
   sync
     .command("linkedin-live")
-    .description("Return or run the governed LinkedIn quick-surface capture path through the resolved connector, with Chrome-profile transport kept only as a legacy fallback.")
+    .description("Return or run the governed LinkedIn quick-surface capture path through the resolved connector.")
     .argument("<user-id>", "Execution user identifier")
     .option("--account <account-id>", "Connected LinkedIn account identifier; inferred when only one LinkedIn account exists")
     .option("--mode <mode>", "quick | full")
     .option("--runtime <runtime>", "Runtime to use when multiple supported harnesses exist, such as codex or claude")
     .option("--connector <connector>", "Connector override such as the detected LinkedIn connector or chrome")
+    .option("--surface <surface-key>", "Only inspect one LinkedIn inbound surface; repeat to request several", collect, [])
     .option("--limit <count>", "Maximum relevant items to inspect per LinkedIn surface")
+    .option("--max-pages <count>", "Stop a full LinkedIn reconciliation after this many pages and return a resumable partial result")
+    .option("--page-size <count>", "Override the LinkedIn page size used for full paginated reconciliation")
+    .option("--resume-cursor <cursor>", "Resume a cursor-paginated LinkedIn surface from a prior partial result")
+    .option("--resume-start-offset <count>", "Resume an offset-paginated LinkedIn surface from a prior partial result")
     .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
     .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
     .option("--json", "Emit machine-readable JSON")
@@ -612,7 +618,12 @@ Rules:
           mode: options.mode ?? "quick",
           runtime: options.runtime ?? null,
           connector: options.connector ?? null,
-          limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
+          surfaceKeys: options.surface,
+          limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null,
+          maxPages: options.maxPages !== undefined ? Number.parseInt(options.maxPages, 10) : null,
+          pageSize: options.pageSize !== undefined ? Number.parseInt(options.pageSize, 10) : null,
+          resumeCursor: options.resumeCursor ?? null,
+          resumeStartOffset: options.resumeStartOffset !== undefined ? Number.parseInt(options.resumeStartOffset, 10) : null,
         });
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -1085,20 +1096,29 @@ async function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
   let clearedSupersededObservationCount = 0;
   const existingObservations = listInboundObservations({ userId });
   const knownCompanies = listCompanies();
+  const companyEnrichmentsByDedupeKey = new Map(
+    (prepared.companyEnrichments ?? []).map((entry) => [entry.dedupeKey, entry.companyProfile]),
+  );
   const storedObservations = prepared.observations.map((rawObservation) => {
+    const companyEnrichment = companyEnrichmentsByDedupeKey.get(rawObservation.dedupeKey) ?? null;
     const companyResolution = resolveInboundObservationCompany(rawObservation, knownCompanies, {
       createIfMissing: true,
+      companyProfile: companyEnrichment,
     });
-    if (companyResolution.companyCreated && companyResolution.company) {
-      insertCompany(companyResolution.company);
-      knownCompanies.unshift(companyResolution.company);
-    } else if (companyResolution.companyLinkedToMotion && companyResolution.company) {
-      updateCompany(companyResolution.company);
-      const companyIndex = knownCompanies.findIndex((candidate) => candidate?.id === companyResolution.company?.id);
+    const enrichedCompanyResult = companyResolution.company
+      ? applyInboundCompanyProfileEnrichment(companyResolution.company, companyEnrichment)
+      : { company: companyResolution.company, changed: false };
+    const resolvedCompany = enrichedCompanyResult.company;
+    if (companyResolution.companyCreated && resolvedCompany) {
+      insertCompany(resolvedCompany);
+      knownCompanies.unshift(resolvedCompany);
+    } else if ((companyResolution.companyLinkedToMotion || enrichedCompanyResult.changed) && resolvedCompany) {
+      updateCompany(resolvedCompany);
+      const companyIndex = knownCompanies.findIndex((candidate) => candidate?.id === resolvedCompany?.id);
       if (companyIndex >= 0) {
-        knownCompanies.splice(companyIndex, 1, companyResolution.company);
+        knownCompanies.splice(companyIndex, 1, resolvedCompany);
       } else {
-        knownCompanies.unshift(companyResolution.company);
+        knownCompanies.unshift(resolvedCompany);
       }
     }
 
@@ -1203,6 +1223,45 @@ async function applyPreparedInboundSyncRun(userId, prepared, options = {}) {
   }
 
   return result;
+}
+
+/**
+ * @param {unknown} rawCompany
+ * @param {import("../../schema/inbound.js").inboundObservationCompanyProfileSchema._type | null} companyProfile
+ */
+function applyInboundCompanyProfileEnrichment(rawCompany, companyProfile) {
+  if (!rawCompany || !companyProfile) {
+    return {
+      company: rawCompany,
+      changed: false
+    };
+  }
+
+  const patch = {};
+  if (companyProfile.domain && companyProfile.domain !== rawCompany.domain) {
+    patch.domain = companyProfile.domain;
+  }
+  if (companyProfile.websiteUrl && companyProfile.websiteUrl !== rawCompany.websiteUrl) {
+    patch.websiteUrl = companyProfile.websiteUrl;
+  }
+  if (companyProfile.linkedinCompanyUrl && companyProfile.linkedinCompanyUrl !== rawCompany.linkedinCompanyUrl) {
+    patch.linkedinCompanyUrl = companyProfile.linkedinCompanyUrl;
+  }
+  if (companyProfile.logoSourceUrl && companyProfile.logoSourceUrl !== rawCompany.logoSourceUrl) {
+    patch.logoSourceUrl = companyProfile.logoSourceUrl;
+  }
+
+  if (!Object.keys(patch).length) {
+    return {
+      company: rawCompany,
+      changed: false
+    };
+  }
+
+  return {
+    company: updateCompanyRecord(rawCompany, patch),
+    changed: true
+  };
 }
 
 /**

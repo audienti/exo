@@ -78,58 +78,8 @@ function setupReadyChromeProfile(tempDir) {
 
 test("motion targeting prioritizes company research before cadence when stages are mixed", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-targeting-stage-order-"));
-  const chrome = setupReadyChromeProfile(tempDir);
 
   try {
-    const profile = JSON.parse(
-      execFileSync(
-        "node",
-        [
-          cliPath,
-          "profiles",
-          "add",
-          "--browser",
-          "chrome",
-          "--label",
-          "planner-profile",
-          "--user-data-dir",
-          chrome.userDataDir,
-          "--profile-directory",
-          chrome.profileDirectory,
-          "--browser-command",
-          chrome.browserCommand,
-          "--capability",
-          "linkedin",
-          "--json"
-        ],
-        {
-          cwd: tempDir,
-          encoding: "utf8"
-        }
-      )
-    );
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "profiles",
-        "claim",
-        profile.id,
-        "--label",
-        "planner-main",
-        "--workspace",
-        "planner",
-        "--account",
-        "linkedin:planner@example.com",
-        "--json"
-      ],
-      {
-        cwd: tempDir,
-        encoding: "utf8"
-      }
-    );
-
     const user = JSON.parse(
       execFileSync(
         "node",
@@ -155,6 +105,28 @@ test("motion targeting prioritizes company research before cadence when stages a
       [
         cliPath,
         "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "chrome",
+        "--status",
+        "available",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
         "accounts",
         "add",
         user.id,
@@ -162,8 +134,12 @@ test("motion targeting prioritizes company research before cadence when stages a
         "linkedin",
         "--handle",
         "planner@example.com",
-        "--profile",
-        profile.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "chrome",
+        "--provider-account-id",
+        "acct-linkedin-1",
         "--preferred",
         "--json"
       ],

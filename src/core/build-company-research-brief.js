@@ -2,6 +2,7 @@
 
 import { companySchema } from "../schema/company.js";
 import { motionSchema } from "../schema/motion.js";
+import { readWorkspaceSettings, resolveWorkspaceEnrichmentPolicy } from "../lib/workspace-settings.js";
 
 const PREFERRED_SIGNAL_WINDOW_DAYS = 180;
 const MAX_SIGNAL_WINDOW_DAYS = 365;
@@ -13,6 +14,7 @@ const MAX_SIGNAL_WINDOW_DAYS = 365;
 export function buildCompanyResearchBrief(rawCompany, rawMotion) {
   const company = companySchema.parse(rawCompany);
   const motion = motionSchema.parse(rawMotion);
+  const enrichmentPolicyLine = buildWorkspaceEnrichmentResearchLine();
   const audienceById = new Map(motion.audienceHypotheses.map((audience) => [audience.id, audience]));
   const targetTitles = dedupeStrings([
     ...motion.targetingProfile.targetTitles,
@@ -56,7 +58,7 @@ export function buildCompanyResearchBrief(rawCompany, rawMotion) {
       "If the exact prospect title does not exist, move to the best-fit owner at director level or above whose function matches the signal.",
       "For chosen people, check recent public activity and recent posts. Treat legitimate recent posting as positive evidence the channel is active.",
       "View the selected prospect profiles before first touch and write that viewback into Exo.",
-      "Use whatever contact-enrichment tools are actually available in the current runtime to find verified direct emails and verified mobile phone numbers for the chosen people when possible so the motion has stronger fallback paths if LinkedIn is blocked or gets no reply."
+      enrichmentPolicyLine,
     ],
     stateWritebacks: [
       company.websiteUrl
@@ -141,6 +143,19 @@ export function buildCompanyResearchBrief(rawCompany, rawMotion) {
       "That cadence branch states the real next action, not generic planning filler."
     ]
   };
+}
+
+function buildWorkspaceEnrichmentResearchLine() {
+  const policy = resolveWorkspaceEnrichmentPolicy(readWorkspaceSettings());
+  const emailProviders = policy.email.providers.length ? policy.email.providers.join(", ") : "none";
+  const validators = policy.email.validators.length ? policy.email.validators.join(", ") : "none";
+  const phoneProviders = policy.phone.providers.length ? policy.phone.providers.join(", ") : "none";
+  const mobileRule = policy.phone.mobileOnly ? "Keep the phone branch mobile-only." : "The phone branch does not require mobile-only numbers.";
+  const whatsappRule = policy.phone.preferWhatsappCapable
+    ? "Prefer WhatsApp-capable evidence when a provider can prove it."
+    : "Do not prioritize WhatsApp-capable evidence.";
+
+  return `Use whatever contact-enrichment tools are actually available in the current runtime to find verified direct emails and verified mobile phone numbers for the chosen people when possible. For this workspace, the direct email provider order is ${emailProviders}; email validation providers are ${validators}; direct phone provider order is ${phoneProviders}. ${mobileRule} ${whatsappRule}`;
 }
 
 /**

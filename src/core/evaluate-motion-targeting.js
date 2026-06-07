@@ -7,7 +7,7 @@ import { userSchema } from "../schema/user.js";
 import { buildMotionQueueSummary, withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
 import { resolveScopedExecutionAssignment } from "./resolve-scoped-execution-assignment.js";
 
-const MINIMUM_AVAILABLE_PROSPECTS = 25;
+export const MINIMUM_AVAILABLE_PROSPECTS = 25;
 
 /**
  * @param {unknown} rawMotion
@@ -192,15 +192,15 @@ function resolveCompanyExecutionIdentity(company, motion, profiles, users, capab
   if (scoped.resolvedAccount && scoped.assignedUser) {
     if (scoped.resolvedAccount.browserProfile || scoped.resolvedAccount.sourceType === "browser-profile") {
       const scopeLabel = describeExecutionScope(scoped.source);
-      return {
-        status: "pinned-untrusted",
-        transportKind: "browser-profile",
-        resolutionSource: scoped.source,
-        message: `${scopeLabel} is pinned to user ${scoped.assignedUser.label}, but profile-backed ${capability} accounts are no longer supported as governed execution paths.`,
-        profile: null,
-        user: {
-          id: scoped.assignedUser.id,
-          label: scoped.assignedUser.label
+        return {
+          status: "pinned-untrusted",
+          transportKind: "browser-profile",
+          resolutionSource: scoped.source,
+          message: `${scopeLabel} is assigned to user ${scoped.assignedUser.label}, but profile-backed ${capability} accounts are no longer supported as governed execution paths.`,
+          profile: null,
+          user: {
+            id: scoped.assignedUser.id,
+            label: scoped.assignedUser.label
         }
       };
     }
@@ -211,7 +211,7 @@ function resolveCompanyExecutionIdentity(company, motion, profiles, users, capab
       transportKind: "harness-connection",
       resolutionSource: scoped.source,
       message: scoped.resolvedAccount.status === "ready"
-        ? `${scopeLabel} is pinned to user ${scoped.assignedUser.label} for ${capability} through ${scoped.resolvedAccount.harnessConnection.runtime}:${scoped.resolvedAccount.harnessConnection.connector}.`
+        ? `${scopeLabel} is assigned to user ${scoped.assignedUser.label} for ${capability} through ${scoped.resolvedAccount.harnessConnection.runtime}:${scoped.resolvedAccount.harnessConnection.connector}.`
         : scoped.resolvedAccount.reason,
       profile: null,
       user: {
@@ -321,7 +321,7 @@ function buildEngagementGate(input) {
     status: "blocked",
     capability: input.capability,
     blocksEngagement: true,
-    message: `A governed ${input.capability} account exists, but Exo cannot yet resolve one ready execution identity for this motion. Pin the acting user to the company or motion before launch.`,
+    message: `A governed ${input.capability} account exists, but Exo cannot yet resolve one ready execution identity for this motion. Assign the acting user to the company or motion before launch.`,
     resolvedProfile: input.browserGate.resolvedProfile,
     trustedProfileCount: input.browserGate.trustedProfileCount
   };
@@ -465,7 +465,7 @@ function buildNextActions(motion, motionPreflight, browserGate, companyLoop, use
       } else if (!capabilityAccountCount) {
         actions.push(`Map a governed ${browserGate.capability} account onto an execution user before launching ${company.companyName}.`);
       } else if (company.executionIdentity.status === "unassigned-global-ready") {
-        actions.push(`Pin the acting execution user to ${company.companyName} before engagement so the motion launches from one consistent identity.`);
+        actions.push(`Assign the acting execution user to ${company.companyName} before engagement so the motion launches from one consistent identity.`);
       } else if (company.executionIdentity.status === "pinned-untrusted") {
         actions.push(company.executionIdentity.message);
       } else {

@@ -3,11 +3,6 @@
 import { createHash } from "node:crypto";
 
 export const BROWSER_TASK_LANE_BY_KIND = {
-  run_inbound_sync: "retrieval",
-  send_message: "execution",
-  reject_connection_request: "execution",
-  withdraw_connection: "execution",
-  unfollow_profile: "execution",
 };
 
 export const BROWSER_TRANSPORT_TASK_KINDS = new Set(Object.keys(BROWSER_TASK_LANE_BY_KIND));
@@ -48,6 +43,7 @@ export function normalizeAgentHostState(state) {
       lastTaskFingerprint: null,
       lastTaskLabel: null,
     },
+    taskLeases: [],
     recentTaskVerifications: [],
   };
 
@@ -89,6 +85,13 @@ export function normalizeAgentHostState(state) {
     lastTaskLabel: normalizeReason(state?.canaryCooldown?.lastTaskLabel),
   };
 
+  const leases = Array.isArray(state?.taskLeases)
+    ? state.taskLeases
+    : [];
+  normalized.taskLeases = leases
+    .map(normalizeTaskLeaseEntry)
+    .filter(Boolean);
+
   const verifications = Array.isArray(state?.recentTaskVerifications)
     ? state.recentTaskVerifications
     : [];
@@ -116,6 +119,10 @@ export function pruneExpiredBrowserBackoffs(state, now = new Date().toISOString(
     }
   }
   normalized.recentTaskVerifications = normalized.recentTaskVerifications.filter((entry) => {
+    if (!entry.expiresAt) return false;
+    return Date.parse(now) < Date.parse(entry.expiresAt);
+  });
+  normalized.taskLeases = normalized.taskLeases.filter((entry) => {
     if (!entry.expiresAt) return false;
     return Date.parse(now) < Date.parse(entry.expiresAt);
   });
@@ -354,6 +361,114 @@ export function recordCanarySendCooldown(state, entry) {
   return normalized;
 }
 
+/**
+ * @param {any} task
+ */
+export function createTaskLeaseFingerprint(task) {
+  const basis = JSON.stringify({
+    kind: task?.kind ?? null,
+    action: task?.action ?? null,
+    motionId: task?.motionId ?? null,
+    companyId: task?.companyId ?? null,
+    prospectId: task?.prospectId ?? null,
+    observationId: task?.observationId ?? null,
+    userId: task?.userId ?? null,
+    accountId: task?.accountId ?? null,
+    capability: task?.capability ?? null,
+    packetId: task?.packetId ?? null,
+    packetKind: task?.packetKind ?? null,
+    surface: task?.surface ?? null,
+    surfaceKeys: Array.isArray(task?.surfaceKeys)
+      ? [...new Set(task.surfaceKeys
+        .map((surfaceKey) => normalizeIdentity(surfaceKey))
+        .filter(Boolean))]
+      : [],
+    mode: task?.mode ?? null,
+    resumeCursor: task?.resumeCursor ?? null,
+    resumeStartOffset: Number.isInteger(task?.resumeStartOffset) ? task.resumeStartOffset : null,
+    maxPages: Number.isInteger(task?.maxPages) ? task.maxPages : null,
+    pageSize: Number.isInteger(task?.pageSize) ? task.pageSize : null,
+    recipientUrl: task?.recipientUrl ?? null,
+    recipientEmail: task?.recipientEmail ?? null,
+    via: task?.via ?? null,
+  });
+  return createHash("sha1").update(basis).digest("hex");
+}
+
+/**
+ * @param {any} state
+ * @param {string | null | undefined} fingerprint
+ * @param {string} [now]
+ */
+export function getActiveTaskLease(state, fingerprint, now = new Date().toISOString()) {
+  if (!fingerprint) return null;
+  const normalized = pruneExpiredBrowserBackoffs(state, now);
+  return normalized.taskLeases.find((entry) => entry.fingerprint === fingerprint) ?? null;
+}
+
+/**
+ * @param {any} state
+ * @param {{
+ *   taskKind: string,
+ *   fingerprint: string,
+ *   workerLabel: string,
+ *   acquiredAt: string,
+ *   expiresAt: string,
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null,
+ *   observationId?: string | null,
+ *   userId?: string | null,
+ *   accountId?: string | null,
+ *   capability?: string | null,
+ *   surface?: string | null,
+ *   subject?: string | null,
+ *   action?: string | null,
+ * }} entry
+ */
+export function checkoutTaskLease(state, entry) {
+  const normalized = normalizeAgentHostState(state);
+  const nextEntry = normalizeTaskLeaseEntry(entry);
+  if (!nextEntry) {
+    return {
+      ok: false,
+      reason: "invalid_task_lease",
+      state: normalized,
+      lease: null,
+    };
+  }
+
+  const existing = getActiveTaskLease(normalized, nextEntry.fingerprint, nextEntry.acquiredAt);
+  if (existing && existing.workerLabel !== nextEntry.workerLabel) {
+    return {
+      ok: false,
+      reason: "already_checked_out",
+      state: normalized,
+      lease: existing,
+    };
+  }
+
+  normalized.taskLeases = normalized.taskLeases.filter((item) => item.fingerprint !== nextEntry.fingerprint);
+  normalized.taskLeases.push(nextEntry);
+  return {
+    ok: true,
+    reason: null,
+    state: normalized,
+    lease: nextEntry,
+  };
+}
+
+/**
+ * @param {any} state
+ * @param {string | null | undefined} fingerprint
+ */
+export function releaseTaskLease(state, fingerprint) {
+  const normalized = normalizeAgentHostState(state);
+  if (!fingerprint) return normalized;
+  normalized.taskLeases = normalized.taskLeases.filter((entry) => entry.fingerprint !== fingerprint);
+  return normalized;
+}
+
 /** @param {any} task */
 export function createTaskVerificationFingerprint(task) {
   const basis = JSON.stringify({
@@ -402,6 +517,33 @@ function normalizePositiveInteger(value) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) return null;
   return Math.floor(number);
+}
+
+/** @param {any} entry */
+function normalizeTaskLeaseEntry(entry) {
+  const taskKind = normalizeIdentity(entry?.taskKind);
+  const fingerprint = normalizeIdentity(entry?.fingerprint);
+  const workerLabel = normalizeIdentity(entry?.workerLabel);
+  const acquiredAt = normalizeIsoDatetime(entry?.acquiredAt);
+  const expiresAt = normalizeIsoDatetime(entry?.expiresAt);
+  if (!taskKind || !fingerprint || !workerLabel || !acquiredAt || !expiresAt) return null;
+  return {
+    taskKind,
+    fingerprint,
+    workerLabel,
+    acquiredAt,
+    expiresAt,
+    motionId: normalizeIdentity(entry?.motionId),
+    companyId: normalizeIdentity(entry?.companyId),
+    prospectId: normalizeIdentity(entry?.prospectId),
+    observationId: normalizeIdentity(entry?.observationId),
+    userId: normalizeIdentity(entry?.userId),
+    accountId: normalizeIdentity(entry?.accountId),
+    capability: normalizeIdentity(entry?.capability),
+    surface: normalizeIdentity(entry?.surface),
+    subject: normalizeIdentity(entry?.subject),
+    action: normalizeIdentity(entry?.action),
+  };
 }
 
 /** @param {any} entry */

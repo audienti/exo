@@ -14,6 +14,10 @@ test("deriveLinkedinCompanyName pulls company names from common LinkedIn headlin
     deriveLinkedinCompanyName("Vice President, Enterprise IT Vendor Management Office at McKesson"),
     "McKesson",
   );
+  assert.equal(
+    deriveLinkedinCompanyName("Founder of KARITIX | Helping SaaS Companies to Scale with Marketing That Performs"),
+    "KARITIX",
+  );
 });
 
 test("deriveLinkedinCompanyName rejects generic lowercase at-phrases", () => {

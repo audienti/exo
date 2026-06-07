@@ -367,7 +367,7 @@ function renderMotionStateDot(state, label = null) {
     blocked: { color: "#ef4444", label: "blocked" },
     "reply-accepted": { color: "#22c55e", label: "reply / accepted" },
     "sent-pending": { color: "#818cf8", label: "sent / pending" },
-    "pinned-ready": { color: "#22c55e", label: "pinned ready" },
+    "pinned-ready": { color: "#22c55e", label: "assigned ready" },
     "unassigned-global-ready": { color: "#94a3b8", label: "unassigned" },
     unassigned: { color: "#94a3b8", label: "unassigned" },
   };
@@ -719,19 +719,19 @@ function deriveEngagementLane(prospect, dailyItem) {
     };
   }
 
-  if (["accepted", "replied", "reply", "positive_reply"].includes(lastOutcome)) {
-    return {
-      key: "reply-accepted",
-      label: "Reply / accepted",
-      description: "The branch already moved off the cold start problem and into live response handling.",
-    };
-  }
-
   if (lastOutcome === "blocked" || nextAction.includes("blocked")) {
     return {
       key: "blocked",
       label: "Blocked",
       description: "The primary path failed or the channel is blocked.",
+    };
+  }
+
+  if (hasReplyAcceptedHistory(prospect)) {
+    return {
+      key: "reply-accepted",
+      label: "Reply / accepted",
+      description: "The branch already moved off the cold start problem and into live response handling.",
     };
   }
 
@@ -759,6 +759,17 @@ function deriveEngagementLane(prospect, dailyItem) {
     label: "Ready",
     description: "The branch is prepped and still waiting for its first governed move.",
   };
+}
+
+function hasReplyAcceptedHistory(prospect) {
+  const cadenceOutcome = prospect?.cadenceState?.lastTouchOutcome ?? null;
+  if (["accepted", "replied", "reply", "positive_reply"].includes(cadenceOutcome)) {
+    return true;
+  }
+
+  return toArray(prospect?.touches).some((touch) =>
+    ["accepted", "replied", "reply", "positive_reply"].includes(touch?.outcome),
+  );
 }
 
 function buildMotionSummaries(reports, daily, inboundReview) {
@@ -1534,11 +1545,16 @@ function isInboundReviewDailyItem(item) {
 }
 
 function isDecisionReviewItem(item) {
-  if (["needs_reply", "needs_decision"].includes(item?.state)) {
-    return true;
-  }
-
-  return toArray(item?.decisionOptions).some((option) => !["wait", "hold", "note-signal"].includes(option));
+  return new Set([
+    "needs_reply",
+    "ready_for_reply",
+    "needs_decision",
+    "needs_status_reconciliation",
+    "needs_triage",
+    "thread_change_review",
+    "ready_for_post_accept",
+    "needs_claim",
+  ]).has(item?.state);
 }
 
 function plannerSubject(item) {
@@ -1587,22 +1603,27 @@ function buildWorkspaceStateActions({ user, reports, daily, workerLabel = DEFAUL
     .map((entry) => entry?.plannerItem?.context?.firstAssignmentBlockedCompanyName ?? null)
     .find(Boolean) ?? null;
 
-  const blockedReadyCompanies = reports
-    .flatMap((report) => toArray(report.targeting?.companyLoop?.items))
-    .filter((company) =>
-      company.queueStatus === "ready"
-      && company.executionIdentity?.status === "unassigned-global-ready"
-      && Number(company.readyCadenceCount ?? 0) > 0,
-    )
+  const blockedReadyCompanies = [...new Map(
+    Object.entries(daily.capacity ?? {}).flatMap(([channel, entry]) =>
+      toArray(entry?.execution?.assignmentBlockedCompanies).map((company) => [
+        `${channel}::${company.companyId}`,
+        {
+          channel,
+          companyId: company.companyId,
+          companyName: company.companyName,
+        },
+      ]),
+    ),
+  ).values()]
     .map((company) => ({
       kind: "assign_company_user",
-      label: `Pin ${company.companyName}`,
-      confirm: `Pin ${company.companyName} to ${user.label}?`,
+      label: `Assign ${company.companyName}`,
+      confirm: `Assign ${company.companyName} to ${user.label}?`,
       companyId: company.companyId,
       companyName: company.companyName,
       userId: user.id,
       userLabel: user.label,
-      browserCapability: "linkedin",
+      browserCapability: company.channel ?? "linkedin",
       reason: "Make ready outbound branches executable",
     }))
     .sort((left, right) => {
@@ -1699,7 +1720,7 @@ function buildDecisionQueue(reviewItems) {
 
   return {
     itemCount: decisions.length,
-    replyCount: decisions.filter((item) => item.state === "needs_reply").length,
+    replyCount: decisions.filter((item) => item.state === "needs_reply" || item.state === "ready_for_reply").length,
     decisionCount: decisions.filter((item) => item.state === "needs_decision").length,
     parkedSignalCount: signals.length,
     items: decisions.map((item) => ({
@@ -1853,8 +1874,14 @@ function agentQueueTaskAction(task) {
   switch (task.kind) {
     case "run_inbound_sync":
       return "Refresh inbound truth";
+    case "company_discovery":
+      return "Discover companies";
     case "company_research":
       return "Research company";
+    case "prospect_selection":
+      return "Select prospects";
+    case "prospect_research":
+      return "Research prospect";
     case "write_draft":
       return `Write ${surface} draft`;
     case "send_message":
@@ -1876,8 +1903,14 @@ function agentQueueTaskWhy(task) {
   switch (task.kind) {
     case "run_inbound_sync":
       return task.whyItMatters ?? "Inbound truth needs a governed refresh before the operator surface can be trusted.";
+    case "company_discovery":
+      return task.whyItMatters ?? "This motion is below its prospect floor and needs more companies queued into backlog.";
     case "company_research":
       return task.whyItMatters ?? "This company was explicitly queued for governed research.";
+    case "prospect_selection":
+      return task.whyItMatters ?? "This researched account still needs the smallest credible stakeholder set.";
+    case "prospect_research":
+      return task.whyItMatters ?? "This selected prospect still needs governed research and cadence before the branch is usable.";
     case "write_draft":
       return task.reason === "no_draft"
         ? "No governed draft exists on the current surface yet."
@@ -1902,6 +1935,10 @@ function agentQueueTaskSourceType(task) {
 
   if (task.kind === "run_inbound_sync") {
     return "inbound_sync";
+  }
+
+  if (task.kind === "company_discovery") {
+    return "company_discovery";
   }
 
   if (task.kind === "company_research") {
@@ -1929,16 +1966,16 @@ function buildBlockedQueue(agentQueue, executionBacklog) {
     subject: item.firstProspectName ?? item.firstCompanyName ?? titleizeStatus(item.channel),
     meta: item.accountHandle ?? titleizeStatus(item.channel),
     reason: "Needs operator assignment",
-    detail: `${item.blockedReadyCount} ready branch${item.blockedReadyCount === 1 ? "" : "es"} across ${item.blockedCompanyCount} compan${item.blockedCompanyCount === 1 ? "y" : "ies"} cannot open until one trusted owner is pinned.`,
+    detail: `${item.blockedReadyCount} ready branch${item.blockedReadyCount === 1 ? "" : "es"} across ${item.blockedCompanyCount} compan${item.blockedCompanyCount === 1 ? "y" : "ies"} cannot open until one trusted owner is assigned.`,
     blockType: "assignment",
     channel: item.channel ?? "",
-    resolveLabel: "Pin owner",
+    resolveLabel: "Assign owner",
     stateActions: toArray(item.stateActions),
     actions: toArray(item.stateActions)
       .filter((action) => action?.kind === "assign_company_user" && action.companyId && action.userId)
       .map((action) => ({
         writer: "assignCompanyUser",
-        label: action.companyName ? `Pin ${action.companyName}` : action.label ?? "Pin owner",
+        label: action.companyName ? `Assign ${action.companyName}` : action.label ?? "Assign owner",
         args: {
           companyId: action.companyId,
           userId: action.userId,
@@ -7188,6 +7225,7 @@ function renderPage({
 /**
  * @param {{
  *   user: any,
+ *   observations?: any[],
  *   inboundReview: any,
  *   inbox: any,
  *   daily: any,
@@ -7200,6 +7238,7 @@ function renderPage({
 export function buildWorkspaceModel(input) {
   const {
     user,
+    observations = [],
     inboundReview,
     inbox,
     daily,
@@ -7337,7 +7376,9 @@ export function buildWorkspaceModel(input) {
       engagementLanes,
       dueNowItems,
       waitingItems,
+      observations,
       reviewItems,
+      itemizationGaps: toArray(inboundReview.itemizationGaps),
       gapNotes,
     },
   };

@@ -19,14 +19,15 @@ import {
   emptyState,
   escapeAttr,
   escapeHtml,
-  fitChip,
   iconSvg,
   ownerTag,
+  renderNextMoveAlert,
   renderShell,
   stateDot,
   truthTag,
 } from "../lib/exo-ui-components.js";
 import { isSendableDraftStatus } from "../lib/draft-policy.js";
+import { selectNextDraftSurface } from "../core/select-next-draft-surface.js";
 
 /**
  * @param {ReturnType<import("../core/build-prospects-view.js").buildProspectsViewModel>} model
@@ -60,6 +61,15 @@ export function renderProspectsPage(model, meta = {}) {
     body,
     interactive: meta.interactive,
     agentRuntime: meta.agentRuntime ?? null,
+    search: meta.interactive
+      ? {
+          action: "/prospects",
+          query: model.search?.query ?? meta.searchQuery ?? "",
+          placeholder: "Search prospects, company, signal…",
+          ariaLabel: "Search prospects",
+          clearHref: "/prospects",
+        }
+      : null,
   });
 }
 
@@ -84,6 +94,7 @@ export function renderProspectDetailPage(person, meta = {}) {
     interactive: meta.interactive,
     detail: true,
     agentRuntime: meta.agentRuntime ?? null,
+    sectionHref: meta.interactive ? `/prospects${prospectsSearchSuffix(meta)}` : null,
   });
 }
 
@@ -92,12 +103,14 @@ export function renderProspectDetailPage(person, meta = {}) {
  * @param {{ interactive?: boolean }} meta
  */
 function personHref(id, meta) {
-  return meta.interactive ? `/prospects/${encodeURIComponent(id)}` : `#p-${id}`;
+  return meta.interactive
+    ? `/prospects/${encodeURIComponent(id)}${prospectsSearchSuffix(meta)}`
+    : `#p-${id}`;
 }
 
 /** @param {{ interactive?: boolean }} meta */
 function prospectsHomeHref(meta) {
-  return meta.interactive ? "/prospects" : "#prospects-top";
+  return meta.interactive ? `/prospects${prospectsSearchSuffix(meta)}` : "#prospects-top";
 }
 
 /**
@@ -110,11 +123,19 @@ function motionHref(motionId, meta) {
 
 /** @param {any} model */
 function renderIntro(model) {
+  const searchMeta = model.search?.active
+    ? `<div class="op-meta">` +
+      countChip(model.counts.prospects, "blue", "matches") +
+      countChip(model.search.totalProspects ?? model.counts.prospects, "neutral", "total") +
+      `<span class="surface-ref">${iconSvg("search", 11)}${escapeHtml(model.search.query)}</span>` +
+      `</div>`
+    : "";
   return (
     `<div class="op-intro">` +
     `<div>` +
     `<h1>Prospects</h1>` +
     `<p class="op-line">Prospect targeting across the workspace — ${model.counts.prospects} people at ${model.counts.companies} companies.</p>` +
+    searchMeta +
     `</div>` +
     `<div class="seg">` +
     `<label for="pr-all">All</label>` +
@@ -130,7 +151,12 @@ function renderIntro(model) {
  */
 function renderTable(all, meta) {
   if (!all.length) {
-    return emptyState({ icon: "users", message: "No prospects selected yet." });
+    return emptyState({
+      icon: "users",
+      message: meta.searchQuery
+        ? `No prospects match "${meta.searchQuery}".`
+        : "No prospects selected yet.",
+    });
   }
   const head =
     `<div class="pr-head"><span>Name</span><span>Title</span><span>Company</span><span>Signal</span>` +
@@ -144,7 +170,7 @@ function renderTable(all, meta) {
         `<a class="pr-co" href="${escapeAttr(personHref(p.id, meta))}">${escapeHtml(p.companyName)}</a>` +
         `<span class="pr-signal" title="${escapeAttr(p.signal)}">${escapeHtml(p.signal)}</span>` +
         `<span>${stateDot(p.branch, p.branchLabel ?? undefined)}</span>` +
-        `<span class="pr-channels">${channelIcons(p.channels)}</span>` +
+        `<span class="pr-channels">${channelIcons(p.channels, { clickable: true })}</span>` +
         `<span>${ownerTag({ ownerName: p.owner })}</span>` +
         `<span class="pr-age">${escapeHtml(p.ageLabel ?? "—")}</span>` +
         `</div>`,
@@ -159,9 +185,10 @@ function renderTable(all, meta) {
  * LinkedIn, email, phone for this person?". Empty (with a soft dash) when
  * nothing's known so the column still occupies its grid slot.
  *
- * @param {string[] | undefined} channels
+ * @param {Array<{ key: string, label: string, value: string, href: string, openInNewTab?: boolean }> | undefined} channels
+ * @param {{ clickable?: boolean }} [options]
  */
-function channelIcons(channels) {
+function channelIcons(channels, options = {}) {
   if (!channels || !channels.length) {
     return `<span class="pr-channels-empty" title="No reach channels known">—</span>`;
   }
@@ -172,10 +199,27 @@ function channelIcons(channels) {
     phone: { icon: "phone", label: "Phone" },
   };
   return channels
-    .map((key) => {
-      const m = meta[key];
+    .map((channel) => {
+      const m = meta[channel.key];
       if (!m) return "";
-      return `<span class="pr-channel pr-channel-${escapeAttr(key)}" title="${escapeAttr(m.label)}" aria-label="${escapeAttr(m.label)}">${iconSvg(m.icon, 13)}</span>`;
+      const label = `${channel.label}: ${channel.value}${channel.openInNewTab ? " (opens in new tab)" : ""}`;
+      const title = channel.value;
+      if (options.clickable && channel.href) {
+        const externalAttrs = channel.openInNewTab ? ` target="_blank" rel="noopener noreferrer"` : "";
+        return (
+          `<a class="pr-channel pr-channel-${escapeAttr(channel.key)}"` +
+          ` href="${escapeAttr(channel.href)}"${externalAttrs}` +
+          ` title="${escapeAttr(title)}" aria-label="${escapeAttr(label)}">` +
+          `${iconSvg(m.icon, 13)}` +
+          `</a>`
+        );
+      }
+      return (
+        `<span class="pr-channel pr-channel-${escapeAttr(channel.key)}"` +
+        ` title="${escapeAttr(title)}" aria-label="${escapeAttr(label)}">` +
+        `${iconSvg(m.icon, 13)}` +
+        `</span>`
+      );
     })
     .join("");
 }
@@ -186,7 +230,12 @@ function channelIcons(channels) {
  */
 function renderGroups(groups, meta) {
   if (!groups.length) {
-    return emptyState({ icon: "building", message: "No companies with prospects yet." });
+    return emptyState({
+      icon: "building",
+      message: meta.searchQuery
+        ? `No companies match "${meta.searchQuery}".`
+        : "No companies with prospects yet.",
+    });
   }
   return (
     `<div class="pr-groups">` +
@@ -239,38 +288,17 @@ function renderPersonDetail(p, meta = {}) {
   const stageIdx = reconcileStageIndex(p.branch, p.connectionDegree);
   const degreeOverride = p.connectionDegree != null && stageIdx !== baseStageIdx;
   const pipelineStages = pipelineStagesFor(p, composeSurface);
-  const currentStageLabel = pipelineStages[stageIdx]?.label ?? PIPELINE[stageIdx]?.label ?? "Current";
-  const next = nextStepForStage(stageIdx, p, composeSurface);
+  const next = nextMoveForStage(stageIdx, p, composeSurface);
   const backLink = meta.asPage
     ? ""
     : `<a class="pd-back" href="${escapeAttr(prospectsHomeHref(meta))}">${iconSvg("chevron", 12)} All prospects</a>`;
-
-  // Company chip → the internal company record (the canonical page); falls back
-  // to the company's LinkedIn page when we're static, or inert if neither.
-  const companyChip =
-    meta.interactive && p.companyId
-      ? `<a class="pd-co-link" href="/companies/${escapeAttr(encodeURIComponent(p.companyId))}">${iconSvg("building", 13)}${escapeHtml(p.companyName)}</a>`
-      : p.companyLinkedinUrl
-        ? `<a class="pd-co-link" href="${escapeAttr(p.companyLinkedinUrl)}" target="_blank" rel="noreferrer">${iconSvg("building", 13)}${escapeHtml(p.companyName)}</a>`
-        : `<span class="pd-co-link" style="cursor:default">${iconSvg("building", 13)}${escapeHtml(p.companyName)}</span>`;
-
-  // Owner, or an inline "Assign" affordance when unassigned.
-  const ownerEl =
-    p.owner
-      ? ownerTag({ ownerName: p.owner })
-      : meta.interactive && p.companyId
-        ? `<a class="pd-assign" href="#assign-${escapeAttr(p.id)}">${iconSvg("userPlus", 12)}Assign</a>`
-        : ownerTag({ ownerName: null });
-
-  const fitEl = p.fit
-    ? `<span title="Fit confidence set when this prospect was selected (high / moderate / low). Not the legacy Audienti numeric fit score.">${fitChip(p.fit)}</span>`
-    : "";
-
-  // Connection degree — the authoritative truth for connection status.
-  const degreeEl =
-    p.connectionDegree != null
-      ? `<span class="deg-chip deg-${p.connectionDegree}" title="LinkedIn network distance. 1st-degree means you are connected (a connection request was accepted); 2nd/3rd means not yet.">${iconSvg("link", 11)}${degreeLabel(p.connectionDegree)}</span>`
-      : "";
+  const railSegments = [
+    renderProspectCompanyMeta(p, meta),
+    renderProspectFitMeta(p.fit),
+    renderProspectDegreeMeta(p.connectionDegree),
+    renderProspectOwnerMeta(p, meta),
+    renderProspectProfileMeta(p),
+  ].filter(Boolean);
 
   const head =
     `<div class="pd-head">` +
@@ -279,14 +307,6 @@ function renderPersonDetail(p, meta = {}) {
     backLink +
     `<h1 class="pd-name">${escapeHtml(p.name)}</h1>` +
     `<div class="pd-title">${escapeHtml(p.title ?? "")}</div>` +
-    `<div class="pd-meta">` +
-    companyChip +
-    `<i class="pd-div"></i>` +
-    fitEl +
-    degreeEl +
-    ownerEl +
-    (p.recipientOpenProfile ? `<span class="op-chip">${iconSvg("mail", 11)}Open Profile</span>` : p.recipientPremium ? `<span class="op-chip">Premium</span>` : "") +
-    `</div>` +
     `</div>` +
     `<div class="pd-actions">` +
     // Why-we're-here context (surfacing signal + premise) lives in a slide-over
@@ -300,6 +320,7 @@ function renderPersonDetail(p, meta = {}) {
       ? (replyUnavailable ? "" : `<a class="btn btn-primary btn-sm" href="#compose-${escapeAttr(p.id)}">${iconSvg("mail", 14)}<span>${escapeHtml(composeTriggerLabel(p))}</span></a>`)
       : btn({ variant: "primary", size: "sm", icon: "spark", label: "Draft opener" })) +
     `</div>` +
+    (railSegments.length ? `<div class="pd-rail">${railSegments.join(`<i class="pd-div"></i>`)}</div>` : "") +
     `</div>`;
 
   // The funnel: where they are right now (replaces the redundant tile row).
@@ -313,9 +334,12 @@ function renderPersonDetail(p, meta = {}) {
       `</p>`
     : "";
   const pipeline = renderPipeline(stageIdx, pipelineStages) +
-    `<p class="pl-now"><strong>${escapeHtml(currentStageLabel)}.</strong> ${escapeHtml(next.text)}` +
-    (p.ageLabel ? ` <span style="color:var(--text-4)">· ${escapeHtml(p.ageLabel)} in pipeline</span>` : "") +
-    `</p>` +
+    renderNextMoveAlert({
+      label: "Next move",
+      lead: next.lead,
+      detail: next.detail,
+      meta: p.ageLabel ? `${p.ageLabel} in pipeline` : null,
+    }) +
     degreeNote;
   const handledNotification = replyUnavailable
     ? `<div class="cap-note">${iconSvg("alert", 14)}<div><strong>Reply unavailable.</strong> ${escapeHtml(p.handledNotification?.detail ?? p.handledNotification?.message ?? "The governed reply path is unavailable.")}</div></div>`
@@ -352,6 +376,16 @@ function renderPersonDetail(p, meta = {}) {
 }
 
 /**
+ * @param {{ interactive?: boolean, searchQuery?: string | null }} meta
+ * @returns {string}
+ */
+function prospectsSearchSuffix(meta) {
+  if (!meta.interactive) return "";
+  const query = typeof meta.searchQuery === "string" ? meta.searchQuery.trim() : "";
+  return query ? `?q=${encodeURIComponent(query)}` : "";
+}
+
+/**
  * Context slide-over: why this prospect is here — the surfacing signal and the
  * premise they're evidence for. Opened from the header so the main column can
  * stay focused on the engagement timeline.
@@ -380,7 +414,8 @@ function renderContextPanel(p, meta = {}) {
     `<div class="compose-field"><span class="compose-label">Surfacing signal</span>` +
     `<div class="signal-card pd-signal">` +
     `<div class="sig-top"><span class="sig-idx">S</span><p class="sig-q">${escapeHtml(p.signal)}</p>${truthTag(p.signalTruth)}</div>` +
-    `<p class="sig-why">This is the evidence that surfaced ${escapeHtml(firstName)} into ${escapeHtml(p.motionName ?? "this motion")}${p.ageLabel ? ` — first seen ${escapeHtml(p.ageLabel)} ago` : ""}.</p>` +
+    (p.signalRationale ? `<p class="sig-why">${escapeHtml(p.signalRationale)}</p>` : "") +
+    `<p class="sig-meta">This is the evidence that surfaced ${escapeHtml(firstName)} into ${escapeHtml(p.motionName ?? "this motion")}${p.ageLabel ? ` — first seen ${escapeHtml(p.ageLabel)} ago` : ""}.</p>` +
     `</div></div>` +
     premise +
     `</div>` +
@@ -433,24 +468,152 @@ function degreeLabel(degree) {
 }
 
 /**
+ * @param {any} p
+ * @param {{ interactive?: boolean }} meta
+ * @returns {string}
+ */
+function renderProspectCompanyMeta(p, meta) {
+  const href = meta.interactive && p.companyId
+    ? `/companies/${escapeAttr(encodeURIComponent(p.companyId))}`
+    : p.companyLinkedinUrl ?? null;
+  const inner = `${iconSvg("building", 11)}${escapeHtml(p.companyName)}`;
+  if (!href) {
+    return `<span class="surface-ref">${inner}</span>`;
+  }
+  const external = href.startsWith("http");
+  return `<a class="surface-ref pd-meta-link" href="${escapeAttr(href)}"${external ? ` target="_blank" rel="noreferrer"` : ""}>${inner}</a>`;
+}
+
+/**
+ * @param {string | null | undefined} fit
+ * @returns {string}
+ */
+function renderProspectFitMeta(fit) {
+  const label = fitLabel(fit);
+  return label ? `<span class="surface-ref">${iconSvg("target", 11)}${escapeHtml(`${label} fit`)}</span>` : "";
+}
+
+/**
+ * @param {number | null | undefined} degree
+ * @returns {string}
+ */
+function renderProspectDegreeMeta(degree) {
+  if (degree == null) {
+    return "";
+  }
+  const label = degree === 1 ? "1st-degree connection" : `${degreeLabel(degree)}-degree away`;
+  return `<span class="surface-ref">${iconSvg("link", 11)}${escapeHtml(label)}</span>`;
+}
+
+/**
+ * @param {any} p
+ * @param {{ interactive?: boolean }} meta
+ * @returns {string}
+ */
+function renderProspectOwnerMeta(p, meta) {
+  if (p.owner) {
+    return `<span class="surface-ref">${iconSvg("users", 11)}${escapeHtml(p.owner)}</span>`;
+  }
+  if (meta.interactive && p.companyId) {
+    return `<a class="surface-ref pd-meta-link" href="#assign-${escapeAttr(p.id)}">${iconSvg("userPlus", 11)}Assign owner</a>`;
+  }
+  return `<span class="surface-ref">${iconSvg("users", 11)}Unassigned</span>`;
+}
+
+/**
+ * @param {any} p
+ * @returns {string}
+ */
+function renderProspectProfileMeta(p) {
+  if (p.recipientOpenProfile) {
+    return `<span class="surface-ref">${iconSvg("link", 11)}Open profile</span>`;
+  }
+  if (p.recipientPremium) {
+    return `<span class="surface-ref">${iconSvg("check", 11)}Premium</span>`;
+  }
+  return "";
+}
+
+/**
+ * @param {string | null | undefined} fit
+ * @returns {string}
+ */
+function fitLabel(fit) {
+  switch (fit) {
+    case "high":
+      return "High";
+    case "moderate":
+      return "Moderate";
+    case "low":
+      return "Low";
+    case "no-fit":
+      return "No fit";
+    default:
+      return "";
+  }
+}
+
+/**
  * @param {number} idx
  * @param {any} p
  */
-function nextStepForStage(idx, p, composeSurface = null) {
+function nextMoveForStage(idx, p, composeSurface = null) {
+  if (composeSurface === "inbound_reply") {
+    const draftState = draftStateForSurface(p, composeSurface);
+    if (draftState === "queued") {
+      return {
+        lead: "Reply queued for send",
+        detail: "The agent will send it on its next pass.",
+      };
+    }
+    if (draftState === "ready") {
+      return {
+        lead: "Review the drafted reply",
+        detail: "Edit it if needed, then queue it for send.",
+      };
+    }
+    return {
+      lead: "Agent is drafting the response",
+      detail: "Wait for the governed draft to land, or write your own below if you need to move now.",
+    };
+  }
   if (composeSurface === "email" && idx <= 1) {
-    return { text: "An email reply is queued and ready for the agent to send through the governed Gmail path." };
+    return {
+      lead: "Review the queued email reply",
+      detail: "The agent can send it through the governed Gmail path.",
+    };
   }
   switch (idx) {
     case 1:
-      return { text: "Connection request sent — awaiting their accept. The agent follows up automatically once they accept." };
+      return {
+        lead: "Wait on the pending request",
+        detail: "The agent follows up automatically after they accept.",
+      };
     case 2:
-      return { text: "Connected — send the first message." };
+      return {
+        lead: "Send the first message",
+        detail: "Use the timeline below to keep the opener anchored in context.",
+      };
     case 3:
-      return { text: "In conversation — continue the thread and steer toward a meeting." };
+      return {
+        lead: "Continue the conversation",
+        detail: "Steer the thread toward a meeting.",
+      };
     case 4:
-      return { text: "Meeting stage — confirm and prep." };
+      return {
+        lead: "Confirm and prep the meeting",
+        detail: null,
+      };
     default:
-      return { text: p.owner ? "Send the first connection request." : "Assign an owner, then send the first connection request." };
+      return p.owner
+        ? {
+            lead: "Send the first connection request",
+            detail: null,
+          }
+        : {
+            lead: "Assign an owner",
+            detail: "Then send the first connection request.",
+          };
   }
 }
 
@@ -583,6 +746,351 @@ function messageStatusFromTouch(t) {
   return "sent";
 }
 
+/** @param {string | null | undefined} value */
+function normalizeMessageText(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
+}
+
+/** @param {string | null | undefined} direction */
+function normalizeMessageDirection(direction) {
+  return direction === "outbound" ? "outbound" : direction === "inbound" ? "inbound" : "unknown";
+}
+
+/**
+ * @param {any} prospect
+ * @param {{ direction?: string | null, fromHandle?: string | null }} message
+ */
+function threadMessageSurfaceLabel(prospect, message) {
+  const handle = String(message?.fromHandle ?? "").trim();
+  if (handle.includes("@") || (!prospect?.linkedinProfileUrl && prospect?.email)) {
+    return "Email";
+  }
+  return "Reply";
+}
+
+/**
+ * @param {any} prospect
+ * @returns {Array<{ type: "message", at: string, surfaceLabel: string, status: "sent" | "received", body: string, byline: string | null }>}
+ */
+function buildThreadMessageEvents(prospect) {
+  return (prospect?.threadMessages ?? [])
+    .map((message) => {
+      const body = normalizeMessageText(message?.body);
+      const at = typeof message?.sentAt === "string" ? message.sentAt : null;
+      const direction = normalizeMessageDirection(message?.direction);
+      if (!body || !at || direction === "unknown") return null;
+      return {
+        type: "message",
+        at,
+        surfaceLabel: threadMessageSurfaceLabel(prospect, message),
+        status: direction === "outbound" ? "sent" : "received",
+        body,
+        byline: direction === "outbound" ? "You" : "From them",
+      };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * @param {string | null | undefined} notes
+ * @returns {{ subject: string | null, body: string | null }}
+ */
+function parseObservationNotes(notes) {
+  if (!notes || !notes.trim()) {
+    return { subject: null, body: null };
+  }
+
+  const normalized = notes.trim();
+  const subjectMatch = normalized.match(/^Subject:\s*(.+?)(?:\r?\n|$)/i);
+  const subject = subjectMatch?.[1]?.trim() || null;
+  const body = subjectMatch
+    ? normalized.slice(subjectMatch[0].length).trim() || null
+    : normalized;
+
+  return { subject, body };
+}
+
+/**
+ * @param {any} observation
+ * @returns {string | null}
+ */
+function observationEventAt(observation) {
+  if (typeof observation?.eventAt === "string" && observation.eventAt.trim()) {
+    return observation.eventAt;
+  }
+  if (typeof observation?.observedAt === "string" && observation.observedAt.trim()) {
+    return observation.observedAt;
+  }
+  return null;
+}
+
+/** @param {any[]} touches */
+function hasAcceptedConnectionTouch(touches) {
+  return (touches ?? []).some((touch) =>
+    touch?.surface === "accept_connection"
+    || (touch?.surface === "connection_request" && touch?.outcome === "accepted"),
+  );
+}
+
+/**
+ * @param {any} prospect
+ * @returns {boolean}
+ */
+function prospectConnectionConfirmed(prospect) {
+  if (prospect?.connectionDegree === 1) return true;
+  if (hasAcceptedConnectionTouch(prospect?.touches ?? [])) return true;
+  if ((prospect?.timelineObservations ?? []).some((observation) => observation?.kind === "connection_request_accepted")) {
+    return true;
+  }
+  const followerObserved = (prospect?.timelineObservations ?? []).some((observation) =>
+    observation?.kind === "follower_added" || observation?.kind === "follower_confirmed",
+  );
+  if (!followerObserved) return false;
+  if ((prospect?.threadMessages ?? []).some((message) => normalizeMessageDirection(message?.direction) !== "unknown")) {
+    return true;
+  }
+  if ((prospect?.touches ?? []).some((touch) => touch?.surface === "post_accept_message")) {
+    return true;
+  }
+  if (prospect?.branch === "connected") return true;
+  return String(prospect?.cadenceState?.currentStep ?? "") === "direct-message";
+}
+
+/**
+ * @param {any} observation
+ * @param {any[]} touches
+ * @returns {boolean}
+ */
+function observationDuplicatesTouch(observation, touches) {
+  switch (observation?.kind) {
+    case "connection_request_pending":
+      return (touches ?? []).some((touch) => touch?.surface === "connection_request");
+    case "connection_request_accepted":
+      return hasAcceptedConnectionTouch(touches);
+    case "connection_request_declined":
+      return (touches ?? []).some((touch) => touch?.surface === "decline_connection");
+    case "connection_request_withdraw_requested":
+    case "connection_request_withdrawn":
+    case "connection_request_no_longer_pending":
+      return (touches ?? []).some((touch) => touch?.surface === "withdraw_connection");
+    default:
+      return false;
+  }
+}
+
+/**
+ * @param {...(string | null | undefined)} parts
+ * @returns {string | null}
+ */
+function joinObservationDetails(...parts) {
+  const kept = parts
+    .map((part) => normalizeMessageText(part))
+    .filter(Boolean);
+  return kept.length ? kept.join(" ") : null;
+}
+
+/**
+ * @param {any} prospect
+ * @param {any} observation
+ * @returns {{ title: string, icon: string, tone: string, outcome?: string | null, detail?: string | null } | null}
+ */
+function observationEventPresentation(prospect, observation) {
+  const notes = parseObservationNotes(observation?.notes);
+  switch (observation?.kind) {
+    case "connection_request_pending":
+      return {
+        title: "Connection request",
+        icon: "userPlus",
+        tone: "out",
+        outcome: "pending",
+        detail: notes.body ?? observation.summary ?? null,
+      };
+    case "connection_request_received":
+      return {
+        title: "Invitation received",
+        icon: "userPlus",
+        tone: "in",
+        detail: notes.body ?? observation.summary ?? null,
+      };
+    case "connection_request_accepted":
+      return {
+        title: "Connected on LinkedIn",
+        icon: "check",
+        tone: "good",
+        outcome: "accepted",
+        detail: observation?.surfaceKey === "linkedin-received-invitations"
+          ? "You accepted their connection request."
+          : "They accepted your connection request.",
+      };
+    case "connection_request_declined":
+      return {
+        title: "Connection request declined",
+        icon: "x",
+        tone: "bad",
+        detail: observation.summary ?? null,
+      };
+    case "connection_request_withdraw_requested":
+      return {
+        title: "Connection withdrawal requested",
+        icon: "x",
+        tone: "bad",
+        detail: observation.summary ?? null,
+      };
+    case "connection_request_withdrawn":
+      return {
+        title: "Connection request withdrawn",
+        icon: "x",
+        tone: "bad",
+        detail: observation.summary ?? null,
+      };
+    case "connection_request_no_longer_pending":
+      return {
+        title: "Pending invite disappeared",
+        icon: "activity",
+        tone: "sys",
+        detail: observation.summary ?? null,
+      };
+    case "connection_request_received_no_longer_pending":
+      return {
+        title: "Received invite disappeared",
+        icon: "activity",
+        tone: "sys",
+        detail: observation.summary ?? null,
+      };
+    case "follower_added":
+    case "follower_confirmed":
+      return prospectConnectionConfirmed(prospect)
+        ? {
+            title: "Connected on LinkedIn",
+            icon: "check",
+            tone: "good",
+            detail: joinObservationDetails("Already connected on LinkedIn.", observation.summary),
+          }
+        : {
+            title: "Follower confirmed",
+            icon: "userPlus",
+            tone: "in",
+            detail: observation.summary ?? null,
+          };
+    default:
+      return null;
+  }
+}
+
+/**
+ * @param {any} prospect
+ * @returns {any[]}
+ */
+function buildObservationEvents(prospect) {
+  const observations = Array.isArray(prospect?.timelineObservations) ? prospect.timelineObservations : [];
+  const touches = Array.isArray(prospect?.touches) ? prospect.touches : [];
+  return observations.flatMap((observation) => {
+    const at = observationEventAt(observation);
+    if (!at || observationDuplicatesTouch(observation, touches)) {
+      return [];
+    }
+    const href = observation?.threadUrl ?? observation?.sourceUrl ?? null;
+    const notes = parseObservationNotes(observation?.notes);
+    const noteBody = normalizeMessageText(notes.body);
+    if (observation?.kind === "connection_request_pending" && noteBody) {
+      return [{
+        type: "message",
+        at,
+        surfaceLabel: "Connection request",
+        status: "sent",
+        body: noteBody,
+        href,
+        byline: "You",
+      }];
+    }
+    if (observation?.kind === "connection_request_received" && noteBody) {
+      return [{
+        type: "message",
+        at,
+        surfaceLabel: "Invitation received",
+        status: "received",
+        body: noteBody,
+        href,
+        byline: "From them",
+      }];
+    }
+    const presentation = observationEventPresentation(prospect, observation);
+    if (!presentation) {
+      return [];
+    }
+    return [{
+      type: "event",
+      at,
+      icon: presentation.icon,
+      tone: presentation.tone,
+      title: presentation.title,
+      outcome: presentation.outcome ?? null,
+      detail: presentation.detail ?? null,
+      href,
+    }];
+  });
+}
+
+/**
+ * @param {any} touch
+ * @param {string | null} touchBody
+ * @param {any[]} threadMessages
+ */
+function touchDuplicatesThreadMessage(touch, touchBody, threadMessages) {
+  const touchAt = Date.parse(touch?.occurredAt ?? "");
+  const touchDirection = normalizeMessageDirection(touch?.direction);
+  if (Number.isNaN(touchAt) || touchDirection === "unknown") return false;
+
+  for (const message of threadMessages ?? []) {
+    const messageAt = Date.parse(message?.sentAt ?? "");
+    if (Number.isNaN(messageAt)) continue;
+    if (Math.abs(messageAt - touchAt) > 120000) continue;
+    if (normalizeMessageDirection(message?.direction) !== touchDirection) continue;
+
+    const messageBody = normalizeMessageText(message?.body);
+    if (touchBody && messageBody) {
+      if (touchBody === messageBody) return true;
+      continue;
+    }
+    if (!touchBody) return true;
+  }
+  return false;
+}
+
+/**
+ * Sent drafts are terminal and no longer render as standalone timeline items,
+ * but older send writebacks may have recorded only a generic touch summary.
+ * Keep one sent-draft queue per surface so the timeline can recover the actual
+ * outbound body for the matching sent touch.
+ *
+ * @param {any[]} drafts
+ */
+function buildSentDraftQueues(drafts) {
+  /** @type {Map<string, Array<{ body: string | null }>>} */
+  const queues = new Map();
+  for (const draft of drafts ?? []) {
+    if (draft?.status !== "sent" || !MESSAGE_SURFACES.has(draft.surface)) continue;
+    const queue = queues.get(draft.surface) ?? [];
+    queue.push({
+      body: normalizeMessageText(draft.body),
+    });
+    queues.set(draft.surface, queue);
+  }
+  return queues;
+}
+
+/**
+ * @param {Map<string, Array<{ body: string | null }>>} sentDraftQueues
+ * @param {string} surface
+ */
+function consumeSentDraft(sentDraftQueues, surface) {
+  const queue = sentDraftQueues.get(surface);
+  if (!queue?.length) return null;
+  return queue.shift() ?? null;
+}
+
 /**
  * Merge touches + draft lifecycle + the genesis (surfacing) event into one
  * descending-by-time list. Message-bearing entries carry their body + a status
@@ -591,18 +1099,31 @@ function messageStatusFromTouch(t) {
  * @param {any} p
  */
 function timelineEvents(p) {
-  const events = [];
+  const events = [
+    ...buildObservationEvents(p),
+    ...buildThreadMessageEvents(p),
+  ];
+  const threadMessages = Array.isArray(p?.threadMessages) ? p.threadMessages : [];
+  const sentDraftQueues = buildSentDraftQueues(p.drafts ?? []);
   for (const t of p.touches ?? []) {
     if (!t.occurredAt) continue;
     const meta = TOUCH_SURFACE[t.surface] ?? { label: humanizeSurface(t.surface), icon: "activity" };
-    if (MESSAGE_SURFACES.has(t.surface) && (t.body || t.summary)) {
+    const matchedSentDraft = t.direction === "outbound" && t.outcome === "sent" && MESSAGE_SURFACES.has(t.surface)
+      ? consumeSentDraft(sentDraftQueues, t.surface)
+      : null;
+    const touchBody = normalizeMessageText(t.body) ?? matchedSentDraft?.body ?? null;
+    const messageBody = touchBody ?? normalizeMessageText(t.summary);
+    if (MESSAGE_SURFACES.has(t.surface) && touchDuplicatesThreadMessage(t, touchBody, threadMessages)) {
+      continue;
+    }
+    if (MESSAGE_SURFACES.has(t.surface) && messageBody) {
       const status = messageStatusFromTouch(t);
       events.push({
         type: "message",
         at: t.occurredAt,
         surfaceLabel: meta.label,
         status,
-        body: t.body || t.summary,
+        body: messageBody,
         href: t.sourceUrl ?? null,
         byline: t.direction === "inbound" ? "From them" : null,
       });
@@ -631,7 +1152,13 @@ function timelineEvents(p) {
       status: DRAFT_STATUS[d.status] ?? "drafted",
       body: d.body || "",
       emptyNote: d.body ? null : "Plain connection request — no note.",
-      byline: d.authoredBy === "operator" ? "You drafted" : d.editedByOperator ? "Agent draft · you edited" : "Agent draft",
+      byline: d.authoredBy === "operator"
+        ? "You drafted"
+        : d.editedByOperator
+          ? "Agent draft · you edited"
+          : (d.approvedByOperator || d.status === "approved")
+            ? "Agent draft · you approved"
+            : "Agent draft",
     });
   }
   for (const n of p.timelineNotes ?? []) {
@@ -651,6 +1178,7 @@ function timelineEvents(p) {
       tone: "sys",
       title: `Surfaced into ${p.motionName ?? "this motion"}`,
       detail: p.signal && p.signal !== "No surfacing signal recorded." ? p.signal : "Selected as a prospect.",
+      rationale: p.signalRationale ?? null,
     });
   }
   return events.filter((e) => e.at).sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
@@ -686,6 +1214,7 @@ function renderTimelineEvent(e) {
     (e.outcome && OUTCOME_LABEL[e.outcome] ? `<span class="tl-outcome">${escapeHtml(OUTCOME_LABEL[e.outcome])}</span>` : "") +
     `<span class="tl-time">${escapeHtml(relTimeShort(e.at))}</span></div>` +
     (e.detail ? `<p class="tl-detail">${escapeHtml(e.detail)}</p>` : "") +
+    (e.rationale ? `<p class="tl-detail tl-rationale"><strong>Why this connects:</strong> ${escapeHtml(e.rationale)}</p>` : "") +
     (e.href ? `<a class="tl-link" href="${escapeAttr(e.href)}" target="_blank" rel="noreferrer">${iconSvg("link", 11)}Open</a>` : "") +
     `</div></li>`
   );
@@ -859,6 +1388,7 @@ const BRANCH_SURFACE = {
   ready: "connection_request",
   "connection-requested": "follow_up_direct_message",
   connected: "post_accept_message",
+  "reply-accepted": "follow_up_direct_message",
   waiting: "follow_up_direct_message",
   blocked: "email",
 };
@@ -888,10 +1418,32 @@ const STAGE_SURFACE = [
  * @param {any} p
  */
 function composeSurfaceFor(p) {
+  const nextSurface = selectNextDraftSurface(buildComposeSurfaceContext(p));
+  if (nextSurface === "inbound_reply" || nextSurface === "comment_reply") return nextSurface;
   const draftedSurface = resolveDraftedComposeSurface(p);
   if (draftedSurface) return draftedSurface;
+  if (nextSurface) return nextSurface;
   const stageIdx = reconcileStageIndex(p.branch, p.connectionDegree);
   return STAGE_SURFACE[stageIdx] ?? BRANCH_SURFACE[p.branch] ?? "post_accept_message";
+}
+
+/**
+ * The detail renderer only gets a shaped prospect record, so rebuild the small
+ * subset of fields the shared draft-surface selector actually needs.
+ *
+ * @param {any} p
+ */
+function buildComposeSurfaceContext(p) {
+  return {
+    linkedinProfileUrl: p?.linkedinProfileUrl ?? null,
+    email: p?.email ?? null,
+    cadenceState: p?.cadenceState ?? null,
+    touches: Array.isArray(p?.touches) ? p.touches : [],
+    linkedinProfileSnapshot: {
+      connectionDegree: p?.connectionDegree ?? null,
+      isOpenProfile: p?.recipientOpenProfile ?? null,
+    },
+  };
 }
 
 /** @param {any} p */
@@ -923,6 +1475,36 @@ function resolveDraftedComposeSurface(p) {
     });
   const surface = prioritized[0]?.surface;
   return typeof surface === "string" && surface.trim().length ? surface.trim() : null;
+}
+
+/**
+ * @param {any} p
+ * @param {string} surface
+ * @returns {"none" | "ready" | "queued" | "drafting"}
+ */
+function draftStateForSurface(p, surface) {
+  const drafts = Array.isArray(p?.drafts)
+    ? p.drafts.filter((draft) => (
+      draft
+      && draft.surface === surface
+      && draft.status !== "sent"
+      && draft.status !== "discarded"
+    ))
+    : [];
+  if (!drafts.length) return "none";
+
+  const prioritized = drafts
+    .slice()
+    .sort((left, right) => {
+      const sendableDelta = Number(isSendableDraftStatus(right?.status)) - Number(isSendableDraftStatus(left?.status));
+      if (sendableDelta) return sendableDelta;
+      return draftTimestamp(right) - draftTimestamp(left);
+    });
+  const draft = prioritized[0] ?? null;
+  if (!draft) return "none";
+  if (isSendableDraftStatus(draft.status)) return "queued";
+  if (draft.status === "ready") return "ready";
+  return "drafting";
 }
 
 /**
@@ -973,7 +1555,7 @@ function renderComposePanel(p, meta = {}) {
       `<div class="compose-panel" id="${escapeAttr(panelId)}">` +
       `<a class="compose-backdrop" href="#p-${escapeAttr(p.id)}" aria-label="Close"></a>` +
       `<div class="compose-sheet">${head}` +
-      `<div class="cap-note">${iconSvg("alert", 14)}<div><strong>No note available.</strong> ${escapeHtml(meta.assignedIdentity ?? "This identity")} is on a free LinkedIn tier, which can't attach a note to a connection request. Pin a <strong>Premium</strong> or <strong>Sales Navigator</strong> identity to enable notes.</div></div>` +
+      `<div class="cap-note">${iconSvg("alert", 14)}<div><strong>No note available.</strong> ${escapeHtml(meta.assignedIdentity ?? "This identity")} is on a free LinkedIn tier, which can't attach a note to a connection request. Assign a <strong>Premium</strong> or <strong>Sales Navigator</strong> identity to enable notes.</div></div>` +
       `<p class="compose-empty">A note-less connection request will be queued.</p>` +
       `<div class="compose-actions">` +
       `<div class="exo-action" data-exo-writer="approveProspectDraft" data-exo-args="${escapeAttr(blockedArgs)}">` +
@@ -984,7 +1566,7 @@ function renderComposePanel(p, meta = {}) {
   }
 
   const byline = draft
-    ? `<span class="compose-byline">${iconSvg("spark", 12)} Drafted by ${escapeHtml(draft.authoredBy)}${draft.editedByOperator ? " · edited" : ""} · ${escapeHtml(draft.status)}</span>`
+    ? `<span class="compose-byline">${iconSvg("spark", 12)} Drafted by ${escapeHtml(draft.authoredBy)}${draft.editedByOperator ? " · edited" : (draft.approvedByOperator || draft.status === "approved") ? " · approved" : ""} · ${escapeHtml(draft.status)}</span>`
     : `<span class="compose-empty">Queued for the agent to draft. Write your own below if you don't want to wait.</span>`;
 
   const subjectField = sm.subject
@@ -993,7 +1575,7 @@ function renderComposePanel(p, meta = {}) {
     : "";
 
   const unknownNotice = noteUnknown
-    ? `<div class="cap-note">${iconSvg("alert", 14)}<div>No identity pinned yet — notes require a <strong>Premium</strong> or <strong>Sales Navigator</strong> identity. Pin one before sending.</div></div>`
+    ? `<div class="cap-note">${iconSvg("alert", 14)}<div>No identity is assigned yet. Notes require a <strong>Premium</strong> or <strong>Sales Navigator</strong> identity. Assign one before sending.</div></div>`
     : "";
 
   // If they're Open Profile and our identity is Premium/Sales Navigator, a
@@ -1062,6 +1644,7 @@ function recommendedNext(p) {
     "pre-connect": { text: "Warm the account before connecting — engage a recent post.", tone: "blue", tag: "pre-connect" },
     "connection-requested": { text: "Request pending — agent will follow up at capacity.", tone: "blue", tag: "agent-ready" },
     connected: { text: "Connected — draft the opening message for this premise.", tone: "blue", tag: "ready to draft" },
+    "reply-accepted": { text: "In conversation — keep the thread moving toward a meeting.", tone: "blue", tag: "conversation" },
     ready: { text: "Prepped — send the first governed move.", tone: "blue", tag: "ready" },
     waiting: { text: "Held in reserve — waiting on a checkpoint.", tone: "neutral", tag: null },
   };

@@ -9,6 +9,10 @@
 //
 // Pure data — no rendering.
 
+import { deriveLinkedinRelativeEventAt } from "../lib/linkedin-relative-time.js";
+import { isStalePendingConnectionRequest } from "../lib/cadence-helpers.js";
+import { isPrivateModeAggregateProfileViewObservation } from "./build-inbox-view.js";
+
 const TABS = [
   { key: "received", label: "Received", icon: "userPlus", surfaceKey: "linkedin-received-invitations" },
   { key: "sent", label: "Sent", icon: "arrowR", surfaceKey: "linkedin-sent-invitations" },
@@ -25,11 +29,27 @@ const TAB_ACTION = {
   views: "connect",
 };
 
+const PRESENT_KINDS_BY_TAB = {
+  received: new Set(["connection_request_received"]),
+  sent: new Set(["connection_request_pending", "connection_request_withdraw_requested"]),
+  following: new Set(["follow_state_confirmed", "follow_state_changed"]),
+  followers: new Set(["follower_confirmed", "follower_added"]),
+  views: new Set(["profile_view_received"]),
+};
+
 /**
- * @param {{ reviewItems: any[], truthAccounts: any[], degreeByProfile?: Map<string, { degree: number, prospectId?: string|null }> | Record<string, { degree: number, prospectId?: string|null }>, sentAtByProfile?: Map<string, string> | Record<string, string> }} input
+ * @param {{
+ *   reviewItems?: any[],
+ *   observations?: any[],
+ *   truthAccounts: any[],
+ *   agentQueue?: { tasks?: any[], items?: any[] } | null,
+ *   degreeByProfile?: Map<string, { degree: number, prospectId?: string|null }> | Record<string, { degree: number, prospectId?: string|null }>,
+ *   sentAtByProfile?: Map<string, string> | Record<string, string>
+ * }} input
  */
 export function buildConnectionsViewModel(input) {
-  const reviewItems = input.reviewItems ?? [];
+  const observations = (input.observations ?? input.reviewItems ?? [])
+    .filter((item) => item && !isPrivateModeAggregateProfileViewObservation(item));
   // Profile-URL → captured connection degree (the authoritative truth for
   // connection status). 1st-degree ⇒ connected/accepted, regardless of which
   // surface the person was itemized on.
@@ -45,38 +65,45 @@ export function buildConnectionsViewModel(input) {
     input.sentAtByProfile instanceof Map
       ? input.sentAtByProfile
       : new Map(Object.entries(input.sentAtByProfile ?? {}));
+  const profileViewAfterTouchByIdentity = buildProfileViewAfterTouchIndex(observations);
   const surfaceByKey = new Map();
   for (const account of input.truthAccounts ?? []) {
     for (const surface of account.surfaces ?? []) {
       surfaceByKey.set(surface.key, { surface, account });
     }
   }
+  const repairTaskBySurfaceKey = buildRepairTaskIndex(input.agentQueue ?? null);
 
   const tabs = TABS.map((tab) => {
     const entry = surfaceByKey.get(tab.surfaceKey);
     const surface = entry?.surface ?? null;
     const truth = surface ? mapSurfaceTruth(surface.lastRunStatus, surface.meta) : "unchecked";
-    let items = reviewItems.filter((item) => item.surfaceKey === tab.surfaceKey);
-    // The received-invitations surface itemizes resolved outcomes too. Once a
-    // request is accepted or declined, the operator's done with it here: the
-    // next step (post-accept message, drop) lives in the Operator decision
-    // queue, not on the inbound-truth list. Show only still-pending requests
-    // so an accept click visibly clears the row.
+    let items = observations.filter((item) =>
+      item.surfaceKey === tab.surfaceKey && PRESENT_KINDS_BY_TAB[tab.key]?.has(item.kind),
+    );
     if (tab.key === "received") {
       items = items.filter((item) => resolutionOf(item, lookupDegree(item, degreeByProfile).degree) === "pending");
     }
-    const people = items.map((item) => shapePerson(item, degreeByProfile, tab.key, sentAtByProfile)).sort((a, b) => (b.observedAtMs ?? 0) - (a.observedAtMs ?? 0));
+    const people = items
+      .map((item) => shapePerson(item, degreeByProfile, tab.key, sentAtByProfile, profileViewAfterTouchByIdentity))
+      .sort((a, b) => comparePeopleForTab(a, b, tab.key));
+    const gapState = deriveGapState(surface, people.length);
 
     return {
       key: tab.key,
       label: tab.label,
       icon: tab.icon,
+      surfaceKey: tab.surfaceKey,
       action: TAB_ACTION[tab.key],
       count: people.length,
       truth,
       lastChecked: relative(surface?.lastSyncedAt ?? surface?.lastObservedAt),
-      gap: deriveGap(surface, people.length),
+      gap: gapState.message,
+      gapKind: gapState.kind,
+      autoRepairable: gapState.autoRepairable,
+      repairTask: gapState.autoRepairable ? repairTaskBySurfaceKey.get(tab.surfaceKey) ?? null : null,
       title: tabTitle(tab.key),
+      filters: tab.key === "sent" ? buildSentFilters(people) : null,
       people,
     };
   });
@@ -99,6 +126,45 @@ export function buildConnectionsViewModel(input) {
     tabs,
     freshness,
   };
+}
+
+/**
+ * @param {{ tasks?: any[], items?: any[] } | null} agentQueue
+ */
+function buildRepairTaskIndex(agentQueue) {
+  const index = new Map();
+  const tasks = []
+    .concat(Array.isArray(agentQueue?.tasks) ? agentQueue.tasks : [])
+    .concat(Array.isArray(agentQueue?.waiting) ? agentQueue.waiting : [])
+    .concat(Array.isArray(agentQueue?.items) ? agentQueue.items : [])
+    .concat(Array.isArray(agentQueue?.waitingItems) ? agentQueue.waitingItems : []);
+
+  for (const task of tasks) {
+    const kind = String(task?.kind ?? task?.taskKind ?? "").trim().toLowerCase();
+    const reason = String(task?.reason ?? task?.sourceType ?? "").trim().toLowerCase();
+    if (kind !== "run_inbound_sync") {
+      continue;
+    }
+    if (reason !== "itemization_gap" && reason !== "inbound_itemization_gap") {
+      continue;
+    }
+    const surfaceKeys = Array.isArray(task?.surfaceKeys) && task.surfaceKeys.length
+      ? task.surfaceKeys
+      : [task?.surface].filter(Boolean);
+    for (const surfaceKey of surfaceKeys) {
+      if (typeof surfaceKey !== "string" || !surfaceKey.trim()) {
+        continue;
+      }
+      index.set(surfaceKey, {
+        mode: typeof task?.mode === "string" ? task.mode : null,
+        dueAt: task?.dueAt ?? task?.queuedAt ?? null,
+        waitingReason: typeof task?.waitingReason === "string" ? task.waitingReason : null,
+        whyItMatters: task?.whyItMatters ?? task?.why ?? null,
+      });
+    }
+  }
+
+  return index;
 }
 
 /**
@@ -133,6 +199,92 @@ function normalizeProfileUrl(url) {
     .replace(/\/+$/, "");
 }
 
+/** @param {string | null | undefined} value */
+function normalizeIdentityValue(value) {
+  if (!value) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {any} item
+ * @returns {string[]}
+ */
+function buildIdentityKeys(item) {
+  const keys = [];
+  const normalizedProfileUrl = normalizeProfileUrl(item.actorProfileUrl ?? item.sourceUrl ?? null);
+  const prospectId = item.prospect?.id ?? item.prospectId ?? null;
+  const publicId = normalizeIdentityValue(item.actorLinkedinPublicId);
+  const memberId = normalizeIdentityValue(item.actorLinkedinMemberId);
+
+  if (normalizedProfileUrl) {
+    keys.push(`profile:${normalizedProfileUrl}`);
+  }
+  if (prospectId) {
+    keys.push(`prospect:${prospectId}`);
+  }
+  if (publicId) {
+    keys.push(`public:${publicId}`);
+  }
+  if (memberId) {
+    keys.push(`member:${memberId}`);
+  }
+
+  return [...new Set(keys)];
+}
+
+/**
+ * @param {any[]} reviewItems
+ * @returns {Map<string, { occurredAt: string, label: string, summary: string | null, when: string | null }>}
+ */
+function buildProfileViewAfterTouchIndex(reviewItems) {
+  const index = new Map();
+
+  for (const item of reviewItems) {
+    if (item?.kind !== "profile_view_after_touch") {
+      continue;
+    }
+
+    const occurredAt = item.eventAt
+      ?? deriveLinkedinRelativeEventAt(item.summary ?? null, item.observedAt ?? null)
+      ?? item.observedAt
+      ?? null;
+    if (!occurredAt) {
+      continue;
+    }
+
+    const signal = {
+      occurredAt,
+      label: "Viewed your profile after the invite",
+      summary: item.summary ?? null,
+      when: relative(occurredAt),
+    };
+
+    for (const key of buildIdentityKeys(item)) {
+      const existing = index.get(key) ?? null;
+      if (!existing || occurredAt > existing.occurredAt) {
+        index.set(key, signal);
+      }
+    }
+  }
+
+  return index;
+}
+
+/**
+ * @param {any} item
+ * @param {Map<string, { occurredAt: string, label: string, summary: string | null, when: string | null }>} profileViewAfterTouchByIdentity
+ */
+function lookupProfileViewAfterTouch(item, profileViewAfterTouchByIdentity) {
+  for (const key of buildIdentityKeys(item)) {
+    const signal = profileViewAfterTouchByIdentity.get(key);
+    if (signal) {
+      return signal;
+    }
+  }
+  return null;
+}
+
 /**
  * Look up the captured connection degree for an itemized person by their
  * profile URL.
@@ -159,10 +311,17 @@ function ageIsoForTab(item, tabKey, sentAtByProfile) {
   if (tabKey === "sent") {
     const key = normalizeProfileUrl(item.actorProfileUrl ?? item.sourceUrl ?? null);
     const ownSentAt = key ? sentAtByProfile.get(key) : null;
-    return ownSentAt ?? item.eventAt ?? item.observedAt ?? null;
+    return ownSentAt
+      ?? item.eventAt
+      ?? deriveLinkedinRelativeEventAt(item.summary ?? null, item.observedAt ?? null)
+      ?? item.observedAt
+      ?? null;
   }
   if (tabKey === "views") {
-    return item.eventAt ?? item.observedAt ?? null;
+    return item.eventAt
+      ?? deriveLinkedinRelativeEventAt(item.summary ?? null, item.observedAt ?? null)
+      ?? item.observedAt
+      ?? null;
   }
   return item.observedAt ?? null;
 }
@@ -172,8 +331,9 @@ function ageIsoForTab(item, tabKey, sentAtByProfile) {
  * @param {Map<string, { degree: number, prospectId?: string|null }>} [degreeByProfile]
  * @param {string} [tabKey]
  * @param {Map<string, string>} [sentAtByProfile]
+ * @param {Map<string, { occurredAt: string, label: string, summary: string | null, when: string | null }>} [profileViewAfterTouchByIdentity]
  */
-function shapePerson(item, degreeByProfile = new Map(), tabKey, sentAtByProfile = new Map()) {
+function shapePerson(item, degreeByProfile = new Map(), tabKey, sentAtByProfile = new Map(), profileViewAfterTouchByIdentity = new Map()) {
   const failed = String(item.state ?? "").includes("failed") || String(item.kind ?? "").includes("failed");
   // The moment that matters per tab is when the underlying event actually
   // happened, not when Exo last looked at the row (observedAt) — otherwise every
@@ -185,6 +345,18 @@ function shapePerson(item, degreeByProfile = new Map(), tabKey, sentAtByProfile 
   const ageIso = ageIsoForTab(item, tabKey, sentAtByProfile);
   const ageMs = ageIso ? new Date(ageIso).getTime() : null;
   const { degree, prospectId: degreeProspectId } = lookupDegree(item, degreeByProfile);
+  const motionId = item.motion?.id ?? item.motionId ?? null;
+  const companyId = item.company?.id ?? item.companyId ?? null;
+  const prospectId = item.prospect?.id ?? item.prospectId ?? degreeProspectId ?? null;
+  const claimState = motionId || companyId || prospectId ? "claimed" : "unclaimed";
+  const withdrawQueued = tabKey === "sent" && item.kind === "connection_request_withdraw_requested";
+  const sentGroup = tabKey === "sent"
+    ? (withdrawQueued || isStalePendingConnectionRequest({ kind: "connection_request_pending", observedAt: ageIso ?? item.observedAt }) ? "stale" : "fresh")
+    : null;
+  const canWithdraw = tabKey === "sent" && item.kind === "connection_request_pending" && sentGroup === "stale";
+  const attention = tabKey === "sent" && item.kind === "connection_request_pending"
+    ? lookupProfileViewAfterTouch(item, profileViewAfterTouchByIdentity)
+    : null;
   return {
     id: item.id,
     connectionDegree: degree,
@@ -193,18 +365,77 @@ function shapePerson(item, degreeByProfile = new Map(), tabKey, sentAtByProfile 
     initials: initials(item.actorName),
     avatarUrl: item.actorAvatarUrl ?? item.actorAvatarSourceUrl ?? null,
     sub: item.actorTitle ?? item.summary ?? "",
-    company: item.actorCompanyName ?? null,
+    company: item.company?.name ?? item.actorCompanyName ?? null,
     when: relative(ageIso),
     observedAtMs: Number.isNaN(ageMs) ? null : ageMs,
     profileUrl: item.actorProfileUrl ?? item.sourceUrl ?? null,
+    note: extractObservationNote(item),
     // When this inbound person is reconciled to a tracked prospect, expose the
     // id so the UI can deep-link to their prospect show page. The degree map
     // (matched by profile URL) backfills it for people itemized on outbound
     // surfaces that don't carry the prospect link.
-    prospectId: item.prospect?.id ?? item.prospectId ?? degreeProspectId ?? null,
+    motionId,
+    companyId,
+    prospectId,
+    claimState,
+    canClaim: claimState === "unclaimed" && !withdrawQueued,
+    canWithdraw,
+    sentGroup,
+    withdrawQueued,
+    statusTone: withdrawQueued ? "queued" : sentGroup === "stale" ? "stale" : null,
+    statusLabel: withdrawQueued ? "Withdraw queued" : sentGroup === "stale" ? "Stale" : null,
     failed,
     target: item.priority === "high",
+    attention,
   };
+}
+
+/**
+ * @param {any[]} people
+ */
+function buildSentFilters(people) {
+  return {
+    all: people.length,
+    stale: people.filter((person) => person.sentGroup === "stale").length,
+    fresh: people.filter((person) => person.sentGroup === "fresh").length,
+  };
+}
+
+/**
+ * @param {any} left
+ * @param {any} right
+ * @param {string} tabKey
+ */
+function comparePeopleForTab(left, right, tabKey) {
+  if (tabKey === "sent") {
+    const rank = sentSortRank(left) - sentSortRank(right);
+    if (rank !== 0) return rank;
+    return (left.observedAtMs ?? 0) - (right.observedAtMs ?? 0);
+  }
+  return (right.observedAtMs ?? 0) - (left.observedAtMs ?? 0);
+}
+
+/** @param {any} person */
+function sentSortRank(person) {
+  if (person.withdrawQueued) return 0;
+  if (person.sentGroup === "stale") return 1;
+  return 2;
+}
+
+/**
+ * @param {{ notes?: string | null }} item
+ * @returns {string | null}
+ */
+function extractObservationNote(item) {
+  const normalized = String(item?.notes ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+  const viewerLabel = normalized.match(/^LinkedIn viewer label:\s*(.+)$/i)?.[1]?.trim() ?? null;
+  if (viewerLabel) {
+    return `Viewer label: ${viewerLabel}`;
+  }
+  return normalized;
 }
 
 /** @param {string} key */
@@ -229,23 +460,82 @@ function tabTitle(key) {
  * @param {any} surface
  * @param {number} itemized
  */
-function deriveGap(surface, itemized) {
-  if (!surface) return null;
+function deriveGapState(surface, itemized) {
+  if (!surface) return { message: null, kind: null, autoRepairable: false };
   const meta = surface.meta ?? {};
-  if (meta.unchecked) return "This surface has never been checked — run it before trusting silence.";
-  // Only assert a numeric comparison when the surface's own visible count truly
-  // exceeds what we itemized; otherwise the reported total lives elsewhere.
-  if (surface.lastItemCount != null && surface.lastItemCount > itemized && itemized > 0) {
-    return `Visible count (${surface.lastItemCount}) exceeds itemized observations (${itemized}) — reconcile to trust this surface.`;
+  const reportedCount = Number.isFinite(surface.lastVisibleTotalCount)
+    ? Number(surface.lastVisibleTotalCount)
+    : Number.isFinite(surface.lastItemCount)
+      ? Number(surface.lastItemCount)
+      : null;
+  const observedCount = Number.isFinite(surface.observationCount)
+    ? Number(surface.observationCount)
+    : Number.isFinite(surface.lastObservationCount)
+      ? Number(surface.lastObservationCount)
+    : null;
+  const itemizationGapCount = Number.isFinite(surface.lastItemizationGapCount)
+    ? Number(surface.lastItemizationGapCount)
+    : null;
+  const countDiscrepancyCount = Number.isFinite(surface.lastCountDiscrepancyCount)
+    ? Number(surface.lastCountDiscrepancyCount)
+    : null;
+  const needsFullReconcile = surface.lastReconcileRequired === true && surface.lastExhaustionStatus !== "complete";
+  if (meta.unchecked) {
+    return {
+      message: "This surface has never been checked — run it before trusting silence.",
+      kind: "unchecked",
+      autoRepairable: false,
+    };
   }
+  // Prefer the authoritative persisted observation counts from sync state. The
+  // rendered tab intentionally filters some observation kinds out of view, so a
+  // page-level `people.length` comparison would manufacture fake gaps on fully
+  // reconciled surfaces like sent invites or profile views.
+  if (reportedCount != null && observedCount != null && reportedCount > observedCount && observedCount > 0) {
+    return {
+      message: `Visible count (${reportedCount}) exceeds itemized observations (${observedCount}) — reconcile to trust this surface.`,
+      kind: "itemization_gap",
+      autoRepairable: true,
+    };
+  }
+  if ((itemizationGapCount ?? 0) > 0 || (countDiscrepancyCount ?? 0) > 0 || needsFullReconcile) {
+    return {
+      message: "More items exist than have been itemized — rerun and write back individual observations to trust this surface.",
+      kind: "itemization_gap",
+      autoRepairable: true,
+    };
+  }
+  // Backward-compatible fallback for older shape callers that do not carry the
+  // persisted sync counters yet.
   if (meta.itemizationGap || surface.needsItemization) {
-    return "More items exist than have been itemized — rerun and write back individual observations to trust this surface.";
+    return {
+      message: "More items exist than have been itemized — rerun and write back individual observations to trust this surface.",
+      kind: "itemization_gap",
+      autoRepairable: true,
+    };
   }
-  if (surface.lastRunStatus === "warning") return "Last sync completed with warnings — reconcile before acting.";
+  if (reportedCount != null && reportedCount > itemized && itemized > 0 && observedCount == null) {
+    return {
+      message: `Visible count (${reportedCount}) exceeds itemized observations (${itemized}) — reconcile to trust this surface.`,
+      kind: "itemization_gap",
+      autoRepairable: true,
+    };
+  }
+  if (surface.lastRunStatus === "warning") {
+    return {
+      message: "Last sync completed with warnings — reconcile before acting.",
+      kind: "warning",
+      autoRepairable: false,
+    };
+  }
   if (surface.lastRunStatus === "error" || surface.lastRunStatus === "failure") {
-    return "Last sync failed — this surface cannot be trusted until it is re-run.";
+    return {
+      message: "Last sync failed — this surface cannot be trusted until it is re-run.",
+      kind: "failure",
+      autoRepairable: false,
+    };
   }
-  return null;
+  return { message: null, kind: null, autoRepairable: false };
 }
 
 /**

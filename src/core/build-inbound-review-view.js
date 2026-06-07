@@ -3,8 +3,14 @@
 import { motionSchema } from "../schema/motion.js";
 import { inboundObservationSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
+import { isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
 import { buildUserInboundSyncView } from "./user-inbound-sync.js";
-import { summarizeSurfaceState, recommendSurfaceAction } from "./build-inbox-view.js";
+import {
+  summarizeSurfaceState,
+  recommendSurfaceAction,
+  resolveInboundWorkspaceContext,
+  shouldSuppressOperationalObservation
+} from "./build-inbox-view.js";
 import { isStalePendingConnectionRequest, STALE_CONNECTION_REQUEST_DAYS } from "../lib/cadence-helpers.js";
 import { steerSuppression } from "./prospect-steer.js";
 import {
@@ -27,7 +33,9 @@ import {
  */
 export function buildInboundReviewView(rawUser, rawObservations, rawMotions, rawCompanies, options = {}) {
   const user = userSchema.parse(rawUser);
-  const observations = rawObservations.map((item) => inboundObservationSchema.parse(item));
+  const observations = rawObservations
+    .map((item) => inboundObservationSchema.parse(item))
+    .filter((observation) => !shouldSuppressOperationalObservation(observation));
   const motions = rawMotions.map((item) => motionSchema.parse(item));
   const companiesById = new Map(
     rawCompanies
@@ -91,10 +99,7 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
         const reportedItemCount = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;
         const missingObservationCount = surface.lastItemizationGapCount
           ?? (reportedItemCount > 0 ? Math.max(reportedItemCount - observationCount, 0) : 0);
-        const needsItemization = (
-          surface.lastRunStatus === "success"
-          || surface.lastRunStatus === "warning"
-        ) && missingObservationCount > 0;
+        const needsItemization = surfaceNeedsReconciliation(surface, missingObservationCount);
 
         return {
           key: surface.key,
@@ -110,6 +115,8 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
           lastActualMode: surface.lastActualMode,
           lastReconcileRequired: surface.lastReconcileRequired,
           lastReconcileReason: surface.lastReconcileReason,
+          lastExhaustionStatus: surface.lastExhaustionStatus,
+          lastExhaustionReason: surface.lastExhaustionReason,
           summary: summarizeSurfaceState(surface),
           recommendedAction: recommendSurfaceAction(surface),
           observationCount,
@@ -141,16 +148,15 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
         actualMode: surface.lastActualMode ?? null,
         reconcileRequired: surface.lastReconcileRequired ?? null,
         reconcileReason: surface.lastReconcileReason ?? null,
-        summary: buildItemizationGapSummary(
-          surface.label,
-          surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0,
-          surface.observationCount
-        ),
+        exhaustionStatus: surface.lastExhaustionStatus ?? null,
+        exhaustionReason: surface.lastExhaustionReason ?? null,
+        summary: buildItemizationGapSummary(surface),
         recommendedAction: buildItemizationGapAction(
           surface.label,
-          surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0,
-          surface.observationCount,
-          surface.missingObservationCount
+          surface.missingObservationCount,
+          surface.lastReconcileRequired,
+          surface.lastCaptureCompleteness,
+          surface.lastExhaustionReason,
         )
       }))
   );
@@ -189,11 +195,33 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
 }
 
 /**
- * @param {string} label
- * @param {number} itemCount
- * @param {number} observationCount
+ * @param {{
+ *   label: string,
+ *   lastVisibleTotalCount: number | null,
+ *   lastItemCount: number | null,
+ *   observationCount: number,
+ *   missingObservationCount: number,
+ *   lastCaptureCompleteness: string | null,
+ *   lastReconcileRequired: boolean | null,
+ *   lastExhaustionStatus: string | null,
+ *   lastExhaustionReason?: string | null,
+ * }} surface
  */
-function buildItemizationGapSummary(label, itemCount, observationCount) {
+function buildItemizationGapSummary(surface) {
+  const label = surface.label;
+  const itemCount = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;
+  const observationCount = surface.observationCount;
+  if (
+    surface.lastReconcileRequired === true
+    && surface.missingObservationCount === 0
+    && surface.lastExhaustionStatus !== "complete"
+  ) {
+    if (surface.lastExhaustionReason === "page_budget_stopped_early") {
+      return `${label} wrote back ${observationCount} itemized observation${observationCount === 1 ? "" : "s"}, but the last full reconciliation stopped at the configured page budget. Exo still needs the remaining pages before silence or disappearance is trustworthy.`;
+    }
+    return `${label} wrote back ${observationCount} itemized observation${observationCount === 1 ? "" : "s"}, but the last sync only proved a bounded quick-pass slice. Exo still needs a full reconciliation before silence or disappearance is trustworthy.`;
+  }
+
   if (observationCount === 0) {
     return `${label} reported ${itemCount} item${itemCount === 1 ? "" : "s"} in the last sync, but no individual observations were written back.`;
   }
@@ -203,18 +231,52 @@ function buildItemizationGapSummary(label, itemCount, observationCount) {
 
 /**
  * @param {string} label
- * @param {number} itemCount
- * @param {number} observationCount
  * @param {number} missingObservationCount
+ * @param {boolean | null} reconcileRequired
+ * @param {string | null} captureCompleteness
+ * @param {string | null | undefined} exhaustionReason
  */
-function buildItemizationGapAction(label, itemCount, observationCount, missingObservationCount) {
-  if (observationCount === 0) {
+function buildItemizationGapAction(label, missingObservationCount, reconcileRequired, captureCompleteness, exhaustionReason) {
+  if (reconcileRequired === true && missingObservationCount === 0) {
+    const completeness = exhaustionReason === "page_budget_stopped_early"
+      ? "the current pass stopped at the configured page budget"
+      : captureCompleteness === "partial_visible_slice"
+        ? "the current pass stopped at the bounded quick-pass limit"
+        : "the current pass did not fully exhaust the live surface";
+    return `Rerun ${label} in full mode and reconcile until the surface is exhausted. ${completeness}, so Exo cannot yet treat disappearance or silence as trustworthy.`;
+  }
+
+  if (missingObservationCount <= 0) {
     return `Rerun ${label} and write each concrete item back as its own observation so Exo can tell the operator what to review.`;
   }
 
-  return `Rerun ${label} and write the remaining ${missingObservationCount} concrete item${missingObservationCount === 1 ? "" : "s"} back as individual observations so Exo can tell the operator what to review.`;
+  if (missingObservationCount > 0) {
+    return `Rerun ${label} and write the remaining ${missingObservationCount} concrete item${missingObservationCount === 1 ? "" : "s"} back as individual observations so Exo can tell the operator what to review.`;
+  }
+
+  return `Rerun ${label} and reconcile the live surface until Exo can trust the result.`;
 }
 
+/**
+ * @param {{
+ *   lastRunStatus: string | null,
+ *   lastReconcileRequired: boolean | null,
+ *   lastExhaustionStatus: string | null,
+ * }} surface
+ * @param {number} missingObservationCount
+ */
+function surfaceNeedsReconciliation(surface, missingObservationCount) {
+  const checked = surface.lastRunStatus === "success" || surface.lastRunStatus === "warning";
+  if (!checked) {
+    return false;
+  }
+
+  if (missingObservationCount > 0) {
+    return true;
+  }
+
+  return surface.lastReconcileRequired === true && surface.lastExhaustionStatus !== "complete";
+}
 /**
  * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
  * @param {import("../schema/motion.js").motionSchema._type[]} motions
@@ -222,33 +284,28 @@ function buildItemizationGapAction(label, itemCount, observationCount, missingOb
  * @param {Map<string, { motion: import("../schema/motion.js").motionSchema._type, account: any, prospect: any }>} prospectContextById
  */
 function buildReviewItem(observation, motions, companiesById, prospectContextById) {
-  const prospectContext = observation.prospectId ? prospectContextById.get(observation.prospectId) ?? null : null;
-  const motion = observation.motionId
-    ? motions.find((candidate) => candidate.id === observation.motionId) ?? prospectContext?.motion ?? null
-    : prospectContext?.motion ?? null;
-  const account = prospectContext?.account ?? (motion && observation.companyId
-    ? motion.targetMap.accounts.find((candidate) => candidate.companyId === observation.companyId) ?? null
-    : null);
-  const company = observation.companyId
-    ? companiesById.get(observation.companyId) ?? account ?? null
-    : account ?? null;
-  const prospect = prospectContext?.prospect ?? (account && observation.prospectId
-    ? account.prospects.find((candidate) => candidate.id === observation.prospectId) ?? null
-    : null);
+  const workspaceContext = resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById);
+  const { claimState, motion, account, company, prospect } = workspaceContext;
   const ageDays = calculateAgeDays(observation.observedAt);
+  if (claimState === "claimed_elsewhere") {
+    return buildClaimedElsewhereReviewItem(observation, ageDays, motion, company, prospect);
+  }
   let triage = classifyReviewObservation(
     observation,
     ageDays,
     observation.observedAt,
     prospect?.name ?? observation.actorName ?? "this person",
   );
+  if (claimState === "unclaimed" && shouldEscalateUnclaimedReviewItem(observation, triage)) {
+    triage = buildNeedsClaimReviewState(observation, triage, prospect?.name ?? observation.actorName ?? "this person");
+  }
 
   const handledPrivateInbound = classifyHandledPrivateInboundStage(
     observation,
     prospect,
     prospect?.name ?? observation.actorName ?? "this person",
   );
-  if (handledPrivateInbound) {
+  if (handledPrivateInbound && claimState !== "unclaimed") {
     triage = handledPrivateInbound;
   }
 
@@ -328,6 +385,7 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
   return {
     id: observation.id,
     observedAt: observation.observedAt,
+    eventAt: observation.eventAt,
     recordedAt: observation.recordedAt,
     ageDays,
     kind: observation.kind,
@@ -351,6 +409,7 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
     whyItMatters: triage.whyItMatters,
     recommendedAction: triage.recommendedAction,
     decisionOptions: triage.decisionOptions,
+    claimState,
     account: {
       id: observation.accountId,
       capability: observation.capability
@@ -359,6 +418,112 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
     company: company ? { id: company.id, name: company.name ?? company.companyName ?? null } : null,
     prospect: prospect ? { id: prospect.id, name: prospect.name, title: prospect.title } : null
   };
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {ReturnType<typeof classifyReviewObservation>} triage
+ * @param {string} actorName
+ */
+function buildNeedsClaimReviewState(observation, triage, actorName) {
+  return {
+    category: "global_intake",
+    priority: triage.priority,
+    state: "needs_claim",
+    whyItMatters: "This inbound person is still global intake. Keep them visible, but do not let them drive this folder's motion flow until this workspace explicitly claims them.",
+    recommendedAction: buildNeedsClaimAction(observation.kind, actorName),
+    decisionOptions: ["claim"],
+  };
+}
+
+/**
+ * Pending outbound invites are already in a governed waiting state even when
+ * they have not been attached to a local workspace yet. Forcing them into
+ * "needs claim" turns passive waiting into fake operator work and obscures the
+ * stale-withdraw threshold.
+ *
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {ReturnType<typeof classifyReviewObservation>} triage
+ */
+function shouldEscalateUnclaimedReviewItem(observation, triage) {
+  if (observation.kind === "connection_request_pending") {
+    return false;
+  }
+  return ![
+    "waiting",
+    "agent_withdraw_due",
+    "attention_signal",
+    "visibility_signal",
+    "public_engagement_review",
+    "informational",
+  ].includes(triage.state);
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {number} ageDays
+ * @param {any | null} motion
+ * @param {any | null} company
+ * @param {any | null} prospect
+ */
+function buildClaimedElsewhereReviewItem(observation, ageDays, motion, company, prospect) {
+  const preview = buildReviewPreview(observation, prospect, "claimed_elsewhere");
+  return {
+    id: observation.id,
+    observedAt: observation.observedAt,
+    eventAt: observation.eventAt,
+    recordedAt: observation.recordedAt,
+    ageDays,
+    kind: observation.kind,
+    surfaceKey: observation.surfaceKey,
+    actorName: observation.actorName,
+    actorTitle: observation.actorTitle,
+    actorCompanyName: observation.actorCompanyName,
+    actorProfileUrl: observation.actorProfileUrl,
+    actorLinkedinPublicId: observation.actorLinkedinPublicId,
+    actorLinkedinMemberId: observation.actorLinkedinMemberId,
+    actorAvatarSourceUrl: observation.actorAvatarSourceUrl,
+    actorAvatarUrl: observation.actorAvatarUrl,
+    sourceUrl: observation.sourceUrl,
+    summary: observation.summary,
+    previewLabel: preview.label,
+    previewSubject: preview.subject,
+    previewText: preview.text,
+    category: "global_intake",
+    priority: "low",
+    state: "claimed_elsewhere",
+    whyItMatters: "This inbound person is already claimed in another workspace. Do not fork them into this folder's motion flow.",
+    recommendedAction: `Leave ${observation.actorName ?? "this inbound person"} in the owning workspace. Do not add them to a motion here.`,
+    decisionOptions: [],
+    claimState: "claimed_elsewhere",
+    account: {
+      id: observation.accountId,
+      capability: observation.capability
+    },
+    motion: motion ? { id: motion.id, name: motion.name } : null,
+    company: company ? { id: company.id, name: company.name ?? company.companyName ?? null } : null,
+    prospect: prospect ? { id: prospect.id, name: prospect.name, title: prospect.title } : null
+  };
+}
+
+/**
+ * @param {string} kind
+ * @param {string} actorName
+ */
+function buildNeedsClaimAction(kind, actorName) {
+  switch (kind) {
+    case "connection_request_received":
+    case "connection_request_received_no_longer_pending":
+      return `Claim ${actorName} into this workspace's transition backlog if the invite belongs here. Until then, keep it in global intake instead of routing it into a local motion.`;
+    case "inbound_reply_received":
+    case "email_reply_received":
+    case "message_received":
+    case "thread_updated":
+    case "email_thread_updated":
+      return `Claim ${actorName} into this workspace's transition backlog if this thread belongs here. Do not treat it as local motion work until this workspace claims it.`;
+    default:
+      return `Claim ${actorName} into this workspace's transition backlog if they belong here. Otherwise leave the item in global intake.`;
+  }
 }
 
 /**
@@ -378,16 +543,15 @@ function hasSentPostAcceptMessage(prospect) {
 
 /**
  * Has a send-ready post-accept message already been staged for this prospect?
- * An approved/queued draft on the post-accept or follow-up DM surface means the
- * work has moved to the agent send queue, so it should drop out of the operator
- * decision lane.
+ * Only operator-approved or explicitly operator-queued drafts should leave the
+ * review lane. Agent-written ready/legacy-queued drafts still need review.
  * @param {any} prospect
  */
 function hasQueuedPostAcceptMessage(prospect) {
   if (!prospect) return false;
   const surfaces = new Set(["post_accept_message", "follow_up_direct_message"]);
   return (prospect.drafts ?? []).some(
-    (d) => surfaces.has(d.surface) && (d.status === "approved" || d.status === "queued"),
+    (d) => surfaces.has(d.surface) && isAutonomousSendReadyDraft(d),
   );
 }
 
@@ -421,9 +585,12 @@ function findReviewablePostAcceptDraft(prospect) {
 function classifyHandledPrivateInboundStage(observation, prospect, actorName) {
   const response = describePrivateInboundResponse(observation, prospect);
   const responseState = response.state;
+  const privateInboundState = classifyPrivateInboundMessage(observation);
+  const category = privateInboundState === "first_inbound" ? "inbound_message" : "reply";
+  const responseLabel = privateInboundState === "first_inbound" ? "response" : "reply";
   if (responseState === "queued") {
     return {
-      category: classifyPrivateInboundMessage(observation) === "first_inbound" ? "inbound_message" : "reply",
+      category,
       priority: "low",
       state: "queued_for_send",
       whyItMatters: "The reply is already send-ready in the agent queue. No operator action is still pending.",
@@ -433,7 +600,7 @@ function classifyHandledPrivateInboundStage(observation, prospect, actorName) {
   }
   if (responseState === "sent") {
     return {
-      category: classifyPrivateInboundMessage(observation) === "first_inbound" ? "inbound_message" : "reply",
+      category,
       priority: "low",
       state: "reply_sent",
       whyItMatters: "A reply was already sent after this inbound message. The branch is now waiting on them.",
@@ -444,11 +611,31 @@ function classifyHandledPrivateInboundStage(observation, prospect, actorName) {
   if (responseState === "blocked") {
     const detail = summarizeUnavailableReplyReason(response.touch?.notes);
     return {
-      category: classifyPrivateInboundMessage(observation) === "first_inbound" ? "inbound_message" : "reply",
+      category,
       priority: "low",
       state: "reply_unavailable",
       whyItMatters: detail,
       recommendedAction: `Reply unavailable for ${actorName} — ${detail}`,
+      decisionOptions: [],
+    };
+  }
+  if (responseState === "ready") {
+    return {
+      category,
+      priority: "high",
+      state: "ready_for_reply",
+      whyItMatters: `The agent already drafted the ${responseLabel}. The operator can review the actual copy now.`,
+      recommendedAction: `Review the drafted ${responseLabel} for ${actorName} and decide whether to queue it for send.`,
+      decisionOptions: ["message", "wait"],
+    };
+  }
+  if (responseState === "open") {
+    return {
+      category,
+      priority: "low",
+      state: "agent_draft_due",
+      whyItMatters: `The private inbound thread is linked to this prospect, but the operator should not have to decide in the abstract. The agent needs to draft the ${responseLabel} first.`,
+      recommendedAction: `Have the agent draft the ${responseLabel} for ${actorName}.`,
       decisionOptions: [],
     };
   }
@@ -571,6 +758,14 @@ function classifyReviewObservation(observation, ageDays, observedAt, actorName) 
         decisionOptions: ["wait"]
       };
     case "profile_view_after_touch":
+      return {
+        category: "signal",
+        priority: "low",
+        state: "attention_signal",
+        whyItMatters: "A pending invite already got attention. That is a reason to stay patient, not a reason to force another touch.",
+        recommendedAction: `Do not add another touch to ${actorName} right now. Keep the pending invite patient and move to the next ready branch.`,
+        decisionOptions: []
+      };
     case "profile_view_received":
       return {
         category: "signal",
@@ -637,6 +832,18 @@ function summarizeUnavailableReplyReason(notes) {
  * @returns {{ label: string | null, subject: string | null, text: string | null }}
  */
 function buildReviewPreview(observation, prospect, state) {
+  if (state === "ready_for_reply") {
+    const draft = findReviewablePrivateReplyDraft(observation, prospect);
+    const text = compactPreviewText(draft?.body ?? null);
+    if (text) {
+      return {
+        label: "Draft message",
+        subject: normalizeNullableString(draft?.subject) ?? null,
+        text,
+      };
+    }
+  }
+
   if (state === "ready_for_post_accept") {
     const draft = findReviewablePostAcceptDraft(prospect);
     const text = compactPreviewText(draft?.body ?? null);
@@ -707,17 +914,20 @@ function compareReviewItems(left, right) {
   };
   const stateRank = {
     needs_reply: 0,
-    needs_decision: 1,
-    needs_status_reconciliation: 2,
-    agent_withdraw_due: 3,
-    ready_for_post_accept: 4,
-    agent_draft_due: 5,
-    thread_change_review: 6,
-    attention_signal: 7,
-    visibility_signal: 8,
-    public_engagement_review: 9,
-    waiting: 10,
-    informational: 11
+    ready_for_reply: 1,
+    needs_decision: 2,
+    needs_status_reconciliation: 3,
+    agent_withdraw_due: 4,
+    ready_for_post_accept: 5,
+    agent_draft_due: 6,
+    thread_change_review: 7,
+    needs_claim: 8,
+    attention_signal: 9,
+    visibility_signal: 10,
+    public_engagement_review: 11,
+    claimed_elsewhere: 12,
+    waiting: 13,
+    informational: 14
   };
 
   return (
@@ -739,6 +949,15 @@ function pickLatestMeaningfulMessage(observation) {
   return messages.findLast((message) => String(message.direction ?? "").toLowerCase() === "inbound")
     ?? messages.at(-1)
     ?? null;
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {any | null} prospect
+ */
+function findReviewablePrivateReplyDraft(observation, prospect) {
+  const response = describePrivateInboundResponse(observation, prospect);
+  return response.state === "ready" ? response.draft ?? null : null;
 }
 
 /**

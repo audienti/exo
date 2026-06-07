@@ -562,10 +562,6 @@ test("full authoritative inbound sync cannot claim success when exhaustion is in
 
 test("daily suppresses new connection-request pressure until a partial live sent-invitations surface is fully reconciled", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-reconcile-contract-"));
-  const chrome = setupReadyChromeProfile(tempDir, {
-    cookieHosts: [".linkedin.com"],
-    historyUrls: ["https://www.linkedin.com/feed/"]
-  });
 
   try {
     const motion = JSON.parse(runCli(tempDir, [
@@ -596,25 +592,20 @@ test("daily suppresses new connection-request pressure until a partial live sent
       "--json"
     ]));
 
-    const profile = JSON.parse(runCli(tempDir, [
-      "profiles",
-      "add",
-      "--browser",
-      "chrome",
-      "--label",
-      "backlog-main",
-      "--user-data-dir",
-      chrome.userDataDir,
-      "--profile-directory",
-      chrome.profileDirectory,
-      "--browser-command",
-      chrome.browserCommand,
-      "--capability",
-      "linkedin",
-      "--json"
-    ]));
-
     const user = JSON.parse(runCli(tempDir, ["users", "add", "--label", "backlog-user", "--owner", "William", "--json"]));
+    runCli(tempDir, [
+      "users",
+      "harness",
+      "add",
+      user.id,
+      "--runtime",
+      "codex",
+      "--connector",
+      "chrome",
+      "--status",
+      "available",
+      "--json"
+    ]);
     const userWithLinkedin = JSON.parse(runCli(tempDir, [
       "users",
       "accounts",
@@ -624,8 +615,14 @@ test("daily suppresses new connection-request pressure until a partial live sent
       "linkedin",
       "--handle",
       "backlog-user",
-      "--profile",
-      profile.id,
+      "--runtime",
+      "codex",
+      "--connector",
+      "chrome",
+      "--provider-account-id",
+      "acct-linkedin-backlog-1",
+      "--max-connection-requests",
+      "125",
       "--preferred",
       "--json"
     ]));
@@ -691,9 +688,6 @@ test("daily suppresses new connection-request pressure until a partial live sent
       "2026-05-30T11:46:51.000Z",
       "--json"
     ]);
-
-    runCli(tempDir, ["profiles", "claim", profile.id, "--max-connection-requests", "125", "--json"]);
-
     const observations = Array.from({ length: 10 }, (_item, index) => ({
       kind: "connection_request_pending",
       externalId: `invite-${index + 1}`,
@@ -746,13 +740,15 @@ test("daily suppresses new connection-request pressure until a partial live sent
     assert.ok(daily.items.every((item) => item.source.type !== "inbound_itemization_gap"));
 
     const queue = JSON.parse(runCli(tempDir, ["agent", "queue", "--json"]));
-    const syncTask = queue.tasks.find((task) =>
+    const syncTask = queue.waiting.find((task) =>
       task.kind === "run_inbound_sync"
       && task.reason === "itemization_gap"
       && task.accountId === linkedinAccount.id
     );
     assert.ok(syncTask);
     assert.equal(syncTask.mode, "full");
+    assert.equal(syncTask.queueState, "waiting");
+    assert.equal(syncTask.waitingReason, "outside_working_hours");
     assert.ok(syncTask.surfaceKeys.includes("linkedin-sent-invitations"));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -841,8 +837,8 @@ test("full sent-invitation reconciliation writes back disappearance deltas inste
     const review = JSON.parse(runCli(tempDir, ["inbound", "review", user.id, "--json"]));
     const disappearedInvite = review.reviewItems.find((item) => item.kind === "connection_request_no_longer_pending");
     assert.ok(disappearedInvite);
-    assert.equal(disappearedInvite.state, "needs_status_reconciliation");
-    assert.match(disappearedInvite.recommendedAction, /accepted, rejected, or otherwise left the pending list/i);
+    assert.equal(disappearedInvite.state, "needs_claim");
+    assert.match(disappearedInvite.recommendedAction, /claim jordan cipolla/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -929,7 +925,7 @@ test("full received-invitation reconciliation writes back disappearance deltas f
     const review = JSON.parse(runCli(tempDir, ["inbound", "review", user.id, "--json"]));
     const disappearedInvite = review.reviewItems.find((item) => item.kind === "connection_request_received_no_longer_pending");
     assert.ok(disappearedInvite);
-    assert.equal(disappearedInvite.state, "needs_status_reconciliation");
+    assert.equal(disappearedInvite.state, "needs_claim");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1029,6 +1025,140 @@ test("full followers reconciliation writes back follower removal deltas", () => 
   }
 });
 
+test("full followers reconciliation promotes first-seen rows to follower_added after a complete baseline", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-followers-added-"));
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/feed/"]
+  });
+
+  try {
+    const profile = JSON.parse(runCli(tempDir, [
+      "profiles",
+      "add",
+      "--browser",
+      "chrome",
+      "--label",
+      "followers-added-main",
+      "--user-data-dir",
+      chrome.userDataDir,
+      "--profile-directory",
+      chrome.profileDirectory,
+      "--browser-command",
+      chrome.browserCommand,
+      "--capability",
+      "linkedin",
+      "--json"
+    ]));
+
+    const user = JSON.parse(runCli(tempDir, ["users", "add", "--label", "followers-added-user", "--owner", "William", "--json"]));
+    const withLinkedin = JSON.parse(runCli(tempDir, [
+      "users",
+      "accounts",
+      "add",
+      user.id,
+      "--capability",
+      "linkedin",
+      "--handle",
+      "followers-added-user",
+      "--profile",
+      profile.id,
+      "--preferred",
+      "--json"
+    ]));
+    const linkedinAccount = withLinkedin.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+
+    runCli(tempDir, [
+      "inbound",
+      "sync",
+      "set",
+      user.id,
+      "--account",
+      linkedinAccount.id,
+      "--enable-surface",
+      "linkedin-followers-list",
+      "--json"
+    ]);
+
+    const firstSyncPath = writeJsonCassette(
+      tempDir,
+      "followers-added-first-full.json",
+      "inbound/linkedin-followers-list/full-first.json",
+      { ACCOUNT_ID: linkedinAccount.id }
+    );
+
+    runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", firstSyncPath, "--json"]);
+
+    const secondSyncPath = path.join(tempDir, "followers-added-second-full.json");
+    fs.writeFileSync(secondSyncPath, JSON.stringify({
+      mode: "full",
+      accounts: [
+        {
+          accountId: linkedinAccount.id,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-followers-list",
+              status: "success",
+              observedAt: "2026-06-01T15:00:00.000Z",
+              itemCount: 2,
+              visibleTotalCount: 2,
+              captureCompleteness: "complete",
+              requestedMode: "full",
+              actualMode: "full",
+              reconcileRequired: false,
+              reconcileReason: null,
+              error: null,
+              observations: [
+                {
+                  kind: "follower_confirmed",
+                  externalId: "follower-1",
+                  observedAt: "2026-06-01T15:00:00.000Z",
+                  actorName: "Grace Follower",
+                  actorProfileUrl: "https://www.linkedin.com/in/grace-follower/",
+                  summary: "Grace Follower currently follows this profile."
+                },
+                {
+                  kind: "follower_confirmed",
+                  externalId: "follower-2",
+                  observedAt: "2026-06-01T15:00:00.000Z",
+                  actorName: "Jordan Newfollower",
+                  actorProfileUrl: "https://www.linkedin.com/in/jordan-newfollower/",
+                  summary: "Jordan Newfollower currently follows this profile."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+
+    runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", secondSyncPath, "--json"]);
+
+    const observationList = JSON.parse(runCli(tempDir, [
+      "inbound",
+      "observations",
+      "list",
+      user.id,
+      "--account",
+      linkedinAccount.id,
+      "--surface",
+      "linkedin-followers-list",
+      "--json"
+    ]));
+
+    assert.equal(observationList.counts.observationCount, 2);
+    const baselineFollower = observationList.observations.find((observation) => observation.externalId === "follower-1");
+    const newFollower = observationList.observations.find((observation) => observation.externalId === "follower-2");
+    assert.ok(baselineFollower);
+    assert.ok(newFollower);
+    assert.equal(baselineFollower.kind, "follower_confirmed");
+    assert.equal(newFollower.kind, "follower_added");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("full following-list reconciliation writes back follow removal deltas", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-following-delta-"));
   const chrome = setupReadyChromeProfile(tempDir, {
@@ -1111,6 +1241,319 @@ test("full following-list reconciliation writes back follow removal deltas", () 
     const disappearedFollow = review.reviewItems.find((item) => item.kind === "follow_state_removed");
     assert.ok(disappearedFollow);
     assert.equal(disappearedFollow.state, "visibility_signal");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("complete following-list reconciliation promotes first-seen rows to follow_state_changed after a complete baseline", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-following-changed-"));
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/feed/"]
+  });
+
+  try {
+    const profile = JSON.parse(runCli(tempDir, [
+      "profiles",
+      "add",
+      "--browser",
+      "chrome",
+      "--label",
+      "following-changed-main",
+      "--user-data-dir",
+      chrome.userDataDir,
+      "--profile-directory",
+      chrome.profileDirectory,
+      "--browser-command",
+      chrome.browserCommand,
+      "--capability",
+      "linkedin",
+      "--json"
+    ]));
+
+    const user = JSON.parse(runCli(tempDir, ["users", "add", "--label", "following-changed-user", "--owner", "William", "--json"]));
+    const withLinkedin = JSON.parse(runCli(tempDir, [
+      "users",
+      "accounts",
+      "add",
+      user.id,
+      "--capability",
+      "linkedin",
+      "--handle",
+      "following-changed-user",
+      "--profile",
+      profile.id,
+      "--preferred",
+      "--json"
+    ]));
+    const linkedinAccount = withLinkedin.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+
+    const firstSyncPath = writeJsonCassette(
+      tempDir,
+      "following-changed-first-full.json",
+      "inbound/linkedin-following-list/full-first.json",
+      { ACCOUNT_ID: linkedinAccount.id }
+    );
+
+    runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", firstSyncPath, "--json"]);
+
+    const secondSyncPath = path.join(tempDir, "following-changed-second-full.json");
+    fs.writeFileSync(secondSyncPath, JSON.stringify({
+      mode: "quick",
+      accounts: [
+        {
+          accountId: linkedinAccount.id,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-following-list",
+              status: "success",
+              observedAt: "2026-06-01T15:00:00.000Z",
+              itemCount: 2,
+              visibleTotalCount: 2,
+              captureCompleteness: "complete",
+              requestedMode: "quick",
+              actualMode: "full",
+              reconcileRequired: false,
+              reconcileReason: null,
+              error: null,
+              observations: [
+                {
+                  kind: "follow_state_confirmed",
+                  externalId: "following-1",
+                  observedAt: "2026-06-01T15:00:00.000Z",
+                  actorName: "Harper Followed",
+                  actorProfileUrl: "https://www.linkedin.com/in/harper-followed/",
+                  summary: "Harper Followed is currently on the live following list."
+                },
+                {
+                  kind: "follow_state_confirmed",
+                  externalId: "following-2",
+                  observedAt: "2026-06-01T15:00:00.000Z",
+                  actorName: "Drew Followed",
+                  actorProfileUrl: "https://www.linkedin.com/in/drew-followed/",
+                  summary: "Drew Followed is currently on the live following list."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+
+    runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", secondSyncPath, "--json"]);
+
+    const observationList = JSON.parse(runCli(tempDir, [
+      "inbound",
+      "observations",
+      "list",
+      user.id,
+      "--account",
+      linkedinAccount.id,
+      "--surface",
+      "linkedin-following-list",
+      "--json"
+    ]));
+
+    assert.equal(observationList.counts.observationCount, 2);
+    const baselineFollow = observationList.observations.find((observation) => observation.externalId === "following-1");
+    const newFollow = observationList.observations.find((observation) => observation.externalId === "following-2");
+    assert.ok(baselineFollow);
+    assert.ok(newFollow);
+    assert.equal(baselineFollow.kind, "follow_state_confirmed");
+    assert.equal(newFollow.kind, "follow_state_changed");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("paginated following-list continuation carries earlier pages into the final full reconciliation", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-following-page-continuation-"));
+  const chrome = setupReadyChromeProfile(tempDir, {
+    cookieHosts: [".linkedin.com"],
+    historyUrls: ["https://www.linkedin.com/feed/"]
+  });
+
+  try {
+    const profile = JSON.parse(runCli(tempDir, [
+      "profiles",
+      "add",
+      "--browser",
+      "chrome",
+      "--label",
+      "following-page-continuation-main",
+      "--user-data-dir",
+      chrome.userDataDir,
+      "--profile-directory",
+      chrome.profileDirectory,
+      "--browser-command",
+      chrome.browserCommand,
+      "--capability",
+      "linkedin",
+      "--json"
+    ]));
+
+    const user = JSON.parse(runCli(tempDir, ["users", "add", "--label", "following-page-continuation-user", "--owner", "William", "--json"]));
+    const withLinkedin = JSON.parse(runCli(tempDir, [
+      "users",
+      "accounts",
+      "add",
+      user.id,
+      "--capability",
+      "linkedin",
+      "--handle",
+      "following-page-continuation-user",
+      "--profile",
+      profile.id,
+      "--preferred",
+      "--json"
+    ]));
+    const linkedinAccount = withLinkedin.accounts.find((account) => account.capability === "linkedin");
+    assert.ok(linkedinAccount);
+
+    const baselinePath = path.join(tempDir, "following-baseline-full.json");
+    fs.writeFileSync(baselinePath, JSON.stringify({
+      mode: "full",
+      accounts: [
+        {
+          accountId: linkedinAccount.id,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-following-list",
+              status: "success",
+              observedAt: "2026-06-01T15:00:00.000Z",
+              itemCount: 2,
+              visibleTotalCount: 2,
+              captureCompleteness: "complete",
+              requestedMode: "full",
+              actualMode: "full",
+              reconcileRequired: false,
+              reconcileReason: null,
+              error: null,
+              observations: [
+                {
+                  kind: "follow_state_confirmed",
+                  externalId: "following-1",
+                  observedAt: "2026-06-01T15:00:00.000Z",
+                  actorName: "Harper Followed",
+                  actorProfileUrl: "https://www.linkedin.com/in/harper-followed/",
+                  summary: "Harper Followed is currently on the live following list."
+                },
+                {
+                  kind: "follow_state_confirmed",
+                  externalId: "following-2",
+                  observedAt: "2026-06-01T15:00:00.000Z",
+                  actorName: "Drew Followed",
+                  actorProfileUrl: "https://www.linkedin.com/in/drew-followed/",
+                  summary: "Drew Followed is currently on the live following list."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+    runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", baselinePath, "--json"]);
+
+    const firstPagePath = path.join(tempDir, "following-page-one.json");
+    fs.writeFileSync(firstPagePath, JSON.stringify({
+      mode: "full",
+      accounts: [
+        {
+          accountId: linkedinAccount.id,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-following-list",
+              status: "warning",
+              observedAt: "2026-06-02T15:00:00.000Z",
+              itemCount: 1,
+              visibleTotalCount: 2,
+              captureCompleteness: "partial_visible_slice",
+              requestedMode: "full",
+              actualMode: "full",
+              reconcileRequired: true,
+              reconcileReason: "page_budget_stopped_early",
+              exhaustionStatus: "incomplete",
+              exhaustionReason: "page_budget_stopped_early",
+              nextStartOffset: 1,
+              error: "Full reconciliation stopped at the configured page budget and should resume from the next offset.",
+              observations: [
+                {
+                  kind: "follow_state_confirmed",
+                  externalId: "following-1",
+                  observedAt: "2026-06-02T15:00:00.000Z",
+                  actorName: "Harper Followed",
+                  actorProfileUrl: "https://www.linkedin.com/in/harper-followed/",
+                  summary: "Harper Followed is currently on the live following list."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+    runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", firstPagePath, "--json"]);
+
+    const resumedSurfaceState = JSON.parse(runCli(tempDir, ["inbound", "sync", "show", user.id, "--json"]));
+    const followingSurface = resumedSurfaceState.accounts[0].surfaces.find((surface) => surface.key === "linkedin-following-list");
+    assert.ok(followingSurface);
+    assert.equal(followingSurface.nextStartOffset, 1);
+
+    const secondPagePath = path.join(tempDir, "following-page-two.json");
+    fs.writeFileSync(secondPagePath, JSON.stringify({
+      mode: "full",
+      accounts: [
+        {
+          accountId: linkedinAccount.id,
+          surfaces: [
+            {
+              surfaceKey: "linkedin-following-list",
+              status: "success",
+              observedAt: "2026-06-02T15:05:00.000Z",
+              itemCount: 1,
+              visibleTotalCount: 2,
+              captureCompleteness: "complete",
+              requestedMode: "full",
+              actualMode: "full",
+              reconcileRequired: false,
+              reconcileReason: null,
+              exhaustionStatus: "complete",
+              exhaustionReason: "reported_total_exhausted",
+              error: null,
+              observations: [
+                {
+                  kind: "follow_state_confirmed",
+                  externalId: "following-2",
+                  observedAt: "2026-06-02T15:05:00.000Z",
+                  actorName: "Drew Followed",
+                  actorProfileUrl: "https://www.linkedin.com/in/drew-followed/",
+                  summary: "Drew Followed is currently on the live following list."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }, null, 2));
+    runCli(tempDir, ["inbound", "sync", "run", user.id, "--input", secondPagePath, "--json"]);
+
+    const observationList = JSON.parse(runCli(tempDir, [
+      "inbound",
+      "observations",
+      "list",
+      user.id,
+      "--account",
+      linkedinAccount.id,
+      "--surface",
+      "linkedin-following-list",
+      "--json"
+    ]));
+
+    assert.equal(observationList.counts.observationCount, 2);
+    assert.ok(observationList.observations.some((observation) => observation.externalId === "following-1" && observation.kind === "follow_state_confirmed"));
+    assert.ok(observationList.observations.some((observation) => observation.externalId === "following-2" && observation.kind === "follow_state_confirmed"));
+    assert.equal(observationList.observations.some((observation) => observation.kind === "follow_state_removed"), false);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -1871,7 +2314,7 @@ test("inbound sync run auto-links and enriches a prospect by LinkedIn member and
           accountId: linkedinAccount.id,
           surfaces: [
             {
-              surfaceKey: "linkedin-received-invitations",
+              surfaceKey: "linkedin-sent-invitations",
               status: "success",
               observedAt: "2026-05-31T18:00:00.000Z",
               itemCount: 1,
@@ -1884,8 +2327,8 @@ test("inbound sync run auto-links and enriches a prospect by LinkedIn member and
               error: null,
               observations: [
                 {
-                  kind: "connection_request_received",
-                  externalId: "received-alias-1",
+                  kind: "connection_request_pending",
+                  externalId: "sent-alias-1",
                   observedAt: "2026-05-31T18:00:00.000Z",
                   actorName: "Alicia Buyer",
                   actorTitle: "VP Revenue Operations",
@@ -1894,7 +2337,7 @@ test("inbound sync run auto-links and enriches a prospect by LinkedIn member and
                   actorLinkedinPublicId: "alicia-buyer",
                   actorLinkedinMemberId: "489864114",
                   actorAvatarSourceUrl: avatarSourceUrl,
-                  summary: "Alicia Buyer appeared on LinkedIn with only alias-level identity fields exposed."
+                  summary: "Alicia Buyer is still pending on LinkedIn with only alias-level identity fields exposed."
                 }
               ]
             }
@@ -1913,7 +2356,7 @@ test("inbound sync run auto-links and enriches a prospect by LinkedIn member and
       "--account",
       linkedinAccount.id,
       "--surface",
-      "linkedin-received-invitations",
+      "linkedin-sent-invitations",
       "--json"
     ]));
 
@@ -2032,20 +2475,109 @@ test("thread update observations stay visible as medium-priority inbox deltas in
   const linkedinItem = inbox.items.find((item) => item.kind === "thread_updated");
   assert.ok(linkedinItem);
   assert.equal(linkedinItem.priority, "medium");
-  assert.equal(linkedinItem.status, "needs-triage");
+  assert.equal(linkedinItem.status, "global-intake");
+  assert.equal(linkedinItem.reviewState, "needs_claim");
 
   const gmailItem = inbox.items.find((item) => item.kind === "email_thread_updated");
   assert.ok(gmailItem);
   assert.equal(gmailItem.priority, "medium");
-  assert.equal(gmailItem.status, "needs-triage");
+  assert.equal(gmailItem.status, "global-intake");
+  assert.equal(gmailItem.reviewState, "needs_claim");
 
   const linkedinReviewItem = review.reviewItems.find((item) => item.kind === "thread_updated");
   assert.ok(linkedinReviewItem);
   assert.equal(linkedinReviewItem.priority, "medium");
-  assert.equal(linkedinReviewItem.state, "thread_change_review");
+  assert.equal(linkedinReviewItem.state, "needs_claim");
 
   const gmailReviewItem = review.reviewItems.find((item) => item.kind === "email_thread_updated");
   assert.ok(gmailReviewItem);
   assert.equal(gmailReviewItem.priority, "medium");
-  assert.equal(gmailReviewItem.state, "thread_change_review");
+  assert.equal(gmailReviewItem.state, "needs_claim");
+});
+
+test("steady follower and following confirmations stay out of inbox and review while delta rows remain visible", () => {
+  const rawUser = {
+    id: "user-1",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    label: "william-main",
+    owner: "William",
+    accounts: [
+      {
+        id: "linkedin-account-1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        capability: "linkedin",
+        handle: "william-main",
+        sourceType: "browser-profile",
+        browserProfileId: "profile-1",
+        preferred: true
+      }
+    ],
+    harnessConnections: []
+  };
+
+  const followerConfirmed = recordInboundObservation(rawUser, {
+    accountId: "linkedin-account-1",
+    surfaceKey: "linkedin-followers-list",
+    kind: "follower_confirmed",
+    externalId: "follower-1",
+    observedAt: "2026-06-05T11:00:00.000Z",
+    actorName: "Grace Follower",
+    actorProfileUrl: "https://www.linkedin.com/in/grace-follower/",
+    summary: "Grace Follower is present in the LinkedIn follower list."
+  });
+  const followerAdded = recordInboundObservation(rawUser, {
+    accountId: "linkedin-account-1",
+    surfaceKey: "linkedin-followers-list",
+    kind: "follower_added",
+    externalId: "follower-2",
+    observedAt: "2026-06-05T11:05:00.000Z",
+    actorName: "Jordan Newfollower",
+    actorProfileUrl: "https://www.linkedin.com/in/jordan-newfollower/",
+    summary: "Jordan Newfollower newly appeared in the live followers list."
+  });
+  const followConfirmed = recordInboundObservation(rawUser, {
+    accountId: "linkedin-account-1",
+    surfaceKey: "linkedin-following-list",
+    kind: "follow_state_confirmed",
+    externalId: "following-1",
+    observedAt: "2026-06-05T11:10:00.000Z",
+    actorName: "Harper Followed",
+    actorProfileUrl: "https://www.linkedin.com/in/harper-followed/",
+    summary: "Harper Followed is still present in the LinkedIn following list."
+  });
+  const followChanged = recordInboundObservation(rawUser, {
+    accountId: "linkedin-account-1",
+    surfaceKey: "linkedin-following-list",
+    kind: "follow_state_changed",
+    externalId: "following-2",
+    observedAt: "2026-06-05T11:15:00.000Z",
+    actorName: "Drew Followed",
+    actorProfileUrl: "https://www.linkedin.com/in/drew-followed/",
+    summary: "Drew Followed newly appeared in the live following list."
+  });
+
+  const inbox = buildInboxView(rawUser, [
+    followerConfirmed,
+    followerAdded,
+    followConfirmed,
+    followChanged
+  ], [], []);
+  const review = buildInboundReviewView(rawUser, [
+    followerConfirmed,
+    followerAdded,
+    followConfirmed,
+    followChanged
+  ], [], []);
+
+  assert.equal(inbox.items.some((item) => item.kind === "follower_confirmed"), false);
+  assert.equal(inbox.items.some((item) => item.kind === "follow_state_confirmed"), false);
+  assert.ok(inbox.items.find((item) => item.kind === "follower_added"));
+  assert.ok(inbox.items.find((item) => item.kind === "follow_state_changed"));
+
+  assert.equal(review.reviewItems.some((item) => item.kind === "follower_confirmed"), false);
+  assert.equal(review.reviewItems.some((item) => item.kind === "follow_state_confirmed"), false);
+  assert.ok(review.reviewItems.find((item) => item.kind === "follower_added"));
+  assert.ok(review.reviewItems.find((item) => item.kind === "follow_state_changed"));
 });

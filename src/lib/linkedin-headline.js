@@ -24,6 +24,13 @@ export function deriveLinkedinCompanyName(headline) {
     return atCandidate;
   }
 
+  const ofCandidate = normalizeNullableString(
+    normalized.match(/\b(?:founder|co-founder|ceo|owner|president|principal|partner)\s+of\s+([^|•·–—,\n]+)/iu)?.[1] ?? null,
+  );
+  if (ofCandidate && /^[A-Z0-9]/.test(ofCandidate)) {
+    return ofCandidate;
+  }
+
   return null;
 }
 

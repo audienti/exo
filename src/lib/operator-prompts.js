@@ -12,12 +12,16 @@
 export function buildOperatorPromptFromDailyItem(item) {
   if (item.source.type === "inbound_review") {
     switch (item.source.kind) {
+      case "needs_claim":
+        return `${item.prospect.name} sent you an inbound LinkedIn connection request. Claim them into transition backlog or leave them in global intake?`;
       case "needs_decision":
         return `${item.prospect.name} sent you an inbound LinkedIn connection request. Accept or decline?`;
       case "needs_status_reconciliation":
         return `${item.prospect.name}'s inbound connection request left the pending list. Was it accepted, declined, or resolved another way?`;
       case "needs_reply":
         return `${item.prospect.name} replied on ${item.company.name}. Reply now?`;
+      case "ready_for_reply":
+        return `Review the drafted reply to ${item.prospect.name} on ${item.company.name} now?`;
       case "ready_for_post_accept":
         return `${item.prospect.name} accepted your connection request. Send the first follow-up message now or wait?`;
       default:
@@ -66,10 +70,22 @@ export function buildOperatorPromptFromExecutionAction(action) {
  * @returns {string | null}
  */
 export function buildOperatorPromptFromInboxItem(item) {
-  if (item.status === "queued" || item.status === "resolved" || item.status === "agent-draft") {
+  if (
+    item.status === "queued"
+    || item.status === "resolved"
+    || item.status === "agent-draft"
+    || item.status === "global-intake"
+    || item.status === "claimed-elsewhere"
+    || item.reviewState === "needs_claim"
+    || item.reviewState === "claimed_elsewhere"
+  ) {
     return null;
   }
   const actorName = item.prospect?.name ?? item.actorName ?? "This person";
+
+  if (item.reviewState === "ready_for_reply") {
+    return `Review the drafted reply to ${actorName} now?`;
+  }
 
   switch (item.kind) {
     case "connection_request_received":

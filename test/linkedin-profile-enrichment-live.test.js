@@ -82,14 +82,16 @@ function runCli(tempDir, args, extraEnv = {}) {
 
 test("companies prospects enrich-linkedin-profile-live returns a governed Codex profile-page capture handoff", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-linkedin-profile-live-"));
-  const chrome = setupReadyChromeProfile(tempDir);
   const codexHome = path.join(tempDir, ".codex");
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(
     path.join(codexHome, "config.toml"),
     [
-      '[plugins."chrome@openai-bundled"]',
+      "[mcp_servers.unipile]",
       "enabled = true",
+      "[mcp_servers.unipile.env]",
+      'UNIPILE_API_KEY = "test-key"',
+      'UNIPILE_DSN = "https://api14.unipile.com:14465"',
       ""
     ].join("\n")
   );
@@ -123,41 +125,6 @@ test("companies prospects enrich-linkedin-profile-live returns a governed Codex 
       "--json"
     ]));
 
-    const profile = JSON.parse(runCli(tempDir, [
-      "profiles",
-      "add",
-      "--browser",
-      "chrome",
-      "--label",
-      "omalab-main",
-      "--browser-command",
-      chrome.browserCommand,
-      "--user-data-dir",
-      chrome.userDataDir,
-      "--profile-directory",
-      chrome.profileDirectory,
-      "--capability",
-      "linkedin",
-      "--json"
-    ]));
-
-    runCli(tempDir, [
-      "profiles",
-      "claim",
-      profile.id,
-      "--label",
-      "omalab-main",
-      "--workspace",
-      "omalab",
-      "--owner",
-      "william",
-      "--scope",
-      "work",
-      "--account",
-      "linkedin:william-main",
-      "--json"
-    ]);
-
     const user = JSON.parse(runCli(tempDir, [
       "users",
       "add",
@@ -170,6 +137,19 @@ test("companies prospects enrich-linkedin-profile-live returns a governed Codex 
 
     runCli(tempDir, [
       "users",
+      "harness",
+      "add",
+      user.id,
+      "--runtime",
+      "codex",
+      "--connector", "unipile",
+      "--status",
+      "available",
+      "--json"
+    ]);
+
+    runCli(tempDir, [
+      "users",
       "accounts",
       "add",
       user.id,
@@ -177,8 +157,11 @@ test("companies prospects enrich-linkedin-profile-live returns a governed Codex 
       "linkedin",
       "--handle",
       "william-main",
-      "--profile",
-      profile.id,
+      "--runtime",
+      "codex",
+      "--connector", "unipile",
+      "--provider-account-id",
+      "acct-linkedin-1",
       "--preferred",
       "--json"
     ]);
@@ -234,10 +217,10 @@ test("companies prospects enrich-linkedin-profile-live returns a governed Codex 
     assert.equal(result.transport.kind, "agent_handoff");
     assert.match(result.transport.captureRequest.prompt, /inspect the real linkedin profile page/i);
     assert.match(result.transport.captureRequest.prompt, /captureGuide/i);
-    assert.match(result.transport.captureRequest.prompt, /surfaceHints, profileSelection, and captureGuide/i);
+    assert.match(result.transport.captureRequest.prompt, /surfaceHints and captureGuide/i);
     assert.match(result.transport.captureRequest.prompt, /Use captureGuide\.writebackRules and verificationCommands/i);
     assert.equal(result.transport.captureRequest.executionMode, "native_tools_only");
-    assert.equal(result.transport.captureRequest.captureTransportMode, "browser_native_only");
+    assert.equal(result.transport.captureRequest.captureTransportMode, "connector_native_only");
     assert.equal(result.transport.captureRequest.shellFallbackAllowed, false);
     assert.equal(result.transport.captureRequest.exoCliWritebackRequired, true);
     assert.equal(result.transport.captureRequest.coldStartReady, true);
@@ -252,14 +235,13 @@ test("companies prospects enrich-linkedin-profile-live returns a governed Codex 
     assert.equal(result.transport.captureRequest.applyStdinContract, null);
     assert.ok(result.transport.captureRequest.verificationCommands.some((command) => new RegExp(`exo companies prospects show ${company.id} --motion ${motion.id} --prospect ${prospectId} --json`).test(command)));
     assert.equal(result.transport.captureRequest.surfaceHints.profilePage.surface, "linkedin-profile-page");
-    assert.equal(result.transport.captureRequest.profileSelection.expectedProfile.profileDirectory, chrome.profileDirectory);
-    assert.equal(result.transport.captureRequest.profileSelection.expectedHandle, "william-main");
+    assert.equal(result.transport.captureRequest.profileSelection, null);
     assert.ok(result.transport.captureRequest.surfaceHints.profilePage.entryHints.startUrls.includes("https://www.linkedin.com/in/minh-le-risk/"));
     assert.ok(result.transport.captureRequest.surfaceHints.profilePage.extractionHints.identityFields.includes("public_identifier"));
     assert.ok(result.transport.captureRequest.surfaceHints.profilePage.extractionHints.recentPostFields.includes("post_url"));
     assert.equal(result.prospect.id, prospectId);
     assert.equal(result.prospect.linkedinProfileUrl, "https://www.linkedin.com/in/minh-le-risk/");
-    assert.equal(result.execution.transport.preferredTransport.tool, "chrome");
+    assert.equal(result.execution.transport.preferredTransport.tool, "codex:unipile");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
