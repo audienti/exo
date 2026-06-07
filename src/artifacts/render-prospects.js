@@ -284,8 +284,9 @@ function renderGroups(groups, meta) {
 function renderPersonDetail(p, meta = {}) {
   const composeSurface = composeSurfaceFor(p);
   const replyUnavailable = p.handledNotification?.state === "reply_unavailable";
-  const baseStageIdx = branchStageIndex(p.branch);
-  const stageIdx = reconcileStageIndex(p.branch, p.connectionDegree);
+  const stageBranch = stageBranchFor(p);
+  const baseStageIdx = branchStageIndex(stageBranch);
+  const stageIdx = reconcileStageIndex(stageBranch, p.connectionDegree);
   const degreeOverride = p.connectionDegree != null && stageIdx !== baseStageIdx;
   const pipelineStages = pipelineStagesFor(p, composeSurface);
   const next = nextMoveForStage(stageIdx, p, composeSurface);
@@ -462,6 +463,14 @@ function reconcileStageIndex(branch, degree) {
   return base;
 }
 
+/**
+ * @param {any} prospect
+ * @returns {string}
+ */
+function stageBranchFor(prospect) {
+  return isWaitingOnEmailReply(prospect) ? "connection-requested" : prospect?.branch;
+}
+
 /** @param {number} degree */
 function degreeLabel(degree) {
   return degree === 1 ? "1st" : degree === 2 ? "2nd" : degree === 3 ? "3rd" : "";
@@ -578,6 +587,31 @@ function nextMoveForStage(idx, p, composeSurface = null) {
     };
   }
   if (composeSurface === "email" && idx <= 1) {
+    const draftState = draftStateForSurface(p, composeSurface);
+    if (draftState === "queued") {
+      return {
+        lead: "Email queued for send",
+        detail: "The agent will send it on its next pass.",
+      };
+    }
+    if (draftState === "ready") {
+      return {
+        lead: "Review the drafted email",
+        detail: "Edit it if needed, then queue it for send.",
+      };
+    }
+    if (draftState === "drafting") {
+      return {
+        lead: "Agent is drafting the email",
+        detail: "Wait for the governed draft to land, or write your own below if you need to move now.",
+      };
+    }
+    if (isWaitingOnEmailReply(p)) {
+      return {
+        lead: "Wait for the email reply",
+        detail: "The last email is out. Stay on this thread until they answer or the branch changes.",
+      };
+    }
     return {
       lead: "Review the queued email reply",
       detail: "The agent can send it through the governed Gmail path.",
@@ -637,9 +671,10 @@ function renderPipeline(stageIdx, stages = PIPELINE) {
  */
 function pipelineStagesFor(p, composeSurface) {
   if (composeSurface === "email" && !p.linkedinProfileUrl) {
+    const emailStageLabel = isWaitingOnEmailReply(p) ? "Email sent" : "Email queued";
     return [
       PIPELINE[0],
-      { key: "email-queued", label: "Email queued" },
+      { key: "email-queued", label: emailStageLabel },
       PIPELINE[2],
       PIPELINE[3],
       PIPELINE[4],
@@ -759,6 +794,43 @@ function normalizeMessageDirection(direction) {
 }
 
 /**
+ * Older governed send writebacks sometimes recorded a placeholder summary
+ * rather than the actual outbound body. Never treat that placeholder as the
+ * message text.
+ *
+ * @param {string | null | undefined} value
+ */
+function isSyntheticSendSummary(value) {
+  return /^sent send\b/i.test(normalizeMessageText(value) ?? "");
+}
+
+/**
+ * @param {any} draft
+ * @returns {number}
+ */
+function sentDraftTimestamp(draft) {
+  const timestamp = Date.parse(draft?.sentAt ?? draft?.updatedAt ?? draft?.approvedAt ?? draft?.createdAt ?? "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+/**
+ * @param {any} touch
+ * @returns {number}
+ */
+function touchTimestamp(touch) {
+  const timestamp = Date.parse(touch?.occurredAt ?? "");
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+/**
+ * @param {any[]} touches
+ * @returns {any[]}
+ */
+function sortTouchesChronologically(touches) {
+  return [...(touches ?? [])].sort((a, b) => touchTimestamp(a) - touchTimestamp(b));
+}
+
+/**
  * @param {any} prospect
  * @param {{ direction?: string | null, fromHandle?: string | null }} message
  */
@@ -816,6 +888,20 @@ function parseObservationNotes(notes) {
  * @param {any} observation
  * @returns {string | null}
  */
+function observationFallbackDetail(observation) {
+  const notes = parseObservationNotes(observation?.notes);
+  const subject = normalizeMessageText(notes.subject);
+  return joinObservationDetails(
+    subject ? `Subject: ${subject}` : null,
+    notes.body,
+    observation?.summary ?? null,
+  );
+}
+
+/**
+ * @param {any} observation
+ * @returns {string | null}
+ */
 function observationEventAt(observation) {
   if (typeof observation?.eventAt === "string" && observation.eventAt.trim()) {
     return observation.eventAt;
@@ -859,6 +945,31 @@ function prospectConnectionConfirmed(prospect) {
 }
 
 /**
+ * @param {any} prospect
+ * @param {string} surface
+ * @returns {boolean}
+ */
+function hasOutboundSurfaceTouch(prospect, surface) {
+  return (prospect?.touches ?? []).some((touch) =>
+    touch?.surface === surface
+    && touch?.direction === "outbound"
+    && (touch?.outcome === "sent" || touch?.outcome === "pending"),
+  );
+}
+
+/**
+ * @param {any} prospect
+ * @returns {boolean}
+ */
+function isWaitingOnEmailReply(prospect) {
+  return (
+    String(prospect?.cadenceState?.currentStep ?? "") === "value-add-email"
+    && prospect?.cadenceState?.lastTouchOutcome === "sent"
+    && hasOutboundSurfaceTouch(prospect, "email")
+  );
+}
+
+/**
  * @param {any} observation
  * @param {any[]} touches
  * @returns {boolean}
@@ -899,6 +1010,49 @@ function joinObservationDetails(...parts) {
 function observationEventPresentation(prospect, observation) {
   const notes = parseObservationNotes(observation?.notes);
   switch (observation?.kind) {
+    case "email_reply_received":
+      return {
+        title: "Email reply",
+        icon: "mail",
+        tone: "in",
+        detail: observationFallbackDetail(observation),
+      };
+    case "email_thread_updated":
+      return {
+        title: "Email thread updated",
+        icon: "mail",
+        tone: "in",
+        detail: observationFallbackDetail(observation),
+      };
+    case "inbound_reply_received":
+    case "message_received":
+      return {
+        title: "Reply",
+        icon: "mail",
+        tone: "in",
+        detail: observationFallbackDetail(observation),
+      };
+    case "thread_updated":
+      return {
+        title: "LinkedIn thread updated",
+        icon: "mail",
+        tone: "in",
+        detail: observationFallbackDetail(observation),
+      };
+    case "public_reply_received":
+      return {
+        title: "Comment reply",
+        icon: "activity",
+        tone: "in",
+        detail: observationFallbackDetail(observation),
+      };
+    case "comment_thread_updated":
+      return {
+        title: "Comment thread updated",
+        icon: "activity",
+        tone: "in",
+        detail: observationFallbackDetail(observation),
+      };
     case "connection_request_pending":
       return {
         title: "Connection request",
@@ -1070,7 +1224,10 @@ function touchDuplicatesThreadMessage(touch, touchBody, threadMessages) {
 function buildSentDraftQueues(drafts) {
   /** @type {Map<string, Array<{ body: string | null }>>} */
   const queues = new Map();
-  for (const draft of drafts ?? []) {
+  const sentDrafts = [...(drafts ?? [])]
+    .filter((draft) => draft?.status === "sent" && MESSAGE_SURFACES.has(draft.surface))
+    .sort((a, b) => sentDraftTimestamp(a) - sentDraftTimestamp(b));
+  for (const draft of sentDrafts) {
     if (draft?.status !== "sent" || !MESSAGE_SURFACES.has(draft.surface)) continue;
     const queue = queues.get(draft.surface) ?? [];
     queue.push({
@@ -1092,6 +1249,30 @@ function consumeSentDraft(sentDraftQueues, surface) {
 }
 
 /**
+ * Suppress later placeholder-only sends when we already rendered the real
+ * outbound message for the same surface in the same short window.
+ *
+ * @param {any} touch
+ * @param {Array<{ surface: string, direction: string, outcome: string | null, at: string }>} renderedTouches
+ */
+function touchDuplicatesRenderedMessageTouch(touch, renderedTouches) {
+  const touchAt = Date.parse(touch?.occurredAt ?? "");
+  const touchDirection = normalizeMessageDirection(touch?.direction);
+  if (Number.isNaN(touchAt) || touchDirection === "unknown") return false;
+
+  for (const rendered of renderedTouches ?? []) {
+    const renderedAt = Date.parse(rendered?.at ?? "");
+    if (Number.isNaN(renderedAt)) continue;
+    if (Math.abs(renderedAt - touchAt) > 120000) continue;
+    if (rendered.surface !== touch.surface) continue;
+    if (rendered.direction !== touchDirection) continue;
+    if ((rendered.outcome ?? null) !== (touch?.outcome ?? null)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
  * Merge touches + draft lifecycle + the genesis (surfacing) event into one
  * descending-by-time list. Message-bearing entries carry their body + a status
  * so a queued message reads as the message itself, updating to "Sent" once it
@@ -1105,15 +1286,21 @@ function timelineEvents(p) {
   ];
   const threadMessages = Array.isArray(p?.threadMessages) ? p.threadMessages : [];
   const sentDraftQueues = buildSentDraftQueues(p.drafts ?? []);
-  for (const t of p.touches ?? []) {
+  /** @type {Array<{ surface: string, direction: string, outcome: string | null, at: string }>} */
+  const renderedMessageTouches = [];
+  for (const t of sortTouchesChronologically(p.touches ?? [])) {
     if (!t.occurredAt) continue;
     const meta = TOUCH_SURFACE[t.surface] ?? { label: humanizeSurface(t.surface), icon: "activity" };
     const matchedSentDraft = t.direction === "outbound" && t.outcome === "sent" && MESSAGE_SURFACES.has(t.surface)
       ? consumeSentDraft(sentDraftQueues, t.surface)
       : null;
+    const syntheticSendSummary = isSyntheticSendSummary(t.summary);
     const touchBody = normalizeMessageText(t.body) ?? matchedSentDraft?.body ?? null;
-    const messageBody = touchBody ?? normalizeMessageText(t.summary);
+    const messageBody = touchBody ?? (syntheticSendSummary ? null : normalizeMessageText(t.summary));
     if (MESSAGE_SURFACES.has(t.surface) && touchDuplicatesThreadMessage(t, touchBody, threadMessages)) {
+      continue;
+    }
+    if (MESSAGE_SURFACES.has(t.surface) && syntheticSendSummary && !touchBody && touchDuplicatesRenderedMessageTouch(t, renderedMessageTouches)) {
       continue;
     }
     if (MESSAGE_SURFACES.has(t.surface) && messageBody) {
@@ -1127,6 +1314,12 @@ function timelineEvents(p) {
         href: t.sourceUrl ?? null,
         byline: t.direction === "inbound" ? "From them" : null,
       });
+      renderedMessageTouches.push({
+        surface: t.surface,
+        direction: normalizeMessageDirection(t.direction),
+        outcome: t.outcome ?? null,
+        at: t.occurredAt,
+      });
     } else {
       events.push({
         type: "event",
@@ -1135,7 +1328,7 @@ function timelineEvents(p) {
         tone: touchTone(t),
         title: meta.label,
         outcome: t.outcome,
-        detail: t.summary,
+        detail: syntheticSendSummary ? null : t.summary,
         href: t.sourceUrl ?? null,
       });
     }
@@ -1422,8 +1615,9 @@ function composeSurfaceFor(p) {
   if (nextSurface === "inbound_reply" || nextSurface === "comment_reply") return nextSurface;
   const draftedSurface = resolveDraftedComposeSurface(p);
   if (draftedSurface) return draftedSurface;
+  if (isWaitingOnEmailReply(p)) return "email";
   if (nextSurface) return nextSurface;
-  const stageIdx = reconcileStageIndex(p.branch, p.connectionDegree);
+  const stageIdx = reconcileStageIndex(stageBranchFor(p), p.connectionDegree);
   return STAGE_SURFACE[stageIdx] ?? BRANCH_SURFACE[p.branch] ?? "post_accept_message";
 }
 
@@ -1518,6 +1712,18 @@ function draftTimestamp(draft) {
 }
 
 /**
+ * @param {any} prospect
+ * @param {string} surface
+ * @returns {string}
+ */
+function composeEmptyStateCopy(prospect, surface) {
+  if (surface === "email" && isWaitingOnEmailReply(prospect)) {
+    return "The last email was sent. The agent will wait for a reply before drafting again. Write your own below if you want to override that.";
+  }
+  return "Queued for the agent to draft. Write your own below if you don't want to wait.";
+}
+
+/**
  * The compose panel: pre-filled with the agent's draft (subject + body),
  * editable; Send approves it (queues for the agent to send).
  *
@@ -1567,7 +1773,7 @@ function renderComposePanel(p, meta = {}) {
 
   const byline = draft
     ? `<span class="compose-byline">${iconSvg("spark", 12)} Drafted by ${escapeHtml(draft.authoredBy)}${draft.editedByOperator ? " · edited" : (draft.approvedByOperator || draft.status === "approved") ? " · approved" : ""} · ${escapeHtml(draft.status)}</span>`
-    : `<span class="compose-empty">Queued for the agent to draft. Write your own below if you don't want to wait.</span>`;
+    : `<span class="compose-empty">${escapeHtml(composeEmptyStateCopy(p, surface))}</span>`;
 
   const subjectField = sm.subject
     ? `<div class="compose-field"><span class="compose-label">Subject</span>` +

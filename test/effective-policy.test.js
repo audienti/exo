@@ -119,6 +119,102 @@ const matchingObservation = {
   messages: [],
 };
 
+const gmailUser = {
+  ...baseUser,
+  accounts: [
+    {
+      id: "account-gmail",
+      createdAt: "2026-06-04T18:00:00.000Z",
+      updatedAt: "2026-06-04T18:00:00.000Z",
+      capability: "gmail",
+      handle: "operator@example.com",
+      label: "Operator Gmail",
+      sourceType: "harness-connection",
+      browserProfileId: null,
+      harnessConnectionId: "hc-gmail-1",
+      providerAccountId: "acct-gmail-1",
+      preferred: true,
+      automationControls: {
+        weeklyQuotas: { profileVisits: null, invitations: null, messages: null },
+      },
+      notes: null,
+      inboundSync: {
+        surfaces: [
+          {
+            surfaceKey: "gmail-inbox-threads",
+            enabled: true,
+            lastSyncedAt: null,
+            lastObservedAt: null,
+            lastRunStatus: "never",
+            lastItemCount: null,
+            lastVisibleTotalCount: null,
+            lastCaptureCompleteness: null,
+            lastRequestedMode: null,
+            lastActualMode: null,
+            lastReconcileRequired: null,
+            lastReconcileReason: null,
+            lastExhaustionStatus: null,
+            lastExhaustionReason: null,
+            lastPaginationAttempted: null,
+            lastTerminalSignalSeen: null,
+            lastStalledPassCount: null,
+            lastObservationCount: null,
+            lastItemizationGapCount: null,
+            lastCountDiscrepancyCount: null,
+            lastError: null,
+          },
+        ],
+      },
+    },
+  ],
+  harnessConnections: [
+    {
+      id: "hc-gmail-1",
+      createdAt: "2026-06-04T18:00:00.000Z",
+      updatedAt: "2026-06-04T18:00:00.000Z",
+      runtime: "codex",
+      connector: "gmail",
+      label: null,
+      status: "available",
+      notes: null,
+    },
+  ],
+};
+
+const gmailObservation = {
+  id: "obs-gmail-1",
+  dedupeKey: "account-gmail:gmail-inbox-threads:thread-1",
+  userId: "user-1",
+  accountId: "account-gmail",
+  capability: "gmail",
+  platform: "gmail",
+  surfaceKey: "gmail-inbox-threads",
+  kind: "email_thread_updated",
+  truthLevel: "authoritative",
+  observedAt: "2026-06-04T18:00:00.000Z",
+  recordedAt: "2026-06-04T18:00:00.000Z",
+  eventAt: null,
+  externalId: "thread-1",
+  actorName: "Lina Park",
+  actorTitle: "Procurement Support Department",
+  actorCompanyName: "GovPointe",
+  actorHandle: "lpark@govpointeoffice.us",
+  actorProfileUrl: null,
+  actorLinkedinPublicId: null,
+  actorLinkedinMemberId: null,
+  actorAvatarSourceUrl: null,
+  actorAvatarUrl: null,
+  threadUrl: "https://mail.google.com/mail/#all/thread-1",
+  sourceUrl: "https://mail.google.com/mail/#all/thread-1",
+  subject: null,
+  summary: "Repeated follow-up on an RFP thread.",
+  motionId: null,
+  companyId: null,
+  prospectId: null,
+  notes: "Subject: Re: Halfmoon Hillcrest Fire Dept. RFP",
+  messages: [],
+};
+
 test("effective policy matches identities by email, LinkedIn ids, profile URL, and thread URL", () => {
   const effective = compileEffectivePolicy({
     globalEvents: [
@@ -216,4 +312,55 @@ test("effective policy filters observations and cues and hides locally blocked s
     viewUser.accounts[0].inboundSync.surfaces.find((surface) => surface.surfaceKey === "linkedin-received-invitations")?.enabled,
     false,
   );
+});
+
+test("effective policy does not collapse Gmail thread URLs to the mailbox root", () => {
+  const effective = compileEffectivePolicy({
+    globalEvents: [
+      {
+        id: "ignore-generic-gmail-root",
+        createdAt: "2026-06-04T18:00:00.000Z",
+        kind: "ignore_identity",
+        reason: "Ignore a different Gmail sender/thread.",
+        account: {
+          providerAccountId: "acct-gmail-1",
+          capability: null,
+          handle: null,
+        },
+        person: {
+          actorHandle: "noreply@md.getsentry.com",
+          threadUrl: "https://mail.google.com/mail",
+        },
+        surface: null,
+      },
+    ],
+    localEvents: [],
+  });
+
+  assert.equal(matchesObservationAgainstPolicy(gmailObservation, gmailUser, effective), false);
+  assert.deepEqual(filterInboundObservationsForPolicy([gmailObservation], gmailUser, effective), [gmailObservation]);
+
+  const exactThreadPolicy = compileEffectivePolicy({
+    globalEvents: [
+      {
+        id: "ignore-exact-gmail-thread",
+        createdAt: "2026-06-04T18:00:00.000Z",
+        kind: "ignore_identity",
+        reason: "Ignore this exact Gmail thread.",
+        account: {
+          providerAccountId: "acct-gmail-1",
+          capability: null,
+          handle: null,
+        },
+        person: {
+          actorHandle: "noreply@md.getsentry.com",
+          threadUrl: "https://mail.google.com/mail/#all/thread-1",
+        },
+        surface: null,
+      },
+    ],
+    localEvents: [],
+  });
+
+  assert.equal(matchesObservationAgainstPolicy(gmailObservation, gmailUser, exactThreadPolicy), true);
 });

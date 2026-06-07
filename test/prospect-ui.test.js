@@ -84,6 +84,55 @@ test("prospect detail prefers the active email draft surface over branch-based L
   assert.doesNotMatch(html, /Connection request note · Lina Park/);
 });
 
+test("prospect detail shows email thread observations and waits on a sent email instead of inventing a queued draft", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    branch: "waiting",
+    branchLabel: "Email sent",
+    primaryChannel: "email",
+    email: "lpark@govpointeoffice.us",
+    cadenceState: {
+      status: "ready",
+      currentStep: "value-add-email",
+      lastTouchOutcome: "sent",
+      lastTouchAt: "2026-06-05T00:24:16.523Z",
+      nextAction: "Wait for an email reply before changing channels again.",
+    },
+    touches: [{
+      surface: "email",
+      direction: "outbound",
+      outcome: "sent",
+      occurredAt: "2026-06-05T00:24:16.523Z",
+      summary: "Sent send email for Lina Park.",
+    }],
+    timelineObservations: [{
+      id: "obs-email-thread",
+      kind: "email_thread_updated",
+      surfaceKey: "gmail-inbox-threads",
+      observedAt: "2026-06-04T13:37:36.000Z",
+      eventAt: null,
+      summary: "Repeated follow-up on a public-safety recruitment/website RFP for Halfmoon Hillcrest Fire Dept.",
+      sourceUrl: "https://mail.google.com/mail/#all/19e92da9d7e8fd05",
+      threadUrl: "https://mail.google.com/mail/#all/19e92da9d7e8fd05",
+      notes: "Subject: Re: William - Halfmoon Hillcrest Fire Dept.\n\nExternal follow-up thread. No reply from William visible in this thread.",
+    }],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Email sent/);
+  assert.match(html, /Wait for the email reply/);
+  assert.match(html, /The last email is out\. Stay on this thread until they answer or the branch changes\./);
+  assert.match(html, /Email thread updated/);
+  assert.match(html, /External follow-up thread\. No reply from William visible in this thread\./);
+  assert.match(html, /The last email was sent\. The agent will wait for a reply before drafting again\./);
+  assert.doesNotMatch(html, /Sent send email for Lina Park\./);
+  assert.doesNotMatch(html, /Review the queued email reply/);
+});
+
 test("prospect detail still falls back to connection-request compose when no active draft exists", () => {
   const html = renderProspectDetailPage(buildProspect(), {
     interactive: true,
@@ -508,6 +557,73 @@ test("prospect timeline shows the full structured thread history and keeps later
   assert.match(html, /Perfect\. I&#39;ll keep it tight and mention you pointed me his way\./);
   assert.doesNotMatch(html, /Matt Pierce has unread LinkedIn message activity\./);
   assert.doesNotMatch(html, /Sent send direct message for Matt Pierce\./);
+});
+
+test("prospect timeline suppresses later duplicate synthetic send touches once the real outbound body is recovered", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    name: "Ainsley Fagerström",
+    linkedinProfileUrl: "https://www.linkedin.com/in/ainsley-fagerstrom/",
+    branch: "reply-accepted",
+    branchLabel: "In conversation",
+    primaryChannel: "linkedin",
+    cadenceState: {
+      status: "ready",
+      currentStep: "direct-message",
+      lastTouchOutcome: "sent",
+      lastTouchAt: "2026-06-06T23:29:43.899Z",
+      nextAction: "Wait for a LinkedIn reply before forcing a new branch.",
+    },
+    drafts: [{
+      id: "draft-1",
+      surface: "inbound_reply",
+      channel: "linkedin",
+      subject: null,
+      body: "Thanks, Ainsley. Appreciate it. Send over a new time when you have one and I’ll make it work.",
+      status: "sent",
+      authoredBy: "agent",
+      editedByOperator: false,
+      approvedByOperator: false,
+      createdAt: "2026-06-06T16:27:21.792Z",
+      updatedAt: "2026-06-06T23:29:00.357Z",
+      approvedAt: "2026-06-06T18:23:07.476Z",
+      sentAt: "2026-06-06T23:29:00.357Z",
+      notes: null,
+    }],
+    touches: [
+      {
+        surface: "inbound_reply",
+        direction: "inbound",
+        outcome: "replied",
+        occurredAt: "2024-10-16T13:08:57.000Z",
+        summary: "Ainsley Fagerström has unread LinkedIn message activity.",
+        body: "Hey no worries at all!",
+      },
+      {
+        surface: "inbound_reply",
+        direction: "outbound",
+        outcome: "sent",
+        occurredAt: "2026-06-06T23:29:00.293Z",
+        summary: "Sent send direct message for Ainsley Fagerström.",
+      },
+      {
+        surface: "inbound_reply",
+        direction: "outbound",
+        outcome: "sent",
+        occurredAt: "2026-06-06T23:29:43.899Z",
+        summary: "Sent send direct message for Ainsley Fagerström.",
+      },
+    ],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Thanks, Ainsley\. Appreciate it\./);
+  assert.doesNotMatch(html, /Sent send direct message for Ainsley Fagerström\./);
+  assert.match(html, /Engagement timeline <span>2<\/span>/);
 });
 
 test("prospect timeline surfaces connected-state evidence from linked inbound observations", () => {

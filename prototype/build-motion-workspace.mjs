@@ -746,6 +746,14 @@ function deriveEngagementLane(prospect, dailyItem) {
     };
   }
 
+  if (["sent", "pending"].includes(lastOutcome) && cadence.currentStep === "value-add-email") {
+    return {
+      key: "waiting",
+      label: "Email sent",
+      description: "An email is already out and the branch is waiting on their reply.",
+    };
+  }
+
   if (["sent", "pending"].includes(lastOutcome)) {
     return {
       key: "sent-pending",

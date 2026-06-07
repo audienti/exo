@@ -475,8 +475,8 @@ function matchesPersonSelector(selector, observation) {
     (selector.actorHandle && selector.actorHandle === normalizeEmailHandle(observation.actorHandle))
     || (selector.actorLinkedinMemberId && selector.actorLinkedinMemberId === normalizeNullableString(observation.actorLinkedinMemberId))
     || (selector.actorLinkedinPublicId && selector.actorLinkedinPublicId === normalizeNullableString(observation.actorLinkedinPublicId))
-    || (selector.actorProfileUrl && selector.actorProfileUrl === normalizeUrl(observation.actorProfileUrl))
-    || (selector.threadUrl && selector.threadUrl === normalizeUrl(observation.threadUrl))
+    || (selector.actorProfileUrl && selector.actorProfileUrl === normalizeProfileUrl(observation.actorProfileUrl))
+    || (selector.threadUrl && selector.threadUrl === normalizeThreadUrl(observation.threadUrl))
   );
 }
 
@@ -499,8 +499,8 @@ function normalizePersonSelector(selector) {
     actorHandle: normalizeEmailHandle(selector.actorHandle),
     actorLinkedinMemberId: normalizeNullableString(selector.actorLinkedinMemberId),
     actorLinkedinPublicId: normalizeNullableString(selector.actorLinkedinPublicId),
-    actorProfileUrl: normalizeUrl(selector.actorProfileUrl),
-    threadUrl: normalizeUrl(selector.threadUrl),
+    actorProfileUrl: normalizeProfileUrl(selector.actorProfileUrl),
+    threadUrl: normalizeThreadUrl(selector.threadUrl),
   };
 }
 
@@ -537,7 +537,7 @@ function normalizeEmailHandle(value) {
 /**
  * @param {string | null | undefined} value
  */
-function normalizeUrl(value) {
+function normalizeProfileUrl(value) {
   const normalized = normalizeNullableString(value);
   if (!normalized) {
     return null;
@@ -547,4 +547,27 @@ function normalizeUrl(value) {
     .toLowerCase()
     .replace(/[?#].*$/, "")
     .replace(/\/+$/, "");
+}
+
+/**
+ * Thread URLs can carry their stable identity in the fragment, especially for
+ * Gmail (`#all/<thread-id>`). Do not strip fragments here or unrelated inbox
+ * threads collapse to the same mailbox root.
+ *
+ * @param {string | null | undefined} value
+ */
+function normalizeThreadUrl(value) {
+  const normalized = normalizeNullableString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+    const hash = parsed.hash ? parsed.hash.toLowerCase() : "";
+    return `${parsed.protocol.toLowerCase()}//${parsed.host.toLowerCase().replace(/^www\./, "")}${pathname}${hash}`;
+  } catch {
+    return normalized.toLowerCase();
+  }
 }

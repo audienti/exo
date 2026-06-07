@@ -214,7 +214,7 @@ function shapeProspect(raw, ctx) {
     signalTruth: deriveSignalTruth(signalMatchCount, raw.fitConfidence),
     fit: raw.fitConfidence ?? null,
     branch,
-    branchLabel: raw.engagementLane?.label ?? null,
+    branchLabel: normalizeBranchLabel(branch, raw.engagementLane?.label ?? null),
     actionIntents: intents,
     owner: ctx.ownerByCompany.get(raw.companyId) ?? null,
     ageLabel: relativeDays(raw.profileViewedAt),
@@ -258,6 +258,19 @@ function shapeProspect(raw, ctx) {
 function shouldIncludeProspect(raw, prospect) {
   const touchCount = Array.isArray(raw.touches) ? raw.touches.length : 0;
   return !(prospect.branch === "archived" && prospect.channels.length === 0 && touchCount === 0);
+}
+
+/**
+ * Keep operator-facing branch copy consistent across the prospects index and
+ * detail routes. Internal engagement-lane labels are too implementation-flavored.
+ *
+ * @param {string} branch
+ * @param {string | null} label
+ */
+function normalizeBranchLabel(branch, label) {
+  if (branch === "reply-accepted") return "In conversation";
+  if (branch === "connection-requested") return "Request sent";
+  return label;
 }
 
 /**

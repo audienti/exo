@@ -112,7 +112,7 @@ test("buildProspectsViewModel preserves channel destinations for hover and click
   ]);
 });
 
-test("buildProspectsViewModel preserves reply-accepted as an in-conversation branch", () => {
+test("buildProspectsViewModel normalizes reply-accepted to the operator-facing in-conversation label", () => {
   const model = buildProspectsViewModel({
     prospectPrepLanes: [],
     engagementLanes: [{
@@ -150,7 +150,77 @@ test("buildProspectsViewModel preserves reply-accepted as an in-conversation bra
   });
 
   assert.equal(model.details[0]?.branch, "reply-accepted");
-  assert.equal(model.details[0]?.branchLabel, "Reply / accepted");
+  assert.equal(model.details[0]?.branchLabel, "In conversation");
+});
+
+test("buildProspectsViewModel normalizes sent-pending to request sent", () => {
+  const model = buildProspectsViewModel({
+    prospectPrepLanes: [],
+    engagementLanes: [{
+      key: "sent-pending",
+      items: [buildRawProspect({
+        prospectId: "pending-prospect",
+        name: "Pending Prospect",
+        linkedinProfileUrl: "https://www.linkedin.com/in/pending-prospect/",
+        engagementLane: { key: "sent-pending", label: "Sent / pending" },
+        cadenceState: {
+          status: "ready",
+          currentStep: "connection-request",
+          lastTouchOutcome: "pending",
+          lastTouchAt: "2026-06-07T00:09:49.284Z",
+          nextAction: "Wait for the connection request to resolve.",
+        },
+        touches: [
+          {
+            surface: "connection_request",
+            direction: "outbound",
+            outcome: "pending",
+            occurredAt: "2026-06-07T00:09:49.284Z",
+          },
+        ],
+      })],
+    }],
+    motionDetails: [],
+    now: "2026-06-07T00:10:00Z",
+  });
+
+  assert.equal(model.details[0]?.branch, "connection-requested");
+  assert.equal(model.details[0]?.branchLabel, "Request sent");
+});
+
+test("buildProspectsViewModel preserves an email-sent waiting label without collapsing it to sent-pending", () => {
+  const model = buildProspectsViewModel({
+    prospectPrepLanes: [],
+    engagementLanes: [{
+      key: "waiting",
+      items: [buildRawProspect({
+        prospectId: "email-prospect",
+        name: "Email Prospect",
+        email: "email.prospect@example.com",
+        engagementLane: { key: "waiting", label: "Email sent" },
+        cadenceState: {
+          status: "ready",
+          currentStep: "value-add-email",
+          lastTouchOutcome: "sent",
+          lastTouchAt: "2026-06-05T00:24:16.523Z",
+          nextAction: "Wait for an email reply before changing channels again.",
+        },
+        touches: [
+          {
+            surface: "email",
+            direction: "outbound",
+            outcome: "sent",
+            occurredAt: "2026-06-05T00:24:16.523Z",
+          },
+        ],
+      })],
+    }],
+    motionDetails: [],
+    now: "2026-06-07T00:10:00Z",
+  });
+
+  assert.equal(model.details[0]?.branch, "waiting");
+  assert.equal(model.details[0]?.branchLabel, "Email sent");
 });
 
 test("buildProspectsViewModel filters prospects by case-insensitive multi-field search terms", () => {

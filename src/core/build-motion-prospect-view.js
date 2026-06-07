@@ -15,6 +15,13 @@ const ENGAGEABLE_ACTIVITY_TYPES = new Set([
 ]);
 const THREAD_MESSAGE_LIMIT = 8;
 const PROSPECT_TIMELINE_OBSERVATION_KINDS = new Set([
+  "email_reply_received",
+  "email_thread_updated",
+  "inbound_reply_received",
+  "message_received",
+  "thread_updated",
+  "public_reply_received",
+  "comment_thread_updated",
   "connection_request_pending",
   "connection_request_received",
   "connection_request_accepted",
