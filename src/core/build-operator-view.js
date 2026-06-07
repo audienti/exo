@@ -89,6 +89,7 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {string | null} role
  * @property {string | null} company
  * @property {string | null} roleLine
+ * @property {string | null} motionName
  * @property {"high" | "block" | "medium" | null} stakes
  * @property {string} summary
  * @property {string} truth
@@ -155,6 +156,7 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {string} meta
  * @property {"decision" | "agent" | "truth" | "blocked"} kind
  * @property {boolean} done
+ * @property {string | null} href
  */
 
 /**
@@ -166,6 +168,8 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  *   decisionQueue: any,
  *   agentQueue: any,
  *   blockedQueue?: any,
+ *   dueNowItems?: any[],
+ *   waitingItems?: any[],
  *   truthAccounts: any[],
  *   agentRuntime?: any,
  * }} input
@@ -192,25 +196,26 @@ export function buildOperatorViewModel(input) {
   const decisionItems = (input.decisionQueue?.items ?? []).filter(
     (item) => !HANDLED_STATES.has(item.state) && !isCleanupLaneItem(item, { now }),
   );
+  const plannerItems = collectPlannerActionItems(input.dueNowItems ?? []);
+  const operatorItems = decisionItems.concat(plannerItems);
   // The Next-move hero should follow the governed planner summary when it
   // points at a concrete decision item. Falling back to the raw top decision
   // is what made Operator disagree with `exo next`.
-  const promotedDecision = pickPromotedDecision(input.operatorSummary ?? null, decisionItems);
+  const promotedDecision = pickPromotedDecision(input.operatorSummary ?? null, operatorItems);
   const nextMove = shapeNextMove(input.operatorSummary ?? null, promotedDecision);
   const promotedId = nextMove && promotedDecision ? promotedDecision.id : null;
 
-  const decisions = shapeDecisions(decisionItems.filter((item) => item.id !== promotedId));
+  const decisions = shapeDecisions(operatorItems.filter((item) => item.id !== promotedId));
   const queue = shapeQueue(input.agentQueue?.items ?? []);
   const blocked = shapeBlocked(input.blockedQueue?.items ?? input.agentQueue?.blockers ?? []);
   const stale = shapeStale(input.truthAccounts ?? []);
-  const agenda = shapeAgenda(input.operatorSummary?.checklist ?? []);
 
   const counts = {
-    decisions: decisions.length,
+    decisions: operatorItems.length,
     queue: queue.length,
     blocked: blocked.length,
     stale: stale.length,
-    agendaLeft: agenda.filter((row) => !row.done).length,
+    agendaLeft: 0,
   };
   const agentRuntime = shapeAgentRuntime(input.agentRuntime ?? null, counts.queue);
 
@@ -225,7 +230,7 @@ export function buildOperatorViewModel(input) {
     queue,
     blocked,
     stale,
-    agenda,
+    agenda: [],
   };
 }
 
@@ -346,6 +351,7 @@ function shapeDecisions(items) {
   return items.map((item) => {
     const stakes = item.priority === "high" ? "high" : null;
     const actions = shapeDecisionActions(item);
+    const primaryAction = actions[0] ?? null;
     return {
       id: String(item.id),
       person: item.subject ?? "Unknown",
@@ -355,18 +361,19 @@ function shapeDecisions(items) {
       role: item.actorTitle ?? null,
       company: item.actorCompanyName ?? item.companyName ?? null,
       roleLine: composeSubtitle(item.actorTitle ?? null, item.actorCompanyName ?? item.companyName ?? null),
+      motionName: item.motionName ?? null,
       stakes,
       summary: item.recommendedAction ?? item.summary ?? "",
       truth: pickDecisionTruth(item),
       truthAt: relativeFromIso(item.observedAt),
       surface: humanizeSurfaceKey(item.surfaceKey),
       actionStatus: actionStatusForState(item.state ?? ""),
-      primaryActionLabel: pickPrimaryActionLabel(item),
-      primaryActionMode: pickPrimaryActionMode(item),
-      primaryHref: item.actorProfileUrl ?? item.sourceUrl ?? null,
+      primaryActionLabel: primaryAction?.label ?? pickPrimaryActionLabel(item),
+      primaryActionMode: primaryAction?.mode ?? pickPrimaryActionMode(item),
+      primaryHref: primaryAction?.href ?? item.actorProfileUrl ?? item.sourceUrl ?? null,
       secondaryActionLabel: pickSecondaryActionLabel(item),
       secondaryHref: null,
-      why: item.why ?? null,
+      why: item.why ?? item.whyItMatters ?? null,
       previewLabel: item.previewLabel ?? null,
       previewSubject: item.previewSubject ?? null,
       previewText: item.previewText ?? null,
@@ -380,6 +387,9 @@ function shapeDecisions(items) {
  * @returns {OperatorUiAction[]}
  */
 function shapeDecisionActions(item) {
+  if (Array.isArray(item?.operatorActions)) {
+    return item.operatorActions.filter(Boolean);
+  }
   const options = decisionOptionsFor(item);
   return options
     .map((option) => shapeDecisionAction(String(option), item))
@@ -594,18 +604,211 @@ function shapeStale(truthAccounts) {
 }
 
 /**
- * @param {any[]} checklist
- * @returns {OperatorAgendaRow[]}
+ * @param {any[] | null | undefined} items
+ * @returns {any[]}
  */
-function shapeAgenda(checklist) {
-  return checklist.map((item, index) => ({
-    id: `agenda-${index}`,
-    time: formatClockTime(item.dueAt) ?? "—",
-    label: shortenAction(item.action ?? item.subject ?? ""),
-    meta: shortenSubject(item.subject ?? ""),
-    kind: deriveAgendaKind(item),
-    done: false,
-  }));
+function collectPlannerActionItems(items) {
+  return toArray(items)
+    .filter(shouldSurfacePlannerActionItem)
+    .sort((left, right) => parseAgendaTime(left?.dueAt) - parseAgendaTime(right?.dueAt))
+    .map(normalizePlannerActionItem)
+    .filter(Boolean);
+}
+
+/** @param {any[] | null | undefined} value */
+function toArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+/** @param {string | null | undefined} iso */
+function parseAgendaTime(iso) {
+  if (!iso) return Number.MAX_SAFE_INTEGER;
+  const target = new Date(iso);
+  return Number.isNaN(target.getTime()) ? Number.MAX_SAFE_INTEGER : target.getTime();
+}
+
+/** @param {any} item */
+function shouldSurfacePlannerActionItem(item) {
+  if (!item || item.state !== "due_now" || item.state === "done") return false;
+  return String(item?.source?.type ?? "").toLowerCase() !== "inbound_review";
+}
+
+/** @param {any} item */
+function normalizePlannerActionItem(item) {
+  const prospectId = normalizeUuid(item?.prospect?.id);
+  const companyId = normalizeUuid(item?.company?.id);
+  const motionId = normalizeUuid(item?.motion?.id);
+  const href = plannerItemHref(item);
+  const composeReady = isPlannerComposeReady(item, prospectId);
+  const recommendedAction = item?.recommendedAction ?? item?.cadence?.nextAction ?? plannerActionLabel(item);
+  const person = item?.prospect?.name ?? item?.company?.name ?? item?.motion?.name ?? "General";
+
+  return {
+    id: plannerItemKey(item) ?? `planner-${motionId ?? "motion"}-${companyId ?? "company"}-${prospectId ?? "prospect"}`,
+    subject: person,
+    prospectId,
+    actorTitle: item?.prospect?.title ?? null,
+    actorCompanyName: item?.company?.name ?? null,
+    motionName: item?.motion?.name ?? null,
+    summary: recommendedAction,
+    recommendedAction,
+    why: item?.whyItMatters ?? null,
+    observedAt: item?.dueAt ?? null,
+    state: "due_now",
+    priority: "medium",
+    surfaceKey: String(item?.source?.type ?? "cadence").replaceAll("_", "-"),
+    operatorActions: buildPlannerOperatorActions({
+      item,
+      prospectId,
+      companyId,
+      motionId,
+      href,
+      composeReady,
+    }),
+  };
+}
+
+/**
+ * @param {{
+ *   item: any,
+ *   prospectId: string | null,
+ *   companyId: string | null,
+ *   motionId: string | null,
+ *   href: string | null,
+ *   composeReady: boolean,
+ * }} input
+ * @returns {OperatorUiAction[]}
+ */
+function buildPlannerOperatorActions(input) {
+  const primaryLabel = plannerPrimaryActionLabel(input.item, input.composeReady);
+  const actions = [{
+    label: primaryLabel,
+    mode: input.composeReady ? "compose" : "detail",
+    href: input.href,
+    writer: null,
+    args: null,
+    variant: "primary",
+    icon: "arrowR",
+  }];
+
+  if (input.composeReady && input.href) {
+    actions.push({
+      label: "Open prospect",
+      mode: "detail",
+      href: input.href,
+      writer: null,
+      args: null,
+      variant: "secondary",
+      icon: "eye",
+    });
+    return actions;
+  }
+
+  if (input.prospectId && input.href) {
+    actions.push({
+      label: "Open prospect",
+      mode: "detail",
+      href: input.href,
+      writer: null,
+      args: null,
+      variant: "secondary",
+      icon: "eye",
+    });
+    return actions;
+  }
+
+  if (input.companyId && input.href) {
+    actions.push({
+      label: "Open company",
+      mode: "detail",
+      href: input.href,
+      writer: null,
+      args: null,
+      variant: "secondary",
+      icon: "building",
+    });
+    return actions;
+  }
+
+  if (input.motionId && input.href) {
+    actions.push({
+      label: "Open motion",
+      mode: "detail",
+      href: input.href,
+      writer: null,
+      args: null,
+      variant: "secondary",
+      icon: "flag",
+    });
+  }
+
+  return actions;
+}
+
+/** @param {any} item */
+function plannerItemKey(item) {
+  const parts = [item?.motion?.id, item?.company?.id, item?.prospect?.id].filter(Boolean);
+  return parts.length > 0 ? parts.join("::") : null;
+}
+
+/** @param {any} item */
+function plannerItemHref(item) {
+  const prospectId = String(item?.prospect?.id ?? "");
+  const companyId = String(item?.company?.id ?? "");
+  const motionId = String(item?.motion?.id ?? "");
+
+  if (prospectId.startsWith("outbound-capacity:")) return "/workspace";
+  if (isUuid(prospectId)) return `/prospects/${encodeURIComponent(prospectId)}`;
+  if (isUuid(companyId)) return `/companies/${encodeURIComponent(companyId)}`;
+  if (isUuid(motionId)) return `/motions/${encodeURIComponent(motionId)}`;
+  return null;
+}
+
+/** @param {string | null | undefined} value */
+function normalizeUuid(value) {
+  const normalized = String(value ?? "");
+  return isUuid(normalized) ? normalized : null;
+}
+
+/**
+ * @param {any} item
+ * @param {string | null} prospectId
+ */
+function isPlannerComposeReady(item, prospectId) {
+  if (!prospectId) return false;
+  const text = `${item?.recommendedAction ?? ""} ${item?.cadence?.nextAction ?? ""}`.toLowerCase();
+  if (/\b(research|select|claim|assign|build|discover)\b/.test(text)) return false;
+  if (/\b(reply|message|email|send|follow up|follow-up|connection request|invite|touch)\b/.test(text)) return true;
+  return String(item?.source?.type ?? "").toLowerCase() === "cadence";
+}
+
+/**
+ * @param {any} item
+ * @param {boolean} composeReady
+ */
+function plannerPrimaryActionLabel(item, composeReady) {
+  const text = `${item?.recommendedAction ?? ""} ${item?.cadence?.nextAction ?? ""}`.toLowerCase();
+  if (composeReady) {
+    if (/\bconnection request\b|\binvite\b/.test(text)) return "Compose request";
+    if (/\bemail\b/.test(text)) return "Compose email";
+    if (/\breply\b/.test(text)) return "Reply now";
+    return "Compose message";
+  }
+
+  if (normalizeUuid(item?.prospect?.id)) return "Open prospect";
+  if (normalizeUuid(item?.company?.id)) return "Open company";
+  if (normalizeUuid(item?.motion?.id)) return "Open motion";
+  return "Review";
+}
+
+/** @param {any} item */
+function plannerActionLabel(item) {
+  return [item?.motion?.name, item?.company?.name, item?.prospect?.name].filter(Boolean).join(" / ") || "General";
+}
+
+/** @param {string} value */
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
 /**
@@ -805,6 +1008,7 @@ function decisionOptionsFor(item) {
 
 /** @param {string} state */
 function actionStatusForState(state) {
+  if (state === "due_now") return "due now";
   if (state === "needs_reply" || state === "ready_for_post_accept") return "due now";
   if (state === "needs_decision") return "needs decision";
   return "needs decision";
@@ -961,6 +1165,10 @@ function formatClockTime(iso) {
  * @param {any} item
  */
 function deriveAgendaKind(item) {
+  const sourceType = String(item?.source?.type ?? "").toLowerCase();
+  if (sourceType === "inbound_review") return "decision";
+  if (sourceType.includes("gap")) return "truth";
+  if (item?.state === "waiting_until") return "blocked";
   const subject = String(item.subject ?? "").toLowerCase();
   if (subject.includes("inbound") || subject.includes("itemization")) return "truth";
   if (subject.includes("blocked") || subject.includes("block")) return "blocked";

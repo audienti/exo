@@ -45,6 +45,7 @@ export function normalizeAgentHostState(state) {
     },
     taskLeases: [],
     recentTaskVerifications: [],
+    recentMotionTaskRuns: [],
   };
 
   for (const lane of ["retrieval", "execution"]) {
@@ -97,6 +98,13 @@ export function normalizeAgentHostState(state) {
     : [];
   normalized.recentTaskVerifications = verifications
     .map(normalizeTaskVerificationEntry)
+    .filter(Boolean);
+
+  const motionTaskRuns = Array.isArray(state?.recentMotionTaskRuns)
+    ? state.recentMotionTaskRuns
+    : [];
+  normalized.recentMotionTaskRuns = motionTaskRuns
+    .map(normalizeMotionTaskRunEntry)
     .filter(Boolean);
 
   return normalized;
@@ -263,6 +271,70 @@ export function recordTaskVerification(state, entry) {
     .filter((item) => !(item.taskKind === nextEntry.taskKind && item.fingerprint === nextEntry.fingerprint));
   normalized.recentTaskVerifications.push(nextEntry);
   return normalized;
+}
+
+/**
+ * @param {any} state
+ * @param {{
+ *   taskKind: string,
+ *   motionId: string,
+ *   recordedAt: string,
+ *   companyId?: string | null,
+ *   prospectId?: string | null,
+ *   status?: string | null,
+ * }} entry
+ */
+export function recordMotionTaskRun(state, entry) {
+  const normalized = normalizeAgentHostState(state);
+  const nextEntry = normalizeMotionTaskRunEntry(entry);
+  if (!nextEntry) return normalized;
+  normalized.recentMotionTaskRuns = normalized.recentMotionTaskRuns
+    .filter((item) => !(item.taskKind === nextEntry.taskKind && item.motionId === nextEntry.motionId));
+  normalized.recentMotionTaskRuns.push(nextEntry);
+  normalized.recentMotionTaskRuns.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt));
+  if (normalized.recentMotionTaskRuns.length > 200) {
+    normalized.recentMotionTaskRuns = normalized.recentMotionTaskRuns.slice(-200);
+  }
+  return normalized;
+}
+
+/**
+ * @param {any} state
+ * @param {string | null | undefined} taskKind
+ * @param {string | null | undefined} motionId
+ */
+export function getRecentMotionTaskRunAt(state, taskKind, motionId) {
+  if (!taskKind || !motionId) return null;
+  const normalized = normalizeAgentHostState(state);
+  return normalized.recentMotionTaskRuns.find((entry) =>
+    entry.taskKind === taskKind && entry.motionId === motionId
+  )?.recordedAt ?? null;
+}
+
+/**
+ * @param {any} state
+ * @param {string | null | undefined} motionId
+ * @param {Iterable<string> | null | undefined} [taskKinds]
+ */
+export function getRecentMotionRunAt(state, motionId, taskKinds = null) {
+  if (!motionId) return null;
+  const normalized = normalizeAgentHostState(state);
+  const allowedKinds = taskKinds
+    ? new Set(Array.from(taskKinds).filter((value) => typeof value === "string" && value.trim().length > 0))
+    : null;
+  let latest = null;
+  for (const entry of normalized.recentMotionTaskRuns) {
+    if (entry.motionId !== motionId) {
+      continue;
+    }
+    if (allowedKinds && !allowedKinds.has(entry.taskKind)) {
+      continue;
+    }
+    if (!latest || entry.recordedAt > latest) {
+      latest = entry.recordedAt;
+    }
+  }
+  return latest;
 }
 
 /**
@@ -570,6 +642,22 @@ function normalizeTaskVerificationEntry(entry) {
     verificationStatus: normalizeIdentity(entry?.verificationStatus),
     prospectName: normalizeIdentity(entry?.prospectName),
     companyName: normalizeIdentity(entry?.companyName),
+  };
+}
+
+/** @param {any} entry */
+function normalizeMotionTaskRunEntry(entry) {
+  const taskKind = normalizeIdentity(entry?.taskKind);
+  const motionId = normalizeIdentity(entry?.motionId);
+  const recordedAt = normalizeIsoDatetime(entry?.recordedAt);
+  if (!taskKind || !motionId || !recordedAt) return null;
+  return {
+    taskKind,
+    motionId,
+    recordedAt,
+    companyId: normalizeIdentity(entry?.companyId),
+    prospectId: normalizeIdentity(entry?.prospectId),
+    status: normalizeIdentity(entry?.status),
   };
 }
 

@@ -7,14 +7,18 @@ import {
   checkoutTaskLease,
   createTaskLeaseFingerprint,
   getActiveTaskLease,
+  getRecentMotionRunAt,
+  getRecentMotionTaskRunAt,
   normalizeAgentHostState,
   pruneExpiredBrowserBackoffs,
+  recordMotionTaskRun,
   releaseTaskLease,
 } from "../src/lib/agent-host-state.js";
 
 test("normalizeAgentHostState includes an empty task lease ledger", () => {
   const state = normalizeAgentHostState(null);
   assert.deepEqual(state.taskLeases, []);
+  assert.deepEqual(state.recentMotionTaskRuns, []);
 });
 
 test("task lease checkout stores and releases a durable checkout entry", () => {
@@ -100,4 +104,63 @@ test("task lease fingerprints distinguish paginated inbound sync slices", () => 
   });
 
   assert.notEqual(first, second);
+});
+
+test("recordMotionTaskRun keeps the latest per task kind and motion for round-robin ordering", () => {
+  const afterFirst = recordMotionTaskRun(null, {
+    taskKind: "company_discovery",
+    motionId: "motion-1",
+    recordedAt: "2026-06-06T20:00:00.000Z",
+    status: "completed",
+  });
+
+  const afterSecond = recordMotionTaskRun(afterFirst, {
+    taskKind: "company_discovery",
+    motionId: "motion-2",
+    recordedAt: "2026-06-06T21:00:00.000Z",
+    status: "failed",
+  });
+
+  const updated = recordMotionTaskRun(afterSecond, {
+    taskKind: "company_discovery",
+    motionId: "motion-1",
+    recordedAt: "2026-06-06T22:00:00.000Z",
+    status: "completed",
+  });
+
+  assert.equal(updated.recentMotionTaskRuns.length, 2);
+  assert.equal(getRecentMotionTaskRunAt(updated, "company_discovery", "motion-1"), "2026-06-06T22:00:00.000Z");
+  assert.equal(getRecentMotionTaskRunAt(updated, "company_discovery", "motion-2"), "2026-06-06T21:00:00.000Z");
+});
+
+test("getRecentMotionRunAt returns the latest recorded motion activity across task kinds", () => {
+  const state = recordMotionTaskRun(
+    recordMotionTaskRun(
+      recordMotionTaskRun(null, {
+        taskKind: "company_discovery",
+        motionId: "motion-1",
+        recordedAt: "2026-06-06T20:00:00.000Z",
+        status: "completed",
+      }),
+      {
+        taskKind: "company_research",
+        motionId: "motion-1",
+        recordedAt: "2026-06-06T21:00:00.000Z",
+        status: "completed",
+      },
+    ),
+    {
+      taskKind: "prospect_selection",
+      motionId: "motion-2",
+      recordedAt: "2026-06-06T22:00:00.000Z",
+      status: "completed",
+    },
+  );
+
+  assert.equal(getRecentMotionRunAt(state, "motion-1"), "2026-06-06T21:00:00.000Z");
+  assert.equal(
+    getRecentMotionRunAt(state, "motion-1", new Set(["company_discovery"])),
+    "2026-06-06T20:00:00.000Z",
+  );
+  assert.equal(getRecentMotionRunAt(state, "motion-2"), "2026-06-06T22:00:00.000Z");
 });

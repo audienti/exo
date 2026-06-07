@@ -18,12 +18,12 @@ import { evaluateMotionTargeting } from "../../core/evaluate-motion-targeting.js
 import { linkCompanyToMotion } from "../../core/link-company-to-motion.js";
 import { recordMotionProspect } from "../../core/record-prospect.js";
 import { refreshMotion } from "../../core/refresh-motion.js";
+import { removeMotionGoverned } from "../../core/remove-motion.js";
 import { setMotionTargetAccountQueue } from "../../core/set-target-account-queue.js";
 import { startMotion } from "../../core/start-motion.js";
 import { transitionMotionStatus } from "../../core/transition-motion-status.js";
 import { updateMotionDefinition } from "../../core/update-motion.js";
 import {
-  deleteMotion,
   findCompanyById,
   findCompanyByIdentity,
   findBrowserProfileById,
@@ -124,6 +124,7 @@ Canonical motion interface:
       .command("intake")
       .description("Inspect partial new-motion input and return the next question the agent should ask before launch.")
       .option("--existing <strategy>", "continue | clone | new")
+      .option("--user <user-id>", "Execution user to assign before launch")
       .option("--from <motion-id>", "Existing motion id to continue or clone when multiple motions share the same URL")
   )
     .addHelpText(
@@ -161,6 +162,7 @@ Examples:
       const result = buildMotionIntake(
         {
           ...input,
+          launchUserId: options.user ?? null,
           existingStrategy,
           sourceMotionId: options.from ?? null
         },
@@ -195,6 +197,7 @@ Examples:
       .command("start")
       .description("Start an outreach motion from an offer URL, checking for existing motions on the same URL before creating anything new.")
       .option("--existing <strategy>", "continue | clone | new")
+      .option("--user <user-id>", "Execution user to assign before launch")
       .option("--from <motion-id>", "Existing motion id to continue or clone when multiple motions share the same URL")
   )
     .addHelpText(
@@ -220,8 +223,15 @@ Examples:
     )
     .action(async (options) => {
       let input;
+      let launchUser = null;
       try {
         input = buildMotionDefinitionInput(options);
+        if (options.user) {
+          launchUser = findUserById(options.user);
+          if (!launchUser) {
+            throw new Error(`User not found: ${options.user}`);
+          }
+        }
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
@@ -241,8 +251,22 @@ Examples:
         return;
       }
 
+      if (result.status === "continued" && launchUser) {
+        const maybeAssigned = assignLaunchUserIfNeeded(result.motion, launchUser, {
+          assignedBy: "exo-cli",
+          reason: "Keep one execution identity for this motion",
+        });
+        result.motion = maybeAssigned.changed ? updateMotion(maybeAssigned.motion) : maybeAssigned.motion;
+      }
+
       if (result.status === "created" || result.status === "cloned") {
-        result.motion = insertMotion(result.motion);
+        const motion = launchUser
+          ? assignMotionUser(result.motion, launchUser, listBrowserProfiles(), {
+              assignedBy: "exo-cli",
+              reason: "Keep one execution identity for this motion",
+            })
+          : result.motion;
+        result.motion = insertMotion(motion);
       }
 
       if (options.json) {
@@ -1663,49 +1687,20 @@ Examples:
   exo motion remove <motion-id> --json
 `
     )
-    .action((motionId, options) => {
-      const raw = findMotionById(motionId);
+    .action(async (motionId, options) => {
+      try {
+        const result = await removeMotionGoverned({ motionId });
 
-      if (!raw) {
-        console.error(`Motion not found: ${motionId}`);
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        console.log(result.message);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;
-        return;
       }
-
-      const motion = motionSchema.parse(raw);
-      const now = new Date().toISOString();
-      const updatedCompanies = listCompanies()
-        .map((item) => companySchema.parse(item))
-        .filter((company) => company.motionIds.includes(motionId))
-        .map((company) => {
-          const updatedCompany = companySchema.parse({
-            ...company,
-            updatedAt: now,
-            motionIds: company.motionIds.filter((id) => id !== motionId)
-          });
-          updateCompany(updatedCompany);
-          return updatedCompany;
-        });
-
-      deleteMotion(motionId);
-
-      if (options.json) {
-        console.log(
-          JSON.stringify(
-            {
-              removedMotion: motion,
-              updatedCompanies
-            },
-            null,
-            2
-          )
-        );
-        return;
-      }
-
-      console.log(
-        `Removed motion ${motion.name} (${motion.id}) and unlinked ${updatedCompanies.length} compan${updatedCompanies.length === 1 ? "y" : "ies"}.`
-      );
     });
 }
 
@@ -1954,6 +1949,28 @@ function normalizeExistingStrategy(value) {
   }
 
   throw new Error(`Invalid --existing strategy: ${value}`);
+}
+
+/**
+ * @param {import("../../schema/motion.js").motionSchema._type} rawMotion
+ * @param {import("../../schema/user.js").userSchema._type} rawUser
+ * @param {{ assignedBy?: string | null, reason?: string | null, force?: boolean }} [options]
+ */
+function assignLaunchUserIfNeeded(rawMotion, rawUser, options = {}) {
+  const assignedUserId = rawMotion.engagementUserAssignment?.userId ?? null;
+  if (assignedUserId === rawUser.id) {
+    return { motion: rawMotion, changed: false };
+  }
+  if (assignedUserId && !options.force) {
+    return { motion: rawMotion, changed: false };
+  }
+  return {
+    motion: assignMotionUser(rawMotion, rawUser, listBrowserProfiles(), {
+      assignedBy: options.assignedBy ?? null,
+      reason: options.reason ?? null,
+    }),
+    changed: true,
+  };
 }
 
 /**

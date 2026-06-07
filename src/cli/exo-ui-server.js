@@ -449,6 +449,8 @@ export async function renderRoute(route, ctx, hooks = {}) {
         decisionQueue: data.decisionQueue,
         agentQueue: data.agentQueue,
         blockedQueue: data.blockedQueue,
+        dueNowItems: data.dueNowItems,
+        waitingItems: data.waitingItems,
         truthAccounts: data.truthAccounts,
         agentRuntime,
       });
@@ -463,6 +465,8 @@ export async function renderRoute(route, ctx, hooks = {}) {
         decisionQueue: data.decisionQueue,
         agentQueue: data.agentQueue,
         blockedQueue: data.blockedQueue,
+        dueNowItems: data.dueNowItems,
+        waitingItems: data.waitingItems,
         truthAccounts: data.truthAccounts,
         agentRuntime,
       });
@@ -480,7 +484,10 @@ export async function renderRoute(route, ctx, hooks = {}) {
     }
     case "/motions": {
       const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions() });
-      return renderMotionsPage(model, baseMeta);
+      return renderMotionsPage(model, {
+        ...baseMeta,
+        users: listUsers().map((user) => ({ id: user.id, label: user.label })),
+      });
     }
     case "/prospects": {
       const model = buildProspectsViewModel({

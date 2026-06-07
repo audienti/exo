@@ -38,7 +38,11 @@
 // operator has to re-review.
 
 import { inboundCueSchema } from "../schema/inbound.js";
-import { createTaskLeaseFingerprint, getActiveTaskLease } from "../lib/agent-host-state.js";
+import {
+  createTaskLeaseFingerprint,
+  getActiveTaskLease,
+  getRecentMotionRunAt,
+} from "../lib/agent-host-state.js";
 import { isConnectionRequestInFlight, isStalePendingConnectionRequest } from "../lib/cadence-helpers.js";
 import {
   draftWritebackStatusForSurface,
@@ -70,6 +74,12 @@ const AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG = {
   "linkedin-followers-list": { maxPages: 1, pageSize: 10 },
   "linkedin-following-list": { maxPages: 1, pageSize: 10 },
 };
+const MOTION_ROUND_ROBIN_TASK_KINDS = new Set([
+  "company_discovery",
+  "company_research",
+  "prospect_selection",
+  "prospect_research",
+]);
 
 /**
  * @param {{
@@ -595,10 +605,11 @@ export function buildAgentQueue(input) {
     }
   }
   // Autonomous truth refresh and packet work first, then discovery refill,
-  // then cleanup, then sends, then drafting. Within each task class, oldest
-  // queued work wins.
-  tasks.sort(taskOrder);
-  waiting.sort(taskOrder);
+  // then cleanup, then sends, then drafting. Discovery cards bias toward the
+  // thinnest motion inventory first; other task classes still use oldest work.
+  const taskComparator = (left, right) => taskOrder(left, right, input.hostState ?? null);
+  tasks.sort(taskComparator);
+  waiting.sort(taskComparator);
   const annotatedTasks = annotateTaskCheckouts(tasks, input.hostState ?? null, now);
   const annotatedWaiting = annotateTaskCheckouts(waiting, input.hostState ?? null, now);
   return {
@@ -1086,8 +1097,9 @@ function normalizeRecipientString(value) {
  * Sort by queue class, then by the oldest relevant queue timestamp.
  * @param {any} a
  * @param {any} b
+ * @param {any} [hostState]
  */
-function taskOrder(a, b) {
+function taskOrder(a, b, hostState = null) {
   const rank = {
     run_inbound_sync: 0,
     company_research: 1,
@@ -1099,12 +1111,54 @@ function taskOrder(a, b) {
     send_message: 7,
     write_draft: 8,
   };
+  if (isMotionRoundRobinTask(a) && isMotionRoundRobinTask(b)) {
+    const motionComparison = compareMotionTaskOrderAcrossKinds(a, b, hostState);
+    if (motionComparison !== 0) return motionComparison;
+  }
   const aRank = rank[a.kind] ?? 99;
   const bRank = rank[b.kind] ?? 99;
   if (aRank !== bRank) return aRank - bRank;
+  if (a.kind === "company_discovery" && b.kind === "company_discovery") {
+    const deficitDelta = normalizeDiscoveryDeficit(b) - normalizeDiscoveryDeficit(a);
+    if (deficitDelta !== 0) return deficitDelta;
+  }
   const aKey = a.dueAt ?? a.queuedAt ?? a.approvedAt ?? null;
   const bKey = b.dueAt ?? b.queuedAt ?? b.approvedAt ?? null;
   return String(aKey ?? "").localeCompare(String(bKey ?? ""));
+}
+
+/** @param {any} task */
+function isMotionRoundRobinTask(task) {
+  return MOTION_ROUND_ROBIN_TASK_KINDS.has(task?.kind)
+    && typeof task?.motionId === "string"
+    && task.motionId.trim().length > 0;
+}
+
+/**
+ * @param {any} left
+ * @param {any} right
+ * @param {any} hostState
+ */
+function compareMotionTaskOrderAcrossKinds(left, right, hostState) {
+  if (left?.motionId === right?.motionId) {
+    return 0;
+  }
+
+  const leftRunAt = getRecentMotionRunAt(hostState, left?.motionId, MOTION_ROUND_ROBIN_TASK_KINDS);
+  const rightRunAt = getRecentMotionRunAt(hostState, right?.motionId, MOTION_ROUND_ROBIN_TASK_KINDS);
+  if (leftRunAt !== rightRunAt) {
+    if (!leftRunAt) return -1;
+    if (!rightRunAt) return 1;
+    return leftRunAt.localeCompare(rightRunAt);
+  }
+
+  return 0;
+}
+
+/** @param {any} task */
+function normalizeDiscoveryDeficit(task) {
+  const deficit = Number(task?.deficitAfterBacklog);
+  return Number.isFinite(deficit) ? Math.max(0, Math.floor(deficit)) : 0;
 }
 
 /**

@@ -75,13 +75,21 @@ test("interactive motions page keeps the motion list visible and moves new-motio
     ],
   });
 
-  const html = renderMotionsPage(model, { interactive: true });
+  const html = renderMotionsPage(model, {
+    interactive: true,
+    user: { id: "user-1", label: "Launch User" },
+    users: [{ id: "user-1", label: "Launch User" }],
+  });
   const listIndex = html.indexOf('class="motion-cards"');
   const intakeIndex = html.indexOf('data-motion-intake');
   assert.ok(listIndex >= 0, "motion list should render");
   assert.ok(intakeIndex > listIndex, "drawer markup should render after the list");
   assert.match(html, /href="#motion-new"/);
   assert.match(html, /<div class="compose-title">New motion<\/div>/);
+  assert.match(html, /Create a real motion or open the transition backlog container/i);
+  assert.match(html, /Work type/);
+  assert.match(html, /Transition backlog/);
+  assert.match(html, /Who should own launch for this motion\? Pick the execution user before it can go live\./);
   assert.match(html, /What are we promoting\? Give me the offer URL first\./);
   assert.match(html, /What is the premise\? In one sentence, why should this offer matter right now\?/);
   assert.match(html, /Who should care first\? Name the primary audience or ICP you want to target\./);
@@ -95,8 +103,88 @@ test("interactive motions page keeps the motion list visible and moves new-motio
   assert.doesNotMatch(html, /Governed intake/);
   assert.doesNotMatch(html, /Current question/);
   assert.doesNotMatch(html, /Exo only starts the motion when the required definition is present\./);
+  assert.match(html, /name="mode" value="motion"/);
+  assert.match(html, /name="userId"/);
+  assert.match(html, /<option value="user-1" selected>Launch User<\/option>/);
   assert.match(html, /name="url"/);
   assert.match(html, /name="premise"/);
   assert.match(html, /name="audience"/);
   assert.match(html, /name="signal"/);
+  assert.match(html, /data-exo-fields="mode:mode\?,userId:userId\?,url:url\?,existingStrategy:existingStrategy\?,sourceMotionId:sourceMotionId\?,premise:premise\?,audience:audience\?,signal:signal\?"/);
+});
+
+test("interactive motions page exposes inline assignment when launch owner is unassigned", () => {
+  const model = buildMotionsViewModel({
+    motionSummaries: [
+      {
+        id: motionId,
+        name: "signal-steady-hawk",
+        status: "draft",
+        overallStage: "targeting-ready",
+        companyCount: 1,
+        prospectCount: 2,
+        dueNowCount: 2,
+        readyToEngage: false,
+      },
+    ],
+    motionDetails: [
+      {
+        motionId,
+        motionName: "signal-steady-hawk",
+        motionStatus: "draft",
+        overallStage: "targeting-ready",
+        offer: {
+          title: "Offer fixture",
+          url: offerUrl,
+          summary: "Fixture summary",
+        },
+        premise: {
+          statement: "This offer matters when operators need one assigned launch owner.",
+          status: "defined",
+          source: "operator",
+        },
+        strategyState: { tone: "warning" },
+        signals: [
+          {
+            question: "Is there recent evidence this team widened GTM scope?",
+            scope: "company",
+            companyCount: 1,
+          },
+        ],
+        audiences: [
+          {
+            name: "Revenue leaders",
+            rolesLine: "CRO, VP Sales",
+            matchedCount: 2,
+          },
+        ],
+        companies: [],
+        backlogCompanies: [],
+        people: [],
+        plan: {
+          nextSteps: [],
+          dueNowCount: 2,
+          readyToSendCount: 2,
+        },
+      },
+    ],
+    rawMotions: [
+      {
+        id: motionId,
+        name: "signal-steady-hawk",
+        status: "draft",
+        targetMap: { accounts: [] },
+        engagementUserAssignment: null,
+      },
+    ],
+  });
+
+  const html = renderMotionsPage(model, {
+    interactive: true,
+    user: { id: "user-1", label: "Launch User" },
+  });
+  assert.match(html, /Launch owner unassigned\./);
+  assert.match(html, /data-exo-writer="assignMotionUser"/);
+  assert.match(html, /Assign Launch User/);
+  assert.match(html, new RegExp(`href="\\/motions\\/${motionId}"`));
 });

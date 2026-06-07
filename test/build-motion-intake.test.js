@@ -33,8 +33,55 @@ async function createMotion(nameSuffix) {
   });
 }
 
-test("motion intake treats continue and clone as ready when an existing motion already covers the required definition", async () => {
+/**
+ * @param {import("../src/schema/motion.js").motionSchema._type} motion
+ * @param {string} userId
+ * @param {string} [label]
+ */
+function assignFixtureUser(motion, userId, label = "Launch User") {
+  motion.engagementUserAssignment = {
+    userId,
+    label,
+    owner: null,
+    accountRefs: [],
+    assignedAt: "2026-06-07T10:00:00.000Z",
+    assignedBy: "test",
+    reason: "fixture",
+    sticky: true,
+  };
+  return motion;
+}
+
+test("motion intake asks for a launch user before continuing or cloning an unassigned motion", async () => {
   const existing = await createMotion("existing");
+
+  const continued = buildMotionIntake(
+    {
+      url: offerUrl,
+      existingStrategy: "continue",
+    },
+    [existing],
+  );
+
+  assert.equal(continued.status, "needs-question");
+  assert.equal(continued.readyToLaunch, false);
+  assert.equal(continued.nextQuestion?.key, "launch-user");
+
+  const cloned = buildMotionIntake(
+    {
+      url: offerUrl,
+      existingStrategy: "clone",
+    },
+    [existing],
+  );
+
+  assert.equal(cloned.status, "needs-question");
+  assert.equal(cloned.readyToLaunch, false);
+  assert.equal(cloned.nextQuestion?.key, "launch-user");
+});
+
+test("motion intake is ready when continuing an already assigned motion or cloning with a selected launch user", async () => {
+  const existing = assignFixtureUser(await createMotion("existing"), "user-1");
 
   const continued = buildMotionIntake(
     {
@@ -52,6 +99,7 @@ test("motion intake treats continue and clone as ready when an existing motion a
     {
       url: offerUrl,
       existingStrategy: "clone",
+      launchUserId: "user-1",
     },
     [existing],
   );
@@ -59,6 +107,25 @@ test("motion intake treats continue and clone as ready when an existing motion a
   assert.equal(cloned.status, "ready-to-launch");
   assert.equal(cloned.readyToLaunch, true);
   assert.equal(cloned.nextQuestion, null);
+});
+
+test("motion intake asks for a launch user after the fresh motion definition is complete", () => {
+  const result = buildMotionIntake(
+    {
+      url: "https://example.com/fresh-offer",
+      premise: {
+        statement: "This offer matters when operators need assignment in the intake itself.",
+        source: "operator",
+      },
+      audienceHypotheses: ["Revenue leaders"],
+      signals: ["company::Is there recent evidence this team widened GTM scope?"],
+    },
+    [],
+  );
+
+  assert.equal(result.status, "needs-question");
+  assert.equal(result.readyToLaunch, false);
+  assert.equal(result.nextQuestion?.key, "launch-user");
 });
 
 test("motion intake asks for the specific source motion before continue or clone when multiple motions share one URL", async () => {

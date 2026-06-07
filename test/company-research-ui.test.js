@@ -164,8 +164,8 @@ test("company and motion surfaces expose a start research button and research br
     assert.ok(motionHtml.indexOf("Audience hypotheses") < motionHtml.indexOf("Matched companies"));
     assert.ok(motionHtml.indexOf("Matched companies") < motionHtml.indexOf("Matched people"));
     assert.doesNotMatch(motionHtml, /PREMISE · WHY THIS OFFER MATTERS HERE/);
-    assert.match(motionHtml, /Set live/i);
-    assert.match(motionHtml, /data-exo-writer="restartMotion"/);
+    assert.doesNotMatch(motionHtml, /Set live/i);
+    assert.doesNotMatch(motionHtml, /data-exo-writer="restartMotion"/);
 
     const settingsHtml = renderMotionSettingsPage(motionsModel.details[0], {
       interactive: true,
@@ -189,10 +189,14 @@ test("company and motion surfaces expose a start research button and research br
     assert.match(settingsHtml, /Remove signal/i);
     assert.match(settingsHtml, /data-exo-writer="removeMotionSignal"/);
     assert.match(settingsHtml, /who can launch this motion/i);
-    assert.match(settingsHtml, /No acting user is pinned for this motion yet\./);
+    assert.match(settingsHtml, /No user is assigned to this motion yet\./);
     assert.match(settingsHtml, /data-exo-writer="assignMotionUser"/);
-    assert.match(settingsHtml, /Set live/i);
-    assert.match(settingsHtml, /data-exo-writer="restartMotion"/);
+    assert.match(settingsHtml, /Delete motion/i);
+    assert.match(settingsHtml, /data-exo-writer="deleteMotion"/);
+    assert.match(settingsHtml, /Prospects will move into the transition backlog/i);
+    assert.ok(settingsHtml.indexOf("Delete motion") < settingsHtml.indexOf('role="tablist"'));
+    assert.doesNotMatch(settingsHtml, /Set live/i);
+    assert.doesNotMatch(settingsHtml, /data-exo-writer="restartMotion"/);
     assert.match(settingsHtml, new RegExp(`href="\\/motions\\/${motion.id}"`));
 
     const brief = buildCompanyResearchBrief(company, motion);

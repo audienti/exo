@@ -9,6 +9,7 @@ export const MOTION_INTAKE_PROMPTS = {
   premise: "What is the premise? In one sentence, why should this offer matter right now?",
   audience: "Who should care first? Name the primary audience or ICP you want to target.",
   signals: "What recent evidence would make this motion talkable? Add one or more signal questions.",
+  launchUser: "Who should own launch for this motion? Pick the execution user before it can go live.",
   targetingSpecifics: "Do you already know any titles, role families, industries, geographies, or segment specifics worth biasing the motion toward?",
   suppression: "Are there any accounts, domains, contacts, or DNC entries we should exclude before launch?",
 };
@@ -37,6 +38,7 @@ export const MOTION_INTAKE_PROMPTS = {
  *     excludedContacts?: string[],
  *     doNotContactEntries?: string[]
  *   } | null,
+ *   launchUserId?: string | null | undefined,
  *   existingStrategy?: "continue" | "clone" | "new" | null | undefined,
  *   sourceMotionId?: string | null | undefined
  * }} input
@@ -53,7 +55,9 @@ export function buildMotionIntake(input, storedMotions) {
         status: motion.status,
         premiseStatus: motion.premise.status,
         audienceCount: motion.audienceHypotheses.length,
-        signalCount: motion.signals.length
+        signalCount: motion.signals.length,
+        assignedUserId: motion.engagementUserAssignment?.userId ?? null,
+        assignedUserLabel: motion.engagementUserAssignment?.label ?? null,
       }))
     : [];
 
@@ -73,6 +77,10 @@ export function buildMotionIntake(input, storedMotions) {
   const reuseStrategy = input.existingStrategy === "continue" || input.existingStrategy === "clone";
   const requiresSourceMotion = existingMotions.length > 1 && reuseStrategy && !input.sourceMotionId;
   const requiresFreshDefinition = existingMotions.length === 0 || input.existingStrategy === "new";
+  const selectedExistingMotion = resolveSelectedExistingMotion(existingMotions, input.existingStrategy, input.sourceMotionId);
+  const requiresLaunchUser = requiresFreshDefinition
+    || input.existingStrategy === "clone"
+    || (input.existingStrategy === "continue" && !selectedExistingMotion?.assignedUserId);
 
   /** @type {Array<{ key: string, prompt: string, required: boolean }>} */
   const questions = [];
@@ -113,6 +121,12 @@ export function buildMotionIntake(input, storedMotions) {
       prompt: MOTION_INTAKE_PROMPTS.signals,
       required: true
     });
+  } else if (requiresLaunchUser && !input.launchUserId) {
+    questions.push({
+      key: "launch-user",
+      prompt: MOTION_INTAKE_PROMPTS.launchUser,
+      required: true
+    });
   } else if (requiresFreshDefinition && !hasRequiredTargetingSpecifics) {
     questions.push({
       key: "targeting-specifics",
@@ -131,11 +145,12 @@ export function buildMotionIntake(input, storedMotions) {
     input.url
     && (
       reuseStrategy
-        ? !requiresSourceMotion
+        ? (!requiresSourceMotion && (!requiresLaunchUser || input.launchUserId))
         : (
           input.premise?.statement
           && input.audienceHypotheses?.length
           && input.signals?.length
+          && (!requiresLaunchUser || input.launchUserId)
         )
     )
   );
@@ -151,6 +166,7 @@ export function buildMotionIntake(input, storedMotions) {
       premiseDefined: Boolean(input.premise?.statement),
       audienceCount: input.audienceHypotheses?.length ?? 0,
       signalCount: input.signals?.length ?? 0,
+      launchUserAssigned: Boolean(input.launchUserId),
       targetingSpecificCount: countTargetingSpecifics(input.targetingProfile ?? null),
       suppressionSpecificCount: countSuppressionSpecifics(input.suppressionPolicy ?? null)
     },
@@ -214,6 +230,10 @@ function buildLaunchCommandHint(input) {
     parts.push(`--from ${shellQuote(input.sourceMotionId)}`);
   }
 
+  if (input.launchUserId) {
+    parts.push(`--user ${shellQuote(input.launchUserId)}`);
+  }
+
   if (input.premise?.statement) {
     parts.push(`--premise ${shellQuote(input.premise.statement)}`);
   }
@@ -227,4 +247,21 @@ function buildLaunchCommandHint(input) {
  */
 function shellQuote(value) {
   return JSON.stringify(value);
+}
+
+/**
+ * @param {Array<{ id: string, assignedUserId: string | null }>} existingMotions
+ * @param {"continue" | "clone" | "new" | null | undefined} existingStrategy
+ * @param {string | null | undefined} sourceMotionId
+ */
+function resolveSelectedExistingMotion(existingMotions, existingStrategy, sourceMotionId) {
+  if (existingStrategy !== "continue" && existingStrategy !== "clone") {
+    return null;
+  }
+
+  if (sourceMotionId) {
+    return existingMotions.find((motion) => motion.id === sourceMotionId) ?? null;
+  }
+
+  return existingMotions.length === 1 ? existingMotions[0] : null;
 }

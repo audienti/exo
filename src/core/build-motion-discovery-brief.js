@@ -16,10 +16,14 @@ export function buildMotionDiscoveryDemand(rawMotion, rawCompanies) {
   const companies = normalizeLinkedMotionCompanies(motion, rawCompanies);
   const queue = buildMotionQueueSummary(motion, companies);
   const stakeholderTargetCount = normalizeStakeholderTargetCount(motion.targetingProfile?.stakeholderTargetCount);
-  const projectedAvailableProspectCount = estimateProjectedAvailableProspects(motion, companies, stakeholderTargetCount);
+  const expectedProspectYieldPerCompany = normalizeDiscoveryYieldPerCompany(stakeholderTargetCount);
+  const projectedAvailableProspectCount = estimateProjectedAvailableProspects(
+    motion,
+    companies,
+    expectedProspectYieldPerCompany,
+  );
   const deficitAfterBacklog = Math.max(MINIMUM_AVAILABLE_PROSPECTS - projectedAvailableProspectCount, 0);
   const autonomousEligible = isEligibleForAutonomousDiscovery(motion);
-  const expectedProspectYieldPerCompany = normalizeDiscoveryYieldPerCompany(stakeholderTargetCount);
   const targetCompanyCount = deficitAfterBacklog > 0
     ? Math.max(1, Math.ceil(deficitAfterBacklog / expectedProspectYieldPerCompany))
     : 0;
@@ -172,9 +176,9 @@ function normalizeLinkedMotionCompanies(motion, rawCompanies) {
 /**
  * @param {import("../schema/motion.js").motionSchema._type} motion
  * @param {import("../schema/company.js").companySchema._type[]} companies
- * @param {number} stakeholderTargetCount
+ * @param {number} projectedYieldPerCompany
  */
-function estimateProjectedAvailableProspects(motion, companies, stakeholderTargetCount) {
+function estimateProjectedAvailableProspects(motion, companies, projectedYieldPerCompany) {
   const accountsByCompanyId = new Map(
     (motion.targetMap?.accounts ?? [])
       .map((account) => withDerivedTargetAccountQueueState(account))
@@ -183,15 +187,15 @@ function estimateProjectedAvailableProspects(motion, companies, stakeholderTarge
 
   return companies.reduce((sum, company) => {
     const account = accountsByCompanyId.get(company.id) ?? null;
-    return sum + estimateProjectedAccountProspects(account, stakeholderTargetCount);
+    return sum + estimateProjectedAccountProspects(account, projectedYieldPerCompany);
   }, 0);
 }
 
 /**
  * @param {ReturnType<typeof withDerivedTargetAccountQueueState> | null} account
- * @param {number} stakeholderTargetCount
+ * @param {number} projectedYieldPerCompany
  */
-function estimateProjectedAccountProspects(account, stakeholderTargetCount) {
+function estimateProjectedAccountProspects(account, projectedYieldPerCompany) {
   const queueStatus = account?.queueState?.status ?? "discovered";
   if (queueStatus === "suppressed" || queueStatus === "exhausted") {
     return 0;
@@ -201,5 +205,13 @@ function estimateProjectedAccountProspects(account, stakeholderTargetCount) {
     ? account.prospects.filter((prospect) => !["suppressed", "exhausted"].includes(prospect.queueState?.status ?? "")).length
     : 0;
 
-  return Math.max(activeProspectCount, stakeholderTargetCount);
+  if (activeProspectCount > 0) {
+    return activeProspectCount;
+  }
+
+  if (["discovered", "queued_for_research", "researched"].includes(queueStatus)) {
+    return projectedYieldPerCompany;
+  }
+
+  return 0;
 }

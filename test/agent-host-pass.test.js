@@ -550,6 +550,32 @@ test("buildInboundContractArgs preserves queued surface scoping for live sync ta
   ]);
 });
 
+test("buildInboundContractArgs omits linkedin-only flags for gmail live sync tasks", () => {
+  const args = buildInboundContractArgs({
+    capability: "gmail",
+    userId: "user-1",
+    accountId: "account-1",
+    surfaceKeys: ["gmail-inbox-threads"],
+    mode: "quick",
+    resumeCursor: "cursor-1",
+    resumeStartOffset: 25,
+    maxPages: 3,
+    pageSize: 50,
+  });
+
+  assert.deepEqual(args, [
+    "inbound",
+    "sync",
+    "gmail-live",
+    "user-1",
+    "--account",
+    "account-1",
+    "--mode",
+    "quick",
+    "--json",
+  ]);
+});
+
 test("resolveInboundExoCommandTimeoutMs gives full sync tasks the capture budget", () => {
   assert.equal(resolveInboundExoCommandTimeoutMs({ mode: "quick" }), 180000);
   assert.equal(resolveInboundExoCommandTimeoutMs({ mode: "full" }), 360000);
@@ -693,6 +719,117 @@ test("chooseNextQueueTask can still run company discovery when browser preflight
   assert.equal(
     chooseNextQueueTask(queue, false)?.id,
     "company-discovery-1",
+  );
+});
+
+test("chooseNextQueueTask prefers the thinnest discovery motion when none has run recently", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "company_discovery",
+        id: "company-discovery-1",
+        motionId: "motion-1",
+        deficitAfterBacklog: 1,
+        dueAt: "2026-06-03T04:20:00.000Z",
+        queuedAt: "2026-06-03T04:20:00.000Z",
+      },
+      {
+        kind: "company_discovery",
+        id: "company-discovery-2",
+        motionId: "motion-2",
+        deficitAfterBacklog: 4,
+        dueAt: "2026-06-03T04:25:00.000Z",
+        queuedAt: "2026-06-03T04:25:00.000Z",
+      },
+    ],
+  };
+
+  assert.equal(
+    chooseNextQueueTask(queue, false)?.id,
+    "company-discovery-2",
+  );
+});
+
+test("chooseNextQueueTask round-robins discovery motions after one was just attempted", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "company_discovery",
+        id: "company-discovery-1",
+        motionId: "motion-1",
+        deficitAfterBacklog: 1,
+        dueAt: "2026-06-03T04:20:00.000Z",
+        queuedAt: "2026-06-03T04:20:00.000Z",
+      },
+      {
+        kind: "company_discovery",
+        id: "company-discovery-2",
+        motionId: "motion-2",
+        deficitAfterBacklog: 4,
+        dueAt: "2026-06-03T04:25:00.000Z",
+        queuedAt: "2026-06-03T04:25:00.000Z",
+      },
+    ],
+  };
+
+  assert.equal(
+    chooseNextQueueTask(
+      queue,
+      false,
+      {
+        recentMotionTaskRuns: [
+          {
+            taskKind: "company_discovery",
+            motionId: "motion-2",
+            recordedAt: "2026-06-03T05:10:00.000Z",
+            status: "completed",
+          },
+        ],
+      },
+      "2026-06-03T05:15:00.000Z",
+    )?.id,
+    "company-discovery-1",
+  );
+});
+
+test("chooseNextQueueTask rotates across motion task kinds instead of letting one motion monopolize the pass", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "prospect_selection",
+        id: "prospect-selection-1",
+        motionId: "motion-1",
+        dueAt: "2026-06-03T04:20:00.000Z",
+        queuedAt: "2026-06-03T04:20:00.000Z",
+      },
+      {
+        kind: "company_discovery",
+        id: "company-discovery-2",
+        motionId: "motion-2",
+        deficitAfterBacklog: 1,
+        dueAt: "2026-06-03T04:25:00.000Z",
+        queuedAt: "2026-06-03T04:25:00.000Z",
+      },
+    ],
+  };
+
+  assert.equal(
+    chooseNextQueueTask(
+      queue,
+      false,
+      {
+        recentMotionTaskRuns: [
+          {
+            taskKind: "company_research",
+            motionId: "motion-1",
+            recordedAt: "2026-06-03T05:10:00.000Z",
+            status: "completed",
+          },
+        ],
+      },
+      "2026-06-03T05:15:00.000Z",
+    )?.id,
+    "company-discovery-2",
   );
 });
 

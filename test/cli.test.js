@@ -519,6 +519,12 @@ test("motion start checks URL reuse before creating, continuing, or cloning moti
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-start-"));
 
   try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Launch User", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
     const created = JSON.parse(
       execFileSync(
         "node",
@@ -602,15 +608,57 @@ test("motion start checks URL reuse before creating, continuing, or cloning moti
     assert.notEqual(cloned.motion.id, created.motion.id);
     assert.equal(cloned.motion.offer.sourceUrl, created.motion.offer.sourceUrl);
     assert.equal(cloned.motion.audienceHypotheses[0].name, "BNPL modernization leaders");
+
+    const assignedOfferUrl = `data:text/html,${encodeURIComponent([
+      "<html>",
+      "<head>",
+      "<title>Assigned Motion Start Fixture</title>",
+      "</head>",
+      "<body>ok</body>",
+      "</html>"
+    ].join(""))}`;
+    const assigned = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "start",
+          "--url",
+          assignedOfferUrl,
+          "--premise",
+          "This offer matters when the CLI needs to carry the launch assignment at creation time.",
+          "--audience",
+          "Operators",
+          "--signal",
+          "company::Is there recent evidence this workspace is carrying active execution work?",
+          "--user",
+          user.id,
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    assert.equal(assigned.status, "created");
+    assert.equal(assigned.motion.engagementUserAssignment?.userId, user.id);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test("motion intake returns the next one-at-a-time setup question before launch and becomes ready when the required specifics exist", () => {
+test("motion intake returns the next one-at-a-time setup question before launch, then requires launch assignment before it is ready", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-intake-"));
 
   try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Launch User", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
     const firstQuestion = JSON.parse(
       execFileSync("node", [cliPath, "motion", "intake", "--json"], {
         cwd: tempDir,
@@ -662,7 +710,7 @@ test("motion intake returns the next one-at-a-time setup question before launch 
     assert.equal(existingQuestion.nextQuestion.key, "existing-strategy");
     assert.equal(existingQuestion.existingMotions.length, 1);
 
-    const ready = JSON.parse(
+    const launchUserQuestion = JSON.parse(
       execFileSync(
         "node",
         [
@@ -685,9 +733,38 @@ test("motion intake returns the next one-at-a-time setup question before launch 
         }
       )
     );
+    assert.equal(launchUserQuestion.status, "needs-question");
+    assert.equal(launchUserQuestion.nextQuestion.key, "launch-user");
+
+    const ready = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "intake",
+          "--url",
+          "https://example.com/another-offer",
+          "--premise",
+          "This offer matters when lenders widen risk and decisioning complexity.",
+          "--audience",
+          "Risk leaders",
+          "--signal",
+          "company::Is there recent evidence that this company launched a new lending workflow?",
+          "--user",
+          user.id,
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
     assert.equal(ready.readyToLaunch, true);
     assert.equal(ready.status, "ready-to-launch");
     assert.match(ready.launchCommandHint, /exo motion start/);
+    assert.match(ready.launchCommandHint, new RegExp(`--user ${JSON.stringify(user.id)}`));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -14156,6 +14233,142 @@ test("motion remove deletes the motion and unlinks linked companies", () => {
       })
     );
     assert.deepEqual(companyAfter.motionIds, []);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("motion remove moves prospects into transition backlog before deleting the motion", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-remove-transition-"));
+
+  try {
+    JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "Launch User", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when the old motion branch should disappear without losing the people in it.",
+          "--audience",
+          "Operators",
+          "--signal",
+          "company::Is there recent evidence this motion is just temporary structure?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Actico Target",
+          "--domain",
+          "actico-target.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Dana Delete",
+          "--title",
+          "VP Revenue",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/dana-delete/",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--why-relevant",
+          "This prospect should survive the motion delete.",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const removeOutput = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "remove", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(removeOutput.removedMotion.id, motion.id);
+    assert.equal(removeOutput.migratedProspectCount, 1);
+    assert.ok(removeOutput.transitionMotion);
+    assert.equal(removeOutput.transitionMotion.offer.sourceUrl, "https://transition.exo.local/inbound-backlog");
+
+    const transitionMotion = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "show", removeOutput.transitionMotion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.ok(
+      (transitionMotion.targetMap?.accounts ?? []).some((account) =>
+        (account.prospects ?? []).some((prospect) => prospect.name === "Dana Delete")
+      )
+    );
+
+    const companyAfter = JSON.parse(
+      execFileSync("node", [cliPath, "companies", "show", company.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(companyAfter.motionIds.includes(motion.id), false);
+    assert.equal(companyAfter.motionIds.includes(removeOutput.transitionMotion.id), true);
+
+    const motionsAfter = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "list", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    assert.equal(motionsAfter.some((item) => item.id === motion.id), false);
+    assert.equal(motionsAfter.some((item) => item.id === removeOutput.transitionMotion.id), true);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

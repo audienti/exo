@@ -486,12 +486,13 @@ test("operator excludes stale global-intake claim backlog from the live decision
     truthAccounts: [],
   });
 
-  assert.equal(model.counts.decisions, 0);
+  assert.equal(model.counts.decisions, 1);
   assert.equal(model.nextMove?.subject, "Jordan Cipolla");
   assert.deepEqual(model.decisions.map((item) => item.person), []);
 
   const html = renderOperatorPage(model, { interactive: true });
   assert.match(html, /Jordan Cipolla/);
+  assert.match(html, /The first queued action is promoted above\./);
   assert.doesNotMatch(html, /Mike Agron/);
 });
 
@@ -1097,8 +1098,8 @@ test("operator hides empty blocked and stale lanes instead of rendering empty st
   });
 
   const html = renderOperatorPage(model, { interactive: true });
-  assert.match(html, /Need decision/i);
-  assert.match(html, /What needs judgment right now\./i);
+  assert.match(html, /Action queue/i);
+  assert.match(html, /What needs action right now\./i);
   assert.doesNotMatch(html, /<h2>Blocked<\/h2>/i);
   assert.doesNotMatch(html, /<h2>Stale or incomplete<\/h2>/i);
   assert.doesNotMatch(html, /Nothing blocked\./i);
@@ -1107,30 +1108,53 @@ test("operator hides empty blocked and stale lanes instead of rendering empty st
   assert.doesNotMatch(html, /<b>0<\/b> stale/i);
 });
 
-test("operator does not render today's agenda on the landing page", () => {
+test("operator merges due-now planner work into the main action queue without duplicating inbound review", () => {
   const model = buildOperatorViewModel({
     user: { id: "user-1", label: "william-main", owner: "William" },
     generatedAt: "2026-06-04T11:05:00.000Z",
     regenerateCommand: "exo ui",
     operatorSummary: {
-      checklist: [
-        {
-          id: "agenda-1",
-          label: "Reply to Tony Robbins and move the branch into an active conversation.",
-          kind: "truth",
-          timeLabel: "9:16p",
-          meta: "Inbound review / linkedin / Tony Robbins",
-          done: false,
-        },
-      ],
+      checklist: [],
     },
     decisionQueue: { items: [] },
     agentQueue: { items: [], blockers: [] },
     blockedQueue: { items: [] },
+    dueNowItems: [
+      {
+        state: "due_now",
+        source: { type: "inbound_review" },
+        motion: { id: "motion-inbound", name: "Inbound review" },
+        company: { id: "company-inbound", name: "BuyerCo" },
+        prospect: { id: "prospect-inbound", name: "Tony Robbins" },
+        recommendedAction: "Reply to Tony Robbins and move the branch into an active conversation.",
+        dueAt: "2026-06-04T11:05:00.000Z",
+      },
+      {
+        state: "due_now",
+        source: { type: "cadence" },
+        motion: { id: "17adf3ca-a6b3-4d26-9f93-bc60f28fe94d", name: "harsh-spare-mongoose" },
+        company: { id: "82b0baf7-f98d-4bb6-b12c-c913fcb998cf", name: "Columbus McKinnon" },
+        prospect: { id: "d149a3e4-6988-4ad7-b40b-000e231e1ac9", name: "Sue Weinheimer" },
+        recommendedAction: "First-touch decision: LinkedIn connection request is the only verified usable direct channel.",
+        dueAt: "2026-06-04T11:06:00.000Z",
+      },
+    ],
+    waitingItems: [],
     truthAccounts: [],
   });
 
+  assert.equal(model.counts.decisions, 1);
+  assert.equal(model.nextMove?.subject, "Sue Weinheimer");
+  assert.deepEqual(model.decisions, []);
+
   const html = renderOperatorPage(model, { interactive: true });
-  assert.doesNotMatch(html, /Today's agenda/i);
+  assert.match(html, /Action queue/i);
+  assert.match(html, /First-touch decision: LinkedIn connection request is the only verified usable direct channel\./i);
+  assert.match(html, /Sue Weinheimer/i);
+  assert.match(html, /Columbus McKinnon/i);
+  assert.match(html, /Compose request/i);
+  assert.match(html, /href="\/prospects\/d149a3e4-6988-4ad7-b40b-000e231e1ac9\?return=%2Foperator"/i);
+  assert.match(html, /The first queued action is promoted above\./i);
   assert.doesNotMatch(html, /Reply to Tony Robbins and move the branch into an active conversation/i);
+  assert.doesNotMatch(html, /Due now<\/h2>/i);
 });

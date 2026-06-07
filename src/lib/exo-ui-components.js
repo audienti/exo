@@ -1464,9 +1464,11 @@ body.view-settings .exec-policy-card{max-width:none}
 .motion-intake-option em{font-style:normal;font-size:11.5px;line-height:1.45;color:var(--text-3)}
 .motion-intake-match strong{text-transform:none}
 .motion-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(282px,1fr));gap:14px;max-width:none}
-.motion-card{display:block;background:var(--bg-2);border:1px solid var(--border);border-radius:13px;padding:16px;
-  text-align:left;cursor:pointer;transition:border-color .14s,background .14s}
+.motion-card{display:flex;flex-direction:column;background:var(--bg-2);border:1px solid var(--border);border-radius:13px;padding:16px;
+  text-align:left;transition:border-color .14s,background .14s}
 .motion-card:hover{border-color:var(--border-3);background:var(--bg-3)}
+.mc-link{display:block;color:inherit;text-decoration:none}
+.mc-link:hover .mc-name{color:var(--accent)}
 .mc-top{display:flex;align-items:center;gap:8px;margin-bottom:11px}
 .mc-ready-tag{margin-left:auto;font-size:10px;color:var(--text-4);font-family:var(--mono);letter-spacing:.04em}
 .mc-name{font-size:17px;font-weight:700;letter-spacing:-.02em;margin-bottom:12px;color:var(--text)}
@@ -1493,6 +1495,7 @@ body.view-settings .exec-policy-card{max-width:none}
 .mc-stats b{display:block;font-size:16px;font-weight:800;color:var(--text);letter-spacing:-.02em}
 .mc-blk{display:flex;align-items:center;gap:6px;font-size:11px;color:#fbbf24;margin-top:11px}
 .mc-go{display:flex;align-items:center;gap:4px;justify-content:flex-end;font-size:12px;font-weight:600;color:var(--accent);margin-top:11px}
+.mc-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)}
 
 /* ---------- motions: detail ---------- */
 .motion-detail{max-width:1000px;scroll-margin-top:18px}

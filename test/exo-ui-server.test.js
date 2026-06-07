@@ -14,7 +14,7 @@ import {
   resolveWorkspaceProjectionForUi,
   startExoUiServer,
 } from "../src/cli/exo-ui-server.js";
-import { insertMotion } from "../src/db/database.js";
+import { insertMotion, insertUser } from "../src/db/database.js";
 import { buildAgentRunLockDir } from "../src/lib/agent-run-lock.js";
 
 test("ui state revision changes when agent runtime artifacts change without a DB write", async (t) => {
@@ -455,6 +455,88 @@ test("prospects route applies the q search filter and preserves it in rendered l
   assert.match(html, /Lina Park/);
   assert.match(html, /href="\/prospects\/prospect-1\?q=procurement"/);
   assert.doesNotMatch(html, /Marco Diaz/);
+});
+
+test("motions route passes execution users into the new-motion intake form", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-motions-route-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+
+  process.env.EXO_STATE_DIR = path.join(tempDir, ".exo");
+  process.env.EXO_HOME_STATE_DIR = process.env.EXO_STATE_DIR;
+
+  insertUser({
+    id: "user-1",
+    createdAt: "2026-06-07T10:00:00.000Z",
+    updatedAt: "2026-06-07T10:00:00.000Z",
+    label: "Launch User",
+    owner: "William",
+    notes: null,
+    workingHours: {
+      mode: "scheduled",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "07:00",
+      endLocalTime: "18:00",
+    },
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-07T10:00:00.000Z",
+        updatedAt: "2026-06-07T10:00:00.000Z",
+        capability: "linkedin",
+        handle: "launch-user",
+        label: "Launch LinkedIn",
+        sourceType: "browser-profile",
+        browserProfileId: "profile-1",
+        harnessConnectionId: null,
+        providerAccountId: null,
+        preferred: true,
+        automationControls: {
+          weeklyQuotas: {
+            profileVisits: null,
+            invitations: null,
+            messages: null,
+          },
+        },
+        metadata: null,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [],
+    inboundIgnoreRules: [],
+  });
+
+  t.after(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousStateDir == null) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir == null) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+  });
+
+  const html = await renderRoute("/motions", { userId: "user-1", capability: "linkedin" }, {
+    resolveWorkspaceProjectionForUi: async () => ({
+      data: {
+        user: { id: "user-1", label: "Launch User", owner: "William" },
+        generatedAt: "2026-06-07T10:00:00.000Z",
+        motionSummaries: [],
+        motionDetails: [],
+      },
+      html: "",
+    }),
+  });
+
+  assert.match(html, /name="userId"/);
+  assert.match(html, /<option value="user-1" selected>Launch User<\/option>/);
+  assert.doesNotMatch(html, /No execution users available/);
 });
 
 test("operator route renders onboarding instead of the workspace projection on a cold-start store", async (t) => {

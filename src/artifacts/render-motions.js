@@ -23,6 +23,7 @@ import {
   truthTag,
 } from "../lib/exo-ui-components.js";
 import { MOTION_INTAKE_PROMPTS } from "../core/build-motion-intake.js";
+import { isTransitionMotion } from "../core/ensure-transition-motion.js";
 
 /**
  * @param {{ motions: any[], details: any[] }} model
@@ -41,7 +42,7 @@ export function renderMotionsPage(model, meta = {}) {
     renderIntro(model, meta) +
     renderList(model.motions, meta) +
     detailSections +
-    (meta.interactive ? renderMotionIntakePanel(model) : "") +
+    (meta.interactive ? renderMotionIntakePanel(model, meta) : "") +
     renderFooter(meta) +
     `</div>`;
 
@@ -157,8 +158,9 @@ function renderIntro(model, meta = {}) {
 
 /**
  * @param {{ motions: any[] }} model
+ * @param {{ user?: { id?: string | null } | null, users?: Array<{ id: string, label: string }> }} [meta]
  */
-function renderMotionIntakePanel(model) {
+function renderMotionIntakePanel(model, meta = {}) {
   const seed = {
     motions: model.motions.map((motion) => ({
       id: motion.id,
@@ -170,6 +172,8 @@ function renderMotionIntakePanel(model) {
       signalCount: motion.signalCount ?? 0,
     })),
   };
+  const users = meta.users ?? [];
+  const currentUserId = meta.user?.id ?? null;
 
   return (
     `<div class="compose-panel" id="motion-new">` +
@@ -177,11 +181,13 @@ function renderMotionIntakePanel(model) {
     `<div class="compose-sheet">` +
     `<div class="compose-head">${iconSvg("spark", 18)}` +
     `<div><div class="compose-title">New motion</div>` +
-    `<div class="compose-sub">Define the offer, premise, primary audience, and signal questions.</div></div>` +
+    `<div class="compose-sub">Create a real motion or open the transition backlog container for ongoing interface-driven relationships.</div></div>` +
     `<a class="compose-close" href="#motions-top" aria-label="Close">${iconSvg("x", 14)}</a>` +
     `</div>` +
-    `<div class="motion-intake-card motion-intake-panel exo-action" data-motion-intake data-motion-intake-form data-exo-writer="startMotionFromIntake" data-exo-args="{}" data-exo-fields="url:url,existingStrategy:existingStrategy?,sourceMotionId:sourceMotionId?,premise:premise?,audience:audience?,signal:signal?">` +
+    `<div class="motion-intake-card motion-intake-panel exo-action" data-motion-intake data-motion-intake-form data-exo-writer="startMotionFromIntake" data-exo-args="{}" data-exo-fields="mode:mode?,userId:userId?,url:url?,existingStrategy:existingStrategy?,sourceMotionId:sourceMotionId?,premise:premise?,audience:audience?,signal:signal?">` +
     `<div class="motion-intake-thread">` +
+    renderMotionIntakeModeStep() +
+    renderMotionIntakeUserStep(users, currentUserId) +
     renderMotionIntakeStep("url", "Offer URL", MOTION_INTAKE_PROMPTS.url, `<input class="compose-input" type="url" name="url" placeholder="https://example.com/offer" autocomplete="off" />`) +
     renderMotionIntakeStrategyStep() +
     renderMotionIntakeSourceStep() +
@@ -194,6 +200,7 @@ function renderMotionIntakePanel(model) {
       `<textarea class="compose-body motion-intake-textarea motion-intake-textarea-signals" name="signal" placeholder="company::Is there recent evidence that the team widened GTM scope?&#10;company::Is there recent evidence that the team is adding outbound capacity?"></textarea>`,
     ) +
     `</div>` +
+    `<input type="hidden" name="mode" value="motion" />` +
     `<input type="hidden" name="existingStrategy" value="" />` +
     `<input type="hidden" name="sourceMotionId" value="" />` +
     `<script type="application/json" data-motion-intake-seed>${serializeJsonScript(seed)}</script>` +
@@ -222,6 +229,46 @@ function renderMotionIntakeStep(key, label, prompt, fieldHtml) {
     fieldHtml +
     `</label>` +
     `</section>`
+  );
+}
+
+function renderMotionIntakeModeStep() {
+  return (
+    `<section class="motion-intake-step" data-intake-step="mode">` +
+    `<div class="compose-field motion-intake-field">` +
+    `<span class="compose-label">Work type</span>` +
+    `<p class="motion-intake-helper">Decide whether this is a real offer-led motion or a holding container for ongoing interface-driven relationships.</p>` +
+    `<div class="motion-intake-options">` +
+    motionStrategyOption("motion", "Real motion", "Offer-led motion with premise, audience, and signal questions.") +
+    motionStrategyOption("transition", "Transition backlog", "Container for existing ongoing relationships until you re-home them into a real motion.") +
+    `</div>` +
+    `</div>` +
+    `</section>`
+  );
+}
+
+/**
+ * @param {Array<{ id: string, label: string }>} users
+ * @param {string | null} currentUserId
+ */
+function renderMotionIntakeUserStep(users, currentUserId) {
+  const options = users.length
+    ? users
+      .map((user) => {
+        const selected = user.id === currentUserId ? " selected" : "";
+        return `<option value="${escapeAttr(user.id)}"${selected}>${escapeHtml(user.label)}</option>`;
+      })
+      .join("")
+    : `<option value="">No execution users available</option>`;
+  const helper = users.length
+    ? MOTION_INTAKE_PROMPTS.launchUser
+    : "Add an execution user first. Exo cannot launch or open governed work without one.";
+
+  return renderMotionIntakeStep(
+    "user",
+    "Launch user",
+    helper,
+    `<select class="compose-input motion-intake-select" name="userId">${options}</select>`,
   );
 }
 
@@ -261,7 +308,7 @@ function renderMotionIntakeSourceStep() {
 function motionStrategyOption(value, label, description) {
   return (
     `<label class="motion-intake-option">` +
-    `<input type="radio" name="existing-strategy-choice" value="${escapeAttr(value)}" />` +
+    `<input type="radio" name="${value === "motion" || value === "transition" ? "mode-choice" : "existing-strategy-choice"}" value="${escapeAttr(value)}"${value === "motion" ? " checked" : ""} />` +
     `<span>` +
     `<strong>${escapeHtml(label)}</strong>` +
     `<em>${escapeHtml(description)}</em>` +
@@ -282,7 +329,7 @@ function serializeJsonScript(value) {
 
 /**
  * @param {any[]} motions
- * @param {{ interactive?: boolean }} meta
+ * @param {{ interactive?: boolean, user?: { id?: string | null, label?: string | null } | null }} meta
  */
 function renderList(motions, meta) {
   if (!motions.length) {
@@ -293,7 +340,8 @@ function renderList(motions, meta) {
     motions
       .map(
         (m) =>
-          `<a class="motion-card" href="${escapeAttr(motionDetailHref(m.id, meta))}">` +
+          `<article class="motion-card">` +
+          `<a class="mc-link" href="${escapeAttr(motionDetailHref(m.id, meta))}">` +
           `<div class="mc-top">${stateDot(m.state)}${truthTag(m.truth)}` +
           `<span class="mc-ready-tag">${Math.round(m.readiness * 100)}% ready</span></div>` +
           `<div class="mc-name">${escapeHtml(m.name)}</div>` +
@@ -316,11 +364,44 @@ function renderList(motions, meta) {
           (m.blocker
             ? `<div class="mc-blk">${iconSvg("alert", 11)}${escapeHtml(m.blocker)}</div>`
             : `<div class="mc-go">Open ${iconSvg("chevronR", 12)}</div>`) +
-          `</a>`,
+          `</a>` +
+          renderMotionCardActions(m, meta) +
+          `</article>`,
       )
       .join("") +
     `</div>`
   );
+}
+
+/**
+ * @param {any} motion
+ * @param {{ interactive?: boolean, user?: { id?: string | null, label?: string | null } | null }} meta
+ */
+function renderMotionCardActions(motion, meta) {
+  const currentUserId = meta.user?.id ?? null;
+  const currentUserLabel = meta.user?.label ?? null;
+  const assignAction = meta.interactive && motion.blockerKind === "launch-owner-unassigned" && currentUserId
+    ? liveActionBtn({
+        writer: "assignMotionUser",
+        args: {
+          motionId: motion.id,
+          userId: currentUserId,
+          reason: "Keep one execution identity for this motion",
+        },
+        variant: "primary",
+        icon: "check",
+        label: currentUserLabel ? `Assign ${currentUserLabel}` : "Assign current user",
+        title: "Assign the current workspace user so this motion can launch through one governed execution identity.",
+      })
+    : "";
+  const openAction = btn({
+    variant: assignAction ? "ghost" : "secondary",
+    size: "sm",
+    icon: "layers",
+    label: "Open motion",
+    href: motionDetailHref(motion.id, meta),
+  });
+  return `<div class="mc-actions">${assignAction}${openAction}</div>`;
 }
 
 function renderMotionIntakeScript() {
@@ -338,6 +419,8 @@ function renderMotionIntakeScript() {
   if (!form || !submit) return;
 
   var fields = {
+    mode: form.querySelector('[name="mode"]'),
+    userId: form.querySelector('[name="userId"]'),
     url: form.querySelector('[name="url"]'),
     premise: form.querySelector('[name="premise"]'),
     audience: form.querySelector('[name="audience"]'),
@@ -345,11 +428,12 @@ function renderMotionIntakeScript() {
     existingStrategy: form.querySelector('[name="existingStrategy"]'),
     sourceMotionId: form.querySelector('[name="sourceMotionId"]')
   };
+  var modeRadios = Array.prototype.slice.call(root.querySelectorAll('input[name="mode-choice"]'));
   var strategyStep = root.querySelector('[data-intake-step="existing-strategy"]');
   var sourceStep = root.querySelector('[data-intake-step="source-motion"]');
   var sourceList = root.querySelector('[data-intake-existing-list]');
   var strategyRadios = Array.prototype.slice.call(root.querySelectorAll('input[name="existing-strategy-choice"]'));
-  var orderedSteps = ['url', 'existing-strategy', 'source-motion', 'premise', 'audience', 'signal'];
+  var orderedSteps = ['mode', 'user', 'url', 'existing-strategy', 'source-motion', 'premise', 'audience', 'signal'];
 
   function normalize(value) {
     return String(value || '').trim();
@@ -375,6 +459,11 @@ function renderMotionIntakeScript() {
   function selectedStrategy() {
     var picked = strategyRadios.find(function(radio){ return radio.checked; });
     return picked ? picked.value : '';
+  }
+
+  function selectedMode() {
+    var picked = modeRadios.find(function(radio){ return radio.checked; });
+    return picked ? picked.value : 'motion';
   }
 
   function needsFreshDefinition(matchCount, strategy) {
@@ -404,22 +493,26 @@ function renderMotionIntakeScript() {
   }
 
   function sync() {
+    var mode = selectedMode();
+    var userId = normalize(fields.userId && fields.userId.value);
     var url = normalize(fields.url && fields.url.value);
-    var matches = matchesForUrl(url);
-    var strategy = selectedStrategy();
-    var freshDefinition = needsFreshDefinition(matches.length, strategy);
-    var currentStep = 'url';
+    var motionMode = mode !== 'transition';
+    var matches = motionMode ? matchesForUrl(url) : [];
+    var strategy = motionMode ? selectedStrategy() : '';
+    var freshDefinition = motionMode ? needsFreshDefinition(matches.length, strategy) : false;
+    var currentStep = 'user';
     var ready = false;
 
+    if (fields.mode) fields.mode.value = mode;
     if (fields.existingStrategy) fields.existingStrategy.value = strategy;
-    if (strategyStep) strategyStep.hidden = matches.length === 0;
+    if (strategyStep) strategyStep.hidden = !motionMode || matches.length === 0;
 
-    if (matches.length === 0) {
+    if (!motionMode || matches.length === 0) {
       strategyRadios.forEach(function(radio){ radio.checked = false; });
       if (fields.existingStrategy) fields.existingStrategy.value = '';
     }
 
-    if (matches.length > 0 && (strategy === 'continue' || strategy === 'clone')) {
+    if (motionMode && matches.length > 0 && (strategy === 'continue' || strategy === 'clone')) {
       if (matches.length === 1) {
         if (fields.sourceMotionId) fields.sourceMotionId.value = matches[0].id;
         if (sourceStep) sourceStep.hidden = true;
@@ -434,12 +527,21 @@ function renderMotionIntakeScript() {
       if (sourceStep) sourceStep.hidden = true;
     }
 
-    ['premise', 'audience', 'signal'].forEach(function(key){
+    ['url', 'premise', 'audience', 'signal'].forEach(function(key){
       var step = root.querySelector('[data-intake-step="' + key + '"]');
-      if (step) step.hidden = !freshDefinition;
+      if (!step) return;
+      if (key === 'url') {
+        step.hidden = !motionMode;
+        return;
+      }
+      step.hidden = !motionMode || !freshDefinition;
     });
 
-    if (!url) {
+    if (!userId) {
+      currentStep = 'user';
+    } else if (!motionMode) {
+      ready = true;
+    } else if (!url) {
       currentStep = 'url';
     } else if (matches.length > 0 && !strategy) {
       currentStep = 'existing-strategy';
@@ -460,23 +562,34 @@ function renderMotionIntakeScript() {
       setStepClass(key, 'is-complete', false);
     });
 
-    setStepClass('url', 'is-complete', Boolean(url));
-    setStepClass('existing-strategy', 'is-complete', matches.length === 0 || Boolean(strategy));
-    setStepClass('source-motion', 'is-complete', matches.length <= 1 || strategy === 'new' || Boolean(normalize(fields.sourceMotionId && fields.sourceMotionId.value)));
-    setStepClass('premise', 'is-complete', freshDefinition ? Boolean(normalize(fields.premise && fields.premise.value)) : false);
-    setStepClass('audience', 'is-complete', freshDefinition ? Boolean(normalize(fields.audience && fields.audience.value)) : false);
-    setStepClass('signal', 'is-complete', freshDefinition ? Boolean(normalize(fields.signal && fields.signal.value)) : false);
+    setStepClass('mode', 'is-complete', Boolean(mode));
+    setStepClass('user', 'is-complete', Boolean(userId));
+    setStepClass('url', 'is-complete', motionMode ? Boolean(url) : false);
+    setStepClass('existing-strategy', 'is-complete', !motionMode || matches.length === 0 || Boolean(strategy));
+    setStepClass('source-motion', 'is-complete', !motionMode || matches.length <= 1 || strategy === 'new' || Boolean(normalize(fields.sourceMotionId && fields.sourceMotionId.value)));
+    setStepClass('premise', 'is-complete', motionMode && freshDefinition ? Boolean(normalize(fields.premise && fields.premise.value)) : false);
+    setStepClass('audience', 'is-complete', motionMode && freshDefinition ? Boolean(normalize(fields.audience && fields.audience.value)) : false);
+    setStepClass('signal', 'is-complete', motionMode && freshDefinition ? Boolean(normalize(fields.signal && fields.signal.value)) : false);
 
     if (!ready) {
       setStepClass(currentStep, 'is-current', true);
     }
 
     submit.disabled = !ready;
-    var label = strategy === 'continue' ? 'Open motion' : strategy === 'clone' ? 'Clone motion' : 'Start motion';
+    var label = !motionMode
+      ? 'Open transition backlog'
+      : strategy === 'continue'
+        ? 'Open motion'
+        : strategy === 'clone'
+          ? 'Clone motion'
+          : 'Start motion';
     var span = submit.querySelector('span');
     if (span) span.textContent = label;
   }
 
+  modeRadios.forEach(function(radio){
+    radio.addEventListener('change', sync);
+  });
   strategyRadios.forEach(function(radio){
     radio.addEventListener('change', sync);
   });
@@ -565,7 +678,8 @@ function renderHead(m, meta = {}) {
     : `<a class="mh-back" href="${escapeAttr(meta.interactive ? "/motions" : "#motions-top")}">${iconSvg("chevron", 12)} All motions</a>`;
   const settingsHref = meta.interactive ? `/motions/${encodeURIComponent(m.id)}/settings` : null;
   const motionHref = meta.interactive ? `/motions/${encodeURIComponent(m.id)}` : null;
-  const setLiveAction = meta.interactive && m.state !== "active"
+  const deleteAction = meta.settingsPage ? renderDeleteMotionAction(m, meta) : "";
+  const setLiveAction = meta.interactive && m.state !== "active" && !m.blocker
     ? liveActionBtn({
         writer: "restartMotion",
         args: { motionId: m.id },
@@ -578,6 +692,7 @@ function renderHead(m, meta = {}) {
   const actions = meta.settingsPage
     ? [
         setLiveAction,
+        deleteAction,
         motionHref ? btn({ variant: "primary", size: "sm", icon: "layers", label: "Open motion", href: motionHref }) : "",
       ].filter(Boolean).join("")
     : [
@@ -595,6 +710,30 @@ function renderHead(m, meta = {}) {
     `<div class="mh-actions">${actions}</div>` +
     `</div>`
   );
+}
+
+/**
+ * @param {any} motion
+ * @param {{ interactive?: boolean }} [meta]
+ */
+function renderDeleteMotionAction(motion, meta = {}) {
+  if (!meta.interactive) {
+    return "";
+  }
+
+  const sourceUrl = motion.offer?.url ?? motion.offer?.sourceUrl ?? motion.sourceUrl ?? null;
+  if (isTransitionMotion({ name: motion.name, sourceUrl })) {
+    return "";
+  }
+
+  return liveActionBtn({
+    writer: "deleteMotion",
+    args: { motionId: motion.id },
+    variant: "danger",
+    icon: "x",
+    label: "Delete motion",
+    title: "Delete this motion. Any prospects in it move into transition backlog first.",
+  });
 }
 
 /**
@@ -728,16 +867,18 @@ function renderSignalComposer(motionId) {
  */
 function renderExecutionSettings(motion, meta = {}) {
   const assignment = motion.executionAssignment ?? null;
+  const sourceUrl = motion.offer?.url ?? motion.offer?.sourceUrl ?? motion.sourceUrl ?? null;
+  const transitionMotion = isTransitionMotion({ name: motion.name, sourceUrl });
   const currentUserId = meta.user?.id ?? null;
   const currentUserLabel = meta.user?.label ?? null;
-  const currentUserPinned = Boolean(currentUserId) && assignment?.userId === currentUserId;
+  const currentUserAssigned = Boolean(currentUserId) && assignment?.userId === currentUserId;
   const assignmentSummary = assignment
-    ? `${assignment.label} is pinned as the acting user for this motion.`
-    : "No acting user is pinned for this motion yet.";
+    ? `${assignment.label} is assigned to this motion.`
+    : "No user is assigned to this motion yet.";
   const assignmentDetail = assignment
-    ? `Launch will inherit ${Array.isArray(assignment.accountRefs) && assignment.accountRefs.length ? assignment.accountRefs.join(", ") : "the pinned user's mapped accounts"}.`
-    : "This is why the motion plan warns that Exo cannot resolve one ready execution identity before launch.";
-  const button = meta.interactive && currentUserId && !currentUserPinned
+    ? `Launch will inherit ${Array.isArray(assignment.accountRefs) && assignment.accountRefs.length ? assignment.accountRefs.join(", ") : "the assigned user's mapped accounts"}.`
+    : "Assign one user here so Exo can resolve one governed launch path.";
+  const button = meta.interactive && currentUserId && !currentUserAssigned
     ? liveActionBtn({
         writer: "assignMotionUser",
         args: {
@@ -747,15 +888,28 @@ function renderExecutionSettings(motion, meta = {}) {
         },
         variant: "primary",
         icon: "check",
-        label: currentUserLabel ? `Use ${currentUserLabel}` : "Pin current user",
-        title: "Pin the current workspace user to this motion so launch can resolve a governed execution identity.",
+        label: currentUserLabel ? `Assign ${currentUserLabel}` : "Assign current user",
+        title: "Assign the current workspace user to this motion so launch can resolve one governed execution identity.",
       })
     : "";
-  const footer = currentUserPinned
-    ? `<p class="premise-note">The current workspace user already governs this motion.</p>`
+  const footer = currentUserAssigned
+    ? `<p class="premise-note">This motion is already assigned to the current workspace user.</p>`
     : currentUserLabel
       ? `<p class="premise-note">Current workspace user: ${escapeHtml(currentUserLabel)}.</p>`
-      : `<p class="premise-note">Open the UI as a governed execution user to pin a motion owner here.</p>`;
+      : `<p class="premise-note">Open the UI as a governed execution user to assign this motion here.</p>`;
+  const deleteCard = transitionMotion
+    ? ""
+    : (
+      `<div class="offer-card">` +
+      `<div class="offer-head">` +
+      `<span class="def-cap">${iconSvg("x", 12)}Delete · remove this motion from Exo</span>` +
+      `</div>` +
+      `<div class="offer-title">Delete motion</div>` +
+      `<p class="offer-summary">Prospects will move into the transition backlog.</p>` +
+      `<p class="offer-summary">Reassign them to a real motion there or ignore them going forward.</p>` +
+      `<p class="premise-note">Use the Delete motion button at the top of this page.</p>` +
+      `</div>`
+    );
 
   return (
     `<div class="offer-card">` +
@@ -770,7 +924,8 @@ function renderExecutionSettings(motion, meta = {}) {
     `</div>` +
     footer +
     (button ? `<div class="compose-actions">${button}</div>` : "") +
-    `</div>`
+    `</div>` +
+    deleteCard
   );
 }
 

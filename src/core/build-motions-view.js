@@ -54,6 +54,7 @@ export function buildMotionsViewModel(input) {
     const readiness = STAGE_READINESS[summary.overallStage] ?? 0.15;
     const detail = detailById.get(summary.id) ?? null;
     const rawMotion = rawMotionById.get(summary.id) ?? null;
+    const blocker = deriveListBlocker(summary, detail, rawMotion);
     return {
       id: summary.id,
       name: summary.name,
@@ -73,18 +74,25 @@ export function buildMotionsViewModel(input) {
       companyCount: summary.companyCount ?? 0,
       prospectCount: summary.prospectCount ?? 0,
       actionCount: summary.dueNowCount ?? 0,
-      blocker: deriveListBlocker(summary, detail),
+      blocker: blocker.text,
+      blockerKind: blocker.kind,
+      executionAssignment: rawMotion?.engagementUserAssignment ?? null,
       activity: summarizeMotionActivity(rawMotion),
     };
   });
 
   const details = input.motionSummaries
-    .map((summary) => ({
-      detail: detailById.get(summary.id),
-      rawMotion: rawMotionById.get(summary.id) ?? null,
-    }))
+    .map((summary) => {
+      const detail = detailById.get(summary.id);
+      const rawMotion = rawMotionById.get(summary.id) ?? null;
+      return {
+        detail,
+        rawMotion,
+        blocker: detail ? deriveListBlocker(summary, detail, rawMotion) : { text: null, kind: null },
+      };
+    })
     .filter((entry) => entry.detail)
-    .map(({ detail, rawMotion }) => shapeDetail(detail, detailById.size, rawMotion));
+    .map(({ detail, rawMotion, blocker }) => shapeDetail(detail, detailById.size, rawMotion, blocker));
 
   return { motions, details };
 }
@@ -99,24 +107,26 @@ function deriveTruth(detail) {
 /**
  * @param {any} summary
  * @param {any} detail
+ * @param {any} rawMotion
  */
-function deriveListBlocker(summary, detail) {
-  if (detail?.blocker) return summarizeListBlocker(detail.blocker);
-  if (summary.overallStage === "needs-company-targeting") return "No companies targeted yet.";
-  if (summary.overallStage === "needs-company-research") return "Research backlog open.";
-  if (summary.overallStage === "needs-prospect-selection") return "Prospect selection still open.";
+function deriveListBlocker(summary, detail, rawMotion) {
+  if (detail?.blocker) return summarizeListBlocker(detail.blocker, rawMotion);
+  if (summary.overallStage === "needs-company-targeting") return { text: "No companies targeted yet.", kind: null };
+  if (summary.overallStage === "needs-company-research") return { text: "Research backlog open.", kind: null };
+  if (summary.overallStage === "needs-prospect-selection") return { text: "Prospect selection still open.", kind: null };
   if (summary.overallStage === "targeting-ready" && summary.readyToEngage === false && summary.dueNowCount > 0) {
-    return "Launch owner not pinned yet.";
+    return describeLaunchBlocker(rawMotion);
   }
-  return null;
+  return { text: null, kind: null };
 }
 
 /**
  * @param {any} detail
  * @param {number} _total
  * @param {any} rawMotion
+ * @param {{ text: string | null, kind: string | null }} blocker
  */
-function shapeDetail(detail, _total, rawMotion = null) {
+function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, kind: null }) {
   const signals = (detail.signals ?? []).map((signal, index) => ({
     id: signal.id,
     index: index + 1,
@@ -194,12 +204,14 @@ function shapeDetail(detail, _total, rawMotion = null) {
       source: detail.premise?.source ?? "operator",
       truth: mapPremiseTruth(detail.premise?.status, detail.strategyState?.tone),
     },
+    executionAssignment: rawMotion?.engagementUserAssignment ?? null,
     signals,
     audiences,
     companies,
     backlogCompanies,
     people,
-    blocker: detail.blocker ?? null,
+    blocker: blocker.text,
+    blockerKind: blocker.kind,
     activity: summarizeMotionActivity(rawMotion),
     plan: {
       nextSteps: (plan.nextSteps ?? []).map((step) => ({
@@ -216,16 +228,35 @@ function shapeDetail(detail, _total, rawMotion = null) {
   };
 }
 
-/** @param {string} text */
-function summarizeListBlocker(text) {
-  if (!text) return text;
+/**
+ * @param {string} text
+ * @param {any} rawMotion
+ */
+function summarizeListBlocker(text, rawMotion) {
+  if (!text) return { text, kind: null };
   if (/cannot yet resolve one ready execution identity/i.test(text)) {
-    return "Launch owner not pinned yet.";
+    return describeLaunchBlocker(rawMotion);
   }
   if (/reconcile these in-flight relationships and re-home them into real motions/i.test(text)) {
-    return "Transition backlog still needs re-homing.";
+    return { text: "Transition backlog still needs re-homing.", kind: "transition-rehome" };
   }
-  return text;
+  return { text, kind: null };
+}
+
+/**
+ * @param {any} rawMotion
+ */
+function describeLaunchBlocker(rawMotion) {
+  if (rawMotion?.engagementUserAssignment?.userId) {
+    return {
+      text: "Assigned launch owner needs a ready governed account.",
+      kind: "launch-path-unready",
+    };
+  }
+  return {
+    text: "Launch owner unassigned.",
+    kind: "launch-owner-unassigned",
+  };
 }
 
 /**

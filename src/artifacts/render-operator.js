@@ -11,7 +11,6 @@ import {
   avatar,
   btn,
   card,
-  countChip,
   emptyState,
   escapeAttr,
   escapeHtml,
@@ -31,7 +30,15 @@ import {
  */
 export function renderOperatorPage(model, meta = {}) {
   const sections = [
-    renderSection("dec", "flag", "Need decision", model.counts.decisions, "amber", null, renderDecisions(model.decisions, meta)),
+    renderSection(
+      "dec",
+      "queue",
+      "Action queue",
+      model.counts.decisions,
+      "amber",
+      "One queue of operator work across inbound review and due-now planner actions.",
+      renderDecisions(model.decisions, meta, { hasPromoted: Boolean(model.nextMove) }),
+    ),
   ];
   if (model.counts.blocked > 0) {
     sections.push(renderSection("blk", "alert", "Blocked", model.counts.blocked, "red", null, renderBlocked(model.blocked, meta)));
@@ -63,15 +70,17 @@ export function renderOperatorPage(model, meta = {}) {
 /** @param {import("../core/build-operator-view.js").OperatorViewModel} model */
 function renderIntro(model) {
   const c = model.counts;
-  const summaryLine = c.blocked > 0
-    ? c.stale > 0
-      ? "What needs judgment, what is blocked, and what still needs review."
-      : "What needs judgment and what is blocked."
-    : c.stale > 0
-      ? "What needs judgment and what still needs review."
-      : "What needs judgment right now.";
+  const summaryParts = ["What needs action"];
+  if (c.blocked > 0) summaryParts.push("what is blocked");
+  if (c.stale > 0) summaryParts.push("what still needs review");
+  let summaryLine = "What needs action right now.";
+  if (summaryParts.length === 2) {
+    summaryLine = `${summaryParts[0]} and ${summaryParts[1]}.`;
+  } else if (summaryParts.length > 2) {
+    summaryLine = `${summaryParts.slice(0, -1).join(", ")}, and ${summaryParts.at(-1)}.`;
+  }
   const stats = [
-    `<span><b>${c.decisions}</b> need decision</span>`,
+    `<span><b>${c.decisions}</b> queued</span>`,
     c.blocked > 0 ? `<span><b>${c.blocked}</b> blocked</span>` : "",
     c.stale > 0 ? `<span><b>${c.stale}</b> stale</span>` : "",
   ].filter(Boolean);
@@ -261,6 +270,7 @@ function renderNextMove(nm, meta = {}) {
       avatar({ src: nm.avatarUrl, name: nm.subject ?? "Next move", initials: nm.subject ? initials(nm.subject) : "NM", size: 48, accent: "#3b82f6" }) +
       `<div class="nm-main">` +
       subjectLine +
+      (nm.why ? `<div class="row-note">${escapeHtml(nm.why)}</div>` : "") +
       renderPreview(nm.previewLabel, nm.previewSubject, nm.previewText) +
       (chips ? `<div class="nm-chips">${chips}</div>` : "") +
       backlog +
@@ -313,10 +323,14 @@ function renderPreview(label, subject, text) {
 /**
  * @param {import("../core/build-operator-view.js").OperatorDecisionCard[]} decisions
  * @param {{ interactive?: boolean }} [meta]
+ * @param {{ hasPromoted?: boolean }} [options]
  */
-function renderDecisions(decisions, meta = {}) {
+function renderDecisions(decisions, meta = {}, options = {}) {
   if (!decisions.length) {
-    return emptyState({ icon: "check", message: "No decisions waiting — inbound is clear." });
+    if (options.hasPromoted) {
+      return emptyState({ icon: "flag", message: "The first queued action is promoted above." });
+    }
+    return emptyState({ icon: "check", message: "No operator work is queued right now." });
   }
   return decisions.map((d) => renderDecisionCard(d, meta)).join("");
 }
@@ -327,6 +341,7 @@ function renderDecisions(decisions, meta = {}) {
  */
 function renderDecisionCard(d, meta = {}) {
   const chips = [
+    d.motionName ? stateDot("active", d.motionName) : null,
     truthTag(d.truth, d.truthAt ?? null),
     d.surface ? `<span class="surface-ref">${iconSvg("inbox", 11)}${escapeHtml(d.surface)}</span>` : null,
     ownerTag({ ownerName: null }),
@@ -365,6 +380,7 @@ function renderDecisionCard(d, meta = {}) {
       actionTag(d.actionStatus, d.why ?? undefined) +
       `</div>` +
       `<p class="row-summary">${escapeHtml(d.summary)}</p>` +
+      (d.why ? `<div class="row-note">${escapeHtml(d.why)}</div>` : "") +
       renderPreview(d.previewLabel, d.previewSubject, d.previewText) +
       `<div class="row-chips">${chips}</div>` +
       `<div class="row-actions">${actions}</div>`,

@@ -34,11 +34,14 @@ import {
   createTaskLeaseFingerprint,
   createTaskVerificationFingerprint as createHostStateTaskVerificationFingerprint,
   getActiveTaskLease,
+  getRecentMotionRunAt,
   getBrowserBackoffForTask,
+  getRecentMotionTaskRunAt,
   getRecentTaskVerification,
   getSendCircuitBreaker,
   normalizeAgentHostState,
   pruneExpiredBrowserBackoffs,
+  recordMotionTaskRun,
   recordSendCircuitFailure,
   recordTaskVerification,
   recordCanarySendCooldown,
@@ -106,6 +109,12 @@ const CODEX_CONNECTOR_RUNTIME_CONFIG = {
     mcpServerIds: ["unipile"],
   },
 };
+const MOTION_ROUND_ROBIN_TASK_KINDS = new Set([
+  "company_discovery",
+  "company_research",
+  "prospect_selection",
+  "prospect_research",
+]);
 
 export function buildCodexTaskEnv(baseEnv = process.env) {
   const env = { ...baseEnv };
@@ -248,6 +257,17 @@ export function runAgentHostPass() {
         saveHostState(hostState);
       }
       results.push(result);
+      if (shouldRecordMotionTaskRun(executableTask)) {
+        hostState = recordMotionTaskRun(hostState, {
+          taskKind: executableTask.kind,
+          motionId: executableTask.motionId,
+          companyId: executableTask.companyId ?? null,
+          prospectId: executableTask.prospectId ?? null,
+          recordedAt: result.finishedAt ?? new Date().toISOString(),
+          status: result.status,
+        });
+        saveHostState(hostState);
+      }
       if (maintenanceTask) {
         maintenanceTaskCount += 1;
       } else {
@@ -472,6 +492,15 @@ function taskMatchesPassLane(task, passState = {}) {
 /** @param {string | null | undefined} taskKind */
 function classifyTaskPassLane(taskKind) {
   return isBrowserMaintenanceTaskKind(taskKind) ? "maintenance" : "standard";
+}
+
+/**
+ * @param {any} task
+ */
+function shouldRecordMotionTaskRun(task) {
+  return MOTION_ROUND_ROBIN_TASK_KINDS.has(task?.kind)
+    && typeof task?.motionId === "string"
+    && task.motionId.trim().length > 0;
 }
 
 /**
@@ -708,7 +737,7 @@ export function chooseNextQueueTask(
   const sendCircuitBreaker = getSendCircuitBreaker(hostState, now);
   const canaryCooldown = getCanaryCooldown(hostState, now);
   const automationBlockReason = getInboundAutomationRolloutBlockReason(automationWarnings, sendMode, automationHealthWarnings);
-  for (const task of getQueueTasksForExecution(queue, forceRetrieval)) {
+  for (const task of getQueueTasksForExecution(queue, forceRetrieval, hostState, now)) {
     if (!taskMatchesPassLane(task, passState)) {
       continue;
     }
@@ -800,21 +829,28 @@ export function chooseNextQueueTask(
  * @param {{ tasks?: any[], waiting?: any[] } | null | undefined} queue
  * @param {boolean} [forceRetrieval]
  */
-function getQueueTasksForExecution(queue, forceRetrieval = false) {
+function getQueueTasksForExecution(queue, forceRetrieval = false, hostState = null, now = new Date().toISOString()) {
   const dueTasks = Array.isArray(queue?.tasks) ? queue.tasks : [];
   if (!forceRetrieval) {
-    return sortQueueTasksForExecution(dueTasks);
+    return sortQueueTasksForExecution(dueTasks, { hostState, now });
   }
   const waitingRetrievalTasks = Array.isArray(queue?.waiting)
     ? queue.waiting.filter((task) => task?.kind === "run_inbound_sync")
     : [];
-  return sortQueueTasksForExecution([...dueTasks, ...waitingRetrievalTasks], { forceRetrieval: true });
+  return sortQueueTasksForExecution([...dueTasks, ...waitingRetrievalTasks], {
+    forceRetrieval: true,
+    hostState,
+    now,
+  });
 }
 
 /**
  * The host runner should not depend on upstream queue ordering. Urgent
  * execution work should clear before long retrieval and research tasks so a
  * full reconciliation pass cannot starve live replies, sends, or drafting.
+ * Inside the autonomous motion lane, rotate across motions before drilling
+ * deeper into one motion's next task kind, otherwise a single motion can own
+ * an entire 14-minute pass just by generating the next downstream packet.
  * Explicit retrieval forcing is still allowed to override this during manual
  * sync recovery.
  *
@@ -823,6 +859,7 @@ function getQueueTasksForExecution(queue, forceRetrieval = false) {
  */
 function sortQueueTasksForExecution(tasks, options = {}) {
   const forceRetrieval = options.forceRetrieval === true;
+  const hostState = options.hostState ?? null;
   const rank = {
     send_message: 0,
     write_draft: 1,
@@ -836,15 +873,88 @@ function sortQueueTasksForExecution(tasks, options = {}) {
   };
 
   return [...(tasks ?? [])].sort((left, right) => {
+    const leftMotionTask = isMotionRoundRobinTask(left);
+    const rightMotionTask = isMotionRoundRobinTask(right);
+    if (leftMotionTask && rightMotionTask) {
+      const motionComparison = compareMotionRoundRobinAcrossKinds(left, right, hostState);
+      if (motionComparison !== 0) {
+        return motionComparison;
+      }
+    }
     const leftRank = rank[left?.kind] ?? 99;
     const rightRank = rank[right?.kind] ?? 99;
     if (leftRank !== rightRank) {
       return leftRank - rightRank;
     }
+    if (left?.kind === right?.kind && leftMotionTask && rightMotionTask) {
+      const roundRobinComparison = compareMotionRoundRobinTasks(left, right, hostState);
+      if (roundRobinComparison !== 0) {
+        return roundRobinComparison;
+      }
+    }
     const leftKey = normalizeQueueTaskSortTime(left);
     const rightKey = normalizeQueueTaskSortTime(right);
-    return leftKey.localeCompare(rightKey);
+    if (leftKey !== rightKey) {
+      return leftKey.localeCompare(rightKey);
+    }
+    return String(left?.motionId ?? left?.companyId ?? left?.prospectId ?? "")
+      .localeCompare(String(right?.motionId ?? right?.companyId ?? right?.prospectId ?? ""));
   });
+}
+
+/**
+ * @param {any} task
+ */
+function isMotionRoundRobinTask(task) {
+  return MOTION_ROUND_ROBIN_TASK_KINDS.has(task?.kind)
+    && typeof task?.motionId === "string"
+    && task.motionId.trim().length > 0;
+}
+
+/**
+ * @param {any} left
+ * @param {any} right
+ * @param {any} hostState
+ */
+function compareMotionRoundRobinAcrossKinds(left, right, hostState) {
+  if (left?.motionId === right?.motionId) {
+    return 0;
+  }
+
+  const leftRunAt = getRecentMotionRunAt(hostState, left?.motionId, MOTION_ROUND_ROBIN_TASK_KINDS);
+  const rightRunAt = getRecentMotionRunAt(hostState, right?.motionId, MOTION_ROUND_ROBIN_TASK_KINDS);
+  if (leftRunAt !== rightRunAt) {
+    if (!leftRunAt) return -1;
+    if (!rightRunAt) return 1;
+    return leftRunAt.localeCompare(rightRunAt);
+  }
+
+  return 0;
+}
+
+/**
+ * @param {any} left
+ * @param {any} right
+ * @param {any} hostState
+ */
+function compareMotionRoundRobinTasks(left, right, hostState) {
+  const leftRunAt = getRecentMotionTaskRunAt(hostState, left?.kind, left?.motionId);
+  const rightRunAt = getRecentMotionTaskRunAt(hostState, right?.kind, right?.motionId);
+  if (leftRunAt !== rightRunAt) {
+    if (!leftRunAt) return -1;
+    if (!rightRunAt) return 1;
+    return leftRunAt.localeCompare(rightRunAt);
+  }
+
+  if (left?.kind === "company_discovery" && right?.kind === "company_discovery") {
+    const leftDeficit = normalizeQueueTaskDeficit(left);
+    const rightDeficit = normalizeQueueTaskDeficit(right);
+    if (leftDeficit !== rightDeficit) {
+      return rightDeficit - leftDeficit;
+    }
+  }
+
+  return 0;
 }
 
 /**
@@ -869,7 +979,7 @@ export function explainNoopPass(
   automationHealthWarnings = [],
   forceRetrieval = false,
 ) {
-  const tasks = getQueueTasksForExecution(queue, forceRetrieval);
+  const tasks = getQueueTasksForExecution(queue, forceRetrieval, hostState, now);
   if (tasks.length === 0) {
     return forceRetrieval
       ? "No due tasks or waiting autonomous retrieval tasks were available."
@@ -2089,6 +2199,7 @@ export function buildInboundContractArgs(task) {
   if (!command) {
     throw new Error(`Unsupported inbound capability: ${task?.capability ?? "unknown"}`);
   }
+  const supportsLinkedinScopedFlags = task?.capability === "linkedin";
 
   const args = [
     "inbound",
@@ -2098,21 +2209,23 @@ export function buildInboundContractArgs(task) {
     "--account",
     task.accountId,
   ];
-  for (const surfaceKey of normalizeInboundTaskSurfaceKeys(task)) {
-    args.push("--surface", surfaceKey);
-  }
-  const resumeCursor = normalizeNullableString(task?.resumeCursor);
-  if (resumeCursor) {
-    args.push("--resume-cursor", resumeCursor);
-  }
-  if (Number.isInteger(task?.resumeStartOffset) && task.resumeStartOffset >= 0) {
-    args.push("--resume-start-offset", String(task.resumeStartOffset));
-  }
-  if (Number.isInteger(task?.maxPages) && task.maxPages > 0) {
-    args.push("--max-pages", String(task.maxPages));
-  }
-  if (Number.isInteger(task?.pageSize) && task.pageSize > 0) {
-    args.push("--page-size", String(task.pageSize));
+  if (supportsLinkedinScopedFlags) {
+    for (const surfaceKey of normalizeInboundTaskSurfaceKeys(task)) {
+      args.push("--surface", surfaceKey);
+    }
+    const resumeCursor = normalizeNullableString(task?.resumeCursor);
+    if (resumeCursor) {
+      args.push("--resume-cursor", resumeCursor);
+    }
+    if (Number.isInteger(task?.resumeStartOffset) && task.resumeStartOffset >= 0) {
+      args.push("--resume-start-offset", String(task.resumeStartOffset));
+    }
+    if (Number.isInteger(task?.maxPages) && task.maxPages > 0) {
+      args.push("--max-pages", String(task.maxPages));
+    }
+    if (Number.isInteger(task?.pageSize) && task.pageSize > 0) {
+      args.push("--page-size", String(task.pageSize));
+    }
   }
   args.push(
     "--mode",
@@ -2593,6 +2706,12 @@ function normalizeQueueTaskSortTime(task) {
     ?? normalizeIsoDatetime(task?.queuedAt)
     ?? normalizeIsoDatetime(task?.approvedAt)
     ?? "9999-12-31T23:59:59.999Z";
+}
+
+/** @param {any} task */
+function normalizeQueueTaskDeficit(task) {
+  const deficit = Number(task?.deficitAfterBacklog);
+  return Number.isFinite(deficit) ? Math.max(0, Math.floor(deficit)) : 0;
 }
 
 /** @param {any} brief */

@@ -28,8 +28,10 @@ import { autoPromoteInboundAccepts } from "./auto-promote-inbound-accepts.js";
 import { setMotionProspectCadence } from "./set-prospect-cadence.js";
 import { transitionInboundObservation } from "./transition-inbound-observation.js";
 import { claimUserRuntimeAccount } from "./claim-user-runtime-account.js";
+import { removeMotionGoverned } from "./remove-motion.js";
 import { addMotionSignals, removeMotionSignal } from "./manage-motion-signals.js";
 import { applyInstallScope, completeOnboardingUser } from "./onboarding.js";
+import { ensureTransitionMotion } from "./ensure-transition-motion.js";
 import { runAgentWorkerPass } from "../cli/commands/agent.js";
 import { findActionResultForTouch } from "../lib/action-result-catalog.js";
 import { inspectAgentRunLock } from "../lib/agent-run-lock.js";
@@ -78,6 +80,8 @@ export async function executeActionIntent(intent) {
       return runAssignCompanyUser(args);
     case "assignMotionUser":
       return runAssignMotionUser(args);
+    case "deleteMotion":
+      return await runDeleteMotion(args);
     case "restartMotion":
       return runRestartMotion(args);
     case "claimTargetAccountPacket":
@@ -319,6 +323,33 @@ function runSetWorkspacePhoneEnrichmentPolicy(args) {
 
 /** @param {Record<string, any>} args */
 async function runStartMotionFromIntake(args) {
+  const mode = normalizeMotionIntakeMode(args.mode);
+  const userId = normalizeOptionalString(args.userId);
+  if (!userId) {
+    throw new Error(mode === "transition"
+      ? "Select an execution user before opening the transition backlog."
+      : "Select a launch user before starting a motion.");
+  }
+  const rawUser = findUserById(userId);
+  if (!rawUser) {
+    throw new Error(`User not found: ${userId}`);
+  }
+
+  if (mode === "transition") {
+    const transitionMotion = await ensureTransitionMotion();
+    const assigned = assignMotionUser(transitionMotion, rawUser, listBrowserProfiles(), {
+      assignedBy: "exo-ui",
+      reason: "Carry ongoing interface-driven relationships through one governed container",
+    });
+    updateMotion(assigned);
+    return {
+      ok: true,
+      writer: "startMotionFromIntake",
+      message: `Opened transition backlog and assigned it to ${assigned.engagementUserAssignment?.label ?? rawUser.label}.`,
+      redirect: `/motions/${assigned.id}`,
+    };
+  }
+
   const url = String(args.url ?? "").trim();
   const allMotions = listMotions();
   const existingMatches = allMotions.filter((motion) => motion.offer?.sourceUrl === url);
@@ -335,6 +366,7 @@ async function runStartMotionFromIntake(args) {
       premise: shouldDefineFresh ? buildPremiseInput(args.premise) : null,
       audienceHypotheses: shouldDefineFresh ? buildAudienceInputs(args.audience) : [],
       signals: shouldDefineFresh ? buildSignalInputs(args.signal) : [],
+      launchUserId: userId,
       targetingProfile: {},
       suppressionPolicy: {},
     },
@@ -365,22 +397,38 @@ async function runStartMotionFromIntake(args) {
   }
 
   if (result.status === "continued") {
+    const maybeAssigned = assignLaunchUserIfNeeded(result.motion, rawUser, {
+      assignedBy: "exo-ui",
+      reason: "Keep one execution identity for this motion",
+      force: false,
+    });
+    if (maybeAssigned.changed) {
+      updateMotion(maybeAssigned.motion);
+    }
     return {
       ok: true,
       writer: "startMotionFromIntake",
-      message: `Continuing ${result.motion.name}.`,
+      message: maybeAssigned.changed
+        ? `Continuing ${maybeAssigned.motion.name} and assigned it to ${maybeAssigned.motion.engagementUserAssignment?.label ?? rawUser.label}.`
+        : `Continuing ${result.motion.name}.`,
       redirect: `/motions/${result.motion.id}`,
     };
   }
 
-  const storedMotion = result.status === "created" || result.status === "cloned"
-    ? insertMotion(result.motion)
+  const motionWithUser = result.status === "created" || result.status === "cloned"
+    ? assignMotionUser(result.motion, rawUser, listBrowserProfiles(), {
+        assignedBy: "exo-ui",
+        reason: "Keep one execution identity for this motion",
+      })
     : result.motion;
+  const storedMotion = result.status === "created" || result.status === "cloned"
+    ? insertMotion(motionWithUser)
+    : motionWithUser;
   const verb = result.status === "cloned" ? "Cloned" : "Created";
   return {
     ok: true,
     writer: "startMotionFromIntake",
-    message: `${verb} motion ${storedMotion.name}.`,
+    message: `${verb} motion ${storedMotion.name} and assigned it to ${storedMotion.engagementUserAssignment?.label ?? rawUser.label}.`,
     redirect: `/motions/${storedMotion.id}`,
   };
 }
@@ -448,7 +496,19 @@ function runAssignMotionUser(args) {
   return {
     ok: true,
     writer: "assignMotionUser",
-    message: `Pinned ${updated.name} to ${updated.engagementUserAssignment?.label ?? "the selected user"}.`,
+    message: `Assigned ${updated.name} to ${updated.engagementUserAssignment?.label ?? "the selected user"}.`,
+  };
+}
+
+/** @param {Record<string, any>} args */
+async function runDeleteMotion(args) {
+  if (!args.motionId) throw new Error("deleteMotion requires motionId.");
+  const result = await removeMotionGoverned({ motionId: args.motionId });
+  return {
+    ok: true,
+    writer: "deleteMotion",
+    message: result.message,
+    redirect: "/motions",
   };
 }
 
@@ -541,6 +601,14 @@ function normalizeExistingStrategy(value) {
 
 /**
  * @param {unknown} value
+ * @returns {"motion" | "transition"}
+ */
+function normalizeMotionIntakeMode(value) {
+  return normalizeOptionalString(value) === "transition" ? "transition" : "motion";
+}
+
+/**
+ * @param {unknown} value
  * @returns {string | null}
  */
 function normalizeOptionalString(value) {
@@ -577,6 +645,28 @@ function buildSignalInputs(value) {
     .split(/\r?\n/)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+/**
+ * @param {import("../schema/motion.js").motionSchema._type} rawMotion
+ * @param {import("../schema/user.js").userSchema._type} rawUser
+ * @param {{ assignedBy?: string | null, reason?: string | null, force?: boolean }} [options]
+ */
+function assignLaunchUserIfNeeded(rawMotion, rawUser, options = {}) {
+  const assignedUserId = rawMotion.engagementUserAssignment?.userId ?? null;
+  if (assignedUserId === rawUser.id) {
+    return { motion: rawMotion, changed: false };
+  }
+  if (assignedUserId && !options.force) {
+    return { motion: rawMotion, changed: false };
+  }
+  return {
+    motion: assignMotionUser(rawMotion, rawUser, listBrowserProfiles(), {
+      assignedBy: options.assignedBy ?? null,
+      reason: options.reason ?? null,
+    }),
+    changed: true,
+  };
 }
 
 /** @param {Record<string, any>} args */
