@@ -241,6 +241,12 @@ function shapeProspect(raw, ctx) {
     connectionDegree: raw.linkedinProfileSnapshot?.connectionDegree ?? null,
     drafts: Array.isArray(raw.drafts) ? raw.drafts : [],
     touches: Array.isArray(raw.touches) ? raw.touches : [],
+    capturedPublicActivity: Array.isArray(raw.capturedPublicActivity)
+      ? raw.capturedPublicActivity
+      : Array.isArray(raw.linkedinProfileSnapshot?.recentPosts)
+        ? raw.linkedinProfileSnapshot.recentPosts.slice(0, 5)
+        : [],
+    publicEngagementSelection: raw.publicEngagementSelection ?? null,
     timelineNotes: Array.isArray(raw.timelineNotes) ? raw.timelineNotes : [],
     handledNotification: raw.handledNotification ?? null,
   };

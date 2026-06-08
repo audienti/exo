@@ -101,6 +101,11 @@ export function describePrivateInboundResponse(observation, prospect) {
     return { state: "sent", draft: sentDraft ?? undefined, touch: sentTouch ?? undefined, surface };
   }
 
+  const sentThreadMessage = findOutboundThreadReplyAfterLatestInbound(observation, prospect);
+  if (sentThreadMessage) {
+    return { state: "sent", surface };
+  }
+
   const blockedTouch = findLatestMatchingTouch(touches, surface, observedAtMs, (touch) =>
     touch?.surface === surface
     && touch?.direction === "outbound"
@@ -186,4 +191,83 @@ function findLatestMatchingTouch(touches, surface, observedAtMs, predicate) {
       && predicate(touch)
     )
     .sort((left, right) => String(right?.occurredAt ?? "").localeCompare(String(left?.occurredAt ?? "")))[0] ?? null;
+}
+
+/**
+ * When the recovered thread already shows an outbound message after the latest
+ * inbound message, treat the reply as handled even if older writeback paths
+ * failed to record a sent draft or outbound touch.
+ *
+ * @param {any} observation
+ * @param {any | null | undefined} prospect
+ */
+function findOutboundThreadReplyAfterLatestInbound(observation, prospect) {
+  const messages = collectThreadMessages(observation, prospect);
+  if (!messages.length) {
+    return null;
+  }
+
+  const latestInboundIndex = findLatestInboundIndex(messages);
+  if (latestInboundIndex < 0) {
+    return null;
+  }
+
+  for (let index = messages.length - 1; index > latestInboundIndex; index -= 1) {
+    if (messages[index].direction === "outbound") {
+      return messages[index].raw;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * @param {any} observation
+ * @param {any | null | undefined} prospect
+ */
+function collectThreadMessages(observation, prospect) {
+  const rawMessages = [
+    ...(Array.isArray(observation?.messages) ? observation.messages : []),
+    ...(Array.isArray(prospect?.threadMessages) ? prospect.threadMessages : []),
+  ];
+
+  const seen = new Set();
+  return rawMessages
+    .map((message) => normalizeThreadMessage(message))
+    .filter(Boolean)
+    .filter((message) => {
+      const key = `${message.direction}::${message.sentAt}::${message.body ?? ""}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => left.sentAt.localeCompare(right.sentAt));
+}
+
+/** @param {any} message */
+function normalizeThreadMessage(message) {
+  const direction = String(message?.direction ?? "").toLowerCase();
+  const sentAt = String(message?.sentAt ?? "").trim();
+  const parsed = Date.parse(sentAt);
+  if ((direction !== "inbound" && direction !== "outbound") || !Number.isFinite(parsed)) {
+    return null;
+  }
+  return {
+    raw: message,
+    direction,
+    sentAt: new Date(parsed).toISOString(),
+    body: typeof message?.body === "string" ? message.body.trim() : null,
+  };
+}
+
+/** @param {Array<{ direction: string }>} messages */
+function findLatestInboundIndex(messages) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].direction === "inbound") {
+      return index;
+    }
+  }
+  return -1;
 }

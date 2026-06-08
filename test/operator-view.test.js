@@ -88,6 +88,82 @@ test("operator moves agent status into the header dropdown instead of a blocking
   assert.doesNotMatch(html, /next-move agent-runtime/);
 });
 
+test("operator uses prospect avatars that already exist on due-now planner work", () => {
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-04T11:05:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: {
+      checklist: [],
+    },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    dueNowItems: [
+      {
+        state: "due_now",
+        source: { type: "cadence" },
+        motion: { id: "17adf3ca-a6b3-4d26-9f93-bc60f28fe94d", name: "harsh-spare-mongoose" },
+        company: { id: "82b0baf7-f98d-4bb6-b12c-c913fcb998cf", name: "Columbus McKinnon" },
+        prospect: {
+          id: "d149a3e4-6988-4ad7-b40b-000e231e1ac9",
+          name: "Sue Weinheimer",
+          title: "Director, Technical Infrastructure Americas",
+          avatarUrl: "https://example.com/sue.jpg",
+        },
+        recommendedAction: "First-touch decision: LinkedIn connection request is the only verified usable direct channel.",
+        dueAt: "2026-06-04T11:06:00.000Z",
+      },
+    ],
+    waitingItems: [],
+    truthAccounts: [],
+  });
+
+  assert.equal(model.nextMove?.subject, "Sue Weinheimer");
+  assert.equal(model.nextMove?.avatarUrl, "https://example.com/sue.jpg");
+
+  const html = renderOperatorPage(model, { interactive: true });
+  assert.match(html, /https:\/\/example\.com\/sue\.jpg/i);
+  assert.match(html, /<img class="avatar" src="https:\/\/example\.com\/sue\.jpg"/i);
+});
+
+test("operator does not surface outbound-capacity deficit as a human next move", () => {
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-07T22:15:30.558Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: {
+      headline: "Keep filling today's LinkedIn invitation deficit.",
+      nextMove: "Use the ready connection-request branches to send 23 more LinkedIn invitations today and close the remaining deficit.",
+      why: "Outbound pacing is behind today's target.",
+      checklist: [],
+    },
+    decisionQueue: { items: [] },
+    dueNowItems: [
+      {
+        motion: { id: "outbound-capacity:linkedin", name: "LinkedIn outbound capacity" },
+        company: { id: "outbound-capacity:linkedin", name: "William Flanagan" },
+        prospect: { id: "outbound-capacity:linkedin", name: "LinkedIn invitation target", title: "Daily deficit" },
+        state: "due_now",
+        priority: "action",
+        priorityRank: 0.95,
+        cadenceEffect: "capacity_deficit",
+        dueAt: "2026-06-07T22:15:30.558Z",
+        whyItMatters: "LinkedIn target is 25 invitations today.",
+        recommendedAction: "Use the ready connection-request branches to send 23 more LinkedIn invitations today and close the remaining deficit.",
+        source: { type: "outbound_capacity", kind: "fill_connection_request_deficit", channel: "linkedin" },
+      },
+    ],
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+  });
+
+  assert.equal(model.nextMove, null);
+  assert.deepEqual(model.decisions, []);
+  assert.equal(model.counts.decisions, 0);
+});
+
 test("operator queue links a company research task back to the research brief", () => {
   const model = buildOperatorViewModel({
     user: { id: "user-1", label: "william-main", owner: "William" },
@@ -240,6 +316,45 @@ test("operator detail links preserve a return path back to operator", () => {
   assert.match(html, /Would be good to compare notes on partnerships\./);
   assert.match(html, /title="They replied\."[^>]*>due now</i);
   assert.doesNotMatch(html, /Why this move/i);
+});
+
+test("operator planner cards use their routed detail href instead of a fake person link", () => {
+  const motionId = "857e193e-fd1e-422f-94ac-e856e59d0619";
+  const companyId = "08c6ac2d-4896-4aa4-8701-15b283ff6aaf";
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-07T22:15:30.558Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: {
+      headline: "Research the queued account.",
+      nextMove: "Open the company research brief and continue the packet.",
+      why: "Queued discovery should route to the real company surface, not an internal person page.",
+      checklist: [],
+    },
+    decisionQueue: { items: [] },
+    dueNowItems: [
+      {
+        motion: { id: motionId, name: "rational-coarse-wren" },
+        company: { id: companyId, name: "The Pitch" },
+        prospect: null,
+        state: "due_now",
+        priority: "action",
+        priorityRank: 0.8,
+        dueAt: "2026-06-07T22:15:30.558Z",
+        whyItMatters: "Queued company research is ready to resume.",
+        recommendedAction: "Open company research.",
+        source: { type: "company_discovery", kind: "run_company_discovery" },
+      },
+    ],
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+  });
+
+  const html = renderOperatorPage(model, { interactive: true });
+
+  assert.match(html, new RegExp(`href="/companies/${companyId}\\?return=%2Foperator"`));
+  assert.doesNotMatch(html, /href="\/people\//);
 });
 
 test("operator next move uses the card body for message context and collapses why into the status label", () => {
@@ -1134,7 +1249,11 @@ test("operator merges due-now planner work into the main action queue without du
         source: { type: "cadence" },
         motion: { id: "17adf3ca-a6b3-4d26-9f93-bc60f28fe94d", name: "harsh-spare-mongoose" },
         company: { id: "82b0baf7-f98d-4bb6-b12c-c913fcb998cf", name: "Columbus McKinnon" },
-        prospect: { id: "d149a3e4-6988-4ad7-b40b-000e231e1ac9", name: "Sue Weinheimer" },
+        prospect: {
+          id: "d149a3e4-6988-4ad7-b40b-000e231e1ac9",
+          name: "Sue Weinheimer",
+          avatarUrl: "https://example.com/sue.jpg",
+        },
         recommendedAction: "First-touch decision: LinkedIn connection request is the only verified usable direct channel.",
         dueAt: "2026-06-04T11:06:00.000Z",
       },
@@ -1145,6 +1264,7 @@ test("operator merges due-now planner work into the main action queue without du
 
   assert.equal(model.counts.decisions, 1);
   assert.equal(model.nextMove?.subject, "Sue Weinheimer");
+  assert.equal(model.nextMove?.avatarUrl, "https://example.com/sue.jpg");
   assert.deepEqual(model.decisions, []);
 
   const html = renderOperatorPage(model, { interactive: true });
@@ -1153,6 +1273,7 @@ test("operator merges due-now planner work into the main action queue without du
   assert.match(html, /Sue Weinheimer/i);
   assert.match(html, /Columbus McKinnon/i);
   assert.match(html, /Compose request/i);
+  assert.match(html, /https:\/\/example\.com\/sue\.jpg/i);
   assert.match(html, /href="\/prospects\/d149a3e4-6988-4ad7-b40b-000e231e1ac9\?return=%2Foperator"/i);
   assert.match(html, /The first queued action is promoted above\./i);
   assert.doesNotMatch(html, /Reply to Tony Robbins and move the branch into an active conversation/i);

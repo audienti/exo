@@ -219,6 +219,7 @@ function buildTimeline(sorted) {
           : "unknown",
       fromName: observation.actorName,
       fromHandle: observation.actorHandle,
+      draftExcerpt: extractDraftReplyExcerpt(parsedNotes.body),
       showSummary: isInviteMessage
         ? Boolean(inviteNote ? inviteNote !== observation.summary : observation.summary)
         : isPendingInviteMessage
@@ -582,6 +583,29 @@ function parseObservationNotes(notes) {
     subject,
     body,
   };
+}
+
+/**
+ * Pull a short quoted draft line out of legacy note-only email observations.
+ * Older Gmail thread captures sometimes stored prose notes instead of a
+ * structured messages array, so surface the quoted draft back to the operator
+ * when it exists.
+ *
+ * @param {string | null | undefined} text
+ * @returns {string | null}
+ */
+function extractDraftReplyExcerpt(text) {
+  const normalized = normalizeNullableString(text);
+  if (!normalized) {
+    return null;
+  }
+  const quotedMatch = normalized.match(
+    /\b(?:draft reply|reply draft|latest william message|draft message)\s+(?:says|reads)\s+["']([^"']+)["']/i,
+  );
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1].trim();
+  }
+  return null;
 }
 
 /**

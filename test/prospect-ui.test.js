@@ -84,6 +84,58 @@ test("prospect detail prefers the active email draft surface over branch-based L
   assert.doesNotMatch(html, /Connection request note · Lina Park/);
 });
 
+test("prospect detail re-home panel reuses the shared motion chooser cards", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    motionId: "transition-1",
+    motionName: "transition-inbound-backlog",
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "transition-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [
+      {
+        id: "transition-1",
+        name: "transition-inbound-backlog",
+        offerLabel: "Transition backlog",
+        premise: "Continue and reconcile relationships started before Exo, then re-home them into real motions once they are understood.",
+        status: "active",
+        statusLabel: "Active",
+      },
+      {
+        id: "motion-1",
+        name: "harsh-spare-mongoose",
+        offerLabel: "Knit",
+        premise: "This offer matters when GTM teams need governed outbound work instead of a pile of disconnected prospecting tasks.",
+        status: "draft",
+        statusLabel: "Draft",
+      },
+      {
+        id: "motion-2",
+        name: "rational-coarse-wren",
+        offerLabel: "Audienti",
+        premise: "This offer matters when operators need one governed system of record for active GTM motions.",
+        status: "paused",
+        statusLabel: "Paused",
+      },
+    ],
+  });
+
+  assert.equal((html.match(/data-exo-writer="rehomeProspect"/g) ?? []).length, 2);
+  assert.match(html, /Destination motion/);
+  assert.match(html, /Status/);
+  assert.match(html, /Offer/);
+  assert.match(html, /Premise/);
+  assert.match(html, /Re-home here/);
+  assert.match(html, /Knit/);
+  assert.match(html, /Audienti/);
+  assert.match(html, /harsh-spare-mongoose/);
+  assert.match(html, /rational-coarse-wren/);
+  assert.match(html, /governed outbound work instead of a pile of disconnected prospecting tasks/);
+  assert.doesNotMatch(html, /data-exo-radio="rehome-motion:/);
+  assert.doesNotMatch(html, /Transition backlog/);
+});
+
 test("prospect detail shows email thread observations and waits on a sent email instead of inventing a queued draft", () => {
   const html = renderProspectDetailPage(buildProspect({
     branch: "waiting",
@@ -131,6 +183,69 @@ test("prospect detail shows email thread observations and waits on a sent email 
   assert.match(html, /The last email was sent\. The agent will wait for a reply before drafting again\./);
   assert.doesNotMatch(html, /Sent send email for Lina Park\./);
   assert.doesNotMatch(html, /Review the queued email reply/);
+});
+
+test("prospect detail ignores a stale private-reply draft when the thread already shows the sent response", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    name: "Sara Vargas",
+    title: "Senior Research Scientist; Associate Professor",
+    branch: "waiting",
+    branchLabel: "Email thread active",
+    primaryChannel: "email",
+    email: "svargas@brownhealth.org",
+    cadenceState: {
+      status: "ready",
+      currentStep: null,
+      lastTouchOutcome: "pending",
+      lastTouchAt: "2026-06-02T17:45:24.000Z",
+      nextAction: "Review this inbound person and choose the next move.",
+    },
+    threadMessages: [
+      {
+        id: "msg-1",
+        direction: "inbound",
+        sentAt: "2026-06-02T19:11:54.000Z",
+        fromName: "Sara Vargas",
+        fromHandle: "svargas@brownhealth.org",
+        body: "Would you be okay with me connecting the two of you?",
+      },
+      {
+        id: "msg-2",
+        direction: "outbound",
+        sentAt: "2026-06-02T21:45:24.000Z",
+        fromName: "William Flanagan",
+        fromHandle: "wflanagan@audienti.com",
+        body: "Sure, always happy to talk and advise. Thank you.",
+      },
+    ],
+    drafts: [{
+      id: "draft-1",
+      surface: "email",
+      channel: "email",
+      subject: null,
+      body: "Hi Sara,\n\nYes, please feel free to connect us.",
+      status: "ready",
+      authoredBy: "agent",
+      editedByOperator: false,
+      createdAt: "2026-06-07T11:01:17.319Z",
+      updatedAt: "2026-06-07T11:01:17.319Z",
+      approvedAt: null,
+      sentAt: null,
+      notes: null,
+    }],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Wait for the email reply/);
+  assert.match(html, /Sure, always happy to talk and advise\. Thank you\./);
+  assert.match(html, /The last email on this thread is already out\./);
+  assert.doesNotMatch(html, /Review the drafted email/);
+  assert.doesNotMatch(html, /Hi Sara,\s+Yes, please feel free to connect us\./i);
 });
 
 test("prospect detail still falls back to connection-request compose when no active draft exists", () => {

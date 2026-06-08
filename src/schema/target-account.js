@@ -64,6 +64,8 @@ const buyingCommitteeRoleSchema = z.enum([
 const decisionAuthoritySchema = z.enum(["buys", "blocks", "sponsors", "influences", "observes", "unknown"]);
 const tenureBandSchema = z.enum(["under-6-months", "6-to-24-months", "24-to-60-months", "60-plus-months", "unknown"]);
 const freshnessBandSchema = z.enum(["0-14-days", "15-30-days", "31-60-days", "61-90-days", "stale", "unknown"]);
+const publicEngagementTargetKindSchema = z.enum(["post", "comment"]);
+const publicEngagementRecommendationSchema = z.enum(["reaction", "comment"]);
 const contactPointKindSchema = z.enum([
   "linkedin_profile",
   "linkedin_public_id",
@@ -222,12 +224,35 @@ export const linkedinRecentPostSchema = z.object({
   postedAt: z.string().datetime().nullable().default(null),
   freshnessBand: freshnessBandSchema.nullable().default(null),
   summary: nullableString.default(null),
-  snippet: nullableString.default(null)
+  snippet: nullableString.default(null),
+  targetKind: publicEngagementTargetKindSchema.nullable().default(null),
+  authoredByProspect: z.boolean().nullable().default(null),
+  hasOriginalCommentary: z.boolean().nullable().default(null),
+  businessRelevance: confidenceSchema.nullable().default(null),
+  recommendedAction: publicEngagementRecommendationSchema.nullable().default(null),
+  rationale: nullableString.default(null)
+});
+
+export const publicEngagementSelectionSchema = z.object({
+  url: z.string().url(),
+  targetKind: publicEngagementTargetKindSchema,
+  activityType: nullableString.default(null),
+  postedAt: z.string().datetime().nullable().default(null),
+  freshnessBand: freshnessBandSchema.nullable().default(null),
+  summary: nullableString.default(null),
+  snippet: nullableString.default(null),
+  businessRelevance: confidenceSchema.nullable().default(null),
+  recommendedAction: publicEngagementRecommendationSchema.nullable().default(null),
+  rationale: nullableString.default(null),
+  selectionReason: nullableString.default(null),
+  selectedAt: z.string().datetime().nullable().default(null)
 });
 
 export const linkedinProfileSnapshotSchema = z.object({
   capturedAt: z.string().datetime().nullable().default(null),
   profileUrl: z.string().url().nullable().default(null),
+  avatarSourceUrl: z.string().url().nullable().default(null),
+  avatarChecked: z.boolean().default(false),
   publicId: nullableString.default(null),
   memberId: nullableString.default(null),
   displayName: nullableString.default(null),
@@ -356,7 +381,7 @@ export const prospectDraftSchema = z.object({
 // Operator-authored timeline entries. A "note" is context/observation; a
 // "steer" is a directive for the agent (what to do or avoid on the next action).
 // Both render as timestamped entries in the engagement timeline.
-export const prospectTimelineNoteKindSchema = z.enum(["note", "steer"]);
+export const prospectTimelineNoteKindSchema = z.enum(["note", "steer", "system"]);
 export const prospectTimelineNoteSchema = z.object({
   id: z.string().min(1),
   kind: prospectTimelineNoteKindSchema.default("note"),
@@ -385,6 +410,7 @@ export const prospectSchema = z.object({
   identityTells: identityTellsSchema.default({}),
   linkedinProfileSnapshot: linkedinProfileSnapshotSchema.default({}),
   liveSignal: liveSignalSchema.default({}),
+  publicEngagementSelection: publicEngagementSelectionSchema.nullable().default(null),
   contactPoints: z.array(contactPointSchema).default([]),
   contactEnrichmentState: contactEnrichmentStateSchema.default({}),
   queueState: queueStateSchema.default({ status: "selected" }),

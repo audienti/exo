@@ -195,7 +195,11 @@ function composeHref(prospectId, personId, fallbackHref, meta) {
  * @returns {string | undefined}
  */
 function detailHref(prospectId, personId, fallbackHref, meta) {
-  return personHref(prospectId, personId, meta) ?? fallbackHref ?? undefined;
+  const internalHref = personHref(prospectId, personId, meta);
+  if (internalHref) {
+    return internalHref;
+  }
+  return fallbackHref ? withReturn(fallbackHref, meta) : undefined;
 }
 
 /**
@@ -340,6 +344,9 @@ function renderDecisions(decisions, meta = {}, options = {}) {
  * @param {{ interactive?: boolean }} [meta]
  */
 function renderDecisionCard(d, meta = {}) {
+  const personId = Object.prototype.hasOwnProperty.call(d, "personId")
+    ? d.personId
+    : d.id;
   const chips = [
     d.motionName ? stateDot("active", d.motionName) : null,
     truthTag(d.truth, d.truthAt ?? null),
@@ -361,7 +368,7 @@ function renderDecisionCard(d, meta = {}) {
     },
     {
       prospectId: d.prospectId,
-      personId: d.id,
+      personId,
       size: "sm",
       meta,
     },
@@ -374,7 +381,7 @@ function renderDecisionCard(d, meta = {}) {
       `<div class="row-top">` +
       avatar({ src: d.avatarUrl, initials: d.initials, name: d.person, size: 34 }) +
       `<div class="row-id">` +
-      personName(d.person, d.prospectId, d.id, meta, "row-name") +
+      personName(d.person, d.prospectId, personId, meta, "row-name") +
       `<div class="row-role">${escapeHtml(d.roleLine ?? [d.role, d.company].filter(Boolean).join(" · "))}</div>` +
       `</div>` +
       actionTag(d.actionStatus, d.why ?? undefined) +

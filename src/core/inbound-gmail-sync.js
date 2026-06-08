@@ -40,6 +40,24 @@ export function buildGmailInboundSyncPayload(rawUser, input) {
     throw new Error("Failed Gmail captures cannot report positive item counts.");
   }
 
+  if (capture.status !== "failed") {
+    const missingMessages = capture.threads.filter((thread) => (thread.messages ?? []).length === 0);
+    if (missingMessages.length) {
+      const threadList = missingMessages.map((thread) => thread.threadId).join(", ");
+      throw new Error(
+        `Gmail capture must include structured messages for every returned thread. Missing messages for: ${threadList}`
+      );
+    }
+
+    const incompleteThreads = capture.threads.filter((thread) => thread.messagesCompleteness !== "complete");
+    if (incompleteThreads.length) {
+      const threadList = incompleteThreads.map((thread) => thread.threadId).join(", ");
+      throw new Error(
+        `Gmail capture must include complete structured thread history for every returned thread. Incomplete threads: ${threadList}`
+      );
+    }
+  }
+
   const newestThreadAt = capture.threads
     .map((thread) => thread.observedAt)
     .sort()

@@ -116,6 +116,31 @@ test("renderPersonPage suppresses the duplicate status preview for one- and two-
   assert.doesNotMatch(html, /status-thread-preview/);
 });
 
+test("renderPersonPage surfaces quoted draft text for legacy note-only email threads", () => {
+  const person = buildPersonView({
+    observationId: "obs-hjf",
+    rawObservations: [
+      rawObservation({
+        id: "obs-hjf",
+        dedupeKey: "obs-hjf",
+        kind: "email_thread_updated",
+        summary: "HJF requested annual security attestation by June 17. A reply draft with an attached completed form exists, but the latest William message is labeled draft rather than sent.",
+        subject: "Re: Audienti - HJF Security Assessment",
+        actorName: "HJF GIS TPRG",
+        actorHandle: "hjf_gis_tprg@hjf.org",
+        notes: "Subject: Re: Audienti - HJF Security Assessment\n\nInbound customer/compliance request. Draft reply says 'Please see the attached' and includes the attestation workbook, but inbox evidence does not show it as sent.",
+        messages: [],
+      }),
+    ],
+    rawMotions: [],
+  });
+
+  const html = renderPersonPage(person, { interactive: true, userId: "user-1" });
+
+  assert.match(html, /class="tl-draft"/);
+  assert.match(html, /Please see the attached/);
+});
+
 test("renderPersonPage blocks promote-and-queue when the inbound identity is still a placeholder", () => {
   const person = buildPersonView({
     observationId: "obs-unknown",
@@ -541,7 +566,7 @@ test("renderPersonPage exposes a motion picker when the workspace has multiple c
     ],
   });
 
-  assert.match(html, /data-exo-writer="claimInboundPersonToMotion"/);
+  assert.equal((html.match(/data-exo-writer="claimInboundPersonToMotion"/g) ?? []).length, 3);
   assert.match(html, /Destination motion/);
   assert.match(html, /Status/);
   assert.match(html, /Active/);
@@ -551,9 +576,11 @@ test("renderPersonPage exposes a motion picker when the workspace has multiple c
   assert.match(html, /Knit/);
   assert.match(html, /Offer/);
   assert.match(html, /Premise/);
+  assert.match(html, /Claim here/);
   assert.match(html, /governed outbound work instead of a pile of disconnected prospecting tasks/);
   assert.match(html, /harsh-spare-mongoose/);
   assert.match(html, /rational-coarse-wren/);
+  assert.doesNotMatch(html, /data-exo-radio="claim-motion-/);
   assert.doesNotMatch(html, /data-exo-writer="promoteInboundPerson"/);
 });
 

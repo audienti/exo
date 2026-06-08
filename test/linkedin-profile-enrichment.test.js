@@ -86,6 +86,9 @@ test("companies prospects enrich-linkedin-profile stores one governed profile sn
       about: "Risk leader focused on portfolio quality, credit controls, and lending operations.",
       followerCount: 1823,
       connectionCount: 500,
+      isPremium: true,
+      isOpenProfile: true,
+      connectionDegree: 1,
       avatarSourceUrl: "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example",
       recentPosts: [
         {
@@ -129,6 +132,11 @@ test("companies prospects enrich-linkedin-profile stores one governed profile sn
     assert.equal(enriched.prospect.identityTells.headline, "Head of Risk at BillEase");
     assert.equal(enriched.prospect.linkedinProfileSnapshot.displayName, "Minh Le");
     assert.equal(enriched.prospect.linkedinProfileSnapshot.currentCompanyName, "BillEase");
+    assert.equal(enriched.prospect.linkedinProfileSnapshot.avatarSourceUrl, "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
+    assert.equal(enriched.prospect.linkedinProfileSnapshot.avatarChecked, true);
+    assert.equal(enriched.prospect.linkedinProfileSnapshot.isPremium, true);
+    assert.equal(enriched.prospect.linkedinProfileSnapshot.isOpenProfile, true);
+    assert.equal(enriched.prospect.linkedinProfileSnapshot.connectionDegree, 1);
     assert.equal(enriched.prospect.linkedinProfileSnapshot.recentPosts.length, 2);
     assert.equal(enriched.prospect.liveSignal.channel, "linkedin");
     assert.equal(enriched.prospect.liveSignal.activityType, "own-post");

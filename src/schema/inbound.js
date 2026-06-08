@@ -35,6 +35,7 @@ export const inboundCueKindSchema = z.enum([
 export const inboundCueSourceSchema = z.enum(["action_glance", "manual_hint", "runtime_capture"]);
 export const inboundCueStatusSchema = z.enum(["open", "resolved", "dismissed"]);
 export const inboundThreadMessageDirectionSchema = z.enum(["inbound", "outbound", "unknown"]);
+export const inboundThreadCaptureCompletenessSchema = z.enum(["complete", "partial_visible_slice"]);
 
 export const inboundThreadMessageSchema = z.object({
   id: z.string().trim().min(1).nullable().default(null),
@@ -248,6 +249,7 @@ export const gmailInboundThreadCaptureSchema = z.object({
   companyId: z.string().min(1).nullable().default(null),
   prospectId: z.string().min(1).nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null),
+  messagesCompleteness: inboundThreadCaptureCompletenessSchema.default("partial_visible_slice"),
   messages: z.array(inboundThreadMessageSchema).default([])
 });
 

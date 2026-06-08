@@ -245,6 +245,73 @@ export function btn(opts) {
 }
 
 /**
+ * Shared motion-choice card used anywhere the operator selects a destination
+ * motion so claim and re-home stay visually locked to the same pattern.
+ *
+ * @param {{
+ *   motion: {
+ *     id: string,
+ *     name: string,
+ *     offerLabel?: string | null,
+ *     premise?: string | null,
+ *     status?: string | null,
+ *     statusLabel?: string | null
+ *   },
+ *   action: {
+ *     writer: string,
+ *     args: Record<string, any>,
+ *     label: string,
+ *     icon?: string,
+ *     variant?: "primary" | "secondary" | "ghost" | "danger",
+ *     returnAfterAction?: boolean
+ *   }
+ * }} opts
+ */
+export function renderMotionChoiceOption(opts) {
+  const name = typeof opts.motion?.name === "string" && opts.motion.name.trim() ? opts.motion.name.trim() : "untitled-motion";
+  const offerLabel =
+    typeof opts.motion?.offerLabel === "string" && opts.motion.offerLabel.trim()
+      ? opts.motion.offerLabel.trim()
+      : name;
+  const premise =
+    typeof opts.motion?.premise === "string" && opts.motion.premise.trim()
+      ? opts.motion.premise.trim()
+      : "No premise authored yet.";
+  const status = typeof opts.motion?.status === "string" && opts.motion.status.trim() ? opts.motion.status.trim() : null;
+  const showMotionName = name !== offerLabel;
+  const statusLine = status
+    ? `<span class="rehome-detail"><span class="rehome-cap">Status</span>${stateDot(status, opts.motion.statusLabel ?? undefined)}</span>`
+    : "";
+  const actionAttrs = [
+    `class="exo-action rehome-action-host"`,
+    `data-exo-writer="${escapeAttr(opts.action.writer)}"`,
+    `data-exo-args="${escapeAttr(JSON.stringify(opts.action.args))}"`,
+    opts.action.returnAfterAction ? `data-exo-return="1"` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const actionButton = btn({
+    variant: opts.action.variant ?? "primary",
+    size: "sm",
+    icon: opts.action.icon ?? "arrowR",
+    label: opts.action.label,
+  });
+  return (
+    `<div class="rehome-opt rehome-opt-action">` +
+    `<span class="rehome-copy">` +
+    statusLine +
+    `<span class="rehome-detail"><span class="rehome-cap">Offer</span><span class="rehome-offer">${escapeHtml(offerLabel)}</span></span>` +
+    (showMotionName
+      ? `<span class="rehome-detail"><span class="rehome-cap">Motion</span><span class="rehome-text rehome-code">${escapeHtml(name)}</span></span>`
+      : "") +
+    `<span class="rehome-detail"><span class="rehome-cap">Premise</span><span class="rehome-text">${escapeHtml(premise)}</span></span>` +
+    `</span>` +
+    `<span class="rehome-act"><span ${actionAttrs}>${actionButton}</span></span>` +
+    `</div>`
+  );
+}
+
+/**
  * @param {{ label?: string | null, lead: string, detail?: string | null, meta?: string | null, className?: string | null }} opts
  */
 export function renderNextMoveAlert(opts) {
@@ -542,6 +609,7 @@ export const EXO_CLIENT_JS = `
     }
     var span = btn ? btn.querySelector('span') : null;
     var prev = span ? span.textContent : '';
+    host.classList.add('busy');
     if(btn){ btn.disabled = true; btn.classList.add('btn-busy'); if(span) span.textContent = 'Working…'; }
     try {
       var res;
@@ -563,13 +631,14 @@ export const EXO_CLIENT_JS = `
       // leaving the operator stranded on a dead-end detail page.
       var isCompose = host.hasAttribute('data-exo-compose');
       var wantsReturn = isCompose || host.hasAttribute('data-exo-return');
+      var ret = null;
+      try { if (wantsReturn) ret = new URLSearchParams(location.search).get('return'); } catch(_){}
+      var navTarget = (data && data.redirect) ? data.redirect : ret;
+      if (navTarget) {
+        location.assign(navTarget);
+        return;
+      }
       setTimeout(function(){
-        if (data && data.redirect) {
-          location.assign(data.redirect);
-          return;
-        }
-        var ret = null;
-        try { if (wantsReturn) ret = new URLSearchParams(location.search).get('return'); } catch(_){}
         if (ret) { location.assign(ret); return; }
         // Drop any open slide-over (the #panel hash) before reloading, so a
         // :target compose/context panel closes instead of re-opening on reload.
@@ -580,6 +649,7 @@ export const EXO_CLIENT_JS = `
       if (host.hasAttribute('data-exo-autostart-key')) {
         try { sessionStorage.removeItem('exo-auto-action:' + host.getAttribute('data-exo-autostart-key')); } catch(_){}
       }
+      host.classList.remove('busy');
       if(btn){ btn.classList.remove('btn-busy'); btn.disabled = false; if(span) span.textContent = prev; }
       toast(String(err && err.message ? err.message : err), false);
     }
@@ -694,7 +764,7 @@ export const EXO_CLIENT_JS = `
       var el = document.activeElement;
       if (el && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)) return true;
       if (location.hash && document.querySelector(location.hash + '.slideover, ' + location.hash + '.compose-panel')) return true;
-      if (document.querySelector('.exo-action.busy')) return true;
+      if (document.querySelector('.exo-action.busy, [data-exo-args].busy')) return true;
       return false;
     }
     function showPill(){
@@ -1722,6 +1792,8 @@ body.view-settings .exec-policy-card{max-width:none}
   background:color-mix(in srgb,var(--violet) 14%,transparent)}
 .tl-message{margin:8px 0 0;padding:11px 13px;border-left:2px solid var(--border-3);background:var(--bg-2);
   border-radius:0 9px 9px 0;font-size:13px;line-height:1.55;color:var(--text);white-space:pre-wrap}
+.tl-draft{margin:8px 0 0;padding:8px 10px;border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
+  border-radius:10px;background:color-mix(in srgb,var(--accent) 10%,var(--bg-2));color:var(--text);font-size:12.5px;line-height:1.5}
 .tl-byline{margin-top:6px;font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-4)}
 /* operator note / agent steer timeline entries */
 .tl-note .tl-dot{color:var(--text-3)}
@@ -1844,18 +1916,23 @@ body.view-settings .exec-policy-card{max-width:none}
 .compose-meta{display:flex;align-items:center;gap:9px;font-size:11px;color:var(--text-3)}
 .compose-byline{display:inline-flex;align-items:center;gap:6px}
 .compose-actions{display:flex;align-items:center;gap:9px;margin-top:auto;padding-top:8px;border-top:1px solid var(--border)}
+.compose-actions-end{justify-content:flex-end}
 .compose-empty{font-size:12px;color:var(--text-4);font-style:italic}
 .rehome-list{display:flex;flex-direction:column;gap:6px}
 .rehome-opt{display:flex;align-items:flex-start;gap:10px;background:var(--bg-2);border:1px solid var(--border-2);
   border-radius:9px;padding:10px 12px;cursor:pointer;font-size:13px;font-weight:600;color:var(--text-2)}
 .rehome-opt:hover{border-color:var(--border-3);color:var(--text)}
 .rehome-opt input{accent-color:var(--accent);margin-top:2px;flex:none}
+.rehome-opt-action{flex-direction:column;align-items:stretch;gap:12px;cursor:default}
+.rehome-opt-action:hover{color:var(--text-2)}
 .rehome-copy{display:flex;flex-direction:column;gap:7px;min-width:0}
 .rehome-detail{display:flex;flex-direction:column;gap:2px;min-width:0}
 .rehome-cap{font-family:var(--mono);font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--text-4)}
 .rehome-offer{font-size:13px;line-height:1.45;font-weight:700;color:var(--text)}
 .rehome-text{font-size:12px;line-height:1.45;font-weight:500;color:var(--text-2)}
 .rehome-code{font-family:var(--mono);font-size:11.5px;color:var(--text-3)}
+.rehome-act{display:flex;justify-content:flex-end}
+.rehome-action-host{display:inline-flex}
 .cap-note{display:flex;align-items:flex-start;gap:9px;font-size:12px;line-height:1.5;color:var(--text-2);
   background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:9px;padding:11px 13px}
 .cap-note .ic{color:var(--amber);flex:none;margin-top:1px}

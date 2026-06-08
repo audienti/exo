@@ -87,14 +87,7 @@ const CANARY_SEND_COOLDOWN_MS = normalizePositiveInteger(process.env.EXO_AGENT_C
 const VERIFICATION_OUTPUT_MAX_CHARS = normalizePositiveInteger(process.env.EXO_AGENT_VERIFICATION_OUTPUT_MAX_CHARS, 1200);
 const TASK_LEASE_GRACE_MS = normalizePositiveInteger(process.env.EXO_AGENT_TASK_LEASE_GRACE_MS, 10 * 60 * 1000);
 const AUTONOMOUS_WORKER_LABEL = normalizeNullableString(process.env.EXO_AGENT_WORKER_LABEL) ?? buildAutonomousWorkerLabel();
-const DRAFT_OUTPUT_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["body"],
-  properties: {
-    body: { type: "string", minLength: 1 }
-  }
-};
+const SUBJECT_DRAFT_SURFACES = new Set(["email", "in_mail_message"]);
 const CODEX_CONNECTOR_RUNTIME_CONFIG = {
   gmail: {
     pluginIds: ["gmail@openai-curated"],
@@ -1272,7 +1265,7 @@ function runDraftTask(task) {
   try {
     response = runCodexTask({
       prompt: buildDraftPrompt(brief),
-      schema: DRAFT_OUTPUT_SCHEMA,
+      schema: buildDraftOutputSchema(brief),
       outputName: `draft-${task.motionId}-${task.prospectId}.json`,
       browserRequired: false,
       timeoutMs: DRAFT_TIMEOUT_MS,
@@ -1280,16 +1273,19 @@ function runDraftTask(task) {
   } catch (error) {
     return buildBlockedCodexTaskResult(error);
   }
-  const body = extractDraftBodyFromCodexResponse(response);
-  if (!body) {
+  const draft = extractDraftOutputFromCodexResponse(response, task.surface);
+  if (!draft.body) {
     throw new Error("Draft task did not return a non-empty body.");
   }
-  setDraft(task, body);
+  if (draftSurfaceUsesSubject(task.surface) && !draft.subject) {
+    throw new Error("Draft task did not return a non-empty subject.");
+  }
+  setDraft(task, draft);
   return {
     status: "completed",
     detail: {
       postWriteStatus: task.postWriteStatus,
-      bodyPreview: truncate(body, 160),
+      bodyPreview: truncate(draft.body, 160),
     },
   };
 }
@@ -1957,6 +1953,10 @@ function runSendTask(task) {
   if (handledUnavailable) {
     return handledUnavailable;
   }
+  const handledPublicUnavailable = maybeHandleUnavailableLinkedinPublicEngagementTask(task, handoff, result, { dryRun });
+  if (handledPublicUnavailable) {
+    return handledPublicUnavailable;
+  }
 
   if (result.status !== "sent") {
     return {
@@ -1965,7 +1965,7 @@ function runSendTask(task) {
     };
   }
 
-  runShellText(task.writeback);
+  runShellText(resolveSendTaskWriteback(task, result));
   return {
     status: "completed",
     detail: { action: handoff.action, recipient: describeHandoffRecipient(handoff) }
@@ -2104,6 +2104,60 @@ function maybeHandleUnavailableLinkedinReplyTask(task, handoff, result, options 
       },
     },
   };
+}
+
+/**
+ * @param {any} task
+ * @param {any} handoff
+ * @param {any} result
+ * @param {{ dryRun?: boolean }} [options]
+ */
+function maybeHandleUnavailableLinkedinPublicEngagementTask(task, handoff, result, options = {}) {
+  if (options.dryRun === true) {
+    return null;
+  }
+  if (result?.status !== "unavailable") {
+    return null;
+  }
+  if (!task?.unavailableWriteback) {
+    return null;
+  }
+  const action = String(handoff?.action ?? "");
+  if (!["like_post", "create_comment_reaction", "create_post_comment", "create_comment_comment"].includes(action)) {
+    return null;
+  }
+
+  runShellText(task.unavailableWriteback);
+  return {
+    status: "completed",
+    detail: {
+      action: handoff.action,
+      recipient: describeHandoffRecipient(handoff),
+      publicTargetUnavailable: true,
+      handledException: true,
+      reason: result.reason ?? "Stored public-engagement target was unavailable.",
+    },
+  };
+}
+
+/**
+ * @param {any} task
+ * @param {any} result
+ */
+function resolveSendTaskWriteback(task, result) {
+  const usedTargetUrl = normalizeNullableString(result?.usedTargetUrl);
+  let writeback = task.writeback;
+  if (usedTargetUrl && task?.writebackByTargetUrl && typeof task.writebackByTargetUrl === "object") {
+    const targetWriteback = task.writebackByTargetUrl[usedTargetUrl];
+    if (typeof targetWriteback === "string" && targetWriteback.trim().length) {
+      writeback = targetWriteback;
+    }
+  }
+  if (task?.postSendNextAction && Number.isFinite(task?.postSendDelayMs)) {
+    const dueAt = new Date(Date.now() + Number(task.postSendDelayMs)).toISOString();
+    return `${writeback} --next-action ${shellQuote(task.postSendNextAction)} --next-action-due-at ${dueAt}`;
+  }
+  return writeback;
 }
 
 /**
@@ -2351,8 +2405,8 @@ function safeUnlink(filePath) {
   }
 }
 
-/** @param {any} task @param {string} body */
-function setDraft(task, body) {
+/** @param {any} task @param {{ subject: string | null, body: string }} draft */
+function setDraft(task, draft) {
   const args = [
     "src/cli/index.js",
     "companies",
@@ -2372,8 +2426,11 @@ function setDraft(task, body) {
     "--status",
     task.postWriteStatus,
     "--body",
-    body
+    draft.body
   );
+  if (draftSurfaceUsesSubject(task.surface) && draft.subject) {
+    args.push("--subject", draft.subject);
+  }
   execFileSync(process.execPath, args, {
     cwd: ROOT,
     env: {
@@ -2561,6 +2618,15 @@ function runVerificationCommand(command) {
 }
 
 /**
+ * @param {string} value
+ */
+function shellQuote(value) {
+  if (value === "") return "''";
+  if (/^[A-Za-z0-9_./:@=-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
  * @param {string} command
  * @param {string} output
  */
@@ -2715,13 +2781,43 @@ function normalizeQueueTaskDeficit(task) {
 }
 
 /** @param {any} brief */
+export function buildDraftOutputSchema(brief) {
+  if (draftSurfaceUsesSubject(brief?.surface?.key)) {
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["subject", "body"],
+      properties: {
+        subject: { type: "string", minLength: 1 },
+        body: { type: "string", minLength: 1 },
+      },
+    };
+  }
+
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["body"],
+    properties: {
+      body: { type: "string", minLength: 1 },
+    },
+  };
+}
+
+/** @param {any} brief */
 export function buildDraftPrompt(brief) {
+  const usesSubject = draftSurfaceUsesSubject(brief?.surface?.key);
   return [
     "Write exactly one governed Exo draft from the brief below.",
     "You are running in a detached background pass.",
     "Do not browse, do not inspect the repo, do not narrate your process, and do not ask questions.",
     "Return only JSON that matches the provided schema.",
-    "The schema has one field only: body. Put the exact outbound copy there and nothing else.",
+    usesSubject
+      ? "The schema has fields: subject and body. Put the exact outbound copy there and nothing else."
+      : "The schema has one field only: body. Put the exact outbound copy there and nothing else.",
+    usesSubject
+      ? "If surface.replySubject is present, this is a reply. Use surface.replySubject exactly as the subject line. If it is absent, generate a concise subject line."
+      : "Do not add a subject line for this surface.",
     "Style rules: plain human copy, concise, specific, no em dashes, no throat-clearing, no AI language.",
     "",
     "Brief JSON:",
@@ -2733,6 +2829,17 @@ export function buildDraftPrompt(brief) {
 export function extractDraftBodyFromCodexResponse(response) {
   const body = extractUsableDraftBody(response);
   return typeof body === "string" && body.trim().length ? body.trim() : null;
+}
+
+/**
+ * @param {unknown} response
+ * @param {string | null | undefined} surface
+ */
+export function extractDraftOutputFromCodexResponse(response, surface) {
+  return {
+    subject: draftSurfaceUsesSubject(surface) ? extractDraftSubjectFromCodexResponse(response) : null,
+    body: extractDraftBodyFromCodexResponse(response),
+  };
 }
 
 /** @param {any} captureRequest @param {string|null|undefined} [connector] */
@@ -2857,6 +2964,7 @@ export function buildProspectResearchPrompt(brief, task) {
 /** @param {any} handoff @param {{ dryRun?: boolean | undefined }} [options] */
 export function buildSendPrompt(handoff, options = {}) {
   const dryRun = options.dryRun === true;
+  const autonomousPublicReaction = ["like_post", "create_comment_reaction"].includes(String(handoff?.action ?? ""));
   if (usesConnectorNativeSend(handoff)) {
     const connectorLabel = connectorToolLabel(handoff.connector);
     const unipilePromptHints = buildUnipileSendPromptHints(handoff);
@@ -2872,8 +2980,10 @@ export function buildSendPrompt(handoff, options = {}) {
       ...dryRunHints,
       "Do not run diagnostics, do not open browser windows, do not switch identities, do not fall back to shell commands, and do not paraphrase the stored message.",
       dryRun
-        ? "Do not send yet. After the exact governed subject/body are loaded into the correct composer and are ready for a real send, return {\"status\":\"ready_to_send\",\"reason\":null}."
-        : "Do not run Exo writeback yourself. After the real send happens, return {\"status\":\"sent\",\"reason\":null}.",
+        ? "Do not send yet. After the exact governed action is loaded into the correct native target and is ready for a real send, return {\"status\":\"ready_to_send\",\"reason\":null}."
+        : autonomousPublicReaction
+          ? "Do not run Exo writeback yourself. After the real public reaction happens, return {\"status\":\"sent\",\"reason\":null,\"usedTargetUrl\":\"<the exact target URL you actually used>\"}. If the stored target is gone or unwritable and the contract provides one fallback target, try that one exactly once; if neither works, return {\"status\":\"unavailable\",\"reason\":\"<concrete reason>\",\"usedTargetUrl\":null}."
+          : "Do not run Exo writeback yourself. After the real send happens, return {\"status\":\"sent\",\"reason\":null}. If the stored target is gone or unwritable, return {\"status\":\"unavailable\",\"reason\":\"<concrete reason>\",\"usedTargetUrl\":null}.",
       "",
       "Governed send contract JSON:",
       JSON.stringify(handoff, null, 2),
@@ -2889,8 +2999,10 @@ export function buildSendPrompt(handoff, options = {}) {
     "If it still cannot attach, return {\"status\":\"blocked\",\"reason\":\"<concrete reason>\"}.",
     "Do not run diagnostics, do not open new Chrome windows, do not switch profiles, do not use Playwriter, and do not paraphrase the stored message.",
     dryRun
-      ? "Do not click Send. After the exact governed message is loaded into a writable composer and is ready for a real send, return {\"status\":\"ready_to_send\",\"reason\":null}."
-      : "Do not run Exo writeback yourself. After the real send happens, return {\"status\":\"sent\",\"reason\":null}.",
+      ? "Do not click Send. After the exact governed action is loaded into a writable target and is ready for a real send, return {\"status\":\"ready_to_send\",\"reason\":null}."
+      : autonomousPublicReaction
+        ? "Do not run Exo writeback yourself. After the real public reaction happens, return {\"status\":\"sent\",\"reason\":null,\"usedTargetUrl\":\"<the exact target URL you actually used>\"}. If the stored target is gone or unwritable and the contract provides one fallback target, try that one exactly once; if neither works, return {\"status\":\"unavailable\",\"reason\":\"<concrete reason>\",\"usedTargetUrl\":null}."
+        : "Do not run Exo writeback yourself. After the real send happens, return {\"status\":\"sent\",\"reason\":null}. If the stored target is gone or unwritable, return {\"status\":\"unavailable\",\"reason\":\"<concrete reason>\",\"usedTargetUrl\":null}.",
     "",
     "Governed send contract JSON:",
     JSON.stringify(handoff, null, 2),
@@ -3323,6 +3435,55 @@ function normalizeBoolean(raw, fallback) {
 function truncate(text, max) {
   const oneLine = String(text).replace(/\s+/g, " ").trim();
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine;
+}
+
+/** @param {string | null | undefined} surface */
+function draftSurfaceUsesSubject(surface) {
+  return SUBJECT_DRAFT_SURFACES.has(String(surface ?? "").trim());
+}
+
+/** @param {unknown} response */
+function extractDraftSubjectFromCodexResponse(response) {
+  return normalizeNullableString(extractNestedDraftSubject(response));
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function extractNestedDraftSubject(value) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith("{")) {
+      return null;
+    }
+    const parsed = parseJsonLoose(trimmed);
+    return parsed ? extractNestedDraftSubject(parsed) : null;
+  }
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  if (typeof value.subject === "string" && value.subject.trim().length) {
+    return value.subject.trim();
+  }
+
+  if (value.draft && typeof value.draft === "object") {
+    if (typeof value.draft.subject === "string" && value.draft.subject.trim().length) {
+      return value.draft.subject.trim();
+    }
+    if (typeof value.draft.body === "string") {
+      const nested = extractNestedDraftSubject(value.draft.body);
+      if (nested) return nested;
+    }
+  }
+
+  if (typeof value.body === "string") {
+    return extractNestedDraftSubject(value.body);
+  }
+
+  return null;
 }
 
 /** @param {unknown} value */

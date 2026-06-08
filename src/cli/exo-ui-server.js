@@ -371,9 +371,10 @@ export async function renderRoute(route, ctx, hooks = {}) {
           ?? null,
       }),
       assignedIdentity: company?.engagementUserAssignment?.label ?? null,
-      motions: listMotions()
-        .filter((motion) => motion.id !== transition?.id)
-        .map((motion) => ({ id: motion.id, name: motion.name })),
+      motions: buildClaimMotionChoices(
+        listMotions().filter((motion) => motion.status !== "archived"),
+        transition,
+      ),
       // Execution users for the "Assign owner" picker.
       users: listUsers().map((user) => ({ id: user.id, label: user.label })),
     };

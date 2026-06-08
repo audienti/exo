@@ -719,14 +719,16 @@ test("connections sent rows expose claim-to-motion and stale-withdraw controls o
     ],
   });
 
-  assert.match(html, /data-exo-writer="claimInboundPersonToMotion"/);
+  assert.ok((html.match(/data-exo-writer="claimInboundPersonToMotion"/g) ?? []).length >= 2);
   assert.match(html, /data-exo-writer="recordInboundObservation"/);
   assert.match(html, /connection_request_withdraw_requested/);
   assert.match(html, /Destination motion/);
+  assert.match(html, /Claim here/);
   assert.match(html, /Knit/);
   assert.match(html, /Premise/);
   assert.match(html, /governed outbound work instead of disconnected one-off outreach/);
   assert.match(html, /Stale/);
+  assert.doesNotMatch(html, /data-exo-radio="claim-motion-/);
   assert.doesNotMatch(html, /<span>Profile<\/span>/);
 });
 

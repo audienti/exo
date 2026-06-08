@@ -4,16 +4,12 @@ import { motionSchema } from "../schema/motion.js";
 import { inboundObservationSchema } from "../schema/inbound.js";
 import { withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
 import { hasUsableEmailFallback, selectBestEmailContactPoint } from "../lib/prospect-contacts.js";
+import {
+  listStoredLinkedinPublicActivity,
+  selectLinkedinPublicEngagementTarget,
+} from "./select-linkedin-public-engagement.js";
 
 const RECENT_POST_READY_BANDS = new Set(["0-14-days", "15-30-days", "31-60-days"]);
-const ENGAGEABLE_ACTIVITY_TYPES = new Set([
-  "own-post",
-  "reshare",
-  "reshare-with-comment",
-  "comment",
-  "interview-share"
-]);
-const THREAD_MESSAGE_LIMIT = 8;
 const PROSPECT_TIMELINE_OBSERVATION_KINDS = new Set([
   "email_reply_received",
   "email_thread_updated",
@@ -113,7 +109,12 @@ export function buildMotionProspectView(rawMotion, options = {}) {
  */
 function buildProspectView(account, prospect, observations) {
   const signalMatches = account.signalMatches.filter((match) => prospect.signalMatchIds.includes(match.id));
-  const recentPost = buildRecentPostReadiness(prospect);
+  const capturedPublicActivity = listStoredLinkedinPublicActivity(prospect);
+  const publicEngagementSelection = selectLinkedinPublicEngagementTarget(prospect);
+  const recentPost = buildRecentPostReadiness(prospect, {
+    capturedPublicActivity,
+    publicEngagementSelection,
+  });
   const messageTestReady = prospect.cadenceState.status === "ready";
   const latestSignalMatch = signalMatches[0] ?? null;
   const conversationContext = buildProspectConversationContext(account, prospect, observations);
@@ -144,6 +145,8 @@ function buildProspectView(account, prospect, observations) {
     identityTells: prospect.identityTells,
     linkedinProfileSnapshot: prospect.linkedinProfileSnapshot,
     liveSignal: prospect.liveSignal,
+    capturedPublicActivity,
+    publicEngagementSelection,
     contactPoints: prospect.contactPoints,
     contactEnrichmentState: prospect.contactEnrichmentState,
     queueStatus: prospect.queueState.status,
@@ -154,6 +157,7 @@ function buildProspectView(account, prospect, observations) {
     latestSignalSummary: latestSignalMatch?.summary ?? null,
     threadMessages: conversationContext.threadMessages,
     latestInboundMessage: conversationContext.latestInboundMessage,
+    replySubject: conversationContext.replySubject,
     timelineObservations: conversationContext.timelineObservations,
     touches: prospect.touches,
     cadenceStatus: prospect.cadenceState.status,
@@ -175,53 +179,53 @@ function buildStatusCounts(statuses) {
 
 /**
  * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ * @param {{
+ *   capturedPublicActivity?: ReturnType<typeof listStoredLinkedinPublicActivity>,
+ *   publicEngagementSelection?: ReturnType<typeof selectLinkedinPublicEngagementTarget> | null,
+ * }} [options]
  */
-function buildRecentPostReadiness(prospect) {
-  const hasEvidence = Boolean(prospect.liveSignal.summary || prospect.liveSignal.url);
-  const freshEnough = prospect.liveSignal.freshnessBand
-    ? RECENT_POST_READY_BANDS.has(prospect.liveSignal.freshnessBand)
-    : false;
-  const linkedinLike = prospect.liveSignal.channel === "linkedin";
-  const engageableActivityType = prospect.liveSignal.activityType
-    ? ENGAGEABLE_ACTIVITY_TYPES.has(prospect.liveSignal.activityType)
-    : false;
+function buildRecentPostReadiness(prospect, options = {}) {
+  const capturedPublicActivity = options.capturedPublicActivity ?? listStoredLinkedinPublicActivity(prospect);
+  const selection = options.publicEngagementSelection ?? selectLinkedinPublicEngagementTarget(prospect);
+  const hasLegacySignal = Boolean(prospect.liveSignal.summary || prospect.liveSignal.url);
 
-  if (!hasEvidence) {
+  if (!capturedPublicActivity.length && !hasLegacySignal) {
     return {
       available: false,
       engageable: false,
-      reason: "No stored recent public activity exists for this prospect."
+      reason: "No stored eligible public LinkedIn activity exists for this prospect.",
+      selectedTarget: null,
     };
   }
 
-  if (!linkedinLike) {
+  if (!selection) {
     return {
       available: true,
       engageable: false,
-      reason: "Stored activity exists, but it is not a LinkedIn-style warmup surface."
+      reason: "Stored activity exists, but none of it currently survives the governed public-engagement rules.",
+      selectedTarget: null,
     };
   }
 
-  if (!freshEnough) {
+  const freshEnough = selection.freshnessBand
+    ? RECENT_POST_READY_BANDS.has(selection.freshnessBand)
+    : false;
+  if (selection.recommendedAction === "reaction" && !freshEnough && !capturedPublicActivity.length) {
     return {
       available: true,
       engageable: false,
-      reason: "Stored activity exists, but it is too old or not freshness-scored enough to use as a live warmup."
-    };
-  }
-
-  if (!engageableActivityType) {
-    return {
-      available: true,
-      engageable: false,
-      reason: "Stored activity supports channel viability, but not a clean recent-post engagement move."
+      reason: "Stored activity exists, but it is too old or underspecified to support a governed warmup.",
+      selectedTarget: selection,
     };
   }
 
   return {
     available: true,
     engageable: true,
-    reason: "A recent LinkedIn activity signal exists and is fresh enough to support legitimate warmup."
+    reason: selection.recommendedAction === "comment"
+      ? "A stored LinkedIn activity target is strong enough to support a checked public comment path."
+      : "A stored LinkedIn activity target exists for a lightweight governed reaction.",
+    selectedTarget: selection,
   };
 }
 
@@ -257,27 +261,32 @@ function buildProspectConversationContext(account, prospect, observations) {
     return {
       threadMessages: [],
       latestInboundMessage: null,
+      replySubject: latestReplySubject(related),
       timelineObservations,
     };
   }
+
+  const replySubject = normalizeNullableString(latestThreadObservation.subject)
+    ?? parseObservationNotes(latestThreadObservation.notes).subject;
 
   const threadMessages = (latestThreadObservation.messages ?? [])
     .filter(hasMessageBody)
     .slice()
     .sort((left, right) => (Date.parse(left.sentAt ?? "") || 0) - (Date.parse(right.sentAt ?? "") || 0))
-    .slice(-THREAD_MESSAGE_LIMIT)
     .map((message) => ({
       id: message.id ?? null,
       direction: message.direction ?? "unknown",
       sentAt: message.sentAt ?? null,
       fromName: normalizeNullableString(message.fromName) ?? null,
       fromHandle: normalizeNullableString(message.fromHandle) ?? null,
+      subject: replySubject,
       body: message.body.trim(),
     }));
 
   return {
     threadMessages,
     latestInboundMessage: threadMessages.findLast((message) => message.direction === "inbound") ?? threadMessages.at(-1) ?? null,
+    replySubject,
     timelineObservations,
   };
 }
@@ -339,6 +348,39 @@ function normalizeNullableString(value) {
 
   const normalized = value.trim();
   return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type[]} observations
+ */
+function latestReplySubject(observations) {
+  const latest = observations
+    .slice()
+    .sort(compareObservedDescending)
+    .find((observation) => normalizeNullableString(observation.subject) ?? parseObservationNotes(observation.notes).subject);
+  if (!latest) {
+    return null;
+  }
+  return normalizeNullableString(latest.subject) ?? parseObservationNotes(latest.notes).subject;
+}
+
+/**
+ * @param {string | null | undefined} notes
+ * @returns {{ subject: string | null, body: string | null }}
+ */
+function parseObservationNotes(notes) {
+  const normalized = normalizeNullableString(notes);
+  if (!normalized) {
+    return { subject: null, body: null };
+  }
+
+  const subjectMatch = normalized.match(/^Subject:\s*(.+?)(?:\r?\n|$)/i);
+  const subject = normalizeNullableString(subjectMatch?.[1] ?? null);
+  const body = subjectMatch
+    ? normalizeNullableString(normalized.slice(subjectMatch[0].length))
+    : normalized;
+
+  return { subject, body };
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   buildCodexTaskEnv,
   buildCompanyDiscoveryPrompt,
   buildCompanyResearchPrompt,
+  buildDraftOutputSchema,
   buildProspectResearchPrompt,
   buildProspectSelectionPrompt,
   createTaskVerificationFingerprint,
@@ -24,6 +25,7 @@ import {
   chooseNextQueueTask,
   explainNoopPass,
   extractDraftBodyFromCodexResponse,
+  extractDraftOutputFromCodexResponse,
   getPreflightTaskGate,
   normalizeInboundCaptureForWriteback,
   requiresBrowserAttachForInboundCapture,
@@ -1369,6 +1371,14 @@ test("task prompts are bounded and fail-fast", () => {
   assert.match(draftPrompt, /Return only JSON/i);
   assert.match(draftPrompt, /one field only: body/i);
 
+  const emailDraftPrompt = buildDraftPrompt({
+    motion: { name: "test-motion" },
+    surface: { key: "email", replySubject: "Re: Fire department RFP" },
+  });
+  assert.match(emailDraftPrompt, /Return only JSON/i);
+  assert.match(emailDraftPrompt, /fields: subject and body/i);
+  assert.match(emailDraftPrompt, /Use surface\.replySubject exactly/i);
+
   const inboundPrompt = buildInboundCapturePrompt({ prompt: "Inspect Gmail and return JSON." });
   assert.match(inboundPrompt, /^@chrome\b/m);
   assert.match(inboundPrompt, /one bounded Exo inbound retrieval task/i);
@@ -1514,6 +1524,16 @@ test("task prompts are bounded and fail-fast", () => {
     }
     fs.rmSync(tempCodexDir, { recursive: true, force: true });
   }
+});
+
+test("subject-using draft surfaces require a subject in the background-pass schema", () => {
+  const emailSchema = buildDraftOutputSchema({ surface: { key: "email" } });
+  assert.deepEqual(emailSchema.required, ["subject", "body"]);
+  assert.equal(emailSchema.properties.subject.type, "string");
+
+  const linkedinSchema = buildDraftOutputSchema({ surface: { key: "connection_request" } });
+  assert.deepEqual(linkedinSchema.required, ["body"]);
+  assert.equal("subject" in linkedinSchema.properties, false);
 });
 
 test("connector runtime config keeps managed MCP servers available in detached codex passes", () => {
@@ -1715,6 +1735,22 @@ test("extractDraftBodyFromCodexResponse unwraps structured envelopes into plain 
   assert.equal(
     extractDraftBodyFromCodexResponse({ body: "Plain outbound copy." }),
     "Plain outbound copy.",
+  );
+});
+
+test("extractDraftOutputFromCodexResponse preserves subject for email drafts", () => {
+  assert.deepEqual(
+    extractDraftOutputFromCodexResponse(
+      {
+        subject: "Re: Fire department RFP",
+        body: "Plain outbound copy.",
+      },
+      "email",
+    ),
+    {
+      subject: "Re: Fire department RFP",
+      body: "Plain outbound copy.",
+    },
   );
 });
 

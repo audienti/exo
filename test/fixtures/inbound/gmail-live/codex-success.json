@@ -20,7 +20,26 @@
       "motionId": null,
       "companyId": null,
       "prospectId": null,
-      "notes": null
+      "notes": null,
+      "messagesCompleteness": "complete",
+      "messages": [
+        {
+          "id": "msg-live-1",
+          "direction": "outbound",
+          "sentAt": "2026-05-30T14:54:00.000Z",
+          "fromName": "William Flanagan",
+          "fromHandle": "gmail-live-user@example.com",
+          "body": "Happy to show you the workflow. Is a short walkthrough what you need?"
+        },
+        {
+          "id": "msg-live-2",
+          "direction": "inbound",
+          "sentAt": "2026-05-30T15:05:00.000Z",
+          "fromName": "Alicia Buyer",
+          "fromHandle": "alicia@buyer.example",
+          "body": "Yes. A short workflow walkthrough would be perfect."
+        }
+      ]
     }
   ]
 }

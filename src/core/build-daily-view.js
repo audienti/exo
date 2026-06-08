@@ -379,7 +379,9 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
     prospect: {
       id: prospect.id,
       name: prospect.name,
-      title: prospect.title
+      title: prospect.title,
+      linkedinProfileUrl: prospect.linkedinProfileUrl ?? null,
+      avatarUrl: prospect.avatarUrl ?? null,
     },
     cadence: {
       currentStep: cadence.currentStep,
@@ -391,16 +393,11 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
   };
 
   if (latestInboxItem) {
-    if (isReplyObservation(latestInboxItem.kind)) {
-      if (
-        latestInboxItem.status === "queued"
-        || latestInboxItem.status === "resolved"
-        || latestInboxItem.reviewState === "queued_for_send"
-        || latestInboxItem.reviewState === "reply_unavailable"
-        || latestInboxItem.reviewState === "agent_draft_due"
-      ) {
-        return null;
-      }
+    if (isHandledReplyReviewState(latestInboxItem.reviewState) || latestInboxItem.status === "queued" || latestInboxItem.status === "resolved") {
+      return null;
+    }
+
+    if (isReplyReviewState(latestInboxItem.reviewState) || isReplyObservation(latestInboxItem.kind)) {
       const whyItMatters = latestInboxItem.reviewState === "ready_for_reply"
         ? "A private inbound message already has a drafted response. The operator can review the actual copy before it enters the send queue."
         : "A live reply overtook the planned cadence branch. The next move is to respond, not to continue the old follow-up.";
@@ -561,7 +558,9 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
         prospect: {
           id: supportAction.prospect.prospectId,
           name: supportAction.prospect.name,
-          title: supportAction.prospect.title
+          title: supportAction.prospect.title,
+          linkedinProfileUrl: supportAction.prospect.linkedinProfileUrl ?? null,
+          avatarUrl: supportAction.prospect.avatarUrl ?? null,
         },
         cadence: {
           currentStep: supportAction.prospect.cadenceState.currentStep ?? null,
@@ -678,6 +677,25 @@ function isReplyObservation(kind) {
 }
 
 /**
+ * @param {string | null | undefined} reviewState
+ */
+function isReplyReviewState(reviewState) {
+  return reviewState === "needs_reply" || reviewState === "ready_for_reply";
+}
+
+/**
+ * @param {string | null | undefined} reviewState
+ */
+function isHandledReplyReviewState(reviewState) {
+  return (
+    reviewState === "queued_for_send"
+    || reviewState === "reply_sent"
+    || reviewState === "reply_unavailable"
+    || reviewState === "agent_draft_due"
+  );
+}
+
+/**
  * @param {import("../schema/target-account.js").cadenceStateSchema._type} cadence
  * @param {boolean} waiting
  */
@@ -770,6 +788,8 @@ function toSupportProspect(account, prospect) {
     prospectId: prospect.id,
     name: prospect.name,
     title: prospect.title,
+    linkedinProfileUrl: prospect.linkedinProfileUrl ?? null,
+    avatarUrl: prospect.avatarUrl ?? null,
     hasEmailFallback: hasUsableEmailFallback(prospect),
     messageTestReady: prospect.cadenceState.status === "ready",
     notes: prospect.notes,

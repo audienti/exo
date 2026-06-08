@@ -183,6 +183,7 @@ function claimedPrivateInboundFixture({ observationOverrides = {}, prospectOverr
       updatedAt: "2026-06-04T16:20:00.000Z",
     },
     drafts: [],
+    threadMessages: [],
     timelineNotes: [],
     ...prospectOverrides,
   };
@@ -446,6 +447,125 @@ test("claimed private inbound with a ready draft returns to operator review", ()
   assert.ok(dailyItem);
   assert.equal(dailyItem.priority, "reply");
   assert.match(dailyItem.recommendedAction, /review the drafted response/i);
+});
+
+test("later outbound thread history suppresses stale reply drafts and marks the branch handled", () => {
+  const { observation, rawMotions, rawCompanies } = claimedPrivateInboundFixture({
+    observationOverrides: {
+      kind: "email_thread_updated",
+      capability: "gmail",
+      platform: "gmail",
+      surfaceKey: "gmail-inbox-threads",
+      actorName: "Sara Vargas",
+      actorTitle: "Senior Research Scientist; Associate Professor",
+      observedAt: "2026-06-02T17:45:24.000Z",
+      recordedAt: "2026-06-05T04:54:11.732Z",
+      sourceUrl: "https://mail.google.com/mail/#all/19e88e44acff9920",
+      threadUrl: "https://mail.google.com/mail/#all/19e88e44acff9920",
+      messages: [
+        {
+          id: "msg-1",
+          direction: "inbound",
+          sentAt: "2026-06-02T19:11:54.000Z",
+          fromName: "Sara Vargas",
+          fromHandle: "svargas@brownhealth.org",
+          body: "Would you be okay with me connecting the two of you?",
+        },
+        {
+          id: "msg-2",
+          direction: "outbound",
+          sentAt: "2026-06-02T21:45:24.000Z",
+          fromName: "William Flanagan",
+          fromHandle: "wflanagan@audienti.com",
+          body: "Sure, always happy to talk and advise. Thank you.",
+        },
+      ],
+    },
+    prospectOverrides: {
+      name: "Sara Vargas",
+      title: "Senior Research Scientist; Associate Professor",
+      email: "svargas@brownhealth.org",
+      sourceUrl: "https://mail.google.com/mail/#all/19e88e44acff9920",
+      cadenceState: {
+        status: "ready",
+        currentStep: null,
+        lastTouchChannel: null,
+        lastTouchOutcome: "pending",
+        lastTouchAt: "2026-06-02T17:45:24.000Z",
+        nextAction: "Review this inbound person and choose the next move.",
+        nextActionDueAt: null,
+        blockedChannels: [],
+        requireNewHook: false,
+        notes: null,
+        updatedAt: "2026-06-07T10:53:22.076Z",
+      },
+      touches: [],
+      threadMessages: [
+        {
+          id: "msg-1",
+          direction: "inbound",
+          sentAt: "2026-06-02T19:11:54.000Z",
+          fromName: "Sara Vargas",
+          fromHandle: "svargas@brownhealth.org",
+          body: "Would you be okay with me connecting the two of you?",
+        },
+        {
+          id: "msg-2",
+          direction: "outbound",
+          sentAt: "2026-06-02T21:45:24.000Z",
+          fromName: "William Flanagan",
+          fromHandle: "wflanagan@audienti.com",
+          body: "Sure, always happy to talk and advise. Thank you.",
+        },
+      ],
+      drafts: [
+        {
+          id: "draft-1",
+          surface: "email",
+          channel: "email",
+          subject: null,
+          body: "Hi Sara,\n\nYes, please feel free to connect us.",
+          status: "ready",
+          authoredBy: "agent",
+          editedByOperator: false,
+          createdAt: "2026-06-07T11:01:17.319Z",
+          updatedAt: "2026-06-07T11:01:17.319Z",
+          approvedAt: null,
+          sentAt: null,
+          notes: null,
+        },
+      ],
+    },
+  });
+
+  const inbox = buildInboxView(rawUser, [observation], rawMotions, rawCompanies);
+  const review = buildInboundReviewView(rawUser, [observation], rawMotions, rawCompanies);
+  const assignedCompanies = rawCompanies.map((company) => ({
+    ...company,
+    engagementUserAssignment: {
+      userId: "user-1",
+      label: "william-main",
+      owner: null,
+      accountRefs: [],
+      assignedAt: "2026-06-07T10:53:22.076Z",
+      assignedBy: null,
+      reason: "Operator owns this company.",
+      sticky: true,
+    },
+  }));
+  const daily = buildDailyView(rawUser, rawMotions, assignedCompanies, [], [observation], { now: "2026-06-07T12:00:00.000Z" });
+
+  const item = inbox.items[0];
+  assert.equal(item.status, "resolved");
+  assert.equal(item.reviewState, "reply_sent");
+  assert.match(item.recommendedAction, /reply already sent/i);
+  assert.equal(buildOperatorPromptFromInboxItem(item), null);
+
+  const reviewItem = review.reviewItems[0];
+  assert.equal(reviewItem.state, "reply_sent");
+  assert.match(reviewItem.recommendedAction, /reply already sent/i);
+
+  assert.equal(daily.items.some((entry) => entry.prospect?.id === "prospect-1"), false);
 });
 
 test("queued private replies are treated as already handled", () => {

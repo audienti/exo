@@ -220,11 +220,12 @@ function availabilityForAction(context) {
         ? { available: true, status: "available", reason: "A follow is already recorded and can be undone." }
         : { available: false, status: "blocked", reason: "No current follow is recorded for this prospect." };
     case "like_post":
-      if (!brief.recentPost.engageable) {
+      if (
+        !brief.recentPost.engageable
+        || brief.recentPost.selectedTarget?.targetKind !== "post"
+        || brief.recentPost.selectedTarget?.recommendedAction === "comment"
+      ) {
         return { available: false, status: "blocked", reason: brief.recentPost.reason };
-      }
-      if (hasNonBlockedSurface(touches, "like_post") && !hasNonBlockedSurface(touches, "unlike_post")) {
-        return { available: false, status: "completed", reason: "A post-like is already recorded for this prospect." };
       }
       return { available: true, status: "available", reason: "A fresh recent-post warmup exists for a lightweight like." };
     case "unlike_post":
@@ -262,7 +263,15 @@ function availabilityForAction(context) {
       }
       return { available: true, status: "available", reason: "A pending or ignored connection request can still be withdrawn." };
     case "create_comment_reaction":
-      return hasSurface(touches, "public_comment") || hasSurface(touches, "comment_reply")
+      return (
+        hasSurface(touches, "public_comment")
+        || hasSurface(touches, "comment_reply")
+        || (
+          brief.recentPost.engageable
+          && brief.recentPost.selectedTarget?.targetKind === "comment"
+          && brief.recentPost.selectedTarget?.recommendedAction === "reaction"
+        )
+      )
         ? { available: true, status: "available", reason: "A public thread exists, so a comment reaction is plausible." }
         : { available: false, status: "blocked", reason: "No comment-thread context is stored for this prospect yet." };
     case "accept_connection":

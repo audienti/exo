@@ -248,8 +248,8 @@ function shapeNextMove(summary, topDecision) {
     title: summary?.nextMove ?? topDecision.recommendedAction ?? topDecision.summary,
     subject: topDecision.subject,
     prospectId: topDecision.prospectId ?? null,
-    personId: topDecision.id ?? null,
-    avatarUrl: topDecision.avatarUrl ?? null,
+    personId: resolveOperatorPersonId(topDecision),
+    avatarUrl: pickItemAvatarUrl(topDecision),
     subtitle: composeSubtitle(topDecision.actorTitle, topDecision.actorCompanyName ?? topDecision.companyName),
     motionName: topDecision.motionName,
     motionStatus: "active",
@@ -356,8 +356,9 @@ function shapeDecisions(items) {
       id: String(item.id),
       person: item.subject ?? "Unknown",
       prospectId: item.prospectId ?? null,
+      personId: resolveOperatorPersonId(item),
       initials: initialsFromName(item.subject ?? null),
-      avatarUrl: item.avatarUrl ?? null,
+      avatarUrl: pickItemAvatarUrl(item),
       role: item.actorTitle ?? null,
       company: item.actorCompanyName ?? item.companyName ?? null,
       roleLine: composeSubtitle(item.actorTitle ?? null, item.actorCompanyName ?? item.companyName ?? null),
@@ -630,7 +631,8 @@ function parseAgendaTime(iso) {
 /** @param {any} item */
 function shouldSurfacePlannerActionItem(item) {
   if (!item || item.state !== "due_now" || item.state === "done") return false;
-  return String(item?.source?.type ?? "").toLowerCase() !== "inbound_review";
+  const sourceType = String(item?.source?.type ?? "").toLowerCase();
+  return sourceType !== "inbound_review" && sourceType !== "outbound_capacity";
 }
 
 /** @param {any} item */
@@ -647,6 +649,8 @@ function normalizePlannerActionItem(item) {
     id: plannerItemKey(item) ?? `planner-${motionId ?? "motion"}-${companyId ?? "company"}-${prospectId ?? "prospect"}`,
     subject: person,
     prospectId,
+    personId: null,
+    avatarUrl: item?.prospect?.avatarUrl ?? null,
     actorTitle: item?.prospect?.title ?? null,
     actorCompanyName: item?.company?.name ?? null,
     motionName: item?.motion?.name ?? null,
@@ -666,6 +670,29 @@ function normalizePlannerActionItem(item) {
       composeReady,
     }),
   };
+}
+
+/** @param {any} item */
+function pickItemAvatarUrl(item) {
+  return item?.avatarUrl
+    ?? item?.prospect?.avatarUrl
+    ?? item?.actorAvatarUrl
+    ?? item?.actorAvatarSourceUrl
+    ?? null;
+}
+
+/** @param {any} item */
+function resolveOperatorPersonId(item) {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(item, "personId")) {
+    return typeof item.personId === "string" && item.personId.trim().length ? item.personId : null;
+  }
+  if (item.prospectId) {
+    return null;
+  }
+  return typeof item.id === "string" && item.id.trim().length ? item.id : null;
 }
 
 /**

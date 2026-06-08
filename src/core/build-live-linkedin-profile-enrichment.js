@@ -57,7 +57,20 @@ const LINKEDIN_PROFILE_ENRICHMENT_OUTPUT_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["activityType", "url", "postedAt", "freshnessBand", "summary", "snippet"],
+        required: [
+          "activityType",
+          "url",
+          "postedAt",
+          "freshnessBand",
+          "summary",
+          "snippet",
+          "targetKind",
+          "authoredByProspect",
+          "hasOriginalCommentary",
+          "businessRelevance",
+          "recommendedAction",
+          "rationale",
+        ],
         properties: {
           activityType: { type: ["string", "null"] },
           url: { type: ["string", "null"], format: "uri" },
@@ -67,7 +80,22 @@ const LINKEDIN_PROFILE_ENRICHMENT_OUTPUT_SCHEMA = {
             enum: ["0-14-days", "15-30-days", "31-60-days", "61-90-days", "stale", "unknown", null]
           },
           summary: { type: ["string", "null"] },
-          snippet: { type: ["string", "null"] }
+          snippet: { type: ["string", "null"] },
+          targetKind: {
+            type: ["string", "null"],
+            enum: ["post", "comment", null],
+          },
+          authoredByProspect: { type: ["boolean", "null"] },
+          hasOriginalCommentary: { type: ["boolean", "null"] },
+          businessRelevance: {
+            type: ["string", "null"],
+            enum: ["low", "moderate", "high", "unknown", null],
+          },
+          recommendedAction: {
+            type: ["string", "null"],
+            enum: ["reaction", "comment", null],
+          },
+          rationale: { type: ["string", "null"] },
         }
       }
     }
@@ -150,7 +178,7 @@ export function buildLiveLinkedinProfileEnrichmentView(rawCompany, rawMotion, ra
   const surfaceHints = {
     profilePage: buildLinkedinProfilePageSurfaceHint({
       profileUrl: targetProfileUrl,
-      recentPostLimit: 3
+      recentPostLimit: 5
     })
   };
 
@@ -249,11 +277,14 @@ function buildLinkedinProfileEnrichmentPrompt(input) {
     "Use the governed connector-native LinkedIn path only. Do not drift to another identity or another transport.",
     "Use captureGuide.writebackRules and verificationCommands for the governed Exo landing path after capture.",
     `Honor the execution plan. Preferred transport is ${input.preferredTransport}. Do not drift to another LinkedIn identity.`,
-    "Capture one unified profile payload: stable identity fields, avatar source URL, and the strongest recent posts visible on the page.",
+    "Capture one unified profile payload: stable identity fields, avatar source URL, and the strongest recent public activities visible on the page.",
     "Record isPremium=true when a LinkedIn Premium badge is visible on the profile, and isOpenProfile=true when the profile shows Open Profile / Free to message (any Premium member can message them without an InMail credit). Use null when you cannot tell.",
     "Record connectionDegree as the network distance badge shown next to their name: 1 for a 1st-degree connection (you are connected — a connection request was accepted), 2 for 2nd, 3 for 3rd or 3rd+. Use null only if the badge is genuinely not visible. This is the authoritative signal for whether a connection request was accepted.",
     "Inspect the real LinkedIn profile page and recent activity routes directly; do not leave the result in scratch notes or ad hoc JavaScript output.",
-    "Keep at most the three strongest recent posts or comments that produce legitimate writing context.",
+    "Keep at most the five strongest eligible public activities.",
+    "Eligible launch scope is prospect-authored activity only: their own posts, their own comments, and reposts only when they added original commentary.",
+    "Exclude passive likes, follows, bare reposts, company-page-only posts, and any activity that is not clearly authored by the prospect.",
+    "For each recentPosts item, set targetKind to post or comment, authoredByProspect to true only when the activity is clearly theirs, hasOriginalCommentary when relevant, businessRelevance as low/moderate/high/unknown, recommendedAction as comment only when the activity is clearly work-relevant enough for a natural peer-style question, otherwise reaction, and rationale as one short sentence.",
     "If the page identity renders but recent activity does not, return the identity fields and an empty recentPosts array with no invented filler.",
     "Then send the JSON payload through the provided buildPayloadCommand."
   ].join(" ");

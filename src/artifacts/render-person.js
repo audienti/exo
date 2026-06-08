@@ -13,6 +13,7 @@ import {
   escapeAttr,
   escapeHtml,
   iconSvg,
+  renderMotionChoiceOption,
   renderNextMoveAlert,
   renderShell,
   stateDot,
@@ -176,6 +177,7 @@ function renderPersonTimelineMessage(entry) {
     renderMessageByline(entry) +
     (entry.subject ? `<div class="tl-byline">Subject · ${escapeHtml(entry.subject)}</div>` : "") +
     `<blockquote class="tl-message">${escapeHtml(entry.detail ?? entry.summary)}</blockquote>` +
+    (entry.draftExcerpt ? `<p class="tl-draft">Draft reply · ${escapeHtml(entry.draftExcerpt)}</p>` : "") +
     (entry.showSummary && entry.summary ? `<p class="tl-detail">${escapeHtml(entry.summary)}</p>` : "") +
     (entry.href ? `<a class="tl-link" href="${escapeAttr(entry.href)}" target="_blank" rel="noreferrer">${iconSvg("link", 11)}Open thread</a>` : "") +
     `</div></li>`
@@ -309,11 +311,20 @@ function renderClaimPanel(person, meta) {
   const panelId = `claim-${person.id}`;
   const options = motions
     .map(
-      (motion, index) =>
-        renderClaimMotionOption(person.id, motion, index === 0),
+      (motion) =>
+        renderMotionChoiceOption({
+          motion,
+          action: {
+            writer: "claimInboundPersonToMotion",
+            args: { observationId: person.id, userId: meta.userId ?? null, toMotionId: motion.id },
+            label: "Claim here",
+            icon: "arrowR",
+            variant: "primary",
+            returnAfterAction: true,
+          },
+        }),
     )
     .join("");
-  const args = JSON.stringify({ observationId: person.id, userId: meta.userId ?? null });
 
   return (
     `<div class="compose-panel" id="${escapeAttr(panelId)}">` +
@@ -325,40 +336,10 @@ function renderClaimPanel(person, meta) {
     `<a class="compose-close" href="#person-top" aria-label="Close">${iconSvg("x", 14)}</a>` +
     `</div>` +
     `<div class="compose-field"><span class="compose-label">Destination motion</span><div class="rehome-list">${options}</div></div>` +
-    `<div class="compose-actions">` +
-    `<div class="exo-action" data-exo-writer="claimInboundPersonToMotion" data-exo-args="${escapeAttr(args)}" data-exo-radio="claim-motion-${escapeAttr(person.id)}:toMotionId" data-exo-return="1">` +
-    `<button class="btn btn-primary btn-sm" type="button">${iconSvg("arrowR", 14)}<span>Claim</span></button></div>` +
+    `<div class="compose-actions compose-actions-end">` +
     `<a class="btn btn-ghost btn-sm" href="#person-top">Cancel</a>` +
     `</div>` +
     `</div></div>`
-  );
-}
-
-/**
- * @param {string} personId
- * @param {{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }} motion
- * @param {boolean} checked
- * @returns {string}
- */
-function renderClaimMotionOption(personId, motion, checked) {
-  const offerLabel = motion.offerLabel?.trim() || motion.name;
-  const premise = motion.premise?.trim() || "No premise authored yet.";
-  const showMotionName = motion.name.trim() && motion.name.trim() !== offerLabel;
-  const statusLine = motion.status
-    ? `<span class="rehome-detail"><span class="rehome-cap">Status</span>${stateDot(motion.status, motion.statusLabel ?? undefined)}</span>`
-    : "";
-  return (
-    `<label class="rehome-opt">` +
-    `<input type="radio" name="claim-motion-${escapeAttr(personId)}" value="${escapeAttr(motion.id)}"${checked ? " checked" : ""}>` +
-    `<span class="rehome-copy">` +
-    statusLine +
-    `<span class="rehome-detail"><span class="rehome-cap">Offer</span><span class="rehome-offer">${escapeHtml(offerLabel)}</span></span>` +
-    (showMotionName
-      ? `<span class="rehome-detail"><span class="rehome-cap">Motion</span><span class="rehome-text rehome-code">${escapeHtml(motion.name)}</span></span>`
-      : "") +
-    `<span class="rehome-detail"><span class="rehome-cap">Premise</span><span class="rehome-text">${escapeHtml(premise)}</span></span>` +
-    `</span>` +
-    `</label>`
   );
 }
 

@@ -158,6 +158,17 @@ function rawMotion(overrides = {}) {
   };
 }
 
+function buildThreadMessages(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `msg-thread-${index + 1}`,
+    direction: index % 2 === 0 ? "outbound" : "inbound",
+    sentAt: `2026-06-04T${String(10 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00.000Z`,
+    fromName: index % 2 === 0 ? "You" : "Matt Pierce",
+    fromHandle: null,
+    body: `Thread message ${index + 1}`,
+  }));
+}
+
 test("buildPersonComposeDraftBrief treats transition backlog as company-and-profile context, not offer context", () => {
   const transitionMotion = rawMotion({
     id: "motion-transition",
@@ -254,4 +265,24 @@ test("resolvePersonComposeDraft uses the writer output and passes thread context
     draft.body,
     "Appreciate the pointer. Robert Cassagrande sounds like the right person to compare notes with. I'll reach out there.",
   );
+});
+
+test("buildPersonComposeDraftBrief preserves the full thread history for reply drafting", () => {
+  const person = buildPersonView({
+    observationId: "obs-long-thread",
+    rawObservations: [rawObservation({
+      id: "obs-long-thread",
+      dedupeKey: "obs-long-thread",
+      messages: buildThreadMessages(10),
+    })],
+    rawMotions: [],
+    rawCompanies: [rawCompany()],
+  });
+
+  assert.ok(person);
+  const brief = buildPersonComposeDraftBrief(person);
+  assert.ok(brief);
+  assert.equal(brief?.threadMessages.length, 10);
+  assert.equal(brief?.threadMessages[0]?.body, "Thread message 1");
+  assert.equal(brief?.threadMessages.at(-1)?.body, "Thread message 10");
 });

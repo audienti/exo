@@ -177,14 +177,14 @@ function buildProspectSelectionPacketBrief(motion, company, account, packet) {
       "A credible primary owner is stored as a prospect.",
       "Additional stakeholders are stored only when they strengthen the committee map.",
       "Each stored prospect has why-relevant reasoning tied back to the signal or premise.",
-      "If a selected prospect was justified from a LinkedIn profile, that profile viewback is landed into Exo before the packet is completed.",
+      "If a selected prospect was justified from a LinkedIn or other social profile, land the profile URL, viewback, and avatar URL in Exo before the packet is completed.",
       "Signal match ids are attached where the support is concrete.",
       "The packet is completed or explicitly suppressed/exhausted with notes."
     ],
     writeback: {
       claimCommand: `exo companies queue claim ${company.id} --motion ${motion.id} --worker <worker-label> --notes "Taking prospect selection for this researched account." --json`,
       supportingCommands: [
-        `exo companies prospects add ${company.id} --motion ${motion.id} --name "Person Name" --title "Director Title" --buying-committee-role primary_business_owner --decision-authority influences --why-relevant "Why this person matters now" --signal-match <signal-match-id> --linkedin-profile-url <linkedin-profile-url> --json`,
+        `exo companies prospects add ${company.id} --motion ${motion.id} --name "Person Name" --title "Director Title" --buying-committee-role primary_business_owner --decision-authority influences --why-relevant "Why this person matters now" --signal-match <signal-match-id> --linkedin-profile-url <linkedin-profile-url> --avatar-source-url <avatar-source-url> --json`,
         `exo companies prospects enrich-linkedin-profile-live ${company.id} --motion ${motion.id} --prospect <prospect-id> --runtime codex --json`,
         `exo companies prospects update ${company.id} --motion ${motion.id} --prospect <prospect-id> --why-relevant "Refined reason this person matters" --json`
       ],
@@ -281,6 +281,7 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
     },
     doneWhen: [
       "Role truth, trigger window, identity tells, and live signal are stored or explicitly exhausted.",
+      "If prospect development used a LinkedIn or other social profile, store the canonical prospect avatar in Exo when that source exposed one.",
       "Contact enrichment state is updated and the best usable contact points are stored, including verified direct email and verified mobile phone numbers when found.",
       "Before a no-channel prospect is completed as exhausted, governed connected-account LinkedIn search was attempted and recorded as source-tried linkedin_connected_search.",
       "Cadence state is ready in Exo with a concrete next action.",
@@ -292,7 +293,7 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
       supportingCommands: [
         `exo companies execution show ${company.id} --capability linkedin --json`,
         `exo companies prospects enrich-linkedin-profile-live ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --runtime codex --json`,
-        `exo companies prospects update ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --role-truth-summary "What role this person actually owns" --trigger-window-summary "Why now is live" --identity-tells-summary "Specific identity clues" --live-signal-summary "Recent public activity or explicit no-signal finding" --source-url <source-url> --observed-at <iso-datetime> --json`,
+        `exo companies prospects update ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --role-truth-summary "What role this person actually owns" --trigger-window-summary "Why now is live" --identity-tells-summary "Specific identity clues" --live-signal-summary "Recent public activity or explicit no-signal finding" --source-url <source-url> --observed-at <iso-datetime> --avatar-source-url <avatar-source-url> --json`,
         `exo companies prospects update ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --contact-point '{"kind":"email","value":"person@example.com","matchStatus":"same_person_verified","verificationStatus":"verified","confidence":"high","source":"provider-or-public-web","usableForOutreach":true}' --contact-point '{"kind":"phone","value":"+1-555-0101","matchStatus":"same_person_verified","verificationStatus":"verified","confidence":"high","source":"provider-or-public-web","usableForOutreach":true}' --enrichment-status complete --source-tried gmail --source-tried public-web --best-direct-channel email --best-direct-channel phone --json`,
         `exo companies cadence set ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --current-step connection-request --next-action "Send connection request when capacity allows" --json`
       ],

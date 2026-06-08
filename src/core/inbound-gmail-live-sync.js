@@ -61,7 +61,9 @@ const gmailCaptureOutputSchema = {
           "motionId",
           "companyId",
           "prospectId",
-          "notes"
+          "notes",
+          "messagesCompleteness",
+          "messages"
         ],
         properties: {
           threadId: {
@@ -115,6 +117,10 @@ const gmailCaptureOutputSchema = {
           },
           notes: {
             type: ["string", "null"]
+          },
+          messagesCompleteness: {
+            type: "string",
+            enum: ["complete", "partial_visible_slice"]
           },
           messages: {
             type: "array",
@@ -513,12 +519,14 @@ function buildGmailLiveCapturePrompt(input) {
     "Set checkedAt to the ISO timestamp when you finished the inspection.",
     "Set itemCount to the number of returned threads on success or warning. Use 0 when failed.",
     "Set error to null on success. Warning or failed must include a short concrete error string.",
-    "Each thread must include threadId, kind, observedAt, summary, subject, fromName, fromEmail, actorTitle, actorCompanyName, threadUrl, sourceUrl, motionId, companyId, prospectId, notes, and messages.",
+    "Each thread must include threadId, kind, observedAt, summary, subject, fromName, fromEmail, actorTitle, actorCompanyName, threadUrl, sourceUrl, motionId, companyId, prospectId, notes, messagesCompleteness, and messages.",
     "Do not invent motionId, companyId, or prospectId. Set them to null unless you truly know them from the inbox itself.",
     "Use kind email_reply_received when the newest relevant change is an external reply in an existing outreach thread. Otherwise use email_thread_updated.",
     "Prefer short operator-usable summaries under 280 characters.",
-    "For messages, include the actual visible participant-authored thread messages the operator or CRM would need later. Use chronological order, oldest to newest, and include up to 6 recent messages per thread.",
+    "For messages, include the full visible participant-authored thread the operator or CRM would need later. Use chronological order, oldest to newest. Do not truncate to a recent slice.",
+    "Set messagesCompleteness to complete only when you captured the full visible participant-authored thread history for that returned thread. If you only have a partial visible slice, set messagesCompleteness to partial_visible_slice and do not return that thread as a successful capture.",
     "Each message must include direction, sentAt, fromName, fromHandle, and body. Use direction inbound for external mail and outbound for the operator's sent mail when visible.",
+    "If you cannot retrieve at least one structured message body or cannot capture the full visible participant-authored thread for a returned thread, do not return that thread as a successful capture. Return warning or failed instead of landing a partial or notes-only thread.",
     "Do not paste the entire quoted chain into every message body. Keep each body to the visible message text itself, trimming repeated signatures or quoted history when it is clearly duplicated.",
     "Only include threads with external participants. Ignore obvious newsletters, spam, or automated internal noise unless they materially change operator action."
   ].join("\n");

@@ -88,6 +88,7 @@ test("buildGmailInboundSyncPayload preserves structured messages for downstream 
           companyId: null,
           prospectId: null,
           notes: "Procurement solicitation. Likely reject and suppress.",
+          messagesCompleteness: "complete",
           messages: [
             {
               id: "msg-1",
@@ -143,6 +144,7 @@ test("normalizeGmailInboundSyncCapture coerces local datetimes into strict ISO s
         companyId: null,
         prospectId: null,
         notes: null,
+        messagesCompleteness: "complete",
         messages: [
           {
             id: "msg-1",
@@ -188,6 +190,7 @@ test("buildGmailInboundSyncPayload accepts local datetimes from Gmail capture ou
           companyId: null,
           prospectId: null,
           notes: null,
+          messagesCompleteness: "complete",
           messages: [
             {
               id: "msg-1",
@@ -206,5 +209,88 @@ test("buildGmailInboundSyncPayload accepts local datetimes from Gmail capture ou
   assert.equal(
     built.payload.accounts[0].surfaces[0].observations[0].messages[0].sentAt,
     new Date("2026-06-04T16:17:00").toISOString()
+  );
+});
+
+test("buildGmailInboundSyncPayload rejects note-only Gmail threads without structured messages", () => {
+  assert.throws(() =>
+    buildGmailInboundSyncPayload(rawUser(), {
+      accountId: "gmail-account-1",
+      capture: {
+        mode: "quick",
+        status: "success",
+        checkedAt: "2026-06-04T16:20:00.000Z",
+        itemCount: 1,
+        error: null,
+        threads: [
+          {
+            threadId: "thread-legacy",
+            kind: "email_thread_updated",
+            observedAt: "2026-06-04T16:18:00.000Z",
+            summary: "Thread changed.",
+            subject: "Re: Thread",
+            fromName: "Lina Park",
+            fromEmail: "lpark@govpointeoffice.us",
+            actorTitle: null,
+            actorCompanyName: "GovPointe Office",
+            threadUrl: "https://mail.google.com/mail/u/0/#inbox/thread-legacy",
+            sourceUrl: "https://mail.google.com/mail/u/0/#inbox/thread-legacy",
+            motionId: null,
+            companyId: null,
+            prospectId: null,
+            notes: "Draft reply says 'Please see the attached'.",
+            messagesCompleteness: "complete",
+            messages: [],
+          },
+        ],
+      },
+    }),
+    /must include structured messages/i
+  );
+});
+
+test("buildGmailInboundSyncPayload rejects partial Gmail thread captures", () => {
+  assert.throws(() =>
+    buildGmailInboundSyncPayload(rawUser(), {
+      accountId: "gmail-account-1",
+      capture: {
+        mode: "quick",
+        status: "warning",
+        checkedAt: "2026-06-04T16:20:00.000Z",
+        itemCount: 1,
+        error: "partial thread capture",
+        threads: [
+          {
+            threadId: "thread-partial",
+            kind: "email_thread_updated",
+            observedAt: "2026-06-04T16:18:00.000Z",
+            summary: "Thread changed.",
+            subject: "Re: Thread",
+            fromName: "Lina Park",
+            fromEmail: "lpark@govpointeoffice.us",
+            actorTitle: null,
+            actorCompanyName: "GovPointe Office",
+            threadUrl: "https://mail.google.com/mail/u/0/#inbox/thread-partial",
+            sourceUrl: "https://mail.google.com/mail/u/0/#inbox/thread-partial",
+            motionId: null,
+            companyId: null,
+            prospectId: null,
+            notes: null,
+            messagesCompleteness: "partial_visible_slice",
+            messages: [
+              {
+                id: "msg-1",
+                direction: "inbound",
+                sentAt: "2026-06-04T16:17:00.000Z",
+                fromName: "Lina Park",
+                fromHandle: "lpark@govpointeoffice.us",
+                body: "Wanted to follow up."
+              }
+            ],
+          },
+        ],
+      },
+    }),
+    /must include complete structured thread history/i
   );
 });

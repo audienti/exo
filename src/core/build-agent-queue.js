@@ -68,8 +68,13 @@ import {
 import { classifyUserWorkingHours } from "./working-hours.js";
 import { resolveScopedExecutionAssignment } from "./resolve-scoped-execution-assignment.js";
 import { resolveConnectionNoteCapability } from "./connection-note-capability.js";
+import {
+  buildLinkedinPublicEngagementPlan,
+  buildPublicEngagementMetadata,
+} from "./select-linkedin-public-engagement.js";
 
 const LIVE_SYNC_TASK_CAPABILITIES = new Set(["linkedin", "gmail"]);
+const SUBJECT_DRAFT_SURFACES = new Set(["email", "in_mail_message"]);
 const AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG = {
   "linkedin-followers-list": { maxPages: 1, pageSize: 10 },
   "linkedin-following-list": { maxPages: 1, pageSize: 10 },
@@ -80,6 +85,7 @@ const MOTION_ROUND_ROBIN_TASK_KINDS = new Set([
   "prospect_selection",
   "prospect_research",
 ]);
+const PUBLIC_ENGAGEMENT_DRAFT_SURFACES = new Set(["public_comment", "comment_reply"]);
 
 /**
  * @param {{
@@ -467,10 +473,27 @@ export function buildAgentQueue(input) {
             prospect,
           }), { now, tasks, waiting });
         }
-        const candidateSurface = selectNextDraftSurface(prospect);
-        const nextSurface = isQueueDraftSurfaceAvailable(prospect, candidateSurface) ? candidateSurface : null;
         const drafts = Array.isArray(prospect.drafts) ? prospect.drafts : [];
         const touches = Array.isArray(prospect.touches) ? prospect.touches : [];
+        const publicEngagementPlan = buildLinkedinPublicEngagementPlan(prospect, now);
+        handlePublicEngagementPlan({
+          motion,
+          account,
+          prospect,
+          publicEngagementPlan,
+          drafts,
+          now,
+          tasks,
+          waiting,
+        });
+        const publicDraftSurface = publicEngagementPlan.kind === "draft"
+          ? publicEngagementPlan.selection?.surface ?? null
+          : null;
+        const candidateSurface = selectNextDraftSurface(prospect);
+        const nextSurface = isQueueDraftSurfaceAvailable(prospect, candidateSurface)
+          && !(publicDraftSurface && publicDraftSurface === candidateSurface)
+          ? candidateSurface
+          : null;
         const cadenceWindow = nextSurface ? resolveCadenceExecutionWindow(prospect, nextSurface, now) : null;
         const draftOnNextSurface = nextSurface
           ? drafts.find((draft) => draft.surface === nextSurface && isDraftActive(draft))
@@ -512,6 +535,7 @@ export function buildAgentQueue(input) {
         for (const draft of drafts) {
           if (!isAutonomousSendReadyDraft(draft)) continue;
           if (isStructuredDraftEnvelope(draft.body)) continue;
+          if (PUBLIC_ENGAGEMENT_DRAFT_SURFACES.has(String(draft.surface ?? ""))) continue;
 
           const staleness = classifyDraftStaleness(draft, nextSurface);
           if (staleness.stale) {
@@ -846,17 +870,187 @@ function buildProspectResearchTask({ motion, account, prospect }) {
 /**
  * @param {{
  *   motion: any,
+ *   account: any,
+ *   prospect: any,
+ *   publicEngagementPlan: any,
+ *   drafts: any[],
+ *   now: string,
+ *   tasks: Array<Record<string, any>>,
+ *   waiting: Array<Record<string, any>>,
+ * }} input
+ */
+function handlePublicEngagementPlan({ motion, account, prospect, publicEngagementPlan, drafts, now, tasks, waiting }) {
+  if (!publicEngagementPlan || publicEngagementPlan.kind === "none" || publicEngagementPlan.kind === "skip") {
+    return;
+  }
+
+  const selection = publicEngagementPlan.selection ?? null;
+  if (!selection) {
+    return;
+  }
+
+  if (publicEngagementPlan.kind === "draft") {
+    const activeDraft = drafts.find((draft) => draft.surface === selection.surface && isDraftActive(draft)) ?? null;
+    const metadataNotes = buildPublicEngagementMetadata({
+      mode: publicEngagementPlan.mode,
+      phase: publicEngagementPlan.phase ?? null,
+      targetUrl: selection.targetUrl ?? null,
+      targetKind: selection.targetKind ?? null,
+      actionKey: selection.actionKey ?? null,
+      detail: selection.selectionReason ?? null,
+    });
+
+    if (!activeDraft || isStructuredDraftEnvelope(activeDraft.body)) {
+      placeTask(buildWriteDraftTask({
+        motion,
+        account,
+        prospect,
+        surface: selection.surface,
+        reason: publicEngagementPlan.reason ?? "public_engagement",
+        dueAt: publicEngagementPlan.dueAt ?? now,
+        waitingReason: null,
+        notes: metadataNotes,
+      }), { now, tasks, waiting });
+      return;
+    }
+
+    if (isAutonomousSendReadyDraft(activeDraft)) {
+      placeTask(buildSendMessageTask({
+        motion,
+        account,
+        prospect,
+        draft: activeDraft,
+        action: selection.actionKey,
+        via: "public-engagement",
+        dueAt: publicEngagementPlan.dueAt ?? activeDraft.approvedAt ?? now,
+        waitingReason: null,
+        recipientUrl: selection.targetUrl,
+        postSendNextAction: publicEngagementPlan.phase === "pre_connect"
+          ? "Wait 48 hours, then queue the connection-request draft for review."
+          : null,
+        postSendDelayMs: publicEngagementPlan.phase === "pre_connect" ? 48 * 60 * 60 * 1000 : null,
+        writeback: buildPublicEngagementResultWriteback({
+          motion,
+          account,
+          prospect,
+          action: selection.actionKey,
+          surface: selection.surface,
+          result: "sent",
+          sourceUrl: selection.targetUrl,
+          summary: buildPublicEngagementSummary(selection, publicEngagementPlan),
+          notes: metadataNotes,
+        }),
+        unavailableWriteback: buildPublicEngagementResultWriteback({
+          motion,
+          account,
+          prospect,
+          action: selection.actionKey,
+          surface: selection.surface,
+          result: "unavailable",
+          sourceUrl: selection.targetUrl,
+          summary: `Stored LinkedIn ${selection.targetKind} target was no longer writable for ${prospect.name}.`,
+          notes: metadataNotes,
+        }),
+      }), { now, tasks, waiting });
+    }
+    return;
+  }
+
+  if (publicEngagementPlan.kind === "send") {
+    const metadataNotes = buildPublicEngagementMetadata({
+      mode: publicEngagementPlan.mode,
+      phase: publicEngagementPlan.phase ?? null,
+      targetUrl: selection.targetUrl ?? null,
+      targetKind: selection.targetKind ?? null,
+      actionKey: selection.actionKey ?? null,
+      detail: selection.selectionReason ?? null,
+    });
+    const writebackByTargetUrl = {
+      [selection.targetUrl]: buildPublicEngagementResultWriteback({
+        motion,
+        account,
+        prospect,
+        action: selection.actionKey,
+        surface: selection.surface,
+        result: "sent",
+        sourceUrl: selection.targetUrl,
+        summary: buildPublicEngagementSummary(selection, publicEngagementPlan),
+        notes: metadataNotes,
+      }),
+    };
+    if (publicEngagementPlan.fallbackSelection?.targetUrl) {
+      const fallbackSelection = publicEngagementPlan.fallbackSelection;
+      writebackByTargetUrl[fallbackSelection.targetUrl] = buildPublicEngagementResultWriteback({
+        motion,
+        account,
+        prospect,
+        action: fallbackSelection.actionKey,
+        surface: fallbackSelection.surface,
+        result: "sent",
+        sourceUrl: fallbackSelection.targetUrl,
+        summary: buildPublicEngagementSummary(fallbackSelection, publicEngagementPlan),
+        notes: buildPublicEngagementMetadata({
+          mode: publicEngagementPlan.mode,
+          phase: publicEngagementPlan.phase ?? null,
+          targetUrl: fallbackSelection.targetUrl,
+          targetKind: fallbackSelection.targetKind ?? null,
+          actionKey: fallbackSelection.actionKey ?? null,
+          detail: `${fallbackSelection.selectionReason ?? "Fallback public target."} Original target was unavailable.`,
+        }),
+      });
+    }
+    placeTask(buildSendMessageTask({
+      motion,
+      account,
+      prospect,
+      action: selection.actionKey,
+      via: "public-engagement",
+      surface: selection.surface,
+      channel: "linkedin",
+      body: "",
+      subject: null,
+      queuedAt: publicEngagementPlan.dueAt ?? now,
+      dueAt: publicEngagementPlan.dueAt ?? now,
+      waitingReason: null,
+      recipientUrl: selection.targetUrl,
+      postSendNextAction: publicEngagementPlan.phase === "pre_connect"
+        ? "Wait 48 hours, then queue the connection-request draft for review."
+        : null,
+      postSendDelayMs: publicEngagementPlan.phase === "pre_connect" ? 48 * 60 * 60 * 1000 : null,
+      writeback: writebackByTargetUrl[selection.targetUrl],
+      writebackByTargetUrl,
+      unavailableWriteback: buildPublicEngagementResultWriteback({
+        motion,
+        account,
+        prospect,
+        action: selection.actionKey,
+        surface: selection.surface,
+        result: "unavailable",
+        sourceUrl: selection.targetUrl,
+        summary: `Stored LinkedIn ${selection.targetKind} target was unavailable for ${prospect.name}.`,
+        notes: metadataNotes,
+      }),
+    }), { now, tasks, waiting });
+  }
+}
+
+/**
+ * @param {{
+ *   motion: any,
   *   account: any,
   *   prospect: any,
   *   surface: string,
   *   reason: string,
  *   dueAt: string | null,
  *   waitingReason: string | null,
+ *   notes?: string | null,
  * }} input
  */
-function buildWriteDraftTask({ motion, account, prospect, surface, reason, dueAt, waitingReason }) {
+function buildWriteDraftTask({ motion, account, prospect, surface, reason, dueAt, waitingReason, notes = null }) {
   const motionFlag = motion.id ? ` --motion ${motion.id}` : "";
   const status = draftWritebackStatusForSurface(surface);
+  const subjectFlag = SUBJECT_DRAFT_SURFACES.has(surface) ? ' --subject "<written-subject>"' : "";
+  const notesFlag = notes ? ` --notes ${shellQuote(notes)}` : "";
   return {
     kind: "write_draft",
     needsOperatorInput: false,
@@ -872,7 +1066,7 @@ function buildWriteDraftTask({ motion, account, prospect, surface, reason, dueAt
     // cadence, prior touches, surface rules. The writeback leaves the draft
     // in `ready` so the operator can review and approve it before send.
     briefCommand: `exo motion draft-brief ${motion.id} --prospect ${prospect.id} --surface ${surface} --json`,
-    writeback: `exo companies prospects draft set ${account.companyId} --prospect ${prospect.id}${motionFlag} --surface ${surface} --status ${status} --body "<written-body>"`,
+    writeback: `exo companies prospects draft set ${account.companyId} --prospect ${prospect.id}${motionFlag} --surface ${surface} --status ${status}${subjectFlag}${notesFlag} --body "<written-body>"`,
     postWriteStatus: status,
     dueAt,
     waitingReason,
@@ -986,17 +1180,49 @@ function buildInboundSyncTask({
  *   motion: any,
  *   account: any,
  *   prospect: any,
- *   draft: any,
+ *   draft?: any,
  *   action: string,
  *   via: string,
  *   dueAt: string | null,
  *   waitingReason: string | null,
+ *   surface?: string | null,
+ *   channel?: string | null,
+ *   subject?: string | null,
+ *   body?: string | null,
+ *   queuedAt?: string | null,
+ *   recipientUrl?: string | null,
+ *   writeback?: string | null,
+ *   writebackByTargetUrl?: Record<string, string> | null,
+ *   unavailableWriteback?: string | null,
+ *   postSendNextAction?: string | null,
+ *   postSendDelayMs?: number | null,
  * }} input
  */
-function buildSendMessageTask({ motion, account, prospect, draft, action, via, dueAt, waitingReason }) {
-  const authoredBy = draft.authoredBy === "operator" ? "operator" : "agent";
-  const editedByOperator = draft.editedByOperator === true;
-  const approvedByOperator = draft.approvedByOperator === true || draft.status === "approved";
+function buildSendMessageTask({
+  motion,
+  account,
+  prospect,
+  draft = null,
+  action,
+  via,
+  dueAt,
+  waitingReason,
+  surface = null,
+  channel = null,
+  subject = null,
+  body = null,
+  queuedAt = null,
+  recipientUrl = null,
+  writeback = null,
+  writebackByTargetUrl = null,
+  unavailableWriteback = null,
+  postSendNextAction = null,
+  postSendDelayMs = null,
+}) {
+  const authoredBy = draft?.authoredBy === "operator" ? "operator" : "agent";
+  const editedByOperator = draft?.editedByOperator === true;
+  const approvedByOperator = draft?.approvedByOperator === true || draft?.status === "approved";
+  const resolvedSurface = draft?.surface ?? surface;
   return {
     kind: "send_message",
     action,
@@ -1007,24 +1233,77 @@ function buildSendMessageTask({ motion, account, prospect, draft, action, via, d
     companyName: account.companyName,
     prospectId: prospect.id,
     prospectName: prospect.name,
-    recipientUrl: resolveSendTaskRecipient(prospect, draft),
+    recipientUrl: recipientUrl ?? resolveSendTaskRecipient(prospect, draft),
     recipientEmail: resolveSendTaskRecipientEmail(prospect, draft),
-    surface: draft.surface,
-    channel: draft.channel,
+    surface: resolvedSurface,
+    channel: draft?.channel ?? channel,
     via,
-    subject: draft.subject ?? null,
-    body: extractUsableDraftBody(draft.body) ?? (draft.body ?? ""),
+    subject: draft?.subject ?? subject,
+    body: draft ? (extractUsableDraftBody(draft.body) ?? (draft.body ?? "")) : (body ?? ""),
     authoredBy,
     editedByOperator,
     approvedByOperator,
-    queuedAt: draft.approvedAt ?? null,
+    queuedAt: draft?.approvedAt ?? queuedAt,
     dueAt,
     waitingReason,
     // Run this AFTER the send actually happens — it records the outbound
     // touch (so the timeline shows "Sent"), marks the draft sent, and
     // advances cadence to "wait for a reply before the next step".
-    writeback: `exo actions result --action ${action} --result sent --company ${account.companyId} --prospect ${prospect.id} --surface ${draft.surface}`,
+    writeback: writeback ?? `exo actions result --action ${action} --result sent --company ${account.companyId} --prospect ${prospect.id} --surface ${resolvedSurface}`,
+    writebackByTargetUrl,
+    unavailableWriteback,
+    postSendNextAction,
+    postSendDelayMs: Number.isFinite(postSendDelayMs) ? Number(postSendDelayMs) : null,
   };
+}
+
+/**
+ * @param {any} selection
+ * @param {any} plan
+ */
+function buildPublicEngagementSummary(selection, plan) {
+  if (selection.actionKey === "create_post_comment") {
+    return `Published a checked public comment on ${selection.targetKind === "comment" ? "the comment thread" : "the LinkedIn post"} for warmup.`;
+  }
+  if (selection.actionKey === "create_comment_comment") {
+    return plan.mode === "reactive"
+      ? "Published a checked in-thread reply after the prospect answered our public comment."
+      : "Published a checked public reply on the prospect's LinkedIn comment thread.";
+  }
+  return selection.targetKind === "comment"
+    ? "Left a lightweight reaction on the stored LinkedIn comment thread."
+    : "Left a lightweight reaction on the stored LinkedIn post.";
+}
+
+/**
+ * @param {{
+ *   motion: any,
+ *   account: any,
+ *   prospect: any,
+ *   action: string,
+ *   surface: string,
+ *   result: string,
+ *   sourceUrl?: string | null,
+ *   summary?: string | null,
+ *   notes?: string | null,
+ *   nextAction?: string | null,
+ *   nextActionDueAt?: string | null,
+ * }} input
+ */
+function buildPublicEngagementResultWriteback(input) {
+  return buildActionResultWriteback({
+    action: input.action,
+    result: input.result,
+    motionId: input.motion?.id ?? null,
+    companyId: input.account?.companyId ?? null,
+    prospectId: input.prospect?.id ?? null,
+    surface: input.surface,
+    sourceUrl: input.sourceUrl ?? null,
+    summary: input.summary ?? null,
+    notes: input.notes ?? null,
+    nextAction: input.nextAction ?? null,
+    nextActionDueAt: input.nextActionDueAt ?? null,
+  });
 }
 
 /**
@@ -1047,6 +1326,8 @@ function resolveSendTaskAction(draft) {
   if (draft?.surface === "connection_request") return "send_connection_request";
   if (draft?.surface === "in_mail_message") return "in_mail_message";
   if (draft?.surface === "email" || draft?.channel === "email") return "send_email";
+  if (draft?.surface === "public_comment") return "create_post_comment";
+  if (draft?.surface === "comment_reply") return "create_comment_comment";
   return "send_direct_message";
 }
 
@@ -1221,6 +1502,11 @@ function annotateTaskCheckout(task, hostState, now) {
  *   prospectId?: string | null,
  *   observationId?: string | null,
  *   surface?: string | null,
+ *   sourceUrl?: string | null,
+ *   summary?: string | null,
+ *   notes?: string | null,
+ *   nextAction?: string | null,
+ *   nextActionDueAt?: string | null,
  * }} input
  */
 function buildActionResultWriteback(input) {
@@ -1232,6 +1518,11 @@ function buildActionResultWriteback(input) {
   if (input.motionId) parts.push(`--motion ${input.motionId}`);
   if (input.observationId) parts.push(`--observation ${input.observationId}`);
   if (input.surface) parts.push(`--surface ${input.surface}`);
+  if (input.sourceUrl) parts.push(`--source-url ${shellQuote(input.sourceUrl)}`);
+  if (input.summary) parts.push(`--summary ${shellQuote(input.summary)}`);
+  if (input.notes) parts.push(`--notes ${shellQuote(input.notes)}`);
+  if (input.nextAction) parts.push(`--next-action ${shellQuote(input.nextAction)}`);
+  if (input.nextActionDueAt) parts.push(`--next-action-due-at ${input.nextActionDueAt}`);
   return parts.join(" ");
 }
 
@@ -1366,6 +1657,15 @@ function normalizeOptionalIso(value) {
   if (!value) return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/**
+ * @param {string} value
+ */
+function shellQuote(value) {
+  if (value === "") return "''";
+  if (/^[A-Za-z0-9_./:@=-]+$/.test(value)) return value;
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 /** @param {string | null | undefined} value */

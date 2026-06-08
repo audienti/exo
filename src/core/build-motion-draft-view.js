@@ -8,6 +8,8 @@ import {
   isFirstPrivateDirectMessagePath,
 } from "./select-next-draft-surface.js";
 
+const SUBJECT_SURFACES = new Set(["email", "in_mail_message"]);
+
 const CARD_DEFINITIONS = [
   { key: "connection_request", stage: "Connection request", channel: "linkedin" },
   { key: "post_accept_message", stage: "First direct message", channel: "linkedin" },
@@ -118,6 +120,8 @@ function buildDraftCard(brief, definition) {
     key: definition.key,
     stage,
     channel: definition.channel,
+    usesSubject: SUBJECT_SURFACES.has(definition.key),
+    replySubject: brief.prospect.replySubject ?? null,
     available: availability.available,
     missingReason: availability.reason,
     contextSummary: {
@@ -154,6 +158,7 @@ function buildDraftCard(brief, definition) {
       signalMatches: brief.signalMatches,
       threadMessages: brief.prospect.threadMessages,
       latestInboundMessage: brief.prospect.latestInboundMessage,
+      replySubject: brief.prospect.replySubject ?? null,
       email: brief.prospect.email,
       profileViewedAt: brief.prospect.profileViewedAt
     }
@@ -193,6 +198,8 @@ function buildDraftRules(surface) {
     case "email":
       return [
         "Write for direct inbox reading, not LinkedIn.",
+        "If surface.replySubject exists, this is a reply. Keep that exact subject line.",
+        "If surface.replySubject does not exist, generate a concise subject line that fits the ask.",
         "Use the stored signal and why-relevant context as the spine.",
         "Keep the ask narrow and concrete."
       ];
@@ -257,11 +264,16 @@ function availabilityFor(brief, surface) {
         ? { available: true, reason: null }
         : { available: false, reason: "No inbound touch is recorded for this prospect yet." };
     case "public_comment":
-      return brief.recentPost.engageable
+      return brief.recentPost.engageable && brief.recentPost.selectedTarget?.recommendedAction === "comment" && brief.recentPost.selectedTarget?.targetKind === "post"
         ? { available: true, reason: null }
         : { available: false, reason: brief.recentPost.reason };
     case "comment_reply":
       return touches.some((touch) => touch.surface === "public_comment" || touch.surface === "comment_reply")
+        || (
+          brief.recentPost.engageable
+          && brief.recentPost.selectedTarget?.recommendedAction === "comment"
+          && brief.recentPost.selectedTarget?.targetKind === "comment"
+        )
         ? { available: true, reason: null }
         : { available: false, reason: "No comment-thread context is recorded for this prospect yet." };
     default:

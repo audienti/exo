@@ -28,6 +28,7 @@ import { recordActionResult } from "../../core/record-action-result.js";
 import { recordMotionProspect, updateMotionProspect } from "../../core/record-prospect.js";
 import { recordMotionProspectTouch } from "../../core/record-prospect-touch.js";
 import { recordMotionSignalMatch } from "../../core/record-signal-match.js";
+import { selectLinkedinPublicEngagementTarget } from "../../core/select-linkedin-public-engagement.js";
 import { setMotionTargetAccountQueue } from "../../core/set-target-account-queue.js";
 import { setMotionProspectCadence } from "../../core/set-prospect-cadence.js";
 import { updateCompanyRecord } from "../../core/update-company.js";
@@ -1077,6 +1078,7 @@ Rules:
 
       try {
         const payload = parseLinkedinProfileEnrichmentPayload(loadJsonInput(options.input));
+        const recentPosts = Array.isArray(payload.recentPosts) ? payload.recentPosts.slice(0, 5) : [];
         const linkedinProfileUrl = payload.profileUrl ?? buildLinkedinProfileUrlFromPublicId(payload.publicId);
         const publicId = payload.publicId ?? extractLinkedinPublicId(linkedinProfileUrl);
         const sourceUrl = linkedinProfileUrl ?? payload.profileUrl ?? null;
@@ -1086,7 +1088,16 @@ Rules:
           observedAt: payload.capturedAt,
           sourceUrl
         });
-        const primaryPost = selectPrimaryLinkedinRecentPost(payload.recentPosts);
+        const existingAccount = (rawMotion.targetMap?.accounts ?? []).find((item) => item.companyId === company.id) ?? null;
+        const existingProspect = existingAccount?.prospects.find((prospect) => prospect.id === options.prospect) ?? null;
+        const primaryPost = selectPrimaryLinkedinRecentPost(recentPosts);
+        const publicEngagementSelection = selectLinkedinPublicEngagementTarget({
+          ...existingProspect,
+          linkedinProfileSnapshot: {
+            ...(existingProspect?.linkedinProfileSnapshot ?? {}),
+            recentPosts,
+          },
+        });
 
         const updatedMotion = updateMotionProspect(rawMotion, company, {
           prospectId: options.prospect,
@@ -1103,6 +1114,8 @@ Rules:
           linkedinProfileSnapshot: {
             capturedAt: payload.capturedAt,
             profileUrl: linkedinProfileUrl,
+            avatarSourceUrl: payload.avatarSourceUrl,
+            avatarChecked: payload.avatarChecked,
             publicId,
             memberId: payload.memberId,
             displayName: payload.displayName,
@@ -1113,7 +1126,10 @@ Rules:
             about: payload.about,
             followerCount: payload.followerCount,
             connectionCount: payload.connectionCount,
-            recentPosts: payload.recentPosts
+            isPremium: payload.isPremium,
+            isOpenProfile: payload.isOpenProfile,
+            connectionDegree: payload.connectionDegree,
+            recentPosts
           },
           liveSignal: primaryPost
             ? {
@@ -1129,6 +1145,22 @@ Rules:
                 engagementRationale: "Recent public LinkedIn activity was captured directly from the live profile page."
               }
             : undefined,
+          publicEngagementSelection: publicEngagementSelection
+            ? {
+                url: publicEngagementSelection.targetUrl,
+                targetKind: publicEngagementSelection.targetKind,
+                activityType: publicEngagementSelection.activityType ?? undefined,
+                postedAt: publicEngagementSelection.postedAt ?? undefined,
+                freshnessBand: publicEngagementSelection.freshnessBand ?? undefined,
+                summary: publicEngagementSelection.summary ?? undefined,
+                snippet: publicEngagementSelection.snippet ?? undefined,
+                businessRelevance: publicEngagementSelection.businessRelevance ?? undefined,
+                recommendedAction: publicEngagementSelection.recommendedAction ?? undefined,
+                rationale: publicEngagementSelection.rationale ?? undefined,
+                selectionReason: publicEngagementSelection.selectionReason ?? undefined,
+                selectedAt: payload.capturedAt ?? undefined,
+              }
+            : null,
           contactPoints: contactPoints.length ? contactPoints : undefined
         });
         const storedMotion = updateMotion(updatedMotion);
@@ -1406,9 +1438,10 @@ Rules:
     .description("Write (or update) a draft message for one prospect surface. This is how the core agent supplies the pre-written text.")
     .argument("<company-id>", "Company identifier")
     .requiredOption("--prospect <prospect-id>", "Prospect identifier")
-    .requiredOption("--surface <surface>", "Draft surface: connection_request, post_accept_message, follow_up_direct_message, email, in_mail_message, inbound_reply")
+    .requiredOption("--surface <surface>", "Draft surface: connection_request, post_accept_message, follow_up_direct_message, email, in_mail_message, inbound_reply, public_comment, comment_reply")
     .requiredOption("--body <text>", "Draft body the agent wrote")
     .option("--subject <text>", "Subject line (email / in_mail only)")
+    .option("--notes <notes>", "Optional draft notes")
     .option("--motion <motion-id>", "Motion identifier when the company is in more than one motion")
     .option("--status <status>", "drafting | ready | queued (default ready)")
     .option("--json", "Emit machine-readable JSON")
@@ -1432,6 +1465,7 @@ Rules:
           body: options.body,
           subject: options.subject ?? null,
           status: options.status ?? "ready",
+          notes: options.notes ?? null,
         });
         const stored = updateMotion(updated);
         emitDraft(stored, companyId, options.prospect, options.surface, options.json, "Draft stored");
@@ -2284,9 +2318,14 @@ function parseLinkedinProfileEnrichmentPayload(raw) {
   }
 
   const source = /** @type {Record<string, any>} */ (raw);
-  const snapshot = linkedinProfileSnapshotSchema.parse({
+  return linkedinProfileSnapshotSchema.parse({
     capturedAt: source.capturedAt ?? null,
     profileUrl: source.profileUrl ?? null,
+    avatarSourceUrl:
+      typeof source.avatarSourceUrl === "string" && source.avatarSourceUrl.trim()
+        ? source.avatarSourceUrl.trim()
+        : null,
+    avatarChecked: true,
     publicId: source.publicId ?? null,
     memberId: source.memberId ?? null,
     displayName: source.displayName ?? null,
@@ -2297,16 +2336,11 @@ function parseLinkedinProfileEnrichmentPayload(raw) {
     about: source.about ?? null,
     followerCount: source.followerCount ?? null,
     connectionCount: source.connectionCount ?? null,
+    isPremium: source.isPremium ?? null,
+    isOpenProfile: source.isOpenProfile ?? null,
+    connectionDegree: source.connectionDegree ?? null,
     recentPosts: Array.isArray(source.recentPosts) ? source.recentPosts : []
   });
-
-  return {
-    ...snapshot,
-    avatarSourceUrl:
-      typeof source.avatarSourceUrl === "string" && source.avatarSourceUrl.trim()
-        ? source.avatarSourceUrl.trim()
-        : null
-  };
 }
 
 /**

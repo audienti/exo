@@ -127,6 +127,17 @@ function buildMotion(overrides = {}) {
   };
 }
 
+function buildThreadMessages(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `msg-${index + 1}`,
+    direction: index % 2 === 0 ? "outbound" : "inbound",
+    sentAt: `2026-06-04T${String(10 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00.000Z`,
+    fromName: index % 2 === 0 ? "William Flanagan" : "Lina Park",
+    fromHandle: index % 2 === 0 ? "william@example.com" : "lpark@govpointeoffice.us",
+    body: `Thread message ${index + 1}`,
+  }));
+}
+
 test("buildMotionProspectView keeps email thread observations when no parsed messages were captured", () => {
   const view = buildMotionProspectView(buildMotion(), {
     prospectId: "prospect-1",
@@ -169,7 +180,56 @@ test("buildMotionProspectView keeps email thread observations when no parsed mes
   }).prospect;
 
   assert.deepEqual(view?.threadMessages ?? [], []);
+  assert.equal(view?.replySubject, "Re: William - Halfmoon Hillcrest Fire Dept.");
   assert.equal(view?.timelineObservations.length, 1);
   assert.equal(view?.timelineObservations[0]?.kind, "email_thread_updated");
   assert.equal(view?.timelineObservations[0]?.surfaceKey, "gmail-inbox-threads");
+});
+
+test("buildMotionProspectView preserves the full structured Gmail thread history", () => {
+  const messages = buildThreadMessages(12);
+  const view = buildMotionProspectView(buildMotion(), {
+    prospectId: "prospect-1",
+    rawObservations: [
+      {
+        id: "obs-email-thread-full",
+        dedupeKey: "gmail:thread:full",
+        userId: "user-1",
+        accountId: "account-1",
+        capability: "gmail",
+        platform: "gmail",
+        surfaceKey: "gmail-inbox-threads",
+        kind: "email_thread_updated",
+        truthLevel: "authoritative",
+        observedAt: "2026-06-04T13:37:36.000Z",
+        recordedAt: "2026-06-04T13:44:05.113Z",
+        eventAt: null,
+        externalId: "thread-full",
+        actorName: "Lina Park",
+        actorTitle: "Procurement Support Department",
+        actorCompanyName: "GovPointe",
+        actorHandle: "lpark@govpointeoffice.us",
+        actorProfileUrl: null,
+        actorLinkedinPublicId: null,
+        actorLinkedinMemberId: null,
+        actorAvatarSourceUrl: null,
+        actorAvatarUrl: null,
+        threadUrl: "https://mail.google.com/mail/#all/thread-full",
+        sourceUrl: "https://mail.google.com/mail/#all/thread-full",
+        subject: "Re: GovPointe follow-up",
+        summary: "Thread changed.",
+        motionId: "motion-1",
+        companyId: "company-1",
+        prospectId: "prospect-1",
+        providerSharedSecret: null,
+        notes: null,
+        messages,
+      },
+    ],
+  }).prospect;
+
+  assert.equal(view?.threadMessages.length, 12);
+  assert.equal(view?.threadMessages[0]?.body, "Thread message 1");
+  assert.equal(view?.threadMessages.at(-1)?.body, "Thread message 12");
+  assert.equal(view?.latestInboundMessage?.body, "Thread message 12");
 });

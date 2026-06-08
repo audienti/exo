@@ -51,7 +51,6 @@ export function buildPersonComposeDraftBrief(person) {
     .filter((entry) => entry?.isMessage && typeof entry.detail === "string" && entry.detail.trim().length > 0)
     .slice()
     .sort((left, right) => (Date.parse(left.observedAt) || 0) - (Date.parse(right.observedAt) || 0))
-    .slice(-8)
     .map((entry) => ({
       observedAt: entry.observedAt ?? null,
       direction: entry.direction ?? "unknown",

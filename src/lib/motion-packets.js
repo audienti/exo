@@ -168,7 +168,7 @@ export function applyCompleteTargetAccountPacket(rawAccount, input, now) {
         throw new Error(
           `Cannot complete Prospect selection packet: selected LinkedIn prospect${missingLinkedinProfileEnrichment.length === 1 ? "" : "s"} ` +
           `missing stored profile enrichment: ${missingLinkedinProfileEnrichment.map((prospect) => prospect.name).join(", ")}. ` +
-          "Store the governed LinkedIn profile viewback before completing selection."
+          "Store the governed LinkedIn profile viewback and avatar capture before completing selection."
         );
       }
     }
@@ -242,6 +242,13 @@ export function applyCompleteMotionProspectPacket(rawProspect, input, now) {
 
   if (input.workerLabel && prospect.packetState.workerLabel && input.workerLabel !== prospect.packetState.workerLabel) {
     throw new Error(`${formatPacketKind(prospect.packetState.kind)} packet is claimed by ${prospect.packetState.workerLabel}, not ${input.workerLabel}.`);
+  }
+
+  if (!input.nextStatus && hasLinkedinProfileIdentity(prospect) && !hasStoredLinkedinProfileEnrichment(prospect)) {
+    throw new Error(
+      `Cannot complete Prospect research packet: LinkedIn-backed prospect missing stored profile enrichment and avatar capture: ${prospect.name}. ` +
+      "Store the governed LinkedIn profile viewback before completing research."
+    );
   }
 
   if (
@@ -442,6 +449,7 @@ function hasStoredLinkedinProfileEnrichment(prospect) {
     normalizeNullableString(prospect.profileViewedAt)
     && normalizeNullableString(snapshot.capturedAt)
     && normalizeNullableString(snapshot.profileUrl)
+    && snapshot.avatarChecked === true
   );
 }
 

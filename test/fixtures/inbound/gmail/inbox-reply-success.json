@@ -10,7 +10,26 @@
       "fromName": "Alicia Buyer",
       "fromEmail": "alicia@buyer.example",
       "subject": "Re: Risk workflow question",
-      "summary": "Alicia replied by email asking for a short overview of the workflow."
+      "summary": "Alicia replied by email asking for a short overview of the workflow.",
+      "messagesCompleteness": "complete",
+      "messages": [
+        {
+          "id": "msg-1",
+          "direction": "outbound",
+          "sentAt": "2026-05-30T13:51:00.000Z",
+          "fromName": "William Flanagan",
+          "fromHandle": "gmail-user@example.com",
+          "body": "Happy to walk through the workflow if that would help."
+        },
+        {
+          "id": "msg-2",
+          "direction": "inbound",
+          "sentAt": "2026-05-30T14:02:00.000Z",
+          "fromName": "Alicia Buyer",
+          "fromHandle": "alicia@buyer.example",
+          "body": "That would help. Could you send a short overview of the workflow?"
+        }
+      ]
     }
   ]
 }

@@ -8445,6 +8445,10 @@ test("motion packet-brief turns packet state into a worker contract with stable 
       true
     );
     assert.equal(
+      selectionBrief.writeback.supportingCommands.some((command) => command.includes("--avatar-source-url <avatar-source-url>")),
+      true
+    );
+    assert.equal(
       selectionBrief.writeback.supportingCommands.some((command) => command.includes("exo companies prospects enrich-linkedin-profile-live")),
       true
     );
@@ -9344,6 +9348,175 @@ test("prospect selection completion blocks LinkedIn-selected prospects until gov
     assert.equal(completedSelection.account.packetState.kind, "prospect_selection");
     assert.equal(completedSelection.account.packetState.status, "completed");
     assert.equal(completedSelection.account.queueState.status, "selected");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("prospect research completion blocks person-first LinkedIn prospects until governed profile enrichment lands avatar capture", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-prospect-research-enrichment-"));
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/prospect-research-enrichment",
+          "--premise",
+          "This offer matters when person-first prospecting still has to obey governed enrichment before completion.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there current evidence this company needs more disciplined outbound execution?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const seeded = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "seed",
+          motion.id,
+          "--company-name",
+          "Seeded Prospect Co",
+          "--domain",
+          "seeded-prospect.example",
+          "--person-name",
+          "Alex Rivera",
+          "--person-title",
+          "Chief Revenue Officer",
+          "--why-relevant",
+          "Known best-fit executive target for the motion hypothesis.",
+          "--linkedin-profile-url",
+          "https://www.linkedin.com/in/alex-rivera-example",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "prospects",
+        "claim",
+        seeded.company.id,
+        "--motion",
+        motion.id,
+        "--prospect",
+        seeded.prospect.id,
+        "--worker",
+        "codex-prospect-1",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    assert.throws(
+      () => execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "complete",
+          seeded.company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          seeded.prospect.id,
+          "--worker",
+          "codex-prospect-1",
+          "--json"
+        ],
+        {
+          cwd: repoRoot,
+          env: { ...process.env, EXO_STATE_DIR: tempDir },
+          encoding: "utf8",
+          stdio: "pipe"
+        }
+      ),
+      /missing stored profile enrichment and avatar capture: Alex Rivera/i
+    );
+
+    const enrichmentPath = path.join(tempDir, "alex-rivera-linkedin-profile.json");
+    fs.writeFileSync(
+      enrichmentPath,
+      JSON.stringify({
+        capturedAt: "2026-06-03T19:03:00.000Z",
+        profileUrl: "https://www.linkedin.com/in/alex-rivera-example",
+        publicId: "alex-rivera-example",
+        memberId: null,
+        displayName: "Alex Rivera",
+        currentRoleTitle: "Chief Revenue Officer",
+        currentCompanyName: "Seeded Prospect Co",
+        headline: "Chief Revenue Officer",
+        location: "United States",
+        about: "Owns revenue execution and pipeline discipline.",
+        followerCount: 500,
+        connectionCount: 500,
+        avatarSourceUrl: "https://media.licdn.com/dms/image/v2/D5603AQF-alex-example/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1710000000000?e=1753920000&v=beta&t=alex",
+        recentPosts: []
+      }, null, 2)
+    );
+
+    const enriched = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "enrich-linkedin-profile",
+          seeded.company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          seeded.prospect.id,
+          "--input",
+          enrichmentPath,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    assert.equal(enriched.prospect.linkedinProfileSnapshot.avatarChecked, true);
+
+    const completed = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "complete",
+          seeded.company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          seeded.prospect.id,
+          "--worker",
+          "codex-prospect-1",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    assert.equal(completed.prospect.packetState.kind, "prospect_research");
+    assert.equal(completed.prospect.packetState.status, "completed");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

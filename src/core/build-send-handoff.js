@@ -5,6 +5,7 @@ import { buildLinkedinSendHandoff } from "./build-linkedin-send.js";
 import { extractUsableDraftBody, isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
 
 const EMAIL_ACTION = "send_email";
+const AUTONOMOUS_LINKEDIN_PUBLIC_SURFACES = new Set(["like_post", "create_comment_reaction"]);
 
 /**
  * Build the governed send contract for whichever channel owns the current
@@ -17,6 +18,9 @@ const EMAIL_ACTION = "send_email";
  * @param {{ prospectId: string, surface?: string|null, runtime?: string|null }} input
  */
 export function buildSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, input) {
+  if (AUTONOMOUS_LINKEDIN_PUBLIC_SURFACES.has(String(input.surface ?? ""))) {
+    return buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, input);
+  }
   const context = resolveSendDraftContext(rawCompany, rawMotion, input);
   const channel = resolveDraftChannel(context.draft);
   if (channel === "email") {

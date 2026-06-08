@@ -59,6 +59,8 @@ import {
  *   linkedinProfileSnapshot?: {
  *     capturedAt?: string | null | undefined,
  *     profileUrl?: string | null | undefined,
+ *     avatarSourceUrl?: string | null | undefined,
+ *     avatarChecked?: boolean | undefined,
  *     publicId?: string | null | undefined,
  *     memberId?: string | null | undefined,
  *     displayName?: string | null | undefined,
@@ -69,6 +71,9 @@ import {
  *     about?: string | null | undefined,
  *     followerCount?: number | null | undefined,
  *     connectionCount?: number | null | undefined,
+ *     isPremium?: boolean | null | undefined,
+ *     isOpenProfile?: boolean | null | undefined,
+ *     connectionDegree?: import("../schema/target-account.js").linkedinProfileSnapshotSchema._type["connectionDegree"],
  *     recentPosts?: Array<{
  *       activityType?: string | null | undefined,
  *       url?: string | null | undefined,
@@ -130,7 +135,7 @@ import {
 export function recordMotionProspect(rawMotion, rawCompany, input) {
   const { motion, company, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
   const normalizedSignalMatchIds = normalizeSignalMatchIds(baseAccount, company.name, input.signalMatchIds);
-  const avatar = normalizeImageProxyFields(input.avatarSourceUrl);
+  const avatar = resolveProspectAvatarFields(input.avatarSourceUrl, input.linkedinProfileSnapshot?.avatarSourceUrl);
 
   const nextProspect = {
     id: crypto.randomUUID(),
@@ -207,6 +212,7 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
       hookStrength: input.liveSignal?.hookStrength,
       engagementRationale: normalizeOptionalNullableString(input.liveSignal?.engagementRationale)
     },
+    publicEngagementSelection: buildPublicEngagementSelectionInput(input.publicEngagementSelection),
     contactPoints: buildContactPointInputs(input.contactPoints),
     contactEnrichmentState: buildContactEnrichmentStateInput(input.contactEnrichmentState),
     notes: normalizeOptionalNullableString(input.notes),
@@ -278,6 +284,8 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
  *   linkedinProfileSnapshot?: {
  *     capturedAt?: string | null | undefined,
  *     profileUrl?: string | null | undefined,
+ *     avatarSourceUrl?: string | null | undefined,
+ *     avatarChecked?: boolean | undefined,
  *     publicId?: string | null | undefined,
  *     memberId?: string | null | undefined,
  *     displayName?: string | null | undefined,
@@ -288,6 +296,9 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
  *     about?: string | null | undefined,
  *     followerCount?: number | null | undefined,
  *     connectionCount?: number | null | undefined,
+ *     isPremium?: boolean | null | undefined,
+ *     isOpenProfile?: boolean | null | undefined,
+ *     connectionDegree?: import("../schema/target-account.js").linkedinProfileSnapshotSchema._type["connectionDegree"],
  *     recentPosts?: Array<{
  *       activityType?: string | null | undefined,
  *       url?: string | null | undefined,
@@ -356,7 +367,7 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
   const normalizedSignalMatchIds = input.signalMatchIds === undefined
     ? undefined
     : normalizeSignalMatchIds(baseAccount, company.name, input.signalMatchIds);
-  const avatar = normalizeImageProxyFields(input.avatarSourceUrl);
+  const avatar = resolveProspectAvatarFields(input.avatarSourceUrl, input.linkedinProfileSnapshot?.avatarSourceUrl);
 
   const updatedProspects = baseAccount.prospects.map((prospect) => {
     if (prospect.id !== input.prospectId) {
@@ -462,6 +473,10 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
         hookStrength: input.liveSignal?.hookStrength,
         engagementRationale: normalizeOptionalNullableString(input.liveSignal?.engagementRationale)
       }),
+      publicEngagementSelection: buildPublicEngagementSelectionUpdate(
+        existing.publicEngagementSelection,
+        buildPublicEngagementSelectionInput(input.publicEngagementSelection),
+      ),
       contactPoints:
         input.contactPoints === undefined
           ? existing.contactPoints
@@ -697,6 +712,8 @@ function buildIdentityTellsUpdate(existing, patch = {}) {
  * @param {{
  *   capturedAt?: string | null | undefined,
  *   profileUrl?: string | null | undefined,
+ *   avatarSourceUrl?: string | null | undefined,
+ *   avatarChecked?: boolean | undefined,
  *   publicId?: string | null | undefined,
  *   memberId?: string | null | undefined,
  *   displayName?: string | null | undefined,
@@ -707,6 +724,9 @@ function buildIdentityTellsUpdate(existing, patch = {}) {
  *   about?: string | null | undefined,
  *   followerCount?: number | null | undefined,
  *   connectionCount?: number | null | undefined,
+ *   isPremium?: boolean | null | undefined,
+ *   isOpenProfile?: boolean | null | undefined,
+ *   connectionDegree?: import("../schema/target-account.js").linkedinProfileSnapshotSchema._type["connectionDegree"],
  *   recentPosts?: Array<{
  *     activityType?: string | null | undefined,
  *     url?: string | null | undefined,
@@ -725,6 +745,8 @@ function buildLinkedinProfileSnapshotInput(snapshot) {
   return {
     capturedAt: normalizeOptionalNullableString(snapshot.capturedAt),
     profileUrl: normalizeOptionalNullableString(snapshot.profileUrl),
+    avatarSourceUrl: normalizeOptionalNullableString(snapshot.avatarSourceUrl),
+    avatarChecked: snapshot.avatarChecked === undefined ? undefined : snapshot.avatarChecked,
     publicId: normalizeOptionalNullableString(snapshot.publicId),
     memberId: normalizeOptionalNullableString(snapshot.memberId),
     displayName: normalizeOptionalNullableString(snapshot.displayName),
@@ -747,7 +769,15 @@ function buildLinkedinProfileSnapshotInput(snapshot) {
             postedAt: normalizeOptionalNullableString(post.postedAt),
             freshnessBand: post.freshnessBand,
             summary: normalizeOptionalNullableString(post.summary),
-            snippet: normalizeOptionalNullableString(post.snippet)
+            snippet: normalizeOptionalNullableString(post.snippet),
+            targetKind: post.targetKind === undefined ? undefined : post.targetKind,
+            authoredByProspect:
+              post.authoredByProspect === undefined ? undefined : post.authoredByProspect,
+            hasOriginalCommentary:
+              post.hasOriginalCommentary === undefined ? undefined : post.hasOriginalCommentary,
+            businessRelevance: post.businessRelevance === undefined ? undefined : post.businessRelevance,
+            recommendedAction: post.recommendedAction === undefined ? undefined : post.recommendedAction,
+            rationale: normalizeOptionalNullableString(post.rationale),
           }))
   };
 }
@@ -760,6 +790,11 @@ function buildLinkedinProfileSnapshotUpdate(existing, patch = {}) {
   return {
     capturedAt: patch.capturedAt ?? existing.capturedAt ?? null,
     profileUrl: patch.profileUrl ?? existing.profileUrl ?? null,
+    avatarSourceUrl:
+      patch.avatarSourceUrl === undefined
+        ? existing.avatarSourceUrl ?? null
+        : patch.avatarSourceUrl,
+    avatarChecked: patch.avatarChecked ?? existing.avatarChecked ?? false,
     publicId: patch.publicId ?? existing.publicId ?? null,
     memberId: patch.memberId ?? existing.memberId ?? null,
     displayName: patch.displayName ?? existing.displayName ?? null,
@@ -781,7 +816,15 @@ function buildLinkedinProfileSnapshotUpdate(existing, patch = {}) {
             postedAt: post.postedAt ?? null,
             freshnessBand: post.freshnessBand ?? null,
             summary: post.summary ?? null,
-            snippet: post.snippet ?? null
+            snippet: post.snippet ?? null,
+            targetKind: post.targetKind ?? null,
+            authoredByProspect:
+              post.authoredByProspect === undefined ? null : post.authoredByProspect,
+            hasOriginalCommentary:
+              post.hasOriginalCommentary === undefined ? null : post.hasOriginalCommentary,
+            businessRelevance: post.businessRelevance ?? null,
+            recommendedAction: post.recommendedAction ?? null,
+            rationale: post.rationale ?? null,
           }))
         : existing.recentPosts ?? []
   };
@@ -801,6 +844,77 @@ function buildLiveSignalUpdate(existing, patch = {}) {
     freshnessBand: patch.freshnessBand ?? existing.freshnessBand ?? null,
     hookStrength: patch.hookStrength ?? existing.hookStrength ?? null,
     engagementRationale: patch.engagementRationale ?? existing.engagementRationale ?? null
+  };
+}
+
+/**
+ * @param {{
+ *   url?: string | null | undefined,
+ *   targetKind?: import("../schema/target-account.js").publicEngagementSelectionSchema._type["targetKind"],
+ *   activityType?: string | null | undefined,
+ *   postedAt?: string | null | undefined,
+ *   freshnessBand?: import("../schema/target-account.js").publicEngagementSelectionSchema._type["freshnessBand"],
+ *   summary?: string | null | undefined,
+ *   snippet?: string | null | undefined,
+ *   businessRelevance?: "low" | "moderate" | "high" | "unknown" | null | undefined,
+ *   recommendedAction?: import("../schema/target-account.js").publicEngagementSelectionSchema._type["recommendedAction"],
+ *   rationale?: string | null | undefined,
+ *   selectionReason?: string | null | undefined,
+ *   selectedAt?: string | null | undefined,
+ * } | null | undefined} selection
+ */
+function buildPublicEngagementSelectionInput(selection) {
+  if (selection === undefined) {
+    return undefined;
+  }
+  if (selection === null) {
+    return null;
+  }
+  const url = normalizeOptionalNullableString(selection.url);
+  const targetKind = selection.targetKind === undefined ? undefined : selection.targetKind;
+  if (url === null || !targetKind) {
+    return null;
+  }
+  return {
+    url,
+    targetKind,
+    activityType: normalizeOptionalNullableString(selection.activityType),
+    postedAt: normalizeOptionalNullableString(selection.postedAt),
+    freshnessBand: selection.freshnessBand === undefined ? undefined : selection.freshnessBand,
+    summary: normalizeOptionalNullableString(selection.summary),
+    snippet: normalizeOptionalNullableString(selection.snippet),
+    businessRelevance: selection.businessRelevance === undefined ? undefined : selection.businessRelevance,
+    recommendedAction: selection.recommendedAction === undefined ? undefined : selection.recommendedAction,
+    rationale: normalizeOptionalNullableString(selection.rationale),
+    selectionReason: normalizeOptionalNullableString(selection.selectionReason),
+    selectedAt: normalizeOptionalNullableString(selection.selectedAt),
+  };
+}
+
+/**
+ * @param {import("../schema/target-account.js").publicEngagementSelectionSchema._type | null | undefined} existing
+ * @param {ReturnType<typeof buildPublicEngagementSelectionInput>} patch
+ */
+function buildPublicEngagementSelectionUpdate(existing, patch) {
+  if (patch === undefined) {
+    return existing ?? null;
+  }
+  if (patch === null) {
+    return null;
+  }
+  return {
+    url: patch.url,
+    targetKind: patch.targetKind,
+    activityType: patch.activityType ?? existing?.activityType ?? null,
+    postedAt: patch.postedAt ?? existing?.postedAt ?? null,
+    freshnessBand: patch.freshnessBand ?? existing?.freshnessBand ?? null,
+    summary: patch.summary ?? existing?.summary ?? null,
+    snippet: patch.snippet ?? existing?.snippet ?? null,
+    businessRelevance: patch.businessRelevance ?? existing?.businessRelevance ?? null,
+    recommendedAction: patch.recommendedAction ?? existing?.recommendedAction ?? null,
+    rationale: patch.rationale ?? existing?.rationale ?? null,
+    selectionReason: patch.selectionReason ?? existing?.selectionReason ?? null,
+    selectedAt: patch.selectedAt ?? existing?.selectedAt ?? null,
   };
 }
 
@@ -918,6 +1032,30 @@ function mergeStringLists(left, right) {
  */
 function normalizeOptionalNullableString(value) {
   return value === undefined ? undefined : normalizeNullableString(value);
+}
+
+/**
+ * Explicit avatar writes win. Otherwise, promote a non-empty profile snapshot
+ * avatar into the canonical prospect avatar fields so downstream views can
+ * render identity media without parsing profile snapshots.
+ *
+ * @param {string | null | undefined} avatarSourceUrl
+ * @param {string | null | undefined} snapshotAvatarSourceUrl
+ */
+function resolveProspectAvatarFields(avatarSourceUrl, snapshotAvatarSourceUrl) {
+  if (avatarSourceUrl !== undefined) {
+    return normalizeImageProxyFields(avatarSourceUrl);
+  }
+
+  const snapshotAvatar = normalizeOptionalNullableString(snapshotAvatarSourceUrl);
+  if (!snapshotAvatar) {
+    return {
+      sourceUrl: undefined,
+      proxyUrl: undefined
+    };
+  }
+
+  return normalizeImageProxyFields(snapshotAvatar);
 }
 
 /**

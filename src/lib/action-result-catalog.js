@@ -114,6 +114,14 @@ const ACTION_RESULT_CATALOG = {
       touchDirection: "outbound",
       touchOutcome: "sent",
     },
+    {
+      key: "unavailable",
+      label: "Unavailable",
+      summary: "Record that the stored post target was gone or unwritable before the like landed.",
+      defaultSurface: "like_post",
+      touchDirection: "outbound",
+      touchOutcome: "blocked",
+    },
   ],
   unlike_post: [
     {
@@ -134,6 +142,15 @@ const ACTION_RESULT_CATALOG = {
       touchDirection: "outbound",
       touchOutcome: "sent",
       markDraftSent: true,
+    },
+    {
+      key: "unavailable",
+      label: "Unavailable",
+      summary: "Record that the stored public post target was gone or unwritable before the comment could be posted.",
+      defaultSurface: "public_comment",
+      touchDirection: "outbound",
+      touchOutcome: "blocked",
+      markDraftDiscarded: true,
     },
   ],
   share_post: [
@@ -156,6 +173,15 @@ const ACTION_RESULT_CATALOG = {
       touchOutcome: "sent",
       markDraftSent: true,
     },
+    {
+      key: "unavailable",
+      label: "Unavailable",
+      summary: "Record that the stored comment thread was gone or unwritable before the reply could be posted.",
+      defaultSurface: "comment_reply",
+      touchDirection: "outbound",
+      touchOutcome: "blocked",
+      markDraftDiscarded: true,
+    },
   ],
   create_comment_reaction: [
     {
@@ -165,6 +191,14 @@ const ACTION_RESULT_CATALOG = {
       defaultSurface: "create_comment_reaction",
       touchDirection: "outbound",
       touchOutcome: "sent",
+    },
+    {
+      key: "unavailable",
+      label: "Unavailable",
+      summary: "Record that the stored comment target was gone or unwritable before the reaction landed.",
+      defaultSurface: "create_comment_reaction",
+      touchDirection: "outbound",
+      touchOutcome: "blocked",
     },
   ],
   withdraw_connection: [

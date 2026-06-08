@@ -56,6 +56,7 @@ function fixture(prospectFields) {
                   email: prospectFields.email ?? undefined,
                   sourceUrl: prospectFields.sourceUrl ?? undefined,
                   linkedinProfileSnapshot: prospectFields.linkedinProfileSnapshot ?? { connectionDegree: null, isOpenProfile: null },
+                  publicEngagementSelection: prospectFields.publicEngagementSelection ?? null,
                   drafts: prospectFields.drafts ?? [],
                   touches: prospectFields.touches ?? [],
                   cadenceState: {
@@ -1629,6 +1630,25 @@ test("buildAgentQueue emits a write_draft task for a prospect with no draft yet"
   assert.equal(writes[0].queueState, "due_now");
 });
 
+test("buildAgentQueue includes a subject placeholder when the queued draft surface needs one", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      linkedinProfileUrl: null,
+      email: "lpark@govpointeoffice.us",
+      sourceUrl: "https://mail.google.com/mail/#all/thread-1",
+      drafts: [],
+      cadenceState: {
+        currentStep: "value-add-email",
+      },
+    }),
+  );
+
+  const writeTask = queue.tasks.find((task) => task.kind === "write_draft");
+  assert.ok(writeTask);
+  assert.equal(writeTask?.surface, "email");
+  assert.match(writeTask?.writeback ?? "", /--subject "<written-subject>"/);
+});
+
 test("buildAgentQueue does not emit a connection-request draft when the cadence branch is not explicitly ready", () => {
   const queue = buildAgentQueue(
     fixture({
@@ -1975,6 +1995,101 @@ test("buildAgentQueue preserves draft authorship on send tasks", () => {
   assert.ok(sendTask);
   assert.equal(sendTask.authoredBy, "operator");
   assert.equal(sendTask.editedByOperator, true);
+});
+
+test("buildAgentQueue emits an autonomous public reaction before the first connection request when the stored target is reaction-only", () => {
+  const queue = buildAgentQueue({
+    ...fixture({
+      linkedinProfileSnapshot: {
+        connectionDegree: 2,
+        isOpenProfile: null,
+        recentPosts: [
+          {
+            activityType: "own-post",
+            url: "https://www.linkedin.com/posts/princess_low-hook-post",
+            postedAt: "2026-06-02T10:00:00.000Z",
+            freshnessBand: "0-14-days",
+            summary: "Shared a team celebration update.",
+            snippet: "Proud of the team for shipping.",
+            targetKind: "post",
+            authoredByProspect: true,
+            hasOriginalCommentary: true,
+            businessRelevance: "low",
+            recommendedAction: "reaction",
+            rationale: "Positive but not business-relevant enough for a real comment.",
+          },
+        ],
+      },
+      publicEngagementSelection: {
+        url: "https://www.linkedin.com/posts/princess_low-hook-post",
+        targetKind: "post",
+        activityType: "own-post",
+        postedAt: "2026-06-02T10:00:00.000Z",
+        freshnessBand: "0-14-days",
+        summary: "Shared a team celebration update.",
+        businessRelevance: "low",
+        recommendedAction: "reaction",
+        rationale: "Positive but not business-relevant enough for a real comment.",
+        selectionReason: "No strong business hook was stored, so Exo should react lightly.",
+        selectedAt: "2026-06-02T10:05:00.000Z",
+      },
+    }),
+    now: "2026-06-03T12:00:00.000Z",
+  });
+
+  const task = queue.tasks.find((item) => item.kind === "send_message" && item.action === "like_post");
+  assert.ok(task, "expected an autonomous reaction task");
+  assert.equal(task.surface, "like_post");
+  assert.equal(task.via, "public-engagement");
+  assert.equal(task.recipientUrl, "https://www.linkedin.com/posts/princess_low-hook-post");
+  assert.match(task.writeback, /--source-url https:\/\/www\.linkedin\.com\/posts\/princess_low-hook-post/);
+  assert.equal(task.postSendDelayMs, 172800000);
+});
+
+test("buildAgentQueue emits a checked public-comment draft when the stored target is comment-worthy", () => {
+  const queue = buildAgentQueue({
+    ...fixture({
+      linkedinProfileSnapshot: {
+        connectionDegree: 2,
+        isOpenProfile: null,
+        recentPosts: [
+          {
+            activityType: "comment",
+            url: "https://www.linkedin.com/feed/update/urn:li:activity:1/",
+            postedAt: "2026-06-02T10:00:00.000Z",
+            freshnessBand: "0-14-days",
+            summary: "Commented on instrumenting expansion risk during growth.",
+            snippet: "Growth only helps if the instrumentation keeps pace.",
+            targetKind: "comment",
+            authoredByProspect: true,
+            hasOriginalCommentary: true,
+            businessRelevance: "high",
+            recommendedAction: "comment",
+            rationale: "Clear operating topic that supports a natural peer question.",
+          },
+        ],
+      },
+      publicEngagementSelection: {
+        url: "https://www.linkedin.com/feed/update/urn:li:activity:1/",
+        targetKind: "comment",
+        activityType: "comment",
+        postedAt: "2026-06-02T10:00:00.000Z",
+        freshnessBand: "0-14-days",
+        summary: "Commented on instrumenting expansion risk during growth.",
+        businessRelevance: "high",
+        recommendedAction: "comment",
+        rationale: "Clear operating topic that supports a natural peer question.",
+        selectionReason: "This comment is clearly work-relevant, so Exo should tee up a checked in-thread reply.",
+        selectedAt: "2026-06-02T10:05:00.000Z",
+      },
+    }),
+    now: "2026-06-03T12:00:00.000Z",
+  });
+
+  const task = queue.tasks.find((item) => item.kind === "write_draft" && item.surface === "comment_reply");
+  assert.ok(task, "expected a checked public-comment draft task");
+  assert.match(task.writeback, /--surface comment_reply/);
+  assert.match(task.writeback, /exo-public-engagement\.target-url=https:\/\/www\.linkedin\.com\/feed\/update\/urn:li:activity:1\//);
 });
 
 test("buildAgentQueue marks approved agent drafts as operator-approved send work", () => {

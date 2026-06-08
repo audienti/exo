@@ -21,12 +21,14 @@ import {
   escapeHtml,
   iconSvg,
   ownerTag,
+  renderMotionChoiceOption,
   renderNextMoveAlert,
   renderShell,
   stateDot,
   truthTag,
 } from "../lib/exo-ui-components.js";
 import { isSendableDraftStatus } from "../lib/draft-policy.js";
+import { describePrivateInboundResponse } from "../core/private-inbound-message-classification.js";
 import { selectNextDraftSurface } from "../core/select-next-draft-surface.js";
 
 /**
@@ -568,14 +570,20 @@ function fitLabel(fit) {
  */
 function nextMoveForStage(idx, p, composeSurface = null) {
   if (composeSurface === "inbound_reply") {
-    const draftState = draftStateForSurface(p, composeSurface);
-    if (draftState === "queued") {
+    const responseState = privateThreadResponseState(p, composeSurface);
+    if (responseState === "sent") {
+      return {
+        lead: "Wait for the reply",
+        detail: "You already replied on this thread. Stay with the conversation until they answer or the branch changes.",
+      };
+    }
+    if (responseState === "queued") {
       return {
         lead: "Reply queued for send",
         detail: "The agent will send it on its next pass.",
       };
     }
-    if (draftState === "ready") {
+    if (responseState === "ready") {
       return {
         lead: "Review the drafted reply",
         detail: "Edit it if needed, then queue it for send.",
@@ -587,7 +595,14 @@ function nextMoveForStage(idx, p, composeSurface = null) {
     };
   }
   if (composeSurface === "email" && idx <= 1) {
+    const responseState = privateThreadResponseState(p, composeSurface);
     const draftState = draftStateForSurface(p, composeSurface);
+    if (responseState === "sent") {
+      return {
+        lead: "Wait for the email reply",
+        detail: "The last email is already on the thread. Stay with it until they answer or the branch changes.",
+      };
+    }
     if (draftState === "queued") {
       return {
         lead: "Email queued for send",
@@ -1284,6 +1299,30 @@ function timelineEvents(p) {
     ...buildObservationEvents(p),
     ...buildThreadMessageEvents(p),
   ];
+  const selectedTargetUrl = normalizeMessageText(p.publicEngagementSelection?.url ?? p.publicEngagementSelection?.targetUrl ?? null);
+  for (const activity of p.capturedPublicActivity ?? []) {
+    const targetUrl = normalizeMessageText(activity?.url);
+    const postedAt = activity?.postedAt ?? null;
+    if (!targetUrl || !postedAt) continue;
+    const targetKind = activity?.targetKind === "comment" ? "comment" : "post";
+    const recommendedAction = activity?.recommendedAction === "comment" ? "comment" : "reaction";
+    const summary = normalizeMessageText(activity?.summary) ?? normalizeMessageText(activity?.snippet) ?? humanizeSurface(activity?.activityType ?? "public_activity");
+    events.push({
+      type: "event",
+      at: postedAt,
+      icon: targetKind === "comment" ? "mail" : "activity",
+      tone: selectedTargetUrl && selectedTargetUrl === targetUrl ? "brand" : "sys",
+      title: selectedTargetUrl && selectedTargetUrl === targetUrl
+        ? `Selected LinkedIn ${targetKind}`
+        : `Captured LinkedIn ${targetKind}`,
+      detail: summary,
+      rationale: activity?.rationale
+        ?? (recommendedAction === "comment"
+          ? "Stored as a comment-worthy public-engagement target."
+          : "Stored as a lightweight public-engagement target."),
+      href: targetUrl,
+    });
+  }
   const threadMessages = Array.isArray(p?.threadMessages) ? p.threadMessages : [];
   const sentDraftQueues = buildSentDraftQueues(p.drafts ?? []);
   /** @type {Array<{ surface: string, direction: string, outcome: string | null, at: string }>} */
@@ -1337,6 +1376,8 @@ function timelineEvents(p) {
     if (d.status === "discarded") continue;
     // A sent draft is already recorded as a touch — don't double-count it.
     if (d.status === "sent") continue;
+    const responseState = privateThreadResponseState(p, d.surface);
+    if (responseState === "sent" || responseState === "blocked") continue;
     const meta = TOUCH_SURFACE[d.surface] ?? { label: humanizeSurface(d.surface) };
     events.push({
       type: "message",
@@ -1357,7 +1398,7 @@ function timelineEvents(p) {
   for (const n of p.timelineNotes ?? []) {
     if (!n.createdAt || !n.body) continue;
     events.push({
-      type: n.kind === "steer" ? "steer" : "note",
+      type: n.kind === "steer" ? "steer" : n.kind === "system" ? "system" : "note",
       at: n.createdAt,
       body: n.body,
       author: n.author ?? null,
@@ -1416,14 +1457,15 @@ function renderTimelineEvent(e) {
 /** @param {any} e */
 function renderTimelineNote(e) {
   const isSteer = e.type === "steer";
+  const isSystem = e.type === "system";
   // We persist the authoring user's id on the note, but the raw UUID is noise
   // in the timeline. Suppress it until we have a human-readable author label
   // to show in its place.
   return (
-    `<li class="tl-item ${isSteer ? "tl-steer" : "tl-note"}">` +
-    `<span class="tl-dot">${iconSvg(isSteer ? "cpu" : "flag", 12)}</span>` +
+    `<li class="tl-item ${isSteer ? "tl-steer" : isSystem ? "tl-note" : "tl-note"}">` +
+    `<span class="tl-dot">${iconSvg(isSteer ? "cpu" : isSystem ? "activity" : "flag", 12)}</span>` +
     `<div class="tl-body">` +
-    `<div class="tl-head"><span class="tl-title">${isSteer ? "Steer" : "Note"}</span>` +
+    `<div class="tl-head"><span class="tl-title">${isSteer ? "Steer" : isSystem ? "System" : "Note"}</span>` +
     (isSteer ? `<span class="tl-status tl-status-steer">agent directive</span>` : "") +
     `<span class="tl-time">${escapeHtml(relTimeShort(e.at))}</span></div>` +
     `<blockquote class="tl-notebody">${escapeHtml(e.body)}</blockquote>` +
@@ -1535,7 +1577,7 @@ function renderAssignPanel(p, meta) {
  * Re-home affordance — only for prospects sitting in the catch-all transition
  * motion. Picks a destination motion and moves them (carrying all state).
  * @param {any} p
- * @param {{ transitionMotionId?: string|null, motions?: Array<{id:string,name:string}>, userId?: string|null }} meta
+ * @param {{ transitionMotionId?: string|null, motions?: Array<{id:string,name:string,offerLabel?:string,premise?:string,status?:string|null,statusLabel?:string|null}>, userId?: string|null }} meta
  */
 function renderRehomePanel(p, meta) {
   const inTransition = meta.transitionMotionId && p.motionId === meta.transitionMotionId;
@@ -1545,12 +1587,20 @@ function renderRehomePanel(p, meta) {
   const options = targets.length
     ? targets
         .map(
-          (m, i) =>
-            `<label class="rehome-opt"><input type="radio" name="rehome-motion" value="${escapeAttr(m.id)}"${i === 0 ? " checked" : ""}><span>${escapeHtml(m.name)}</span></label>`,
+          (m) =>
+            renderMotionChoiceOption({
+              motion: m,
+              action: {
+                writer: "rehomeProspect",
+                args: { prospectId: p.id, userId: meta.userId ?? null, toMotionId: m.id },
+                label: "Re-home here",
+                icon: "arrowR",
+                variant: "primary",
+              },
+            }),
         )
         .join("")
     : `<div class="compose-empty">No other motions yet — create one to re-home into.</div>`;
-  const args = JSON.stringify({ prospectId: p.id, userId: meta.userId ?? null });
 
   return (
     `<div class="compose-panel" id="${escapeAttr(panelId)}">` +
@@ -1562,11 +1612,7 @@ function renderRehomePanel(p, meta) {
     `<a class="compose-close" href="#p-${escapeAttr(p.id)}" aria-label="Close">${iconSvg("x", 14)}</a>` +
     `</div>` +
     `<div class="compose-field"><span class="compose-label">Destination motion</span><div class="rehome-list">${options}</div></div>` +
-    `<div class="compose-actions">` +
-    (targets.length
-      ? `<div class="exo-action" data-exo-writer="rehomeProspect" data-exo-args="${escapeAttr(args)}" data-exo-radio="rehome-motion:toMotionId">` +
-        `<button class="btn btn-primary btn-sm" type="button">${iconSvg("arrowR", 14)}<span>Re-home</span></button></div>`
-      : "") +
+    `<div class="compose-actions compose-actions-end">` +
     `<a class="btn btn-ghost btn-sm" href="#p-${escapeAttr(p.id)}">Cancel</a>` +
     `</div>` +
     `</div>` +
@@ -1640,6 +1686,95 @@ function buildComposeSurfaceContext(p) {
   };
 }
 
+/**
+ * @param {any} p
+ * @param {string} surface
+ * @returns {"open" | "ready" | "queued" | "sent" | "blocked" | "not_private_inbound" | null}
+ */
+function privateThreadResponseState(p, surface) {
+  const context = privateInboundResponseContext(p, surface);
+  if (!context) {
+    return null;
+  }
+
+  return describePrivateInboundResponse(
+    {
+      ...context.observation,
+    },
+    {
+      drafts: Array.isArray(p?.drafts) ? p.drafts : [],
+      touches: Array.isArray(p?.touches) ? p.touches : [],
+      threadMessages: context.threadMessages,
+    },
+  ).state;
+}
+
+/**
+ * @param {any} p
+ * @param {string} surface
+ * @returns {{ observation: { kind: string, capability: string, surfaceKey: string, observedAt: string }, threadMessages: any[] } | null}
+ */
+function privateInboundResponseContext(p, surface) {
+  if (surface !== "email" && surface !== "inbound_reply") {
+    return null;
+  }
+
+  const threadMessages = (p?.threadMessages ?? []).filter((message) => threadMessageMatchesSurface(p, message, surface));
+  const latestInboundMessage = threadMessages
+    .filter((message) => normalizeMessageDirection(message?.direction) === "inbound" && typeof message?.sentAt === "string")
+    .sort((left, right) => String(left.sentAt).localeCompare(String(right.sentAt)))
+    .at(-1);
+  const observedAt = latestInboundMessage?.sentAt ?? latestInboundTouchAt(p, surface);
+  if (!observedAt) {
+    return null;
+  }
+
+  return {
+    observation: {
+      kind: surface === "email" ? "email_thread_updated" : "thread_updated",
+      capability: surface === "email" ? "gmail" : "linkedin",
+      surfaceKey: surface === "email" ? "gmail-inbox-threads" : "linkedin-messaging-inbox",
+      observedAt,
+    },
+    threadMessages,
+  };
+}
+
+/**
+ * @param {any} p
+ * @param {"email" | "inbound_reply"} surface
+ * @returns {string | null}
+ */
+function latestInboundTouchAt(p, surface) {
+  const touches = Array.isArray(p?.touches) ? p.touches : [];
+  return touches
+    .filter((touch) =>
+      touch?.surface === surface
+      && normalizeMessageDirection(touch?.direction) === "inbound"
+      && typeof touch?.occurredAt === "string"
+    )
+    .sort((left, right) => String(left.occurredAt).localeCompare(String(right.occurredAt)))
+    .at(-1)?.occurredAt ?? null;
+}
+
+/**
+ * @param {any} p
+ * @param {any} message
+ * @param {string} surface
+ * @returns {boolean}
+ */
+function threadMessageMatchesSurface(p, message, surface) {
+  const handle = String(message?.fromHandle ?? "").trim();
+  const looksLikeEmail = handle.includes("@") || (!p?.linkedinProfileUrl && p?.email);
+  if (surface === "email") {
+    return looksLikeEmail;
+  }
+  if (surface === "inbound_reply") {
+    return !looksLikeEmail;
+  }
+  return false;
+}
+
 /** @param {any} p */
 function composeTriggerLabel(p) {
   return composeSurfaceFor(p) === "connection_request" ? "Compose request" : "Compose message";
@@ -1656,7 +1791,13 @@ function composeTriggerLabel(p) {
  */
 function resolveDraftedComposeSurface(p) {
   const drafts = Array.isArray(p?.drafts)
-    ? p.drafts.filter((draft) => draft && draft.status !== "sent" && draft.status !== "discarded")
+    ? p.drafts.filter((draft) => (
+      draft
+      && draft.status !== "sent"
+      && draft.status !== "discarded"
+      && privateThreadResponseState(p, draft.surface) !== "sent"
+      && privateThreadResponseState(p, draft.surface) !== "blocked"
+    ))
     : [];
   if (!drafts.length) return null;
 
@@ -1677,6 +1818,17 @@ function resolveDraftedComposeSurface(p) {
  * @returns {"none" | "ready" | "queued" | "drafting"}
  */
 function draftStateForSurface(p, surface) {
+  const privateResponseState = privateThreadResponseState(p, surface);
+  if (privateResponseState === "sent" || privateResponseState === "blocked") {
+    return "none";
+  }
+  if (privateResponseState === "queued") {
+    return "queued";
+  }
+  if (privateResponseState === "ready") {
+    return "ready";
+  }
+
   const drafts = Array.isArray(p?.drafts)
     ? p.drafts.filter((draft) => (
       draft
@@ -1717,6 +1869,13 @@ function draftTimestamp(draft) {
  * @returns {string}
  */
 function composeEmptyStateCopy(prospect, surface) {
+  const privateResponseState = privateThreadResponseState(prospect, surface);
+  if (surface === "inbound_reply" && privateResponseState === "sent") {
+    return "You already replied on this thread. Wait for their next message before drafting again, or write your own below if you need to override that.";
+  }
+  if (surface === "email" && privateResponseState === "sent") {
+    return "The last email on this thread is already out. Wait for their reply before drafting again, or write your own below if you need to override that.";
+  }
   if (surface === "email" && isWaitingOnEmailReply(prospect)) {
     return "The last email was sent. The agent will wait for a reply before drafting again. Write your own below if you want to override that.";
   }
@@ -1737,7 +1896,10 @@ function composeEmptyStateCopy(prospect, surface) {
 function renderComposePanel(p, meta = {}) {
   const surface = composeSurfaceFor(p);
   const sm = SURFACE_META[surface] ?? SURFACE_META.post_accept_message;
-  const draft = (p.drafts ?? []).find((d) => d.surface === surface && d.status !== "sent" && d.status !== "discarded") ?? null;
+  const privateResponseState = privateThreadResponseState(p, surface);
+  const draft = privateResponseState === "sent" || privateResponseState === "blocked"
+    ? null
+    : (p.drafts ?? []).find((d) => d.surface === surface && d.status !== "sent" && d.status !== "discarded") ?? null;
   const args = JSON.stringify({ companyId: p.companyId, prospectId: p.id, motionId: p.motionId, surface });
   const panelId = `compose-${p.id}`;
 

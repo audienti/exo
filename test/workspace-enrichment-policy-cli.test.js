@@ -123,6 +123,10 @@ test("workspace enrichment policy flows into planner guidance and live research 
       researchBrief.researchPath.some((step) => /prospeo/i.test(step)),
       "expected company research brief to mention configured phone provider",
     );
+    assert.ok(
+      researchBrief.stateWritebacks.some((step) => /--avatar-source-url <avatar-source-url>/i.test(step)),
+      "expected company research brief to require landing prospect avatar identity when profile-backed research is used",
+    );
     assert.match(packetBrief.inputs.execution.runtimeEnrichmentRule, /icypeas, findymail/i);
     assert.match(packetBrief.inputs.execution.runtimeEnrichmentRule, /zerobounce/i);
     assert.match(packetBrief.inputs.execution.runtimeEnrichmentRule, /prospeo/i);

@@ -15,8 +15,8 @@ import { prospectSchema, targetAccountSchema } from "../schema/target-account.js
 /**
  * @param {unknown} rawMotion
  * @param {unknown} rawCompany
- * @param {{ prospectId: string, kind?: "note"|"steer", body: string, author?: string|null }} input
- * @returns {{ motion: any, note: { id: string, kind: "note"|"steer", body: string, author: string|null, createdAt: string } }}
+ * @param {{ prospectId: string, kind?: "note"|"steer"|"system", body: string, author?: string|null }} input
+ * @returns {{ motion: any, note: { id: string, kind: "note"|"steer"|"system", body: string, author: string|null, createdAt: string } }}
  */
 export function addMotionProspectTimelineNote(rawMotion, rawCompany, input) {
   const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
@@ -27,7 +27,7 @@ export function addMotionProspectTimelineNote(rawMotion, rawCompany, input) {
 
   const note = {
     id: crypto.randomUUID(),
-    kind: input.kind === "steer" ? "steer" : "note",
+    kind: input.kind === "steer" ? "steer" : input.kind === "system" ? "system" : "note",
     body: input.body,
     author: input.author ?? null,
     createdAt: now,

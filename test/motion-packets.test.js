@@ -101,3 +101,53 @@ test("applyCompleteMotionProspectPacket allows exhausted after governed LinkedIn
   assert.equal(completed.queueState.status, "exhausted");
   assert.equal(completed.packetState?.status, "completed");
 });
+
+test("applyCompleteMotionProspectPacket rejects completing a LinkedIn-backed prospect until governed profile enrichment and avatar capture are stored", () => {
+  assert.throws(
+    () => applyCompleteMotionProspectPacket(
+      buildProspect({
+        name: "Minh Le",
+        linkedinProfileUrl: "https://www.linkedin.com/in/minh-le-risk/",
+        contactEnrichmentState: {
+          status: "complete",
+          sourcesTried: ["linkedin_connected_search"],
+          missingChannels: [],
+          bestDirectChannels: ["linkedin_profile"],
+          lastEnrichedAt: "2026-06-05T13:05:00.000Z",
+          notes: null,
+        },
+      }),
+      { workerLabel: "worker-1" },
+      "2026-06-05T13:10:00.000Z",
+    ),
+    /missing stored profile enrichment and avatar capture: Minh Le/i,
+  );
+});
+
+test("applyCompleteMotionProspectPacket allows completing a LinkedIn-backed prospect after governed profile enrichment recorded avatar capture", () => {
+  const completed = applyCompleteMotionProspectPacket(
+    buildProspect({
+      name: "Minh Le",
+      linkedinProfileUrl: "https://www.linkedin.com/in/minh-le-risk/",
+      profileViewedAt: "2026-06-05T13:04:00.000Z",
+      linkedinProfileSnapshot: {
+        capturedAt: "2026-06-05T13:04:00.000Z",
+        profileUrl: "https://www.linkedin.com/in/minh-le-risk/",
+        avatarSourceUrl: "https://media.licdn.com/dms/image/minh.jpg",
+        avatarChecked: true,
+      },
+      contactEnrichmentState: {
+        status: "complete",
+        sourcesTried: ["linkedin_connected_search"],
+        missingChannels: [],
+        bestDirectChannels: ["linkedin_profile"],
+        lastEnrichedAt: "2026-06-05T13:05:00.000Z",
+        notes: null,
+      },
+    }),
+    { workerLabel: "worker-1" },
+    "2026-06-05T13:10:00.000Z",
+  );
+
+  assert.equal(completed.packetState?.status, "completed");
+});
