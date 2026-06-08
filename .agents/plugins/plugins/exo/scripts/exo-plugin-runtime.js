@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const INSTALL_MODES = new Set(["if-needed", "always", "skip"]);
 const DEFAULT_INSTALL_MODE = "if-needed";
-const REPO_PACKAGE_NAME = "@omalab/exo";
+const REPO_PACKAGE_NAME = "@audienti/exo";
 
 /**
  * @param {string} importMetaUrl

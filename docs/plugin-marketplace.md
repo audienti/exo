@@ -1,11 +1,13 @@
 # Plugin Marketplace
 
-Exo now ships a repo-contained Audienti marketplace plugin wrapper so the repo can be installed and referenced as a Codex plugin without splitting Exo into a second codebase.
+Exo now ships a repo-root Codex plugin so the repo can be installed and referenced directly by a marketplace without splitting Exo into a second codebase.
 
 ## Marketplace Files
 
-- Marketplace catalog: `.agents/plugins/marketplace.json`
-- Plugin root: `.agents/plugins/plugins/exo`
+- Public plugin manifest: `.codex-plugin/plugin.json`
+- Public skill root: `skills/`
+- Marketplace catalog for local testing: `.agents/plugins/marketplace.json`
+- Internal wrapper implementation: `.agents/plugins/plugins/exo`
 
 The marketplace entry uses the normalized plugin name `exo` and exposes it in the `Audienti` marketplace as an `AVAILABLE` `Business` plugin.
 

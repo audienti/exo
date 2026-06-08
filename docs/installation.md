@@ -50,7 +50,14 @@ export EXO_STATE_DIR=<repo-root>/.exo
 
 ## Marketplace Plugin Initialization
 
-This repo now ships a marketplace plugin wrapper under:
+This repo now exposes a publishable Codex plugin at the repo root:
+
+```bash
+.codex-plugin/plugin.json
+skills/
+```
+
+The internal wrapper implementation still lives under:
 
 ```bash
 .agents/plugins/plugins/exo
@@ -217,7 +224,7 @@ npm prefix -g
 ## Uninstall
 
 ```bash
-npm unlink -g @omalab/exo
+npm unlink -g @audienti/exo
 ```
 
 That removes the global shim without touching the repo.

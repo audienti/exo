@@ -6,6 +6,10 @@ It helps one high-agency operator supervise signals, research, drafts, replies, 
 
 Agents should treat Exo that way in practice: if a research finding, signal match, website, stakeholder, or profile assignment is durable and Exo has a place to store it, write it back instead of leaving it only in prose or browser state.
 
+## License
+
+See [LICENSE](/Users/williamflanagan/Projects/omalab/exo/LICENSE). User and third-party content remain owned by their respective owners. Exo code, documentation, GTM methods, operating workflows, product strategy, and business materials are Copyright (c) 2026 OMALab, Inc. All rights reserved.
+
 ## Docs
 
 - [Vision One-Page](docs/vision-one-page.md)

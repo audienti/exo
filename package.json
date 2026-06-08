@@ -1,7 +1,10 @@
 {
-  "name": "@omalab/exo",
+  "name": "@audienti/exo",
   "version": "0.1.0",
   "description": "Exo GTM operating kernel CLI",
+  "homepage": "https://github.com/audienti/exo",
+  "repository": "https://github.com/audienti/exo",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"
