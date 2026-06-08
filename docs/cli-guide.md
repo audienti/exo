@@ -66,9 +66,9 @@ Then claim the identity:
 
 ```bash
 exo profiles claim <profile-id> \
-  --label audienti-main \
-  --owner william \
-  --workspace audienti \
+  --label operator-main \
+  --owner operator \
+  --workspace primary \
   --scope work \
   --account linkedin:operator-linkedin@example.com \
   --max-connection-requests 40 \
@@ -91,7 +91,7 @@ The important distinction is:
 
 For browser-backed work, rely on verified capability coverage and `exo profiles resolve`, not just the declared labels.
 
-The claimed profile is also where weekly outreach pacing lives. In Exo, that mirrors the Audienti buckets:
+The claimed profile is also where weekly outreach pacing lives. In Exo, that mirrors the existing operator buckets:
 
 - `profile visits`
 - `connection requests` / `invitations`
@@ -134,7 +134,7 @@ Exo now auto-generates a short motion codename like `boring-absurd-meerkat`. If 
 If a motion is getting richer, move it into a config file instead of stuffing more shell flags into one command:
 
 ```bash
-exo motion add --config ./actico.motion.json --json
+exo motion add --config ./motion.example.json --json
 ```
 
 Example motion seed:
@@ -198,7 +198,7 @@ It stops at `targeting-ready`. Exo does not write the message and it does not se
 ### 4. Add or inspect canonical companies
 
 ```bash
-exo companies add --name Chainguard --domain chainguard.dev
+exo companies add --name ExampleCo --domain example.com
 exo companies list
 exo companies find chainguard
 exo companies motions <company-id>

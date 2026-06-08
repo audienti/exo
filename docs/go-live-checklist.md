@@ -1,6 +1,6 @@
 # Exo Go-Live Checklist
 
-Use this when you are moving one motion or one operator workflow off Audienti and onto Exo.
+Use this when you are moving one motion or one operator workflow onto Exo as the primary system of record.
 
 ## Cutover rule
 

@@ -46,7 +46,7 @@ When the strongest next move is a direct operator decision, `exo next --json` al
 That field is the short operator-facing question the agent should ask instead of narrating bootstrapping or planner internals.
 Example:
 
-> Jordan Cipolla sent you an inbound LinkedIn connection request. Accept or decline?
+> A prospect sent you an inbound LinkedIn connection request. Accept or decline?
 
 ## Not implemented yet
 

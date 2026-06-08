@@ -68,9 +68,9 @@ Once you choose a registered profile, claim it as a business identity:
 
 ```bash
 exo profiles claim <profile-id> \
-  --label audienti-main \
-  --owner william \
-  --workspace audienti \
+  --label operator-main \
+  --owner operator \
+  --workspace primary \
   --scope work \
   --account linkedin:operator-linkedin@example.com \
   --account gmail:operator-linkedin@example.com \
@@ -83,7 +83,7 @@ It is also where account-level weekly outreach pacing is configured.
 
 ## Weekly quotas
 
-Exo should mirror the real Audienti control shape here instead of inventing a different one.
+Exo should mirror the existing operator control shape here instead of inventing a different one.
 
 The durable weekly quota buckets are:
 

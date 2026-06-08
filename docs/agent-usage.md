@@ -161,7 +161,7 @@ Do not default to copying the SQLite file directly unless the task is explicitly
 4. `exo profiles resolve --capability <capability> --json`
 5. if the path resolves through a harness connector, run `exo users harness probe <user-id> --runtime <runtime> --connector <connector> --json`
 6. If needed, `exo profiles add ... --json`
-7. `exo profiles claim <profile-id> --label audienti-main --workspace audienti --account linkedin:operator-linkedin@example.com --max-connection-requests 40 --max-inmail-messages 20 --json`
+7. `exo profiles claim <profile-id> --label operator-main --workspace primary --account linkedin:operator-linkedin@example.com --max-connection-requests 40 --max-inmail-messages 20 --json`
 8. `exo profiles test <profile-id> --json`
 9. `exo profiles auth <profile-id> --runtime <runtime> --json`
 10. Refuse browser-backed work if the result is not trustworthy
@@ -383,7 +383,7 @@ Browser profiles are first-class because the wrong local browser context means:
 
 Agents should treat profile resolution as execution identity, not local preference.
 
-The claimed profile is also where weekly outreach pacing lives. In Exo this mirrors the Audienti shape:
+The claimed profile is also where weekly outreach pacing lives. In Exo this mirrors the existing operator shape:
 
 - `profile visits`
 - `connection requests` / `invitations`

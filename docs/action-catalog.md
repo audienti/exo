@@ -39,7 +39,7 @@ But it did not know the canonical action layer that sits between planning and ex
 
 That was wrong.
 
-Audienti already has a real action vocabulary in its queue catalog, platform-action map, engagement-panel labels, and messaging replay surfaces.
+The existing operator workflow already has a real action vocabulary in its queue catalog, platform-action map, engagement-panel labels, and messaging replay surfaces.
 Exo should use that same vocabulary instead of inventing a second one.
 
 ## Canonical actions

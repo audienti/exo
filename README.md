@@ -12,7 +12,6 @@ See [LICENSE](/Users/williamflanagan/Projects/omalab/exo/LICENSE). User and thir
 
 ## Docs
 
-- [Vision One-Page](docs/vision-one-page.md)
 - [CLI and MCP Contract](docs/cli-mcp-contract.md)
 - [Installation](docs/installation.md)
 - [CLI Guide](docs/cli-guide.md)
@@ -22,16 +21,14 @@ See [LICENSE](/Users/williamflanagan/Projects/omalab/exo/LICENSE). User and thir
 - [Companies](docs/companies.md)
 - [Browser Profiles](docs/browser-profiles.md)
 - [Config Portability](docs/config-portability.md)
-- [Audienti Replacement Motions](docs/audienti-replacement-motions.md)
-- [Spreadsheet-Derived Model](docs/spreadsheet-derived-model.md)
-- [Product Thesis](docs/product-thesis.md)
-- [First-Principles Design](docs/first-principles.md)
-- [MVP](docs/mvp.md)
-- [MVP Product Spec](docs/mvp-spec.md)
-- [Experience and Output First](docs/experience-and-output-first.md)
-- [UI Model](docs/ui-model.md)
-- [Customer Discovery](docs/discovery.md)
-- [Competitor Map](docs/competitors.md)
+- [Go-Live Checklist](docs/go-live-checklist.md)
+- [Action Catalog](docs/action-catalog.md)
+- [Inbound Sync](docs/inbound-sync.md)
+- [Inbound Review](docs/inbound-review.md)
+- [Inbox](docs/inbox.md)
+- [Daily](docs/daily.md)
+- [Next](docs/next.md)
+- [Writing Voice](docs/writing-voice.md)
 
 ## Prototype
 
@@ -332,7 +329,7 @@ Exo auto-generates a short codename like `boring-absurd-meerkat`. If you want to
 When flags get cramped, use a structured seed file instead:
 
 ```bash
-exo motion add --config ./actico.motion.json --json
+exo motion add --config ./motion.example.json --json
 ```
 
 ### Browser Profiles
@@ -349,9 +346,9 @@ Claim the business identity after registration:
 
 ```bash
 exo profiles claim <profile-id> \
-  --label audienti-main \
-  --owner william \
-  --workspace audienti \
+  --label operator-main \
+  --owner operator \
+  --workspace primary \
   --scope work \
   --account linkedin:operator-linkedin@example.com \
   --account gmail:operator-linkedin@example.com \
@@ -386,7 +383,7 @@ Important distinction:
 
 Exo now verifies claimed capabilities when a profile is added, re-tested, or imported. That verification is still conservative: it uses local browser artifacts like `Cookies` and `History`, not live SaaS session probes.
 
-The claimed profile is also where weekly outreach pacing lives. Exo mirrors the real Audienti quota shape here:
+The claimed profile is also where weekly outreach pacing lives. Exo mirrors the real existing operator quota shape here:
 
 - `profile visits`
 - `connection requests` / `invitations`
@@ -405,7 +402,7 @@ Important execution rule:
 Company is now a first-class Exo noun:
 
 ```bash
-exo companies add --name Chainguard --domain chainguard.dev
+exo companies add --name ExampleCo --domain example.com
 exo companies list
 exo companies find chainguard
 exo companies show <company-id>

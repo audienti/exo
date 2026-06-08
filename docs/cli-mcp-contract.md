@@ -157,7 +157,7 @@ Examples:
 - `exo companies profile assign <company> --profile <profile-id>` <-> `exo.companies_profile_assign`
 - `exo profiles add --browser chrome --profile-directory "Profile 2" --capability linkedin --capability sales-navigator` <-> `exo.profiles_add`
 - `exo profiles discover [--browser chrome]` <-> `exo.profiles_discover`
-- `exo profiles claim <profile> --label audienti-main --workspace audienti --account linkedin:operator-linkedin@example.com` <-> `exo.profiles_claim`
+- `exo profiles claim <profile> --label operator-main --workspace primary --account linkedin:operator-linkedin@example.com` <-> `exo.profiles_claim`
 - `exo profiles list` <-> `exo.profiles_list`
 - `exo profiles show <profile>` <-> `exo.profiles_show`
 - `exo profiles capabilities [profile]` <-> `exo.profiles_capabilities`
@@ -259,11 +259,11 @@ The same rule applies to local state:
 
 The contract is good if all of the following are true:
 
-- William can define a new offer-driven motion from a product URL using `exo`
-- William can register and test the exact browser profile Exo should use for browser-backed work
-- William can constrain that motion by geolocation, ICP type, industry, company type, company shape, company size, segment, stakeholder title, and explicit suppression rules
-- William can drive the motion directly from `exo`
+- an operator can define a new offer-driven motion from a product URL using `exo`
+- an operator can register and test the exact browser profile Exo should use for browser-backed work
+- an operator can constrain that motion by geolocation, ICP type, industry, company type, company shape, company size, segment, stakeholder title, and explicit suppression rules
+- an operator can drive the motion directly from `exo`
 - Claude can drive the same motion through MCP
 - both paths produce the same account truth
 - both paths preserve the same proposal/prediction/outcome history
-- Exo can replace real Audienti motions without requiring a browser-first app shell
+- Exo can replace real legacy motions without requiring a browser-first app shell

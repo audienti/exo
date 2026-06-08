@@ -87,8 +87,8 @@ Because motion retrieval is not built yet, the current company flow supports man
 
 ```bash
 exo companies add \
-  --name Chainguard \
-  --domain chainguard.dev \
+  --name ExampleCo \
+  --domain example.com \
   --motion <motion-id> \
   --tag enterprise-security
 ```

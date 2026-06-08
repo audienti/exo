@@ -9,7 +9,7 @@ Exo now ships a repo-root Codex plugin so the repo can be installed and referenc
 - Marketplace catalog for local testing: `.agents/plugins/marketplace.json`
 - Internal wrapper implementation: `.agents/plugins/plugins/exo`
 
-The marketplace entry uses the normalized plugin name `exo` and exposes it in the `Audienti` marketplace as an `AVAILABLE` `Business` plugin.
+The marketplace entry uses the normalized plugin name `exo` and exposes it in the configured marketplace as an `AVAILABLE` `Business` plugin.
 
 ## Plugin Contract
 
@@ -51,7 +51,7 @@ To continue onboarding through the wrapper:
 
 ```bash
 npm run plugin:init -- --scope local-folder --apply --json
-npm run plugin:init -- --scope local-folder --label william-main --apply --json
+npm run plugin:init -- --scope local-folder --label operator-main --apply --json
 ```
 
 To verify a true fresh initialization path:

@@ -143,7 +143,7 @@ exo motion target <motion-id> --json
 Add a company and link it later if needed:
 
 ```bash
-exo companies add --name Chainguard --domain chainguard.dev
+exo companies add --name ExampleCo --domain example.com
 exo companies find chainguard
 ```
 
@@ -170,9 +170,9 @@ Then claim it:
 
 ```bash
 exo profiles claim <profile-id> \
-  --label audienti-main \
-  --owner william \
-  --workspace audienti \
+  --label operator-main \
+  --owner operator \
+  --workspace primary \
   --account linkedin:operator-linkedin@example.com
 ```
 
