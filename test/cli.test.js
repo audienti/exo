@@ -2118,7 +2118,6 @@ test("claimed browser identities can be pinned to a company and sticky resolutio
         { cwd: tempDir, encoding: "utf8" }
       )
     );
-
     const secondProfile = JSON.parse(
       execFileSync(
         "node",
@@ -3045,7 +3044,6 @@ test("agent queue surfaces inbound sync pressure from stale surfaces and fresh a
         }
       )
     );
-
     const company = JSON.parse(
       execFileSync(
         "node",
@@ -4587,34 +4585,90 @@ test("inbox ranks inbound observations into an operator-facing triage view with 
       { cwd: tempDir, encoding: "utf8" }
     );
 
+    const inboundInputPath = path.join(tempDir, "inbox-reply-sync.json");
+    fs.writeFileSync(
+      inboundInputPath,
+      JSON.stringify(
+        {
+          mode: "quick",
+          accounts: [
+            {
+              accountId: linkedinAccountId,
+              surfaces: [
+                {
+                  surfaceKey: "linkedin-messaging-inbox",
+                  status: "success",
+                  observedAt: "2026-05-28T14:00:00.000Z",
+                  itemCount: 1,
+                  visibleTotalCount: 1,
+                  captureCompleteness: "complete",
+                  requestedMode: "quick",
+                  actualMode: "quick",
+                  reconcileRequired: false,
+                  exhaustionStatus: "complete",
+                  observations: [
+                    {
+                      kind: "inbound_reply_received",
+                      externalId: "thread-parm-1",
+                      observedAt: "2026-05-28T14:00:00.000Z",
+                      actorName: "Parm Uppal",
+                      actorProfileUrl: "https://www.linkedin.com/in/parm-uppal/",
+                      actorLinkedinPublicId: "parm-uppal",
+                      summary: "Parm replied in the LinkedIn inbox.",
+                      motionId: motion.id,
+                      companyId: company.id,
+                      prospectId: prospect.id,
+                      messages: [
+                        {
+                          id: "msg-1",
+                          direction: "outbound",
+                          sentAt: "2026-05-28T13:30:00.000Z",
+                          fromName: "William Flanagan",
+                          body: "Would love to connect."
+                        },
+                        {
+                          id: "msg-2",
+                          direction: "inbound",
+                          sentAt: "2026-05-28T14:00:00.000Z",
+                          fromName: "Parm Uppal",
+                          body: "Happy to chat."
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        null,
+        2
+      )
+    );
+    execFileSync(
+      "node",
+      [cliPath, "inbound", "sync", "run", user.id, "--input", inboundInputPath, "--refresh", "--json"],
+      { cwd: tempDir, encoding: "utf8" }
+    );
     execFileSync(
       "node",
       [
         cliPath,
-        "inbound",
-        "observations",
-        "add",
-        user.id,
-        "--account",
-        linkedinAccountId,
-        "--surface",
-        "linkedin-messaging-inbox",
-        "--kind",
-        "inbound_reply_received",
-        "--observed-at",
-        "2026-05-28T14:00:00.000Z",
-        "--actor-name",
-        "Parm Uppal",
-        "--actor-profile-url",
-        "https://www.linkedin.com/in/parm-uppal/",
-        "--summary",
-        "Parm replied in the LinkedIn inbox.",
+        "companies",
+        "prospects",
+        "draft",
+        "set",
+        company.id,
         "--motion",
         motion.id,
-        "--company",
-        company.id,
         "--prospect",
         prospect.id,
+        "--surface",
+        "inbound_reply",
+        "--body",
+        "Parm, thanks for the quick reply. Happy to compare notes.",
+        "--status",
+        "ready",
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
@@ -5480,6 +5534,10 @@ test("daily reconciles cadence with inbound observations into due, waiting, and 
           "codex",
           "--connector",
           "chrome",
+          "--provider-account-id",
+          "acct-daily-user",
+          "--max-connection-requests",
+          "125",
           "--preferred",
           "--json"
         ],
@@ -5614,30 +5672,88 @@ test("daily reconciles cadence with inbound observations into due, waiting, and 
       { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
     );
 
+    const inboundInputPath = path.join(tempDir, "daily-reply-sync.json");
+    fs.writeFileSync(
+      inboundInputPath,
+      JSON.stringify(
+        {
+          mode: "quick",
+          accounts: [
+            {
+              accountId: linkedinAccount.id,
+              surfaces: [
+                {
+                  surfaceKey: "linkedin-messaging-inbox",
+                  status: "success",
+                  observedAt: "2026-05-28T13:00:00.000Z",
+                  itemCount: 1,
+                  visibleTotalCount: 1,
+                  captureCompleteness: "complete",
+                  requestedMode: "quick",
+                  actualMode: "quick",
+                  reconcileRequired: false,
+                  exhaustionStatus: "complete",
+                  observations: [
+                    {
+                      kind: "inbound_reply_received",
+                      externalId: "thread-ana-1",
+                      observedAt: "2026-05-28T13:00:00.000Z",
+                      actorName: "Ana Reply",
+                      summary: "Ana replied in LinkedIn",
+                      motionId: motion.id,
+                      companyId: company.id,
+                      prospectId: replyProspect.id,
+                      messages: [
+                        {
+                          id: "msg-1",
+                          direction: "outbound",
+                          sentAt: "2026-05-28T12:45:00.000Z",
+                          fromName: "Daily User",
+                          body: "Wanted to follow up on the invite."
+                        },
+                        {
+                          id: "msg-2",
+                          direction: "inbound",
+                          sentAt: "2026-05-28T13:00:00.000Z",
+                          fromName: "Ana Reply",
+                          body: "Happy to discuss."
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        null,
+        2
+      )
+    );
+    execFileSync(
+      "node",
+      [cliPath, "inbound", "sync", "run", user.id, "--input", inboundInputPath, "--refresh", "--json"],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
     execFileSync(
       "node",
       [
         cliPath,
-        "inbound",
-        "observations",
-        "add",
-        user.id,
-        "--account",
-        linkedinAccount.id,
-        "--surface",
-        "linkedin-messaging-inbox",
-        "--kind",
-        "inbound_reply_received",
+        "companies",
+        "prospects",
+        "draft",
+        "set",
+        company.id,
         "--motion",
         motion.id,
-        "--company",
-        company.id,
         "--prospect",
         replyProspect.id,
-        "--observed-at",
-        "2026-05-28T13:00:00.000Z",
-        "--summary",
-        "Ana replied in LinkedIn",
+        "--surface",
+        "inbound_reply",
+        "--body",
+        "Ana, thanks for the reply. Happy to dig in.",
+        "--status",
+        "ready",
         "--json"
       ],
       { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
@@ -5650,11 +5766,11 @@ test("daily reconciles cadence with inbound observations into due, waiting, and 
       }).toString()
     );
 
-    assert.equal(daily.counts.itemCount, 2);
+    assert.equal(daily.counts.itemCount, 3);
     assert.equal(daily.counts.replyPriorityCount, 1);
-    assert.equal(daily.counts.actionPriorityCount, 0);
+    assert.equal(daily.counts.actionPriorityCount, 1);
     assert.equal(daily.counts.waitPriorityCount, 1);
-    assert.equal(daily.counts.dueNowCount, 1);
+    assert.equal(daily.counts.dueNowCount, 2);
     assert.equal(daily.counts.waitingCount, 1);
     assert.equal(daily.counts.overriddenByInboundCount, 1);
     assert.equal(daily.items[0].prospect.name, "Ana Reply");
@@ -5662,17 +5778,21 @@ test("daily reconciles cadence with inbound observations into due, waiting, and 
     assert.equal(daily.items[0].priority, "reply");
     assert.equal(daily.items[0].cadenceEffect, "overridden_by_inbound");
     assert.match(daily.items[0].recommendedAction, /reply/i);
-    assert.equal(daily.items[0].source.type, "inbound_observation");
-    assert.equal(daily.items[0].source.kind, "inbound_reply_received");
+    assert.equal(daily.items[0].source.type, "inbound_review");
+    assert.equal(daily.items[0].source.kind, "ready_for_reply");
     assert.equal(daily.items[0].guidance.key, "reply_to_inbound");
     assert.match(daily.items[0].guidance.docPath, /docs\/planner\/reply_to_inbound\.md$/);
     assert.match(daily.items[0].guidance.taskPrompt, /Inspect the live inbound thread/i);
-    assert.equal(daily.items[1].prospect.name, "Ben Wait");
-    assert.equal(daily.items[1].state, "waiting_until");
-    assert.equal(daily.items[1].priority, "wait");
-    assert.equal(daily.items[1].cadenceEffect, "none");
-    assert.match(daily.items[1].recommendedAction, /wait|hold/i);
-    assert.equal(daily.items[1].guidance.key, "wait_for_due_checkpoint");
+    assert.equal(daily.items[1].priority, "action");
+    assert.equal(daily.items[1].source.type, "outbound_capacity");
+    assert.equal(daily.items[1].source.kind, "run_company_discovery");
+    assert.match(daily.items[1].recommendedAction, /company discovery/i);
+    assert.equal(daily.items[2].prospect.name, "Ben Wait");
+    assert.equal(daily.items[2].state, "waiting_until");
+    assert.equal(daily.items[2].priority, "wait");
+    assert.equal(daily.items[2].cadenceEffect, "none");
+    assert.match(daily.items[2].recommendedAction, /wait|hold/i);
+    assert.equal(daily.items[2].guidance.key, "wait_for_due_checkpoint");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -9672,30 +9792,88 @@ test("next prefers a due-now daily item over the broader motion path", () => {
       { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
     );
 
+    const inboundInputPath = path.join(tempDir, "next-reply-sync.json");
+    fs.writeFileSync(
+      inboundInputPath,
+      JSON.stringify(
+        {
+          mode: "quick",
+          accounts: [
+            {
+              accountId: linkedinAccount.id,
+              surfaces: [
+                {
+                  surfaceKey: "linkedin-messaging-inbox",
+                  status: "success",
+                  observedAt: "2026-05-28T13:00:00.000Z",
+                  itemCount: 1,
+                  visibleTotalCount: 1,
+                  captureCompleteness: "complete",
+                  requestedMode: "quick",
+                  actualMode: "quick",
+                  reconcileRequired: false,
+                  exhaustionStatus: "complete",
+                  observations: [
+                    {
+                      kind: "inbound_reply_received",
+                      externalId: "thread-nora-1",
+                      observedAt: "2026-05-28T13:00:00.000Z",
+                      actorName: "Nora Reply",
+                      summary: "Nora replied in LinkedIn",
+                      motionId: motion.id,
+                      companyId: company.id,
+                      prospectId: prospect.id,
+                      messages: [
+                        {
+                          id: "msg-1",
+                          direction: "outbound",
+                          sentAt: "2026-05-28T12:45:00.000Z",
+                          fromName: "Next User",
+                          body: "Wanted to follow up on the invite."
+                        },
+                        {
+                          id: "msg-2",
+                          direction: "inbound",
+                          sentAt: "2026-05-28T13:00:00.000Z",
+                          fromName: "Nora Reply",
+                          body: "Happy to discuss."
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        null,
+        2
+      )
+    );
+    execFileSync(
+      "node",
+      [cliPath, "inbound", "sync", "run", user.id, "--input", inboundInputPath, "--refresh", "--json"],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
     execFileSync(
       "node",
       [
         cliPath,
-        "inbound",
-        "observations",
-        "add",
-        user.id,
-        "--account",
-        linkedinAccount.id,
-        "--surface",
-        "linkedin-messaging-inbox",
-        "--kind",
-        "inbound_reply_received",
+        "companies",
+        "prospects",
+        "draft",
+        "set",
+        company.id,
         "--motion",
         motion.id,
-        "--company",
-        company.id,
         "--prospect",
         prospect.id,
-        "--observed-at",
-        "2026-05-28T13:00:00.000Z",
-        "--summary",
-        "Nora replied in LinkedIn",
+        "--surface",
+        "inbound_reply",
+        "--body",
+        "Nora, thanks for the reply. Happy to compare notes.",
+        "--status",
+        "ready",
         "--json"
       ],
       { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
@@ -10220,6 +10398,18 @@ test("motion targeting requires an explicit managed linkedin account identity be
           encoding: "utf8"
         }
       )
+    );
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
     );
     assert.ok(
       userWithManagedLinkedin.accounts.some((account) =>
@@ -11662,7 +11852,12 @@ test("companies add/list/find/show/motions persists canonical company records", 
         }
       )
     );
-
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
     const company = JSON.parse(
       execFileSync(
         "node",
@@ -11782,7 +11977,6 @@ test("companies show rolls up linked motions, people, signals, and touch history
         }
       )
     );
-
     const company = JSON.parse(
       execFileSync(
         "node",
@@ -12558,6 +12752,12 @@ test("companies update stores canonical website identity and research brief turn
         }
       )
     );
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
 
     const company = JSON.parse(
       execFileSync(
@@ -12697,6 +12897,12 @@ test("companies signal-matches add/show persists motion-specific company and per
           encoding: "utf8"
         }
       )
+    );
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
     );
 
     const company = JSON.parse(
@@ -12863,6 +13069,12 @@ test("companies persist prospects and cadence state on the motion-owned target a
           encoding: "utf8"
         }
       )
+    );
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
     );
 
     const company = JSON.parse(
@@ -13316,8 +13528,12 @@ test("companies persist prospects and cadence state on the motion-owned target a
 
     assert.equal(motionProspectsBeforePlanning.counts.prospectCount, 2);
     assert.equal(motionProspectsBeforePlanning.counts.messageTestReadyCount, 0);
-    assert.equal(motionProspectsBeforePlanning.counts.recentPostReadyCount, 1);
-    assert.equal(motionProspectsBeforePlanning.prospects[0].recentPost.engageable, true);
+    assert.equal(motionProspectsBeforePlanning.counts.recentPostReadyCount, 0);
+    const minhProspect = motionProspectsBeforePlanning.prospects.find((prospect) => prospect.name === "Minh Le");
+    assert.ok(minhProspect);
+    assert.equal(minhProspect.recentPost.available, true);
+    assert.equal(minhProspect.recentPost.engageable, false);
+    assert.match(minhProspect.recentPost.reason, /governed public-engagement rules/i);
 
     const cadenceResult = JSON.parse(
       execFileSync(
@@ -13474,7 +13690,8 @@ test("companies persist prospects and cadence state on the motion-owned target a
     );
 
     assert.equal(motionProspectBrief.writingBrief.messageTestReady, true);
-    assert.equal(motionProspectBrief.writingBrief.recentPost.engageable, true);
+    assert.equal(motionProspectBrief.writingBrief.recentPost.engageable, false);
+    assert.match(motionProspectBrief.writingBrief.recentPost.reason, /governed public-engagement rules/i);
     assert.equal(motionProspectBrief.writingBrief.touches.length, 3);
     assert.equal(motionProspectBrief.writingBrief.signalMatches.length, 1);
 
@@ -13501,7 +13718,8 @@ test("companies persist prospects and cadence state on the motion-owned target a
     assert.equal(firstDirectMessageCard.available, true);
     assert.equal(followUpCard.available, true);
     assert.equal(emailCard.available, true);
-    assert.equal(publicCommentCard.available, true);
+    assert.equal(publicCommentCard.available, false);
+    assert.match(publicCommentCard.missingReason, /governed public-engagement rules/i);
     assert.equal(commentReplyCard.available, true);
     assert.equal(firstDirectMessageCard.priorTouches.length, 3);
 
@@ -13517,7 +13735,8 @@ test("companies persist prospects and cadence state on the motion-owned target a
     );
 
     assert.equal(motionDraftBrief.surface.key, "public_comment");
-    assert.equal(motionDraftBrief.surface.available, true);
+    assert.equal(motionDraftBrief.surface.available, false);
+    assert.match(motionDraftBrief.surface.missingReason, /governed public-engagement rules/i);
     assert.match(motionDraftBrief.draftRequest.task, /unsent public comment draft/i);
     assert.ok(
       motionDraftBrief.draftRequest.rules.some((rule) => /do not pitch/i.test(rule)),
@@ -13891,6 +14110,12 @@ test("report workspace renders a native workspace projection in json and html fo
         }
       )
     );
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
 
     const reportJson = JSON.parse(
       execFileSync(
@@ -13995,6 +14220,12 @@ test("report workspace keeps ready reply drafts in the operator decision lane", 
         ],
         { cwd: tempDir, encoding: "utf8" }
       )
+    );
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
     );
 
     const company = JSON.parse(
@@ -14574,6 +14805,12 @@ test("canonical action catalog and motion action briefs expose executable Audien
         }
       )
     );
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
 
     const company = JSON.parse(
       execFileSync(
@@ -14765,7 +15002,8 @@ test("canonical action catalog and motion action briefs expose executable Audien
     assert.equal(directMessageAction.available, false);
     assert.match(directMessageAction.reason, /no governed direct-message branch is writable/i);
     assert.equal(emailAction.available, true);
-    assert.equal(postCommentAction.available, true);
+    assert.equal(postCommentAction.available, false);
+    assert.match(postCommentAction.reason, /governed public-engagement rules/i);
     assert.equal(postCommentAction.draftSurface.key, "public_comment");
 
     execFileSync(
@@ -15456,6 +15694,86 @@ test("what-is-this returns machine-readable orientation for agents", () => {
     ].includes(about.agentUsage.recommendedPath.mode),
     "expected a recommended path mode"
   );
+});
+
+test("what-is-this ignores draft motions when choosing the default focus", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-what-is-this-focus-"));
+  const activeOfferUrl = "data:text/html,%3Chtml%3E%3Chead%3E%3Ctitle%3EActive%20Focus%20Fixture%3C%2Ftitle%3E%3Cmeta%20name%3D%22description%22%20content%3D%22Active%20focus%20fixture.%22%20%2F%3E%3C%2Fhead%3E%3Cbody%3Eactive%3C%2Fbody%3E%3C%2Fhtml%3E";
+
+  try {
+    const draftMotion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          offerUrl,
+          "--premise",
+          "This offer matters when a richer draft should still stay out of the default focus.",
+          "--audience",
+          "Revenue leaders",
+          "--audience",
+          "Revenue operations",
+          "--signal",
+          "company::Is there recent evidence this company widened product scope?",
+          "--signal",
+          "person::Is there recent evidence a new revenue leader joined this company?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+
+    const started = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "start",
+          "--url",
+          activeOfferUrl,
+          "--premise",
+          "This offer matters when the default focus should only come from active motions.",
+          "--audience",
+          "Operators",
+          "--signal",
+          "company::Is there recent evidence this workspace already has governed work in flight?",
+          "--json"
+        ],
+        {
+          cwd: tempDir,
+          encoding: "utf8"
+        }
+      )
+    );
+    const activeMotion = started.motion;
+    JSON.parse(
+      execFileSync("node", [cliPath, "motion", "restart", activeMotion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    const about = JSON.parse(
+      execFileSync("node", [cliPath, "what-is-this", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    assert.equal(about.stateSummary.motions.focusMotionId, activeMotion.id);
+    assert.equal(about.stateSummary.motions.focusMotion?.status, "active");
+    assert.notEqual(about.stateSummary.motions.focusMotionId, draftMotion.id);
+    assert.equal(about.agentUsage.recommendedPath.focusMotionId, activeMotion.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("multiple agent processes can share one Exo state store through EXO_STATE_DIR", async () => {

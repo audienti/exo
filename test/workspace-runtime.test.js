@@ -39,6 +39,7 @@ test("report workspace exposes the unified agent queue separately from blockers 
       "company::Is there recent evidence this company widened product or GTM scope?",
       "--json",
     ]);
+    runCliJson(tempDir, ["motion", "restart", motion.id, "--json"]);
 
     const company = runCliJson(tempDir, [
       "companies",
@@ -129,14 +130,16 @@ test("report workspace exposes the unified agent queue separately from blockers 
     assert.ok(report.blockedQueue, "workspace report should expose operator blockers separately");
     assert.ok(report.executionBacklog, "workspace report should expose packet/backlog pressure separately");
 
-    assert.equal(report.agentQueue.tasks.length, 1);
+    assert.equal(report.agentQueue.tasks.length, 2);
     assert.equal(report.agentQueue.waiting.length, 1);
-    assert.equal(report.agentQueue.items.length, 1);
+    assert.equal(report.agentQueue.items.length, 2);
     assert.equal(report.agentQueue.waitingItems.length, 1);
 
     assert.equal(report.agentQueue.tasks[0].kind, "prospect_research");
     assert.equal(report.agentQueue.tasks[0].prospectName, dueProspect.name);
     assert.equal(report.agentQueue.items[0].taskKind, "prospect_research");
+    assert.equal(report.agentQueue.tasks[1].kind, "company_discovery");
+    assert.equal(report.agentQueue.items[1].taskKind, "company_discovery");
 
     assert.equal(report.agentQueue.waiting[0].kind, "write_draft");
     assert.equal(report.agentQueue.waiting[0].prospectName, waitingProspect.name);
@@ -145,6 +148,107 @@ test("report workspace exposes the unified agent queue separately from blockers 
 
     assert.equal(report.blockedQueue.itemCount, 0);
     assert.equal(report.executionBacklog.packetCount, 0);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("report workspace keeps draft motions out of the default focus when active work exists", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-workspace-focus-active-"));
+
+  try {
+    const user = runCliJson(tempDir, [
+      "users",
+      "add",
+      "--label",
+      "workspace-focus-user",
+      "--owner",
+      "william",
+      "--json",
+    ]);
+
+    const activeMotion = runCliJson(tempDir, [
+      "motion",
+      "add",
+      "--url",
+      offerUrl,
+      "--premise",
+      "This offer matters when the workspace should focus the motion that owns the live queue.",
+      "--audience",
+      "Revenue leaders",
+      "--signal",
+      "company::Is there recent evidence this company widened product or GTM scope?",
+      "--json",
+    ]);
+    runCliJson(tempDir, ["motion", "restart", activeMotion.id, "--json"]);
+
+    const draftOfferUrl = "data:text/html,%3Chtml%3E%3Chead%3E%3Ctitle%3EDraft%20Focus%20Fixture%3C%2Ftitle%3E%3C%2Fhead%3E%3Cbody%3Edraft%3C%2Fbody%3E%3C%2Fhtml%3E";
+    const draftMotion = runCliJson(tempDir, [
+      "motion",
+      "add",
+      "--url",
+      draftOfferUrl,
+      "--premise",
+      "This offer matters when a richer draft should still stay out of the default operator focus.",
+      "--audience",
+      "Revenue leaders",
+      "--audience",
+      "Revenue operations",
+      "--signal",
+      "company::Is there recent evidence this company widened product or GTM scope?",
+      "--signal",
+      "person::Is there recent evidence a new revenue leader joined this company?",
+      "--json",
+    ]);
+
+    const company = runCliJson(tempDir, [
+      "companies",
+      "add",
+      "--name",
+      "Workspace Focus Co",
+      "--domain",
+      "workspace-focus.example",
+      "--motion",
+      activeMotion.id,
+      "--json",
+    ]);
+
+    const prospect = runCliJson(tempDir, [
+      "companies",
+      "prospects",
+      "add",
+      company.id,
+      "--motion",
+      activeMotion.id,
+      "--name",
+      "Focus Prospect",
+      "--title",
+      "VP Revenue",
+      "--buying-committee-role",
+      "primary_business_owner",
+      "--decision-authority",
+      "influences",
+      "--why-relevant",
+      "Creates the due branch that should anchor the workspace focus.",
+      "--linkedin-profile-url",
+      "https://linkedin.com/in/focus-prospect",
+      "--json",
+    ]).prospects[0];
+
+    assert.ok(prospect, "expected the active motion to own a due prospect");
+
+    const report = runCliJson(tempDir, [
+      "report",
+      "workspace",
+      "--user",
+      user.id,
+      "--json",
+    ]);
+
+    assert.ok(report.operatorSummary.focusMotion, "expected a focused motion in the operator summary");
+    assert.equal(report.operatorSummary.focusMotion.id, activeMotion.id);
+    assert.equal(report.operatorSummary.focusMotion.status, "active");
+    assert.notEqual(report.operatorSummary.focusMotion.id, draftMotion.id);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -177,6 +281,7 @@ test("report workspace keeps a replied prospect in reply-accepted after the outb
       "company::Did the relationship already move into a live conversation?",
       "--json",
     ]);
+    runCliJson(tempDir, ["motion", "restart", motion.id, "--json"]);
 
     const company = runCliJson(tempDir, [
       "companies",

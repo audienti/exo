@@ -51,6 +51,7 @@ import {
   isStructuredDraftEnvelope,
 } from "../lib/draft-policy.js";
 import { withDerivedProspectQueueState } from "../lib/motion-queue.js";
+import { isExecutionEligibleMotionStatus } from "../lib/motion-status.js";
 import { buildSendHandoff } from "./build-send-handoff.js";
 import { buildMotionDiscoveryDemand } from "./build-motion-discovery-brief.js";
 import { buildInboundReviewView } from "./build-inbound-review-view.js";
@@ -111,6 +112,7 @@ const PUBLIC_ENGAGEMENT_DRAFT_SURFACES = new Set(["public_comment", "comment_rep
 export function buildAgentQueue(input) {
   const now = normalizeNowIso(input.now);
   const includeWaitingRetrieval = input.includeWaitingRetrieval === true;
+  const activeMotions = (input.motions ?? []).filter((motion) => isExecutionEligibleMotionStatus(motion?.status));
   const normalizedCues = normalizeInboundCues(input.cues ?? []);
   const profilesById = new Map((input.profiles ?? []).map((profile) => [profile.id, profile]));
   const companiesById = new Map((input.companies ?? []).map((company) => [company.id, company]));
@@ -118,7 +120,7 @@ export function buildAgentQueue(input) {
   // Premium→Premium messaging to non-connections.
   const senderPremiumByScope = new Map();
   const senderPremiumByCompany = new Map();
-  for (const motion of input.motions ?? []) {
+  for (const motion of activeMotions) {
     for (const account of motion.targetMap?.accounts ?? []) {
       const rawCompany = companiesById.get(account.companyId) ?? null;
       if (!rawCompany) {
@@ -152,7 +154,7 @@ export function buildAgentQueue(input) {
     }
   }
   const prospectContextById = new Map();
-  for (const motion of input.motions ?? []) {
+  for (const motion of activeMotions) {
     for (const account of (motion.targetMap?.accounts ?? []).map((item) => normalizeAccountForAgentQueue(item, now))) {
       for (const prospect of account.prospects ?? []) {
         prospectContextById.set(prospect.id, { motion, account, prospect });
@@ -167,7 +169,7 @@ export function buildAgentQueue(input) {
   for (const rawUser of input.users ?? []) {
     const syncView = buildUserInboundSyncView(rawUser);
     const workingHoursStatus = classifyUserWorkingHours(rawUser, now);
-    const review = buildInboundReviewView(rawUser, input.observations ?? [], input.motions ?? [], input.companies ?? []);
+    const review = buildInboundReviewView(rawUser, input.observations ?? [], activeMotions, input.companies ?? []);
     const itemizationGapsByAccountId = groupBy(review.itemizationGaps, (gap) => gap.accountId);
     const openCuesByAccountId = groupBy(
       normalizedCues.filter((cue) => cue.userId === syncView.user.id && cue.status === "open"),
@@ -424,7 +426,7 @@ export function buildAgentQueue(input) {
       }),
     }, { now, tasks, waiting });
   }
-  for (const motion of input.motions ?? []) {
+  for (const motion of activeMotions) {
     const discoveryTask = buildCompanyDiscoveryTask({
       motion,
       companies: input.companies ?? [],

@@ -144,7 +144,7 @@ function resolveNextMotion(explicitMotionId, rawMotions, description) {
 
   const focusMotionId = description.agentUsage.recommendedPath.focusMotionId ?? null;
   if (focusMotionId && activeMotions.length > 0) {
-    return findMotionById(focusMotionId);
+    return activeMotions.find((motion) => motion.id === focusMotionId) ?? null;
   }
 
   return null;

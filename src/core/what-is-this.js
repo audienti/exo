@@ -1,8 +1,18 @@
 // @ts-check
 
-import { listBrowserProfiles, listCompanies, listMotions, listUsers } from "../db/database.js";
+import {
+  listBrowserProfiles,
+  listCompanies,
+  listInboundCues,
+  listInboundObservations,
+  listMotions,
+  listUsers
+} from "../db/database.js";
 import { describeStatePathRule } from "../db/paths.js";
+import { summarizeExecutionUsers } from "../lib/execution-users.js";
+import { buildDailyView } from "./build-daily-view.js";
 import { buildOnboardingState } from "./onboarding.js";
+import { buildUserWorkspaceContext } from "./workspace-context.js";
 
 /**
  * @returns {{
@@ -54,6 +64,8 @@ import { buildOnboardingState } from "./onboarding.js";
  *       count: number,
  *       focusMotionId: string | null,
  *       focusMotionName: string | null,
+ *       focusMotion: { id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number } | null,
+ *       activeCount: number,
  *       preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }>
  *     },
  *     companies: {
@@ -95,7 +107,15 @@ export function describeExo() {
   const companies = listCompanies();
   const browserProfiles = listBrowserProfiles();
   const users = listUsers();
-  const stateSummary = buildStateSummary(motions, companies, browserProfiles, users);
+  const recommendedFocusMotion = resolveRecommendedFocusMotion({
+    rawMotions: motions,
+    rawCompanies: companies,
+    rawProfiles: browserProfiles,
+    rawUsers: users,
+  });
+  const stateSummary = buildStateSummary(motions, companies, browserProfiles, users, {
+    focusMotionId: recommendedFocusMotion?.id ?? null,
+  });
   const onboarding = buildOnboardingState({
     rawUsers: users,
     rawProfiles: browserProfiles,
@@ -429,32 +449,96 @@ export function describeExo() {
 }
 
 /**
+ * @param {unknown} motion
+ */
+function buildMotionPreview(motion) {
+  return {
+    id: motion.id,
+    name: motion.name,
+    status: motion.status,
+    premiseStatus: motion.premise?.status ?? "missing",
+    sourceUrl: motion.offer?.sourceUrl ?? "unknown",
+    audienceCount: Array.isArray(motion.audienceHypotheses) ? motion.audienceHypotheses.length : 0,
+    signalCount: Array.isArray(motion.signals) ? motion.signals.length : 0,
+    nextStepCount: Array.isArray(motion.nextSteps) ? motion.nextSteps.length : 0
+  };
+}
+
+/**
+ * @param {{
+ *   rawMotions: unknown[],
+ *   rawCompanies: unknown[],
+ *   rawProfiles: unknown[],
+ *   rawUsers: unknown[],
+ * }} input
+ */
+function resolveRecommendedFocusMotion(input) {
+  const activeMotions = input.rawMotions.filter((motion) => motion?.status === "active");
+  if (!activeMotions.length) {
+    return null;
+  }
+
+  const fallbackFocusMotion = activeMotions
+    .map((motion) => buildMotionPreview(motion))
+    .sort(compareMotionPreview)[0] ?? null;
+  const { eligibleUsers } = summarizeExecutionUsers(input.rawUsers);
+  if (eligibleUsers.length !== 1) {
+    return fallbackFocusMotion;
+  }
+
+  const rawUser = eligibleUsers[0];
+  const rawObservations = listInboundObservations({ userId: rawUser.id });
+  const rawCues = listInboundCues({
+    userId: rawUser.id,
+    status: "open"
+  });
+  const workspaceContext = buildUserWorkspaceContext(rawUser, {
+    rawObservations,
+    rawCues
+  });
+  const daily = buildDailyView(
+    workspaceContext.user,
+    activeMotions,
+    input.rawCompanies,
+    input.rawProfiles,
+    workspaceContext.observations,
+    {
+      rawUsers: input.rawUsers,
+      rawCues: workspaceContext.cues,
+      limit: 1
+    }
+  );
+  const focusMotionId = daily.items[0]?.motion?.id ?? null;
+  if (!focusMotionId) {
+    return fallbackFocusMotion;
+  }
+
+  const matchedMotion = activeMotions.find((motion) => motion.id === focusMotionId) ?? null;
+  return matchedMotion ? buildMotionPreview(matchedMotion) : fallbackFocusMotion;
+}
+
+/**
  * @param {unknown[]} motions
  * @param {unknown[]} companies
  * @param {unknown[]} browserProfiles
  * @param {unknown[]} users
+ * @param {{ focusMotionId?: string | null | undefined }} [options]
  */
-function buildStateSummary(motions, companies, browserProfiles, users) {
+function buildStateSummary(motions, companies, browserProfiles, users, options = {}) {
   const rankedMotions = motions
-    .map((motion) => ({
-      id: motion.id,
-      name: motion.name,
-      status: motion.status,
-      premiseStatus: motion.premise?.status ?? "missing",
-      sourceUrl: motion.offer?.sourceUrl ?? "unknown",
-      audienceCount: Array.isArray(motion.audienceHypotheses) ? motion.audienceHypotheses.length : 0,
-      signalCount: Array.isArray(motion.signals) ? motion.signals.length : 0,
-      nextStepCount: Array.isArray(motion.nextSteps) ? motion.nextSteps.length : 0
-    }))
+    .map((motion) => buildMotionPreview(motion))
     .sort(compareMotionPreview);
   const activeMotionPreview = rankedMotions.filter((motion) => motion.status === "active");
-  const focusMotion = activeMotionPreview[0] ?? rankedMotions[0] ?? null;
+  const focusMotion = options.focusMotionId
+    ? rankedMotions.find((motion) => motion.id === options.focusMotionId) ?? null
+    : activeMotionPreview[0] ?? null;
 
   return {
     motions: {
       count: motions.length,
       focusMotionId: focusMotion?.id ?? null,
       focusMotionName: focusMotion?.name ?? null,
+      focusMotion,
       activeCount: activeMotionPreview.length,
       preview: rankedMotions.slice(0, 3)
     },
@@ -490,7 +574,7 @@ function buildStateSummary(motions, companies, browserProfiles, users) {
 
 /**
  * @param {{
- *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, activeCount: number, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
+ *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, focusMotion: { id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number } | null, activeCount: number, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
  *   companies: { count: number, preview: Array<{ id: string, name: string, domain: string | null }> },
  *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> },
  *   users: { count: number, executionCapableCount: number, preview: Array<{ id: string, label: string, accountCount: number }> }
@@ -540,7 +624,7 @@ function buildGettingStarted(stateSummary, onboarding) {
   }
 
   if (stateSummary.motions.count > 0) {
-    const firstMotion = stateSummary.motions.preview[0];
+    const firstMotion = stateSummary.motions.focusMotion ?? stateSummary.motions.preview[0];
     steps.push({
       title: "Inspect the existing motion state first",
       reason:
@@ -621,7 +705,7 @@ function buildGettingStarted(stateSummary, onboarding) {
 
 /**
  * @param {{
- *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, activeCount: number, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
+ *   motions: { count: number, focusMotionId: string | null, focusMotionName: string | null, focusMotion: { id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number } | null, activeCount: number, preview: Array<{ id: string, name: string, status: string, premiseStatus: string, sourceUrl: string, audienceCount: number, signalCount: number, nextStepCount: number }> },
  *   companies: { count: number, preview: Array<{ id: string, name: string, domain: string | null }> },
  *   browserProfiles: { count: number, readyCount: number, preview: Array<{ id: string, label: string, status: string, capabilities: string[] }> },
  *   users: { count: number, executionCapableCount: number, preview: Array<{ id: string, label: string, accountCount: number }> }
@@ -631,7 +715,8 @@ function buildGettingStarted(stateSummary, onboarding) {
 function buildRecommendedPath(stateSummary, onboarding) {
   /** @type {string[]} */
   const blockers = [];
-  const focusMotion = stateSummary.motions.preview[0] ?? null;
+  const candidateMotion = stateSummary.motions.focusMotion ?? stateSummary.motions.preview[0] ?? null;
+  const focusMotion = stateSummary.motions.focusMotion ?? null;
 
   if (onboarding.status === "needs-scope") {
     return {
@@ -648,8 +733,8 @@ function buildRecommendedPath(stateSummary, onboarding) {
     return {
       mode: "configure-execution-user",
       reason: "No execution users exist in the current Exo state store yet, so Exo still does not know who the first managed operator identity is.",
-      focusMotionId: focusMotion?.id ?? null,
-      focusMotionName: focusMotion?.name ?? null,
+      focusMotionId: candidateMotion?.id ?? null,
+      focusMotionName: candidateMotion?.name ?? null,
       blockers: ["No execution user exists yet."],
       commands: [
         "exo users intake --json",
@@ -664,8 +749,8 @@ function buildRecommendedPath(stateSummary, onboarding) {
     return {
       mode: "configure-execution-connectors",
       reason: "Execution users exist, but none of them owns a governed connected account path yet.",
-      focusMotionId: focusMotion?.id ?? null,
-      focusMotionName: focusMotion?.name ?? null,
+      focusMotionId: candidateMotion?.id ?? null,
+      focusMotionName: candidateMotion?.name ?? null,
       blockers: ["No execution-capable user exists yet."],
       commands: [
         "exo users intake --json",
@@ -678,30 +763,23 @@ function buildRecommendedPath(stateSummary, onboarding) {
 
   if (!focusMotion) {
     return {
-      mode: "create-motion",
-      reason: "No motions exist in the current Exo state store yet.",
-      focusMotionId: null,
-      focusMotionName: null,
-      blockers: [],
-      commands: [
-        "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
-      ]
-    };
-  }
-
-  if (stateSummary.motions.activeCount === 0) {
-    return {
-      mode: "activate-motion",
-      reason: "Motions exist in state, but none of them are active. Cross-motion execution should only move active motions forward.",
-      focusMotionId: focusMotion.id,
-      focusMotionName: focusMotion.name,
-      blockers: ["No active motion exists yet."],
-      commands: [
-        "exo motion list --json",
-        `exo motion show ${focusMotion.id} --json`,
-        `exo motion restart ${focusMotion.id} --json`,
-        `exo motion clone ${focusMotion.id} --audience "Secondary ICP" --segment alt-segment --json`
-      ]
+      mode: candidateMotion ? "activate-motion" : "create-motion",
+      reason: candidateMotion
+        ? "Motions exist in state, but none of them are active. Cross-motion execution should only move active motions forward."
+        : "No motions exist in the current Exo state store yet.",
+      focusMotionId: candidateMotion?.id ?? null,
+      focusMotionName: candidateMotion?.name ?? null,
+      blockers: candidateMotion ? ["No active motion exists yet."] : [],
+      commands: candidateMotion
+        ? [
+            "exo motion list --json",
+            `exo motion show ${candidateMotion.id} --json`,
+            `exo motion restart ${candidateMotion.id} --json`,
+            `exo motion clone ${candidateMotion.id} --audience "Secondary ICP" --segment alt-segment --json`
+          ]
+        : [
+            "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
+          ]
     };
   }
 

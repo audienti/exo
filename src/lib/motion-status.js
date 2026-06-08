@@ -11,5 +11,5 @@ export function isExecutionEligibleMotionStatus(status) {
  * @param {string | null | undefined} status
  */
 export function isPlannerEligibleMotionStatus(status) {
-  return status === "active" || status === "draft";
+  return status === "active";
 }

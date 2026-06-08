@@ -957,16 +957,25 @@ function pickFocusMotion(motionSummaries) {
     })[0] ?? null;
 }
 
+function resolveOperatorFocusMotion(motionSummaries, topDueItem) {
+  const topDueMotionId = topDueItem?.motion?.id ?? null;
+  if (!topDueMotionId) {
+    return pickFocusMotion(motionSummaries);
+  }
+
+  return motionSummaries.find((motion) => motion.id === topDueMotionId) ?? pickFocusMotion(motionSummaries);
+}
+
 function buildOperatorSummary({ user, daily, motionSummaries, truthAccounts, reviewItems, now }) {
   const dueNowItems = toArray(daily.items).filter((item) => item.state === "due_now");
   const waitingItems = toArray(daily.items).filter((item) => item.state === "waiting_until");
-  const focusMotion = pickFocusMotion(motionSummaries);
   const allSurfaces = truthAccounts.flatMap((account) => account.surfaces);
   const actionableSurfaceCount = allSurfaces.filter((surface) => surface.meta.actionable).length;
   const staleSurfaceCount = allSurfaces.filter((surface) => surface.meta.stale && !surface.meta.unchecked).length;
   const uncheckedSurfaceCount = allSurfaces.filter((surface) => surface.meta.unchecked).length;
   const topDueItem = dueNowItems[0] ?? null;
   const topWaitingItem = waitingItems[0] ?? null;
+  const focusMotion = resolveOperatorFocusMotion(motionSummaries, topDueItem);
 
   let headline = `Operator call for ${user.label}`;
   let nextMove = "No governed move is exposed right now.";

@@ -33,6 +33,7 @@ import {
  *   cadenceState?: any,
  *   accountQueueState?: any,
  *   accountPacketState?: any,
+ *   motionStatus?: string,
  * }} prospectFields
  */
 function fixture(prospectFields) {
@@ -41,6 +42,7 @@ function fixture(prospectFields) {
       {
         id: "motion-1",
         name: "Motion One",
+        status: prospectFields.motionStatus ?? "active",
         targetMap: {
           accounts: [
             {
@@ -1628,6 +1630,20 @@ test("buildAgentQueue emits a write_draft task for a prospect with no draft yet"
   assert.match(writes[0].writeback, /--status ready/);
   assert.equal(writes[0].postWriteStatus, "ready");
   assert.equal(writes[0].queueState, "due_now");
+});
+
+test("buildAgentQueue ignores draft motions in the shared execution queue", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      motionStatus: "draft",
+      touches: [],
+      drafts: [],
+    }),
+  );
+
+  assert.equal(queue.tasks.length, 0);
+  assert.equal(queue.waiting.length, 0);
+  assert.equal(queue.blockers.length, 0);
 });
 
 test("buildAgentQueue includes a subject placeholder when the queued draft surface needs one", () => {
