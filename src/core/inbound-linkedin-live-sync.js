@@ -909,7 +909,7 @@ async function captureLinkedinQuickSurfacesThroughUnipile(input) {
 }
 
 /**
- * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
+ * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, maxPages?: number | null, pageSize?: number | null, resumeCursor?: string | null, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
  */
 async function captureUnipileSentInvitationsSurface(input) {
   return captureUnipileLinkedinCollectionSurface({
@@ -920,6 +920,9 @@ async function captureUnipileSentInvitationsSurface(input) {
     providerAccountId: input.providerAccountId,
     mode: input.mode,
     limit: input.limit,
+    maxPages: input.maxPages ?? null,
+    pageSize: input.pageSize ?? null,
+    resumeCursor: input.resumeCursor ?? null,
     maxPageSize: LINKEDIN_COLLECTION_MAX_PAGE_SIZE,
     partialError: "Unipile returned more pending sent invitations than this quick pass itemized.",
     httpGetImpl: input.httpGetImpl,
@@ -1151,6 +1154,9 @@ async function captureUnipileMessagingInboxSurface(input) {
  *   providerAccountId: string,
  *   mode: "quick" | "full",
  *   limit: number,
+ *   maxPages?: number | null,
+ *   pageSize?: number | null,
+ *   resumeStartOffset?: number | null,
  *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpPostImpl: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null
  *   profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>>
@@ -1166,9 +1172,11 @@ async function captureUnipileProfileViewsSurface(input) {
     routeLabel: "profile views capture",
     mode: input.mode,
     limit: input.limit,
+    maxPages: input.maxPages ?? null,
     pageSize: input.mode === "full"
-      ? DEFAULT_LINKEDIN_PROXY_PAGE_SIZE
+      ? normalizePositiveInteger(input.pageSize ?? DEFAULT_LINKEDIN_PROXY_PAGE_SIZE, DEFAULT_LINKEDIN_PROXY_PAGE_SIZE, "profile views page size")
       : Math.max(1, input.limit),
+    resumeStartOffset: input.resumeStartOffset ?? null,
     partialError: "Unipile returned more LinkedIn profile views than this quick pass itemized.",
     httpPostImpl: input.httpPostImpl,
     buildRequest: (start, count) => ({

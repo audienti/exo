@@ -145,6 +145,8 @@ export function buildCanonicalSurfaceResultSchema(itemSchema) {
     paginationAttempted: z.boolean().nullable().default(null),
     terminalSignalSeen: z.boolean().nullable().default(null),
     stalledPassCount: z.coerce.number().int().min(0).nullable().default(null),
+    nextCursor: z.string().trim().min(1).nullable().default(null),
+    nextStartOffset: z.coerce.number().int().min(0).nullable().default(null),
     items: z.array(itemSchema).default([]),
     diagnostics: toolDiagnosticsSchema.nullable().default(null),
     lifecycleSummary: toolLifecycleSummarySchema.nullable().default(null),

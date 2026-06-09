@@ -165,6 +165,8 @@ function buildCanonicalReceivedSurfaceFromLegacyCapture(capture, mode, session) 
     paginationAttempted: capture.paginationAttempted ?? false,
     terminalSignalSeen: capture.terminalSignalSeen ?? null,
     stalledPassCount: capture.stalledPassCount ?? null,
+    nextCursor: capture.nextCursor ?? null,
+    nextStartOffset: capture.nextStartOffset ?? null,
     items: capture.items.map((item) => ({
       identity: {
         sourceItemId: item.invitationId,
@@ -237,6 +239,8 @@ function buildCanonicalSentSurfaceFromLegacyCapture(capture, mode, session) {
     paginationAttempted: capture.paginationAttempted ?? false,
     terminalSignalSeen: capture.terminalSignalSeen ?? null,
     stalledPassCount: capture.stalledPassCount ?? null,
+    nextCursor: capture.nextCursor ?? null,
+    nextStartOffset: capture.nextStartOffset ?? null,
     items: capture.items.map((item) => ({
       identity: {
         sourceItemId: item.invitationId,

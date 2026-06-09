@@ -84,6 +84,8 @@ function buildInvitationInboundSurface(surfaceKey, result) {
     paginationAttempted: result.paginationAttempted,
     terminalSignalSeen: result.terminalSignalSeen,
     stalledPassCount: result.stalledPassCount,
+    nextCursor: result.nextCursor ?? null,
+    nextStartOffset: result.nextStartOffset ?? null,
     error: surfaceError,
     observations: result.items.map((item) => ({
       kind: mapInvitationObservationKind(surfaceKey, item),
