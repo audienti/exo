@@ -405,6 +405,8 @@ test("daily treats singleton explicitly pinned managed execution as assigned and
       "--json"
     ]);
 
+    runCliJson(tempDir, ["motion", "restart", motion.id, "--json"]);
+
     const sixsense = runCliJson(tempDir, [
       "companies",
       "add",
