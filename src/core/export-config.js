@@ -6,8 +6,7 @@ import { companySchema } from "../schema/company.js";
 import { configBundleSchema } from "../schema/config-bundle.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
-
-export const EXO_VERSION = "0.1.0";
+import { EXO_VERSION } from "../lib/exo-version.js";
 
 export function exportConfigBundle() {
   const motions = listMotions().map((item) => motionSchema.parse(item));

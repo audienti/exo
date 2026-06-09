@@ -20,13 +20,14 @@ import { registerTransition } from "./commands/transition.js";
 import { registerUi } from "./commands/ui.js";
 import { registerUsers } from "./commands/users.js";
 import { registerWhatIsThis } from "./commands/what-is-this.js";
+import { EXO_VERSION } from "../lib/exo-version.js";
 
 const program = new Command();
 
 program
   .name("exo")
   .description("Exo agentic CRM and GTM motion system of record")
-  .version("0.1.0")
+  .version(EXO_VERSION)
   .showHelpAfterError()
   .addHelpText(
     "after",

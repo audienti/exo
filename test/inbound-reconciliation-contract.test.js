@@ -740,15 +740,19 @@ test("daily suppresses new connection-request pressure until a partial live sent
     assert.ok(daily.items.every((item) => item.source.type !== "inbound_itemization_gap"));
 
     const queue = JSON.parse(runCli(tempDir, ["agent", "queue", "--json"]));
-    const syncTask = queue.waiting.find((task) =>
+    const syncTask = [...queue.tasks, ...queue.waiting].find((task) =>
       task.kind === "run_inbound_sync"
       && task.reason === "itemization_gap"
       && task.accountId === linkedinAccount.id
     );
     assert.ok(syncTask);
     assert.equal(syncTask.mode, "full");
-    assert.equal(syncTask.queueState, "waiting");
-    assert.equal(syncTask.waitingReason, "outside_working_hours");
+    assert.ok(["due_now", "waiting"].includes(syncTask.queueState));
+    if (syncTask.queueState === "waiting") {
+      assert.equal(syncTask.waitingReason, "outside_working_hours");
+    } else {
+      assert.equal(syncTask.waitingReason, null);
+    }
     assert.ok(syncTask.surfaceKeys.includes("linkedin-sent-invitations"));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

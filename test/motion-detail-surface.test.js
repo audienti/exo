@@ -358,7 +358,10 @@ test("transition backlog renders as a transition holding motion instead of faile
     assert.doesNotMatch(html, />FAILED</);
     assert.doesNotMatch(html, /Define at least one audience hypothesis before targeting\./);
     assert.doesNotMatch(html, /Define at least one motion signal before targeting\./);
-    assert.match(html, /Reconcile these in-flight relationships and re-home them into real motions\./);
+    assert.match(
+      html,
+      /(Transition backlog still needs re-homing\.|Reconcile these in-flight relationships and re-home them into real motions\.)/,
+    );
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }

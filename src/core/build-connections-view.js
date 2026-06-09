@@ -164,7 +164,7 @@ function buildConnectionsAccounts(truthAccounts) {
       const label = normalizeDisplayString(account.label);
       const surfaces = Array.isArray(account.surfaces) ? account.surfaces.filter((surface) => CONNECTION_SURFACE_KEYS.has(surface.key)) : [];
       return {
-        accountId: normalizeDisplayString(account.accountId) ?? "",
+        accountId: normalizeDisplayString(account.accountId ?? account.id) ?? "",
         capability: normalizeDisplayString(account.capability) ?? null,
         handle,
         label,

@@ -17,6 +17,7 @@ See [LICENSE](/Users/williamflanagan/Projects/omalab/exo/LICENSE). User and thir
 - [CLI Guide](docs/cli-guide.md)
 - [Agent Usage](docs/agent-usage.md)
 - [Plugin Marketplace](docs/plugin-marketplace.md)
+- [Changelog](CHANGELOG.md)
 - [Parallel Agent Access](docs/parallel-agent-access.md)
 - [Companies](docs/companies.md)
 - [Browser Profiles](docs/browser-profiles.md)

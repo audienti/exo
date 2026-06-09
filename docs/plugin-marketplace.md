@@ -11,6 +11,24 @@ Exo now ships a repo-root Codex plugin so the repo can be installed and referenc
 
 The marketplace entry uses the normalized plugin name `exo` and exposes it in the configured marketplace as an `AVAILABLE` `Business` plugin.
 
+## Versioning and changelog
+
+The public plugin manifest is versioned. The version lives in `.codex-plugin/plugin.json`.
+
+For Exo, keep the release number aligned across:
+
+- `package.json`
+- `.codex-plugin/plugin.json`
+- `CHANGELOG.md`
+
+When the public plugin changes, do all three in the same change:
+
+1. bump `package.json`
+2. set `.codex-plugin/plugin.json` to the same version
+3. add a matching `## [x.y.z] - YYYY-MM-DD` section to `CHANGELOG.md`
+
+If work is in progress but not released yet, keep the note under `Unreleased` until the version bump happens.
+
 ## Plugin Contract
 
 The plugin contract is explicit:

@@ -9,6 +9,7 @@ import {
   listUsers
 } from "../db/database.js";
 import { describeStatePathRule } from "../db/paths.js";
+import { EXO_VERSION } from "../lib/exo-version.js";
 import { summarizeExecutionUsers } from "../lib/execution-users.js";
 import { buildDailyView } from "./build-daily-view.js";
 import { buildOnboardingState } from "./onboarding.js";
@@ -127,7 +128,7 @@ export function describeExo() {
 
   return {
     name: "Exo",
-    version: "0.1.0",
+    version: EXO_VERSION,
     identity: {
       oneLiner: "Exo is an agentic CRM and GTM motion system of record exposed through a local CLI and later through MCP.",
       purpose:
