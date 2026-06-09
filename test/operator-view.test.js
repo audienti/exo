@@ -1285,3 +1285,159 @@ test("operator merges due-now planner work into the main action queue without du
   assert.doesNotMatch(html, /Reply to Tony Robbins and move the branch into an active conversation/i);
   assert.doesNotMatch(html, /Due now<\/h2>/i);
 });
+
+test("agent runtime reports a renamed foreign scheduler instead of saying the agent is off", () => {
+  const runtime = {
+    scheduler: {
+      kind: "launchd",
+      installed: true,
+      loaded: false,
+      running: false,
+      runIntervalSeconds: 900,
+      foreignAgents: [
+        {
+          label: "com.lizb.exo.agent-loop",
+          loaded: true,
+          running: true,
+          pid: 4242,
+          referencesStateDir: true,
+        },
+      ],
+    },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "ok", endedAt: "2026-06-04T10:55:00.000Z" },
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "lizb-main", owner: "Liz" },
+    generatedAt: "2026-06-04T11:00:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+
+  assert.equal(model.agentRuntime?.headline, "Background agent running under a non-canonical scheduler");
+  assert.equal(model.agentRuntime?.state, "running");
+  assert.match(model.agentRuntime?.detail ?? "", /com\.lizb\.exo\.agent-loop/);
+  assert.match(model.agentRuntime?.nextAction ?? "", /install-routine/);
+  assert.match((model.agentRuntime?.statusFacts ?? []).join("\n"), /Other exo schedulers: com\.lizb\.exo\.agent-loop \(loaded\)/);
+
+  const html = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
+  assert.match(html, /non-canonical scheduler/i);
+  assert.doesNotMatch(html, /Background agent off/i);
+});
+
+test("agent runtime ignores foreign schedulers that belong to another workspace", () => {
+  const runtime = {
+    scheduler: {
+      kind: "launchd",
+      installed: true,
+      loaded: false,
+      running: false,
+      runIntervalSeconds: 900,
+      foreignAgents: [
+        {
+          label: "com.lizb.exo.agent-loop",
+          loaded: true,
+          running: true,
+          pid: 4242,
+          referencesStateDir: false,
+        },
+      ],
+    },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "blocked", endedAt: "2026-06-04T10:17:27.465Z" },
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "lizb-main", owner: "Liz" },
+    generatedAt: "2026-06-04T11:00:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+
+  assert.equal(model.agentRuntime?.headline, "Background agent off");
+  assert.doesNotMatch((model.agentRuntime?.statusFacts ?? []).join("\n"), /Other exo schedulers/);
+});
+
+test("agent runtime trusts a fresh pass heartbeat when the installed scheduler is unloaded", () => {
+  const runtime = {
+    scheduler: {
+      kind: "launchd",
+      installed: true,
+      loaded: false,
+      running: false,
+      runIntervalSeconds: 900,
+      foreignAgents: [],
+    },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "ok", endedAt: "2026-06-04T10:50:00.000Z" },
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "lizb-main", owner: "Liz" },
+    generatedAt: "2026-06-04T11:00:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+
+  assert.equal(model.agentRuntime?.headline, "Agent passes are arriving outside the installed scheduler");
+  assert.equal(model.agentRuntime?.state, "on");
+  assert.match(model.agentRuntime?.nextAction ?? "", /install-routine/);
+});
+
+test("agent runtime calls out launchd TCC exit codes as a permissions block", () => {
+  const runtime = {
+    scheduler: {
+      kind: "launchd",
+      installed: true,
+      loaded: true,
+      running: false,
+      runIntervalSeconds: 900,
+      lastExitCode: "126",
+      foreignAgents: [],
+    },
+    routine: { exists: true, sendMode: "live" },
+    lastPass: null,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "lizb-main", owner: "Liz" },
+    generatedAt: "2026-06-04T11:00:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "task-1",
+          subject: "Gmail inbound truth",
+          action: "run_inbound_sync",
+          why: "Refresh stale truth.",
+          dueAt: "2026-06-04T10:55:00.000Z",
+          sourceType: "inbound_itemization_gap",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+
+  assert.equal(model.agentRuntime?.headline, "Background agent blocked by macOS permissions");
+  assert.equal(model.agentRuntime?.state, "off");
+  assert.match(model.agentRuntime?.detail ?? "", /code 126/);
+  assert.match(model.agentRuntime?.detail ?? "", /protected folder/i);
+  assert.match(model.agentRuntime?.nextAction ?? "", /install-routine/);
+});

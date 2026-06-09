@@ -889,7 +889,7 @@ function buildAgentRuntimeSnapshot(userId = null) {
   const verificationSendCount = sendTasks.filter((task) => !isOperatorControlledQueueSendTask(task)).length;
   const operatorSendCount = sendTasks.length - verificationSendCount;
   const lock = inspectAgentRunLock({ stateDir });
-  const scheduler = inspectAgentSchedulerState();
+  const scheduler = inspectAgentSchedulerState(stateDir);
   const routine = inspectAgentRoutineState(stateDir);
   const lastPass = readJsonIfExists(path.join(stateDir, "agent-last-pass.json"));
   return {

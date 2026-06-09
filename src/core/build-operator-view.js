@@ -219,7 +219,7 @@ export function buildOperatorViewModel(input) {
     stale: stale.length,
     agendaLeft: 0,
   };
-  const agentRuntime = shapeAgentRuntime(input.agentRuntime ?? null, counts.queue);
+  const agentRuntime = shapeAgentRuntime(input.agentRuntime ?? null, counts.queue, input.generatedAt ?? null);
 
   return {
     user: input.user,
@@ -843,9 +843,10 @@ function isUuid(value) {
 /**
  * @param {any} runtime
  * @param {number} queueCount
+ * @param {string | null} [checkedAt]
  * @returns {OperatorAgentRuntime | null}
  */
-function shapeAgentRuntime(runtime, queueCount) {
+function shapeAgentRuntime(runtime, queueCount, checkedAt = null) {
   if (!runtime) return null;
   const lock = runtime.lock ?? null;
   const scheduler = runtime.scheduler ?? null;
@@ -863,6 +864,14 @@ function shapeAgentRuntime(runtime, queueCount) {
   const lastPassSummary = summarizeLastPass(lastPass);
   const statusFacts = buildAgentStatusFacts({ lock, scheduler, lastPassSummary });
   const verifyHoldingSends = isVerifyModeHoldingSends({ sendMode, lastPass, verificationSendCount });
+  // Far agents have been observed re-installing the runner under a different
+  // launchd label when the canonical one fails. The canonical label then reads
+  // "off" while passes keep arriving — detect that drift instead of lying.
+  const activeForeignAgent = Array.isArray(scheduler?.foreignAgents)
+    ? scheduler.foreignAgents.find((agent) => agent?.loaded && agent?.referencesStateDir !== false) ?? null
+    : null;
+  const heartbeatFresh = isAgentHeartbeatFresh(lastPass, cadence, scheduler, checkedAt);
+  const tccBlocked = isLaunchdTccExitCode(scheduler?.lastExitCode);
   const overdueBySeconds = Number.isFinite(cadence?.overdueBySeconds) ? Number(cadence.overdueBySeconds) : 0;
   const schedulerBehind = Boolean(scheduler?.loaded)
     && !scheduler?.running
@@ -923,6 +932,22 @@ function shapeAgentRuntime(runtime, queueCount) {
     };
   }
 
+  if (tccBlocked && scheduler?.loaded) {
+    return {
+      state: "off",
+      headline: "Background agent blocked by macOS permissions",
+      detail: `Every scheduled run exits with code ${scheduler.lastExitCode}: macOS is refusing to let launchd execute the runner inside a protected folder (Documents/Desktop). Reinstall the scheduler with exo agent install-routine --install to move the entry point out of the protected folder, or grant the runner Full Disk Access.`,
+      cadenceLabel,
+      sendMode,
+      lastPassSummary,
+      statusFacts,
+      nextAction: "Reinstall the scheduler (exo agent install-routine --runtime codex --install) so the launchd entry point lives outside macOS protected folders.",
+      queueCount,
+      canRunNow: true,
+      runLabel: "Run agent now",
+    };
+  }
+
   if (schedulerBehind) {
     return {
       state: "on",
@@ -954,6 +979,38 @@ function shapeAgentRuntime(runtime, queueCount) {
       queueCount,
       canRunNow: !scheduler.running,
       runLabel: scheduler.running ? null : "Run agent now",
+    };
+  }
+
+  if (activeForeignAgent) {
+    return {
+      state: activeForeignAgent.running ? "running" : "on",
+      headline: "Background agent running under a non-canonical scheduler",
+      detail: `Queue passes are arriving from ${activeForeignAgent.label}, not the installed exo scheduler. This usually means an agent re-installed the runner under its own name after a launchd failure. Reinstall the canonical scheduler to adopt it.`,
+      cadenceLabel,
+      sendMode,
+      lastPassSummary,
+      statusFacts,
+      nextAction: "Run exo agent install-routine --runtime codex --install to converge back to the canonical scheduler (it removes the renamed runner).",
+      queueCount,
+      canRunNow: true,
+      runLabel: "Run agent now",
+    };
+  }
+
+  if (heartbeatFresh) {
+    return {
+      state: "on",
+      headline: "Agent passes are arriving outside the installed scheduler",
+      detail: `The installed exo scheduler is not loaded, but an agent pass completed recently (${lastPassSummary ?? "see last pass"}). Something else is draining the queue on this machine.`,
+      cadenceLabel,
+      sendMode,
+      lastPassSummary,
+      statusFacts,
+      nextAction: "Run exo agent install-routine --runtime codex --install so background draining survives whatever is currently running passes.",
+      queueCount,
+      canRunNow: true,
+      runLabel: "Run agent now",
     };
   }
 
@@ -1132,12 +1189,58 @@ function buildAgentStatusFacts(input) {
   const installed = input.scheduler?.installed ? "yes" : "no";
   const loaded = input.scheduler?.loaded ? "yes" : "no";
   const running = input.lock?.active || input.scheduler?.running ? "yes" : "no";
-  return [
+  const facts = [
     `Installed: ${installed}`,
     `Loaded: ${loaded}`,
     `Running: ${running}`,
     `Last pass: ${input.lastPassSummary ?? "none"}`,
   ];
+  const foreignLabels = Array.isArray(input.scheduler?.foreignAgents)
+    ? input.scheduler.foreignAgents
+      .filter((agent) => agent?.referencesStateDir !== false)
+      .map((agent) => `${agent.label}${agent.loaded ? " (loaded)" : ""}`)
+    : [];
+  if (foreignLabels.length > 0) {
+    facts.push(`Other exo schedulers: ${foreignLabels.join(", ")}`);
+  }
+  return facts;
+}
+
+/**
+ * launchd reports 126 when macOS TCC refuses to execute the runner script
+ * (classic for entry points living under ~/Documents or ~/Desktop) and 78
+ * (EX_CONFIG) for the closely related "operation not permitted" startup
+ * failures. Either way the scheduler is loaded but every run dies instantly.
+ *
+ * @param {unknown} lastExitCode
+ */
+function isLaunchdTccExitCode(lastExitCode) {
+  const code = String(lastExitCode ?? "").trim();
+  return code === "126" || code === "78";
+}
+
+/**
+ * The canonical scheduler label being unloaded does not necessarily mean no
+ * agent is draining the queue — passes may be arriving from a renamed runner
+ * or a manual loop. Treat the agent as alive when the last pass landed within
+ * two scheduler intervals (with a floor so sparse cadences don't flap).
+ *
+ * @param {any} lastPass
+ * @param {any} cadence
+ * @param {any} scheduler
+ * @param {string | null} checkedAt
+ */
+function isAgentHeartbeatFresh(lastPass, cadence, scheduler, checkedAt) {
+  const endedAtRaw = lastPass?.endedAt ?? cadence?.lastStartedAt ?? null;
+  if (!endedAtRaw) return false;
+  const endedAt = Date.parse(endedAtRaw);
+  if (!Number.isFinite(endedAt)) return false;
+  const now = checkedAt ? Date.parse(checkedAt) : Date.now();
+  if (!Number.isFinite(now)) return false;
+  const intervalSeconds = Number(scheduler?.runIntervalSeconds ?? cadence?.runIntervalSeconds ?? 900);
+  const freshWindowMs = Math.max(intervalSeconds * 2, 1800) * 1000;
+  const age = now - endedAt;
+  return age >= 0 && age <= freshWindowMs;
 }
 
 /**

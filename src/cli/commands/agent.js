@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { buildAgentQueue } from "../../core/build-agent-queue.js";
 import { buildSendHandoff } from "../../core/build-send-handoff.js";
 import { buildInboundAutomationHealthWarnings, buildInboundAutomationStatus, buildInboundAutomationWarnings } from "../../core/user-inbound-sync.js";
@@ -12,6 +12,7 @@ import { findCompanyById, findMotionById, listBrowserProfiles, listCompanies, li
 import { getHomeStateDir } from "../../db/paths.js";
 import { createTaskVerificationFingerprint, getCanaryCooldown, getRecentTaskVerification, getSendCircuitBreaker, listActiveBrowserBackoffs, pruneExpiredBrowserBackoffs } from "../../lib/agent-host-state.js";
 import { releaseAgentRunLock, tryAcquireAgentRunLock } from "../../lib/agent-run-lock.js";
+import { AGENT_EXECUTION_LANES, normalizeAgentExecutionLane } from "../../lib/agent-task-lanes.js";
 import { buildPreflightSummary } from "../../lib/agent-preflight.js";
 import { buildLaunchAgentLabel, buildRoutinePlan, ROUTINE_ARTIFACT_VERSION } from "../../lib/agent-routine.js";
 
@@ -257,7 +258,7 @@ needs operator input.
     .action(async (options) => {
       const intervalMs = Math.max(5, Number(options.interval) || 30) * 1000;
       while (true) {
-        runAgentWorkerPass({
+        await runAgentWorkerPass({
           json: Boolean(options.json),
           sendMode: options.sendMode ?? null,
           maxTasks: options.maxTasks ?? null,
@@ -379,11 +380,13 @@ needs operator input.
         let installAttempted = false;
         let installError = null;
 
+        let removedForeignAgents = [];
         if (shouldInstall) {
           installAttempted = true;
           if (plan.scheduler === "launchd" && plan.launchAgent) {
             try {
-              installLaunchAgent(plan.launchAgent);
+              const installResult = installLaunchAgent(plan.launchAgent, { canonicalLabel: plan.label, stateDir });
+              removedForeignAgents = installResult.removedForeignAgents;
               installed = true;
             } catch (error) {
               installError = error instanceof Error ? error.message : String(error);
@@ -411,6 +414,7 @@ needs operator input.
           installAttempted,
           artifactsWritten,
           installError,
+          removedForeignAgents: removedForeignAgents.map((agent) => agent.label),
           routinePath: plan.routinePath,
           logPath: plan.logPath,
           cronLine: plan.cronLine,
@@ -431,6 +435,9 @@ needs operator input.
         }
         if (plan.scheduler === "launchd" && plan.launchAgent) {
           console.log(`Wrote the LaunchAgent source → ${plan.launchAgent.sourcePath}`);
+          if (plan.launchAgent.launchdEntryPath) {
+            console.log(`Wrote the launchd entry point → ${plan.launchAgent.launchdEntryPath} (outside macOS protected folders)`);
+          }
           console.log(`\nThe scheduled agent (${plan.runtime}, every ${plan.interval.label}, send mode ${plan.sendMode}) now runs through macOS launchd:`);
           console.log(`  installed plist: ${plan.launchAgent.installPath}`);
           console.log(`  target:         ${plan.launchAgent.target}`);
@@ -456,8 +463,11 @@ needs operator input.
       if (shouldInstall) {
         if (plan.scheduler === "launchd" && plan.launchAgent) {
           try {
-            installLaunchAgent(plan.launchAgent);
+            const installResult = installLaunchAgent(plan.launchAgent, { canonicalLabel: plan.label, stateDir });
             console.log("✓ Installed into your user LaunchAgents and bootstrapped with launchctl.");
+            for (const removedAgent of installResult.removedForeignAgents) {
+              console.log(`✓ Removed stray exo scheduler ${removedAgent.label} (it pointed at this workspace).`);
+            }
           } catch (error) {
             console.log(`Could not install the LaunchAgent automatically (${error instanceof Error ? error.message : error}).`);
             if (plan.launchAgent.bootstrapCommand) console.log(`Bootstrap manually: ${plan.launchAgent.bootstrapCommand}`);
@@ -511,7 +521,7 @@ needs operator input.
  *   quiet?: boolean,
  * }} [options]
  */
-export function runAgentWorkerPass(options = {}) {
+export async function runAgentWorkerPass(options = {}) {
   const stateDir = getHomeStateDir();
   const existingRoutine = inspectAgentRoutineState(stateDir);
   const resolvedSendMode = normalizeRoutineSendMode(options.sendMode, existingRoutine?.sendMode ?? "verify");
@@ -565,26 +575,21 @@ export function runAgentWorkerPass(options = {}) {
   }
 
   try {
-    let raw;
-    try {
-      raw = execFileSync(runnerNode, [runnerScript], {
-        cwd: process.cwd(),
-        env,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        maxBuffer: 8 * 1024 * 1024,
-      });
-    } catch (error) {
-      throw new Error(`Host worker pass failed.\n${formatExecFailure(error)}`);
-    }
+    // Run one host-pass worker per execution lane concurrently: the transport
+    // lane grinds through connector-bound work (sync slices, sends, invite
+    // cleanup) while the research lane drains native compute work. Setting
+    // EXO_AGENT_LANE narrows execution to that single lane.
+    const pinnedLane = normalizeAgentExecutionLane(env.EXO_AGENT_LANE);
+    const lanes = pinnedLane ? [pinnedLane] : [...AGENT_EXECUTION_LANES];
+    const laneSummaries = await Promise.all(lanes.map((lane) =>
+      runWorkerLanePass({ lane, stateDir, runnerNode, runnerScript, env })));
+    const summary = mergeLanePassSummaries(laneSummaries);
 
-    /** @type {any} */
-    let summary;
-    try {
-      summary = JSON.parse(raw);
-    } catch (error) {
-      throw new Error(`Host worker pass returned invalid JSON.\n${error instanceof Error ? error.message : String(error)}\n\nRaw output:\n${raw}`);
-    }
+    // Each lane runner writes its own agent-last-pass.<lane>.json; the merged
+    // view keeps the legacy whole-host summary file current for its readers.
+    const summaryPath = path.join(stateDir, "agent-last-pass.json");
+    fs.mkdirSync(path.dirname(summaryPath), { recursive: true });
+    fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
 
     if (!options.quiet) {
       if (options.json) {
@@ -600,6 +605,117 @@ export function runAgentWorkerPass(options = {}) {
   } finally {
     releaseAgentRunLock(runLock);
   }
+}
+
+/**
+ * Run one host-pass worker for a single execution lane, guarded by that
+ * lane's run lock. A lane that cannot start (lock held) or that breaks must
+ * not take down the sibling lane mid-flight, so failures are surfaced as a
+ * failed lane summary instead of a thrown error.
+ *
+ * @param {{
+ *   lane: string,
+ *   stateDir: string,
+ *   runnerNode: string,
+ *   runnerScript: string,
+ *   env: Record<string, string | undefined>,
+ * }} input
+ * @returns {Promise<any>}
+ */
+async function runWorkerLanePass({ lane, stateDir, runnerNode, runnerScript, env }) {
+  const laneLock = tryAcquireAgentRunLock({ stateDir, lane });
+  if (!laneLock.acquired) {
+    const now = new Date().toISOString();
+    return {
+      status: "noop",
+      reason: `Another ${lane} lane pass is already active${laneLock.pid ? ` (pid ${laneLock.pid})` : ""}.`,
+      startedAt: now,
+      endedAt: now,
+      lane,
+      results: [],
+    };
+  }
+
+  try {
+    const raw = await new Promise((resolve, reject) => {
+      execFile(runnerNode, [runnerScript], {
+        cwd: process.cwd(),
+        env: { ...env, EXO_AGENT_LANE: lane },
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+      }, (error, stdout) => {
+        if (error) {
+          reject(new Error(`Host worker ${lane} lane pass failed.\n${formatExecFailure(error)}`));
+          return;
+        }
+        resolve(stdout);
+      });
+    });
+
+    let parsed;
+    try {
+      parsed = JSON.parse(String(raw));
+    } catch (error) {
+      throw new Error(`Host worker ${lane} lane pass returned invalid JSON.\n${error instanceof Error ? error.message : String(error)}\n\nRaw output:\n${raw}`);
+    }
+    return { ...parsed, lane };
+  } catch (error) {
+    const now = new Date().toISOString();
+    return {
+      status: "failed",
+      reason: error instanceof Error ? error.message : String(error),
+      startedAt: now,
+      endedAt: now,
+      lane,
+      results: [],
+    };
+  } finally {
+    releaseAgentRunLock(laneLock);
+  }
+}
+
+// Worst lane status wins the merged pass status.
+const PASS_STATUS_SEVERITY = ["failed", "blocked", "mixed", "partial", "completed", "noop"];
+
+/**
+ * Merge per-lane host-pass summaries into the legacy whole-host summary shape.
+ * @param {any[]} laneSummaries
+ */
+export function mergeLanePassSummaries(laneSummaries) {
+  const lanes = (laneSummaries ?? []).filter(Boolean);
+  if (lanes.length === 1) {
+    return { ...lanes[0], lanes };
+  }
+
+  const status = PASS_STATUS_SEVERITY.find((candidate) => lanes.some((lane) => lane?.status === candidate))
+    ?? "noop";
+  const distinctReasons = [...new Set(lanes.map((lane) => lane?.reason).filter(Boolean))];
+  const reason = distinctReasons.length <= 1
+    ? distinctReasons[0] ?? null
+    : lanes
+      .filter((lane) => lane?.reason)
+      .map((lane) => `${lane.lane ?? "lane"}: ${lane.reason}`)
+      .join(" | ");
+  const startedAt = lanes.map((lane) => lane?.startedAt).filter(Boolean).sort()[0] ?? null;
+  const endedAt = lanes.map((lane) => lane?.endedAt).filter(Boolean).sort().at(-1) ?? null;
+  // The lane that finished last saw the freshest queue.
+  const freshestQueueLane = lanes
+    .filter((lane) => lane?.finalQueueCounts)
+    .sort((left, right) => String(left?.endedAt ?? "").localeCompare(String(right?.endedAt ?? "")))
+    .at(-1);
+
+  return {
+    status,
+    reason,
+    startedAt,
+    endedAt,
+    lanes,
+    results: lanes.flatMap((lane) => (Array.isArray(lane?.results) ? lane.results : [])),
+    finalQueueCounts: freshestQueueLane?.finalQueueCounts
+      ?? { dueTaskCount: 0, waitingTaskCount: 0, blockerCount: 0 },
+    browserReady: lanes.find((lane) => lane?.browserReady !== undefined)?.browserReady,
+    preflightPath: lanes.find((lane) => lane?.preflightPath)?.preflightPath ?? null,
+  };
 }
 
 /**
@@ -637,6 +753,9 @@ function formatAgentWorkerPassSummary(summary, options = {}) {
   }
   if (summary?.startedAt || summary?.endedAt) {
     lines.push(`Window: ${summary?.startedAt ?? "unknown"} → ${summary?.endedAt ?? "unknown"}`);
+  }
+  if (Array.isArray(summary?.lanes) && summary.lanes.length > 1) {
+    lines.push(`Lanes: ${summary.lanes.map((lane) => `${lane?.lane ?? "?"} ${lane?.status ?? "unknown"}`).join(", ")}`);
   }
   if (options.forceRetrieval) {
     lines.push("Forced retrieval was enabled for this manual pass.");
@@ -702,7 +821,7 @@ function buildAgentDoctorReport() {
     stateDir,
     codexHome: process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"),
   });
-  const scheduler = inspectAgentSchedulerState();
+  const scheduler = inspectAgentSchedulerState(stateDir);
   const routine = inspectAgentRoutineState(stateDir);
   const desiredRoutine = buildRoutinePlan({
     repo: process.cwd(),
@@ -789,6 +908,16 @@ export function formatAgentDoctorReport(report) {
       ? ` state=${scheduler.state ?? "unknown"} runs=${scheduler.runs ?? 0}${scheduler.lastExitCode !== null ? ` last_exit=${scheduler.lastExitCode}` : ""}${scheduler.runIntervalSeconds ? ` interval=${formatCadenceIntervalSeconds(scheduler.runIntervalSeconds)}` : ""}${Number.isFinite(scheduler.runningForSeconds) ? ` running_for=${formatDurationSeconds(Number(scheduler.runningForSeconds))}` : ""}`
       : "";
     lines.push(`Scheduler: launchd ${schedulerStatus}.${schedulerDetail}`);
+    if (scheduler.loaded && (String(scheduler.lastExitCode) === "126" || String(scheduler.lastExitCode) === "78")) {
+      lines.push(`Last launchd exit code ${scheduler.lastExitCode} usually means macOS privacy controls (TCC) blocked the runner. Reinstall the routine to move the launchd entry point outside protected folders: exo agent install-routine --runtime codex --install`);
+    }
+    const foreignAgents = Array.isArray(scheduler.foreignAgents)
+      ? scheduler.foreignAgents.filter((agent) => agent?.referencesStateDir !== false)
+      : [];
+    if (foreignAgents.length > 0) {
+      const labels = foreignAgents.map((agent) => `${agent.label}${agent.loaded ? " (loaded)" : ""}`).join(", ");
+      lines.push(`Other exo schedulers found for this workspace: ${labels}. Reinstalling the routine converges on the canonical scheduler and removes them.`);
+    }
   }
   if (report.cadence?.nextExpectedRunAt) {
     const prefix = report.cadence.overdue ? "Scheduler is overdue." : "Next scheduled pass is expected around";
@@ -1010,7 +1139,70 @@ function readJsonIfExists(filePath) {
   }
 }
 
-export function inspectAgentSchedulerState() {
+/**
+ * Far agents have been observed working around launchd failures by installing
+ * their own exo-labelled LaunchAgents under a different name (for example
+ * `com.<user>.exo.agent-loop` instead of the canonical queue-drainer). The
+ * canonical label then reads as "off" while passes are actually arriving.
+ * Scan the LaunchAgents directory for those renamed runners so status can
+ * tell the truth and repair can converge them back to the canonical label.
+ *
+ * @param {{
+ *   canonicalLabel: string,
+ *   launchAgentsDir?: string,
+ *   stateDir?: string | null,
+ *   uid?: number | null,
+ *   printLaunchctl?: (target: string) => string,
+ * }} input
+ */
+export function scanForeignExoLaunchAgents(input) {
+  const launchAgentsDir = input.launchAgentsDir ?? path.join(os.homedir(), "Library", "LaunchAgents");
+  const uid = input.uid !== undefined ? input.uid : (process.getuid?.() ?? null);
+  const printLaunchctl = input.printLaunchctl
+    ?? ((target) => execFileSync("launchctl", ["print", target], { encoding: "utf8" }));
+  /** @type {string[]} */
+  let entries = [];
+  try {
+    entries = fs.readdirSync(launchAgentsDir);
+  } catch {
+    return [];
+  }
+  const foreign = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".plist")) continue;
+    const label = entry.slice(0, -".plist".length);
+    if (label === input.canonicalLabel) continue;
+    if (!/(^|\.)exo\./.test(label)) continue;
+    const installPath = path.join(launchAgentsDir, entry);
+    let plistContent = "";
+    try {
+      plistContent = fs.readFileSync(installPath, "utf8");
+    } catch {
+      // Unreadable plist still gets reported by label so drift is visible.
+    }
+    const referencesStateDir = input.stateDir ? plistContent.includes(input.stateDir) : null;
+    const target = uid === null ? label : `gui/${uid}/${label}`;
+    let loaded = false;
+    let running = false;
+    let pid = null;
+    try {
+      const output = printLaunchctl(target);
+      loaded = true;
+      running = (output.match(/^\s*state = (.+)$/m)?.[1]?.trim() ?? null) === "running";
+      const pidRaw = output.match(/^\s*pid = (\d+)/m)?.[1] ?? null;
+      pid = pidRaw ? Number(pidRaw) : null;
+    } catch {
+      // Not loaded in this launchd domain; the stray plist alone is the drift.
+    }
+    foreign.push({ label, installPath, target, loaded, running, pid, referencesStateDir });
+  }
+  return foreign;
+}
+
+/**
+ * @param {string | null} [stateDir]
+ */
+export function inspectAgentSchedulerState(stateDir = null) {
   if (process.platform !== "darwin") {
     return {
       kind: "none",
@@ -1025,6 +1217,7 @@ export function inspectAgentSchedulerState() {
   const installPath = path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`);
   const target = uid === null ? label : `gui/${uid}/${label}`;
   const installed = fs.existsSync(installPath);
+  const foreignAgents = scanForeignExoLaunchAgents({ canonicalLabel: label, stateDir, uid });
 
   if (!installed) {
     return {
@@ -1042,6 +1235,7 @@ export function inspectAgentSchedulerState() {
       runningForSeconds: null,
       lastExitCode: null,
       error: null,
+      foreignAgents,
     };
   }
 
@@ -1068,6 +1262,7 @@ export function inspectAgentSchedulerState() {
       runningForSeconds: state === "running" && pid ? readProcessElapsedSeconds(pid) : null,
       lastExitCode: lastExitRaw && lastExitRaw !== "(never exited)" ? lastExitRaw : null,
       error: null,
+      foreignAgents,
     };
   } catch (error) {
     return {
@@ -1085,6 +1280,7 @@ export function inspectAgentSchedulerState() {
       runningForSeconds: null,
       lastExitCode: null,
       error: error instanceof Error ? error.message : String(error),
+      foreignAgents,
     };
   }
 }
@@ -1593,7 +1789,7 @@ function parsePsElapsedTime(value) {
  *   enableCommand: string | null,
  * }} launchAgent
  */
-function installLaunchAgent(launchAgent) {
+function installLaunchAgent(launchAgent, options = {}) {
   fs.mkdirSync(path.dirname(launchAgent.installPath), { recursive: true });
   fs.copyFileSync(launchAgent.sourcePath, launchAgent.installPath);
   try {
@@ -1611,6 +1807,54 @@ function installLaunchAgent(launchAgent) {
     // Some launchd states are already enabled. Keep the bootstrap as success.
   }
   execFileSync("launchctl", ["print", launchAgent.target], { encoding: "utf8" });
+  const removedForeignAgents = options.canonicalLabel
+    ? removeForeignExoLaunchAgents({
+      canonicalLabel: options.canonicalLabel,
+      stateDir: options.stateDir ?? null,
+    })
+    : [];
+  return { removedForeignAgents };
+}
+
+/**
+ * Converge scheduling back onto the canonical label: boot out and delete any
+ * renamed exo LaunchAgents that drive the same state dir, so two schedulers
+ * never race over one queue and status stops reporting drift. Plists that
+ * reference a different state dir belong to another workspace and are left
+ * alone.
+ *
+ * @param {{
+ *   canonicalLabel: string,
+ *   stateDir?: string | null,
+ *   launchAgentsDir?: string,
+ *   uid?: number | null,
+ *   printLaunchctl?: (target: string) => string,
+ *   bootoutLaunchctl?: (target: string) => void,
+ * }} input
+ */
+export function removeForeignExoLaunchAgents(input) {
+  const bootoutLaunchctl = input.bootoutLaunchctl
+    ?? ((target) => execFileSync("launchctl", ["bootout", target], { encoding: "utf8" }));
+  const foreignAgents = scanForeignExoLaunchAgents(input);
+  const removed = [];
+  for (const agent of foreignAgents) {
+    // Strict containment check: only plists that provably reference this
+    // workspace's state dir are ours to remove. Unreadable plists and other
+    // workspaces' runners stay (they keep showing up in status as drift).
+    if (agent.referencesStateDir !== true) continue;
+    try {
+      bootoutLaunchctl(agent.target);
+    } catch {
+      // Already unloaded (or never bootstrapped); removing the plist is what matters.
+    }
+    try {
+      fs.rmSync(agent.installPath, { force: true });
+      removed.push(agent);
+    } catch {
+      // Leave it visible in the next status scan rather than failing the install.
+    }
+  }
+  return removed;
 }
 
 /** @param {any} handoff */

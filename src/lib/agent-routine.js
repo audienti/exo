@@ -17,7 +17,7 @@ const DEFAULT_PATH = [
   "/sbin",
 ].join(":");
 const DEFAULT_CODEX_BIN = "/Applications/Codex.app/Contents/Resources/codex";
-export const ROUTINE_ARTIFACT_VERSION = "2026-06-04-1";
+export const ROUTINE_ARTIFACT_VERSION = "2026-06-09-1";
 
 /**
  * @param {string} interval
@@ -169,9 +169,40 @@ export function buildDrainPrompt(input) {
 }
 
 /**
+ * The launchd entry point deliberately lives outside macOS TCC-protected
+ * folders (Documents/Desktop) and runs under the node binary that installed
+ * the routine. Launchd exec'ing a shell script inside ~/Documents dies with
+ * exit 126 before any logging happens — /bin/bash has no TCC identity of its
+ * own, while the installing runtime's node (for example the Codex app bundle)
+ * carries the file-access grant the operator already approved. Children of
+ * the entry process inherit that responsibility, so the workspace runner can
+ * read and write the repo again.
+ *
+ * @param {{ runnerPath: string }} input
+ */
+export function buildLaunchdEntryScript(input) {
+  return [
+    "#!/usr/bin/env node",
+    `// exo launchd entry — exo_agent_routine_version=${ROUTINE_ARTIFACT_VERSION}`,
+    "// Installed outside Documents/Desktop so launchd can always exec it; runs",
+    "// the workspace host runner under this node binary's TCC identity.",
+    'import { spawnSync } from "node:child_process";',
+    "",
+    `const runnerPath = ${JSON.stringify(input.runnerPath)};`,
+    'const result = spawnSync("/bin/bash", [runnerPath], { stdio: "inherit" });',
+    "if (result.error) {",
+    "  console.error(`exo launchd entry could not start the host runner: ${result.error.message}`);",
+    "  process.exit(1);",
+    "}",
+    "process.exit(result.status ?? 1);",
+    "",
+  ].join("\n");
+}
+
+/**
  * @param {{
  *   label: string,
- *   runnerPath: string,
+ *   programArguments: string[],
  *   repo: string,
  *   stateDir: string,
  *   homeDir: string,
@@ -195,7 +226,7 @@ export function buildLaunchAgentPlist(input) {
     "",
     "  <key>ProgramArguments</key>",
     "  <array>",
-    `    <string>${escapeXml(input.runnerPath)}</string>`,
+    ...input.programArguments.map((argument) => `    <string>${escapeXml(argument)}</string>`),
     "  </array>",
     "",
     "  <key>WorkingDirectory</key>",
@@ -358,12 +389,24 @@ export function buildCodexHostRunner(input) {
     "  exit 0",
     "fi",
     "",
-    "echo \"Starting deterministic host pass...\"",
+    "echo \"Starting deterministic host pass (transport + research lanes)...\"",
+    "# The shell holds the whole-host lock; each lane worker drains its own",
+    "# slice of the queue concurrently (connector work vs native research).",
     "set +e",
-    "/usr/bin/caffeinate -dimsu -t 7200 /usr/bin/env node \"$PASS_RUNNER_SCRIPT\"",
-    "status=$?",
+    "EXO_AGENT_LANE=transport /usr/bin/caffeinate -dimsu -t 7200 /usr/bin/env node \"$PASS_RUNNER_SCRIPT\" &",
+    "transport_pid=$!",
+    "EXO_AGENT_LANE=research /usr/bin/caffeinate -dimsu -t 7200 /usr/bin/env node \"$PASS_RUNNER_SCRIPT\" &",
+    "research_pid=$!",
+    "wait \"$transport_pid\"",
+    "transport_status=$?",
+    "wait \"$research_pid\"",
+    "research_status=$?",
     "set -e",
-    "echo \"finished_at=$(date '+%Y-%m-%dT%H:%M:%S%z %Z') status=$status\"",
+    "status=$transport_status",
+    "if [[ \"$research_status\" -ne 0 ]]; then",
+    "  status=$research_status",
+    "fi",
+    "echo \"finished_at=$(date '+%Y-%m-%dT%H:%M:%S%z %Z') transport_status=$transport_status research_status=$research_status status=$status\"",
     "exit \"$status\"",
     "",
   ].join("\n");
@@ -480,12 +523,24 @@ function buildDeterministicHostRunner(input) {
     "  exit 0",
     "fi",
     "",
-    "echo \"Starting deterministic host pass...\"",
+    "echo \"Starting deterministic host pass (transport + research lanes)...\"",
+    "# The shell holds the whole-host lock; each lane worker drains its own",
+    "# slice of the queue concurrently (connector work vs native research).",
     "set +e",
-    "/usr/bin/env node \"$PASS_RUNNER_SCRIPT\"",
-    "status=$?",
+    "EXO_AGENT_LANE=transport /usr/bin/env node \"$PASS_RUNNER_SCRIPT\" &",
+    "transport_pid=$!",
+    "EXO_AGENT_LANE=research /usr/bin/env node \"$PASS_RUNNER_SCRIPT\" &",
+    "research_pid=$!",
+    "wait \"$transport_pid\"",
+    "transport_status=$?",
+    "wait \"$research_pid\"",
+    "research_status=$?",
     "set -e",
-    "echo \"finished_at=$(date '+%Y-%m-%dT%H:%M:%S%z %Z') status=$status\"",
+    "status=$transport_status",
+    "if [[ \"$research_status\" -ne 0 ]]; then",
+    "  status=$research_status",
+    "fi",
+    "echo \"finished_at=$(date '+%Y-%m-%dT%H:%M:%S%z %Z') transport_status=$transport_status research_status=$research_status status=$status\"",
     "exit \"$status\"",
     "",
   ].join("\n");
@@ -505,6 +560,7 @@ function buildDeterministicHostRunner(input) {
  *   pathEnv?: string,
  *   codexHome?: string,
  *   codexBin?: string,
+ *   nodeBin?: string,
  *   sendMode?: string,
  * }} input
  */
@@ -578,6 +634,11 @@ export function buildRoutinePlan(input) {
   const launchAgentTarget = uid === null ? label : `gui/${uid}/${label}`;
   const stdoutLogPath = path.join(input.stateDir, "agent-launchd.out.log");
   const stderrLogPath = path.join(input.stateDir, "agent-launchd.err.log");
+  // The entry point launchd actually execs lives under ~/Library (never
+  // TCC-protected) and runs under the installing node binary, because workspaces
+  // under ~/Documents make the in-repo runner un-executable for launchd (exit 126).
+  const launchdEntryPath = path.join(homeDir, "Library", "Application Support", "exo", label, "launchd-entry.mjs");
+  const nodeBin = input.nodeBin ?? process.execPath;
   const hostRunner = buildCodexHostRunner({
     repo: input.repo,
     stateDir: input.stateDir,
@@ -595,7 +656,7 @@ export function buildRoutinePlan(input) {
   });
   const plist = buildLaunchAgentPlist({
     label,
-    runnerPath: hostRunnerPath,
+    programArguments: [nodeBin, launchdEntryPath],
     repo: input.repo,
     stateDir: input.stateDir,
     homeDir,
@@ -609,6 +670,7 @@ export function buildRoutinePlan(input) {
 
   artifacts.push(
     { path: hostRunnerPath, content: hostRunner, mode: 0o755 },
+    { path: launchdEntryPath, content: buildLaunchdEntryScript({ runnerPath: hostRunnerPath }), mode: 0o755 },
     { path: launchAgentSourcePath, content: plist, mode: 0o644 },
   );
 
@@ -627,6 +689,8 @@ export function buildRoutinePlan(input) {
     launchAgent: {
       sourcePath: launchAgentSourcePath,
       installPath: launchAgentInstallPath,
+      launchdEntryPath,
+      nodeBin,
       target: launchAgentTarget,
       bootstrapDomain: uid === null ? null : `gui/${uid}`,
       bootstrapCommand: uid === null ? null : `launchctl bootstrap gui/${uid} ${launchAgentInstallPath}`,

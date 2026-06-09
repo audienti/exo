@@ -70,6 +70,7 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
     uid: 501,
     pathEnv: "/usr/local/bin:/usr/bin:/bin",
     codexHome: "/Users/tester/.codex",
+    nodeBin: "/Applications/Codex.app/Contents/Resources/node",
   });
 
   assert.equal(plan.scheduler, "launchd");
@@ -78,7 +79,12 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   assert.equal(plan.hostRunnerPath, "/tmp/exo/.exo/run-agent-host.sh");
   assert.equal(plan.launchAgent?.installPath, "/Users/tester/Library/LaunchAgents/com.williamflanagan.exo.queue-drainer.plist");
   assert.equal(plan.launchAgent?.target, "gui/501/com.williamflanagan.exo.queue-drainer");
-  assert.equal(plan.artifacts.length, 3);
+  assert.equal(
+    plan.launchAgent?.launchdEntryPath,
+    "/Users/tester/Library/Application Support/exo/com.williamflanagan.exo.queue-drainer/launchd-entry.mjs",
+  );
+  assert.equal(plan.launchAgent?.nodeBin, "/Applications/Codex.app/Contents/Resources/node");
+  assert.equal(plan.artifacts.length, 4);
 
   const runner = plan.artifacts.find((artifact) => artifact.path.endsWith("run-agent-host.sh"))?.content ?? "";
   const prompt = plan.prompt;
@@ -98,8 +104,11 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   assert.match(runner, /PREFLIGHT_SCRIPT="\$ROOT\/scripts\/preflight-agent-runtime\.js"/);
   assert.match(runner, /PASS_RUNNER_SCRIPT="\$ROOT\/scripts\/run-agent-host-pass\.js"/);
   assert.match(runner, /node "\$PREFLIGHT_SCRIPT" --json --write "\$PREFLIGHT_JSON"/);
-  assert.match(runner, /Starting deterministic host pass/);
-  assert.match(runner, /caffeinate -dimsu -t 7200 \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT"/);
+  assert.match(runner, /Starting deterministic host pass \(transport \+ research lanes\)/);
+  assert.match(runner, /EXO_AGENT_LANE=transport \/usr\/bin\/caffeinate -dimsu -t 7200 \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
+  assert.match(runner, /EXO_AGENT_LANE=research \/usr\/bin\/caffeinate -dimsu -t 7200 \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
+  assert.match(runner, /wait "\$transport_pid"/);
+  assert.match(runner, /wait "\$research_pid"/);
 
   assert.match(prompt, /Read \/tmp\/exo\/\.exo\/agent-preflight\.json first if it exists/);
   assert.match(prompt, /skip every browser-backed task in this pass/);
@@ -113,7 +122,18 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   assert.match(plist, /<key>USER<\/key>\s*<string>williamflanagan<\/string>/);
   assert.match(plist, /<key>LOGNAME<\/key>\s*<string>williamflanagan<\/string>/);
   assert.match(plist, /<key>StartInterval<\/key>\s*<integer>900<\/integer>/);
-  assert.match(plist, /<string>\/tmp\/exo\/\.exo\/run-agent-host\.sh<\/string>/);
+  // launchd must exec the TCC-safe entry chain (node + ~/Library entry script),
+  // never the in-repo bash runner directly (exit 126 under ~/Documents).
+  assert.match(plist, /<string>\/Applications\/Codex\.app\/Contents\/Resources\/node<\/string>\s*<string>\/Users\/tester\/Library\/Application Support\/exo\/com\.williamflanagan\.exo\.queue-drainer\/launchd-entry\.mjs<\/string>/);
+  assert.doesNotMatch(plist, /<string>\/tmp\/exo\/\.exo\/run-agent-host\.sh<\/string>/);
+
+  const entry = plan.artifacts.find((artifact) => artifact.path.endsWith("launchd-entry.mjs"));
+  assert.ok(entry, "expected a launchd-entry.mjs artifact");
+  assert.equal(entry?.path, plan.launchAgent?.launchdEntryPath);
+  assert.equal(entry?.mode, 0o755);
+  assert.match(entry?.content ?? "", new RegExp(`exo_agent_routine_version=${ROUTINE_ARTIFACT_VERSION}`));
+  assert.match(entry?.content ?? "", /const runnerPath = "\/tmp\/exo\/\.exo\/run-agent-host\.sh";/);
+  assert.match(entry?.content ?? "", /spawnSync\("\/bin\/bash", \[runnerPath\]/);
 });
 
 test("buildRoutinePlan falls back to cron and still emits the shared host runner", () => {
@@ -143,7 +163,8 @@ test("buildRoutinePlan falls back to cron and still emits the shared host runner
   assert.match(runner, /Exo queue drainer already active/);
   assert.match(runner, /PREFLIGHT_SCRIPT="\$ROOT\/scripts\/preflight-agent-runtime\.js"/);
   assert.match(runner, /PASS_RUNNER_SCRIPT="\$ROOT\/scripts\/run-agent-host-pass\.js"/);
-  assert.match(runner, /\/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT"/);
+  assert.match(runner, /EXO_AGENT_LANE=transport \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
+  assert.match(runner, /EXO_AGENT_LANE=research \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
   assert.doesNotMatch(runner, /claude -p|codex exec/);
 });
 

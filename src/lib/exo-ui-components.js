@@ -959,6 +959,30 @@ function renderAgentStatusMenu(runtime, opts = {}) {
   );
 }
 
+/**
+ * The canonical scheduler label being unloaded does not necessarily mean no
+ * agent is draining the queue — passes may be arriving from a renamed runner
+ * or a manual loop. Treat the agent as alive when the last pass landed within
+ * two scheduler intervals (with a floor so sparse cadences don't flap).
+ *
+ * @param {any} lastPass
+ * @param {any} cadenceState
+ * @param {any} scheduler
+ * @param {string | null} checkedAt
+ */
+function isAgentHeartbeatFreshForHeader(lastPass, cadenceState, scheduler, checkedAt) {
+  const endedAtRaw = lastPass?.endedAt ?? cadenceState?.lastStartedAt ?? null;
+  if (!endedAtRaw) return false;
+  const endedAt = Date.parse(endedAtRaw);
+  if (!Number.isFinite(endedAt)) return false;
+  const now = checkedAt ? Date.parse(checkedAt) : Date.now();
+  if (!Number.isFinite(now)) return false;
+  const intervalSeconds = Number(scheduler?.runIntervalSeconds ?? cadenceState?.runIntervalSeconds ?? 900);
+  const freshWindowMs = Math.max(intervalSeconds * 2, 1800) * 1000;
+  const age = now - endedAt;
+  return age >= 0 && age <= freshWindowMs;
+}
+
 /** @param {number | null | undefined} seconds */
 function humanizeCadence(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
@@ -1050,6 +1074,15 @@ function summarizeAgentHeaderRuntime(runtime) {
   const queuedLabel = `${queueCount} queued`;
   const queuedDetail = `${queueCount} queued task${queueCount === 1 ? "" : "s"} waiting to run.`;
   const verifyHoldingSends = isVerifyModeHoldingSends({ sendMode, lastPass, verificationSendCount });
+  // Far agents have been observed re-installing the runner under a different
+  // launchd label when the canonical one fails (TCC exit 126). Keep the header
+  // pill honest: drift and out-of-band heartbeats are "on", not "off".
+  const activeForeignAgent = Array.isArray(scheduler?.foreignAgents)
+    ? scheduler.foreignAgents.find((agent) => agent?.loaded && agent?.referencesStateDir !== false) ?? null
+    : null;
+  const heartbeatFresh = isAgentHeartbeatFreshForHeader(lastPass, cadenceState, scheduler, runtime.checkedAt ?? null);
+  const lastExitCode = String(scheduler?.lastExitCode ?? "").trim();
+  const tccBlocked = lastExitCode === "126" || lastExitCode === "78";
   const overdueBySeconds = Number.isFinite(cadenceState?.overdueBySeconds) ? Number(cadenceState.overdueBySeconds) : 0;
   const schedulerBehind = Boolean(scheduler?.loaded)
     && !scheduler?.running
@@ -1147,6 +1180,21 @@ function summarizeAgentHeaderRuntime(runtime) {
     };
   }
 
+  if (tccBlocked && scheduler?.loaded) {
+    return {
+      health: "red",
+      label: "Blocked",
+      headline: "Background agent blocked by macOS permissions",
+      detail: `Every scheduled run exits with code ${lastExitCode}: macOS is refusing to let launchd execute the runner inside a protected folder (Documents/Desktop). Reinstall the scheduler to move the entry point out of the protected folder.`,
+      cadence,
+      sendMode,
+      statusFacts,
+      nextAction: "Reinstall the scheduler (exo agent install-routine --runtime codex --install) so the launchd entry point lives outside macOS protected folders.",
+      canRunNow: true,
+      runLabel: "Run agent now",
+    };
+  }
+
   if (schedulerBehind) {
     return {
       health: "yellow",
@@ -1176,6 +1224,36 @@ function summarizeAgentHeaderRuntime(runtime) {
       nextAction: scheduler.running ? null : "No repair needed. Let the scheduler run, or run the agent now if you want an immediate pass.",
       canRunNow: !scheduler.running,
       runLabel: scheduler.running ? null : "Run agent now",
+    };
+  }
+
+  if (activeForeignAgent) {
+    return {
+      health: "green",
+      label: activeForeignAgent.running ? "Running" : "On",
+      headline: "Background agent running under a non-canonical scheduler",
+      detail: `Queue passes are arriving from ${activeForeignAgent.label}, not the installed exo scheduler. Reinstall the canonical scheduler to converge (it removes the renamed runner).`,
+      cadence,
+      sendMode,
+      statusFacts,
+      nextAction: "Run exo agent install-routine --runtime codex --install to converge back to the canonical scheduler.",
+      canRunNow: !activeForeignAgent.running,
+      runLabel: activeForeignAgent.running ? null : "Run agent now",
+    };
+  }
+
+  if (heartbeatFresh) {
+    return {
+      health: "green",
+      label: "On",
+      headline: "Agent passes are arriving outside the installed scheduler",
+      detail: `The installed exo scheduler is not loaded, but an agent pass completed recently${lastPassSummary ? ` (${lastPassSummary.toLowerCase()})` : ""}. Something else is draining the queue on this machine.`,
+      cadence,
+      sendMode,
+      statusFacts,
+      nextAction: "Run exo agent install-routine --runtime codex --install so background draining survives whatever is currently running passes.",
+      canRunNow: true,
+      runLabel: "Run agent now",
     };
   }
 
