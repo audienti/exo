@@ -827,6 +827,9 @@ async function captureLinkedinQuickSurfacesThroughUnipile(input) {
           providerAccountId: input.providerAccountId,
           mode,
           limit: input.limit,
+          maxPages: input.maxPages,
+          pageSize: input.pageSize,
+          resumeCursor: input.resumeCursor,
           httpGetImpl: input.httpGetImpl,
           profileCache,
           companyCache
@@ -839,6 +842,9 @@ async function captureLinkedinQuickSurfacesThroughUnipile(input) {
           providerAccountId: input.providerAccountId,
           mode,
           limit: input.limit,
+          maxPages: input.maxPages,
+          pageSize: input.pageSize,
+          resumeCursor: input.resumeCursor,
           httpGetImpl: input.httpGetImpl,
           profileCache,
           companyCache
@@ -979,7 +985,7 @@ async function captureUnipileSentInvitationsSurface(input) {
 }
 
 /**
- * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
+ * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, maxPages?: number | null, pageSize?: number | null, resumeCursor?: string | null, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
  */
 async function captureUnipileReceivedInvitationsSurface(input) {
   return captureUnipileLinkedinCollectionSurface({
@@ -990,6 +996,9 @@ async function captureUnipileReceivedInvitationsSurface(input) {
     providerAccountId: input.providerAccountId,
     mode: input.mode,
     limit: input.limit,
+    maxPages: input.maxPages ?? null,
+    pageSize: input.pageSize ?? null,
+    resumeCursor: input.resumeCursor ?? null,
     maxPageSize: LINKEDIN_COLLECTION_MAX_PAGE_SIZE,
     partialError: "Unipile returned more received LinkedIn invitations than this quick pass itemized.",
     httpGetImpl: input.httpGetImpl,
@@ -1046,7 +1055,7 @@ async function captureUnipileReceivedInvitationsSurface(input) {
 }
 
 /**
- * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
+ * @param {{ apiKey: string, baseUrl: string, providerAccountId: string, mode: "quick" | "full", limit: number, maxPages?: number | null, pageSize?: number | null, resumeCursor?: string | null, httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null, profileCache: Map<string, Promise<null | { providerId: string | null, publicIdentifier: string | null, headline: string | null, companyName: string | null, profileUrl: string | null, pictureUrl: string | null }>> }} input
  */
 async function captureUnipileMessagingInboxSurface(input) {
   /** @type {Map<string, Promise<null | {
@@ -1076,6 +1085,9 @@ async function captureUnipileMessagingInboxSurface(input) {
     providerAccountId: input.providerAccountId,
     mode: input.mode,
     limit: input.limit,
+    maxPages: input.maxPages ?? null,
+    pageSize: input.pageSize ?? null,
+    resumeCursor: input.resumeCursor ?? null,
     maxPageSize: LINKEDIN_COLLECTION_MAX_PAGE_SIZE,
     partialError: "Unipile returned more unread LinkedIn chats than this quick pass itemized.",
     httpGetImpl: input.httpGetImpl,

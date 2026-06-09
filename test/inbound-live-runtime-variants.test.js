@@ -1915,6 +1915,339 @@ test("inbound sync linkedin-live can stop a full sent-invitations reconciliation
   }
 });
 
+test("inbound sync linkedin-live can stop a full received-invitations reconciliation at a page budget and resume from the next cursor", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-received-invitations-page-budget-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const timestamp = "2026-06-04T12:00:00.000Z";
+  const seenInvitationRequests = [];
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ""
+  ].join("\n"));
+
+  try {
+    const rawUser = {
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "linkedin-live-unipile-user",
+      owner: "william",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00"
+      },
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "linkedin-live-unipile-user",
+          label: "LinkedIn via Unipile",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-1",
+          providerAccountId: "unipile-linkedin-1",
+          preferred: true,
+          automationControls: {
+            weeklyQuotas: {
+              profileVisits: null,
+              invitations: null,
+              messages: null
+            }
+          },
+          notes: null,
+          inboundSync: {
+            surfaces: []
+          }
+        }
+      ],
+      harnessConnections: [
+        {
+          id: "harness-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          runtime: "codex",
+          connector: "unipile",
+          label: "codex:unipile",
+          status: "available",
+          notes: null
+        }
+      ],
+      inboundIgnoreRules: []
+    };
+
+    const sharedOptions = {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      limit: 500,
+      surfaceKeys: ["linkedin-received-invitations"],
+      codexHome,
+      unipileHttpGetImpl: (url) => {
+        const requestUrl = new URL(url);
+        if (!requestUrl.pathname.endsWith("/api/v1/users/invite/received")) {
+          return {
+            status: 404,
+            bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+          };
+        }
+
+        const cursor = requestUrl.searchParams.get("cursor");
+        const limit = Number(requestUrl.searchParams.get("limit") ?? "-1");
+        seenInvitationRequests.push({ cursor, limit });
+
+        if (cursor === "cursor-2") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              items: [
+                {
+                  id: "invitation-2",
+                  inviter: {
+                    inviter_name: "Page Two Inviter",
+                    inviter_public_identifier: "page-two-inviter"
+                  },
+                  date: timestamp
+                }
+              ],
+              cursor: null
+            })
+          };
+        }
+
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            items: [
+              {
+                id: "invitation-1",
+                inviter: {
+                  inviter_name: "Page One Inviter",
+                  inviter_public_identifier: "page-one-inviter"
+                },
+                date: timestamp
+              }
+            ],
+            cursor: "cursor-2"
+          })
+        };
+      },
+      unipileHttpPostImpl: () => ({
+        status: 404,
+        bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+      })
+    };
+
+    const first = await buildLiveLinkedinInboundSyncPayload(rawUser, [], {
+      ...sharedOptions,
+      maxPages: 1,
+      pageSize: 1,
+    });
+
+    const firstInvitations = first.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-received-invitations");
+    assert.ok(firstInvitations);
+    assert.equal(firstInvitations.status, "warning");
+    assert.equal(firstInvitations.reconcileReason, "page_budget_stopped_early");
+    assert.equal(firstInvitations.nextCursor, "cursor-2");
+    assert.equal(firstInvitations.observations.length, 1);
+
+    const resumed = await buildLiveLinkedinInboundSyncPayload(rawUser, [], {
+      ...sharedOptions,
+      resumeCursor: "cursor-2",
+      maxPages: 1,
+      pageSize: 1,
+    });
+
+    const resumedInvitations = resumed.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-received-invitations");
+    assert.ok(resumedInvitations);
+    assert.equal(resumedInvitations.status, "success");
+    assert.equal(resumedInvitations.nextCursor, null);
+    assert.equal(resumedInvitations.observations.length, 1);
+    assert.deepEqual(seenInvitationRequests, [
+      { cursor: null, limit: 1 },
+      { cursor: "cursor-2", limit: 1 },
+    ]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync linkedin-live can stop a full messaging-inbox reconciliation at a page budget and resume from the next cursor", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-messaging-inbox-page-budget-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const timestamp = "2026-06-04T12:00:00.000Z";
+  const seenChatRequests = [];
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ""
+  ].join("\n"));
+
+  try {
+    const rawUser = {
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "linkedin-live-unipile-user",
+      owner: "william",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00"
+      },
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "linkedin-live-unipile-user",
+          label: "LinkedIn via Unipile",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-1",
+          providerAccountId: "unipile-linkedin-1",
+          preferred: true,
+          automationControls: {
+            weeklyQuotas: {
+              profileVisits: null,
+              invitations: null,
+              messages: null
+            }
+          },
+          notes: null,
+          inboundSync: {
+            surfaces: []
+          }
+        }
+      ],
+      harnessConnections: [
+        {
+          id: "harness-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          runtime: "codex",
+          connector: "unipile",
+          label: "codex:unipile",
+          status: "available",
+          notes: null
+        }
+      ],
+      inboundIgnoreRules: []
+    };
+
+    const sharedOptions = {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      limit: 500,
+      surfaceKeys: ["linkedin-messaging-inbox"],
+      codexHome,
+      unipileHttpGetImpl: (url) => {
+        const requestUrl = new URL(url);
+        if (!requestUrl.pathname.endsWith("/api/v1/chats")) {
+          return {
+            status: 404,
+            bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+          };
+        }
+
+        const cursor = requestUrl.searchParams.get("cursor");
+        const limit = Number(requestUrl.searchParams.get("limit") ?? "-1");
+        const unread = requestUrl.searchParams.get("unread");
+        seenChatRequests.push({ cursor, limit, unread });
+
+        if (cursor === "cursor-2") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              items: [
+                {
+                  id: "thread-2",
+                  unread_count: 1,
+                  timestamp
+                }
+              ],
+              cursor: null
+            })
+          };
+        }
+
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            items: [
+              {
+                id: "thread-1",
+                unread_count: 2,
+                timestamp
+              }
+            ],
+            cursor: "cursor-2"
+          })
+        };
+      },
+      unipileHttpPostImpl: () => ({
+        status: 404,
+        bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+      })
+    };
+
+    const first = await buildLiveLinkedinInboundSyncPayload(rawUser, [], {
+      ...sharedOptions,
+      maxPages: 1,
+      pageSize: 1,
+    });
+
+    const firstInbox = first.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-messaging-inbox");
+    assert.ok(firstInbox);
+    assert.equal(firstInbox.status, "warning");
+    assert.equal(firstInbox.reconcileReason, "page_budget_stopped_early");
+    assert.equal(firstInbox.nextCursor, "cursor-2");
+    assert.equal(firstInbox.observations.length, 1);
+
+    const resumed = await buildLiveLinkedinInboundSyncPayload(rawUser, [], {
+      ...sharedOptions,
+      resumeCursor: "cursor-2",
+      maxPages: 1,
+      pageSize: 1,
+    });
+
+    const resumedInbox = resumed.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-messaging-inbox");
+    assert.ok(resumedInbox);
+    assert.equal(resumedInbox.status, "success");
+    assert.equal(resumedInbox.nextCursor, null);
+    assert.equal(resumedInbox.observations.length, 1);
+    assert.deepEqual(seenChatRequests, [
+      { cursor: null, limit: 1, unread: "true" },
+      { cursor: "cursor-2", limit: 1, unread: "true" },
+    ]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound sync gmail-live returns a connector handoff for a managed Codex Gmail account", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-codex-handoff-"));
   const codexHome = path.join(tempDir, ".codex");

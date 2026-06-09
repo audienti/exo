@@ -81,6 +81,8 @@ const AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG = {
   "linkedin-following-list": { maxPages: 1, pageSize: 10 },
   "linkedin-profile-views": { maxPages: 1, pageSize: 10 },
   "linkedin-sent-invitations": { maxPages: 1, pageSize: 10 },
+  "linkedin-received-invitations": { maxPages: 1, pageSize: 10 },
+  "linkedin-messaging-inbox": { maxPages: 1, pageSize: 10 },
 };
 // Every full-mode (backfill) sync task runs as a bounded slice: the sync stops
 // at the page budget with `page_budget_stopped_early`, persists `nextCursor`,
