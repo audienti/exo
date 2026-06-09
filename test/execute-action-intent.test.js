@@ -566,11 +566,21 @@ test("executeActionIntent drives every operator writer against governed state", 
   await t.test("runAgentQueuePass returns a governed pass summary", async () => {
     const fakeRunnerPath = path.join(stateDir, "fake-agent-runner.js");
     fs.writeFileSync(fakeRunnerPath, `#!/usr/bin/env node
-console.log(JSON.stringify({
-  status: "completed",
-  results: [{ kind: "company_research", status: "completed", detail: { summary: "Stored signal." } }],
-  finalQueueCounts: { dueTaskCount: 2, waitingTaskCount: 0, blockerCount: 0 }
-}));\n`, "utf8");
+// Lane-aware fake: research work only exists in the research lane.
+const lane = process.env.EXO_AGENT_LANE ?? null;
+if (lane === "research" || lane == null) {
+  console.log(JSON.stringify({
+    status: "completed",
+    results: [{ kind: "company_research", status: "completed", detail: { summary: "Stored signal." } }],
+    finalQueueCounts: { dueTaskCount: 2, waitingTaskCount: 0, blockerCount: 0 }
+  }));
+} else {
+  console.log(JSON.stringify({
+    status: "noop",
+    results: [],
+    finalQueueCounts: { dueTaskCount: 2, waitingTaskCount: 0, blockerCount: 0 }
+  }));
+}\n`, "utf8");
     fs.chmodSync(fakeRunnerPath, 0o755);
 
     const previousRunner = process.env.EXO_AGENT_RUNNER_SCRIPT;
@@ -593,11 +603,21 @@ console.log(JSON.stringify({
   await t.test("runAgentQueuePass surfaces partial passes as progress with backlog remaining", async () => {
     const fakeRunnerPath = path.join(stateDir, "fake-agent-runner-partial.js");
     fs.writeFileSync(fakeRunnerPath, `#!/usr/bin/env node
-console.log(JSON.stringify({
-  status: "partial",
-  results: [{ kind: "run_inbound_sync", status: "completed", detail: { summary: "Refreshed truth." } }],
-  finalQueueCounts: { dueTaskCount: 2, waitingTaskCount: 0, blockerCount: 0 }
-}));\n`, "utf8");
+// Lane-aware fake: inbound sync only exists in the transport lane.
+const lane = process.env.EXO_AGENT_LANE ?? null;
+if (lane === "transport" || lane == null) {
+  console.log(JSON.stringify({
+    status: "partial",
+    results: [{ kind: "run_inbound_sync", status: "completed", detail: { summary: "Refreshed truth." } }],
+    finalQueueCounts: { dueTaskCount: 2, waitingTaskCount: 0, blockerCount: 0 }
+  }));
+} else {
+  console.log(JSON.stringify({
+    status: "noop",
+    results: [],
+    finalQueueCounts: { dueTaskCount: 2, waitingTaskCount: 0, blockerCount: 0 }
+  }));
+}\n`, "utf8");
     fs.chmodSync(fakeRunnerPath, 0o755);
 
     const previousRunner = process.env.EXO_AGENT_RUNNER_SCRIPT;

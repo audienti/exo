@@ -15,7 +15,7 @@ import {
 
 /**
  * @param {Record<string, any>} args
- * @param {{ kickoffAgentQueuePass?: (args: Record<string, any>) => { ok: true, writer: string, message: string } }} [deps]
+ * @param {{ kickoffAgentQueuePass?: (args: Record<string, any>) => { ok: true, writer: string, message: string } | Promise<{ ok: true, writer: string, message: string }> }} [deps]
  */
 export async function startMotionFromIntakeAction(args, deps = {}) {
   const kickoffAgentQueuePass = deps.kickoffAgentQueuePass ?? runAgentQueuePassAction;
@@ -126,7 +126,7 @@ export async function startMotionFromIntakeAction(args, deps = {}) {
     : motionWithUser;
   const verb = result.status === "cloned" ? "Cloned" : "Created";
   const kickoff = args.kickoffAgentPass
-    ? kickoffAgentQueuePass({
+    ? await kickoffAgentQueuePass({
         background: true,
         sendMode: args.sendMode ?? "verify",
       })
