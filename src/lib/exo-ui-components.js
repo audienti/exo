@@ -933,7 +933,7 @@ function renderAgentStatusMenu(runtime, opts = {}) {
   }
   const chips = [
     status.cadence ? `<span class="surface-ref">${iconSvg("clock", 11)}${escapeHtml(status.cadence)}</span>` : "",
-    status.sendMode ? `<span class="cap-ref">${iconSvg("cpu", 11)}${escapeHtml(status.sendMode)} mode</span>` : "",
+    status.sendMode ? `<span class="cap-ref">${iconSvg("cpu", 11)}${escapeHtml(formatOperatorSendModeLabel(status.sendMode))}</span>` : "",
   ].filter(Boolean).join("");
   return (
     `<details class="agent-menu" data-agent-health="${escapeAttr(status.health)}">` +
@@ -947,6 +947,10 @@ function renderAgentStatusMenu(runtime, opts = {}) {
     `<div class="agent-panel-head">` +
     `<div class="agent-panel-title">${escapeHtml(status.headline)}</div>` +
     `<p class="agent-panel-detail">${escapeHtml(status.detail)}</p>` +
+    (Array.isArray(status.statusFacts) && status.statusFacts.length
+      ? `<div class="agent-panel-facts">${status.statusFacts.map((fact) => `<span class="surface-ref">${escapeHtml(fact)}</span>`).join("")}</div>`
+      : "") +
+    (status.nextAction ? `<p class="agent-panel-detail">Next action: ${escapeHtml(status.nextAction)}</p>` : "") +
     `</div>` +
     (chips ? `<div class="agent-panel-chips">${chips}</div>` : "") +
     `<div class="agent-panel-actions">${actions.join("")}</div>` +
@@ -979,6 +983,44 @@ function humanizeDelay(seconds) {
   return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
 }
 
+/** @param {string | null | undefined} sendMode */
+export function formatOperatorSendModeLabel(sendMode) {
+  const normalized = normalizeRuntimeText(sendMode)?.toLowerCase();
+  switch (normalized) {
+    case "verify":
+      return "Review only";
+    case "canary":
+      return "Send one next run";
+    case "live":
+      return "Send all next run";
+    default:
+      return normalized ? normalized.replaceAll("_", " ") : "Unknown";
+  }
+}
+
+/** @param {any} lastPass */
+function summarizeAgentLastPass(lastPass) {
+  if (!lastPass?.endedAt) return null;
+  const when = formatRelative(lastPass.endedAt) ?? "recently";
+  const status = String(lastPass.status ?? "finished").replaceAll("_", " ");
+  return `Last pass ${status} ${when}`;
+}
+
+/**
+ * @param {{ lock: any, scheduler: any, lastPassSummary: string | null }} input
+ */
+function buildAgentRuntimeFacts(input) {
+  const installed = input.scheduler?.installed ? "yes" : "no";
+  const loaded = input.scheduler?.loaded ? "yes" : "no";
+  const running = input.lock?.active || input.scheduler?.running ? "yes" : "no";
+  return [
+    `Installed: ${installed}`,
+    `Loaded: ${loaded}`,
+    `Running: ${running}`,
+    `Last pass: ${input.lastPassSummary ?? "none"}`,
+  ];
+}
+
 /** @param {any} runtime */
 function summarizeAgentHeaderRuntime(runtime) {
   if (!runtime || typeof runtime !== "object") return null;
@@ -998,11 +1040,13 @@ function summarizeAgentHeaderRuntime(runtime) {
     ? Number(runtime.verificationSendCount)
     : queueCount;
   const lastStatus = typeof lastPass?.status === "string" ? lastPass.status.trim().toLowerCase() : null;
+  const lastPassSummary = summarizeAgentLastPass(lastPass);
   const lastReason = summarizeAgentFailureReason(runtime, {
     cadence,
     lastPass,
     queueCount,
   });
+  const statusFacts = buildAgentRuntimeFacts({ lock, scheduler, lastPassSummary });
   const queuedLabel = `${queueCount} queued`;
   const queuedDetail = `${queueCount} queued task${queueCount === 1 ? "" : "s"} waiting to run.`;
   const verifyHoldingSends = isVerifyModeHoldingSends({ sendMode, lastPass, verificationSendCount });
@@ -1021,6 +1065,8 @@ function summarizeAgentHeaderRuntime(runtime) {
       detail: `A queue pass is already in progress${Number.isInteger(lock.pid) ? ` (pid ${lock.pid})` : ""}.`,
       cadence,
       sendMode,
+      statusFacts,
+      nextAction: null,
       canRunNow: false,
       runLabel: null,
     };
@@ -1034,6 +1080,8 @@ function summarizeAgentHeaderRuntime(runtime) {
       detail: `Launchd is draining the queue now${cadence ? ` ${cadence}.` : "."}`,
       cadence,
       sendMode,
+      statusFacts,
+      nextAction: null,
       canRunNow: false,
       runLabel: null,
     };
@@ -1047,6 +1095,8 @@ function summarizeAgentHeaderRuntime(runtime) {
       detail: buildAgentBackoffDetail(activeBackoff, cadence, Boolean(scheduler?.loaded)),
       cadence,
       sendMode,
+      statusFacts,
+      nextAction: "Fix the blocked connector path, then run the agent again.",
       canRunNow: true,
       runLabel: "Run agent now",
     };
@@ -1060,6 +1110,8 @@ function summarizeAgentHeaderRuntime(runtime) {
       detail: lastReason ?? "The last agent pass did not complete cleanly.",
       cadence,
       sendMode,
+      statusFacts,
+      nextAction: "Inspect the last failed pass, fix it, then run the agent again.",
       canRunNow: true,
       runLabel: "Run agent now",
     };
@@ -1073,6 +1125,8 @@ function summarizeAgentHeaderRuntime(runtime) {
       detail: lastReason ?? "The last agent pass hit a real execution blocker.",
       cadence,
       sendMode,
+      statusFacts,
+      nextAction: "Clear the blocker, then run the agent again.",
       canRunNow: true,
       runLabel: "Run agent now",
     };
@@ -1081,13 +1135,15 @@ function summarizeAgentHeaderRuntime(runtime) {
   if (verifyHoldingSends) {
     return {
       health: "yellow",
-      label: "Verify only",
-      headline: "Verify mode is holding sends",
-      detail: `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"} already have fresh proof. Verify mode stops those at ready_to_send and will not click Send or write back.`,
+      label: "Review only",
+      headline: "Approved drafts are waiting in review only",
+      detail: `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"} already have fresh proof. Review only will not send them. Switch the agent to send one or send all when you want the next pass to send.`,
       cadence,
       sendMode,
+      statusFacts,
+      nextAction: "Switch the agent out of review only when you want the next pass to send approved drafts.",
       canRunNow: true,
-      runLabel: "Run proof pass",
+      runLabel: "Run review pass",
     };
   }
 
@@ -1099,6 +1155,8 @@ function summarizeAgentHeaderRuntime(runtime) {
       detail: `${queuedDetail} No pass is running right now. The next scheduled pass is already ${humanizeDelay(overdueBySeconds)} late.`,
       cadence,
       sendMode,
+      statusFacts,
+      nextAction: "Run the agent now or repair the scheduler so queued work can drain.",
       canRunNow: true,
       runLabel: "Run agent now",
     };
@@ -1114,6 +1172,8 @@ function summarizeAgentHeaderRuntime(runtime) {
         : cadence ? `Background draining is enabled ${cadence}.` : "Background draining is enabled.",
       cadence,
       sendMode,
+      statusFacts,
+      nextAction: scheduler.running ? null : "No repair needed. Let the scheduler run, or run the agent now if you want an immediate pass.",
       canRunNow: !scheduler.running,
       runLabel: scheduler.running ? null : "Run agent now",
     };
@@ -1123,12 +1183,16 @@ function summarizeAgentHeaderRuntime(runtime) {
   return {
     health: "yellow",
     label: queueCount > 0 ? queuedLabel : hasSetup ? "Idle" : "Off",
-    headline: queueCount > 0 ? "Agent work queued" : hasSetup ? "Agent is idle" : "Agent is off",
+    headline: queueCount > 0 ? "Agent work queued" : hasSetup ? "Agent is idle" : "Background agent off",
     detail: queueCount > 0
       ? `${queuedDetail} ${hasSetup ? "No pass is running right now." : "Background draining is off right now."}`
       : hasSetup ? "No pass is running right now." : "Background draining is off right now.",
     cadence,
     sendMode,
+    statusFacts,
+    nextAction: scheduler?.installed
+      ? "Load the installed background agent or run a pass manually."
+      : "Install the background agent before expecting autonomous draining.",
     canRunNow: true,
     runLabel: "Run agent now",
   };
@@ -1311,6 +1375,7 @@ a{color:inherit;text-decoration:none}
 .agent-panel-head{display:flex;flex-direction:column;gap:4px}
 .agent-panel-title{font-size:13px;font-weight:800;color:var(--text)}
 .agent-panel-detail{font-size:12px;color:var(--text-3);line-height:1.45}
+.agent-panel-facts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .agent-panel-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .agent-panel-actions{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
 .agent-passive{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-3);font-weight:600}

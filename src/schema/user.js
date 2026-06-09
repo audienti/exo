@@ -50,6 +50,28 @@ export const userHarnessConnectionSchema = z.object({
   notes: z.string().nullable().default(null)
 });
 
+export const userManagedAccountExclusionSchema = z
+  .object({
+    id: z.string().min(1),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+    runtime: z.string().trim().min(1),
+    connector: z.string().trim().min(1),
+    capability: browserProfileCapabilitySchema,
+    providerAccountId: z.string().trim().min(1).nullable().default(null),
+    handle: z.string().trim().min(1).nullable().default(null),
+    label: z.string().trim().min(1).nullable().default(null),
+    notes: z.string().nullable().default(null),
+  })
+  .superRefine((value, context) => {
+    if (!value.providerAccountId && !value.handle) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Managed account exclusions require providerAccountId or handle.",
+      });
+    }
+  });
+
 export const userConnectedAccountSchema = z
   .object({
     id: z.string().min(1),
@@ -126,5 +148,6 @@ export const userSchema = z.object({
   }),
   accounts: z.array(userConnectedAccountSchema).default([]),
   harnessConnections: z.array(userHarnessConnectionSchema).default([]),
+  managedAccountExclusions: z.array(userManagedAccountExclusionSchema).default([]),
   inboundIgnoreRules: z.array(inboundIgnoreRuleSchema).default([]),
 });

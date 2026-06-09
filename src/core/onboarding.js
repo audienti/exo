@@ -289,14 +289,31 @@ function inferInstallScope(input) {
  * @param {string | null} preferredUserId
  */
 function resolveFocusUser(rawUsers, preferredUserId) {
+  /**
+   * @param {any} user
+   */
+  const summarize = (user) => {
+    const accounts = Array.isArray(user.accounts) ? user.accounts : [];
+    const managedCapabilities = [...new Set(accounts
+      .filter((account) => account?.sourceType === "harness-connection" && typeof account?.capability === "string")
+      .map((account) => String(account.capability)))];
+    const browserCapabilities = [...new Set(accounts
+      .filter((account) => account?.sourceType === "browser-profile" && typeof account?.capability === "string")
+      .map((account) => String(account.capability)))];
+
+    return {
+      id: String(user.id),
+      label: String(user.label),
+      accountCount: accounts.length,
+      managedCapabilities,
+      browserCapabilities,
+    };
+  };
+
   if (preferredUserId) {
     const matched = rawUsers.find((user) => String(user.id) === preferredUserId);
     if (matched) {
-      return {
-        id: String(matched.id),
-        label: String(matched.label),
-        accountCount: Array.isArray(matched.accounts) ? matched.accounts.length : 0,
-      };
+      return summarize(matched);
     }
   }
 
@@ -305,11 +322,7 @@ function resolveFocusUser(rawUsers, preferredUserId) {
     return null;
   }
 
-  return {
-    id: String(first.id),
-    label: String(first.label),
-    accountCount: Array.isArray(first.accounts) ? first.accounts.length : 0,
-  };
+  return summarize(first);
 }
 
 /**

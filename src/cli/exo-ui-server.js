@@ -162,6 +162,7 @@ export async function renderRoute(route, ctx, hooks = {}) {
   const requestUrl = new URL(route, "http://exo.local");
   const pathname = requestUrl.pathname;
   const searchQuery = normalizeRouteSearchQuery(requestUrl.searchParams.get("q"));
+  const selectedAccountId = normalizeRouteAccountId(requestUrl.searchParams.get("account"));
   const listInboundObservationsFn = hooks.listInboundObservations ?? listInboundObservations;
   const listMotionsFn = hooks.listMotions ?? listMotions;
   const listCompaniesFn = hooks.listCompanies ?? listCompanies;
@@ -209,13 +210,47 @@ export async function renderRoute(route, ctx, hooks = {}) {
       rawProfiles: listBrowserProfiles(),
       runtimeAccountDiscovery,
     });
-    if (pathname === "/users") {
+    const userSegments = pathname.split("/").filter(Boolean);
+    if (userSegments.length === 1) {
       return renderExecutionPage(model, meta("exo ui"));
     }
-    const id = decodeURIComponent(pathname.slice("/users/".length));
+    const id = decodeURIComponent(userSegments[1] ?? "");
     const user = model.users.find((candidate) => candidate.id === id);
     if (!user) {
       return renderNotFound("User", id, "/users", "Users");
+    }
+    if (userSegments.length === 3 && userSegments[2] === "connections") {
+      const projection = await resolveWorkspaceProjectionForUiFn({
+        userId: user.id,
+        capability: ctx.capability,
+        regenerateCommand: "exo ui",
+      });
+      const data = projection.data;
+      const transition = findTransitionMotionFn();
+      const claimMotions = buildClaimMotionChoices(
+        listMotions().filter((motion) => motion.status !== "archived"),
+        transition,
+      );
+      const routeAgentRuntime = {
+        ...buildAgentRuntimeSnapshot(user.id),
+        nav: resolveCleanupNavState({
+          userId: user.id,
+          capability: ctx.capability,
+          generatedAt: data.generatedAt,
+          reviewItems: data.reviewItems ?? [],
+        }),
+      };
+      return renderConnectionsView({
+        data,
+        agentRuntime: routeAgentRuntime,
+        userId: user.id,
+        accountPath: `/users/${encodeURIComponent(user.id)}/connections`,
+        selectedAccountId,
+        claimMotions,
+      });
+    }
+    if (userSegments.length > 2) {
+      return renderNotFound("User page", pathname, "/users", "Users");
     }
     return renderUserDetailPage(user, meta("exo ui"));
   }
@@ -505,19 +540,14 @@ export async function renderRoute(route, ctx, hooks = {}) {
         listMotions().filter((motion) => motion.status !== "archived"),
         transition,
       );
-      const model = buildConnectionsViewModel({
-        observations: data.observations,
-        reviewItems: data.reviewItems,
-        truthAccounts: data.truthAccounts,
-        agentQueue: data.agentQueue,
-        // Authoritative connection-degree by profile URL, so the Sent / Received
-        // tabs reconcile against the real connection state (1st-degree = accepted).
-        degreeByProfile: buildDegreeByProfile(),
-        // Exact send time by profile URL, taken from our own outbound touches, so
-        // the Sent tab shows true age instead of LinkedIn's rounded label.
-        sentAtByProfile: buildSentAtByProfile(),
+      return renderConnectionsView({
+        data,
+        agentRuntime: baseMeta.agentRuntime,
+        userId: session.userId,
+        accountPath: "/connections",
+        selectedAccountId,
+        claimMotions,
       });
-      return renderConnectionsPage(model, { ...baseMeta, userId: session.userId, claimMotions });
     }
     case "/workspace": {
       const executionModel = buildExecutionViewModel({
@@ -550,6 +580,54 @@ export async function renderRoute(route, ctx, hooks = {}) {
  */
 function normalizeRouteSearchQuery(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * @param {string | null} value
+ * @returns {string | null}
+ */
+function normalizeRouteAccountId(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+/**
+ * @param {{
+ *   data: any,
+ *   agentRuntime: any,
+ *   userId: string | null,
+ *   accountPath: string,
+ *   selectedAccountId: string | null,
+ *   claimMotions: Array<{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }>,
+ * }} input
+ */
+function renderConnectionsView(input) {
+  const model = buildConnectionsViewModel({
+    observations: input.data.observations,
+    reviewItems: input.data.reviewItems,
+    truthAccounts: input.data.truthAccounts,
+    agentQueue: input.data.agentQueue,
+    selectedAccountId: input.selectedAccountId,
+    // Authoritative connection-degree by profile URL, so the Sent / Received
+    // tabs reconcile against the real connection state (1st-degree = accepted).
+    degreeByProfile: buildDegreeByProfile(),
+    // Exact send time by profile URL, taken from our own outbound touches, so
+    // the Sent tab shows true age instead of LinkedIn's rounded label.
+    sentAtByProfile: buildSentAtByProfile(),
+  });
+  return renderConnectionsPage(model, {
+    user: input.data.user,
+    generatedAt: input.data.generatedAt,
+    regenerateCommand: "exo ui",
+    interactive: true,
+    agentRuntime: input.agentRuntime,
+    userId: input.userId,
+    accountPath: input.accountPath,
+    claimMotions: input.claimMotions,
+  });
 }
 
 /**
@@ -835,20 +913,27 @@ function buildAgentRuntimeSnapshot(userId = null) {
  */
 function resolveUiRouteSession(preferredUserId = null) {
   const users = listUsers();
+  const { totalUserCount, eligibleUserCount, eligibleUsers } = summarizeExecutionUsers(users);
   const preferredUser = preferredUserId
     ? users.find((user) => user.id === preferredUserId) ?? null
     : null;
 
   if (preferredUserId) {
-    if (!preferredUser) {
-      return { mode: "workspace", userId: preferredUserId, preferredUserId };
+    if (preferredUser && Array.isArray(preferredUser.accounts) && preferredUser.accounts.length > 0) {
+      return { mode: "workspace", userId: preferredUser.id, preferredUserId: preferredUser.id };
     }
-    return Array.isArray(preferredUser.accounts) && preferredUser.accounts.length > 0
-      ? { mode: "workspace", userId: preferredUser.id, preferredUserId: preferredUser.id }
-      : { mode: "onboarding", userId: null, preferredUserId: preferredUser.id };
+    if (eligibleUserCount === 1) {
+      return {
+        mode: "workspace",
+        userId: eligibleUsers[0].id,
+        preferredUserId: eligibleUsers[0].id,
+      };
+    }
+    if (preferredUser) {
+      return { mode: "onboarding", userId: null, preferredUserId: preferredUser.id };
+    }
   }
 
-  const { totalUserCount, eligibleUserCount, eligibleUsers } = summarizeExecutionUsers(users);
   if (eligibleUserCount === 1) {
     return {
       mode: "workspace",
@@ -856,7 +941,6 @@ function resolveUiRouteSession(preferredUserId = null) {
       preferredUserId: eligibleUsers[0].id,
     };
   }
-
   return {
     mode: "onboarding",
     userId: null,

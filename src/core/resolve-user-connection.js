@@ -7,6 +7,7 @@ import { userSchema } from "../schema/user.js";
 import { accountCanAttachConnectionNote } from "./connection-note-capability.js";
 import { discoverRuntimeConnectorAccounts } from "./discover-runtime-account-identities.js";
 import { getHomeStateDir } from "../db/paths.js";
+import { isStoredManagedAccountExcluded } from "./user-account-governance.js";
 
 const discoveredAccountCache = new Map();
 const linkedinEvidenceCache = new Map();
@@ -26,6 +27,12 @@ export function resolveUserConnection(rawUser, rawProfiles, input) {
   const profiles = rawProfiles.map((profile) => browserProfileSchema.parse(profile));
   const matches = user.accounts
     .filter((account) => account.capability === input.capability)
+    .filter((account) => {
+      const harnessConnection = account.harnessConnectionId
+        ? user.harnessConnections.find((candidate) => candidate.id === account.harnessConnectionId) ?? null
+        : null;
+      return !isStoredManagedAccountExcluded(user, account, harnessConnection);
+    })
     .map((account) => buildResolvedAccount(account, profiles, user))
     .sort(compareResolvedAccounts);
   const browserResolved = matches.find((candidate) => candidate.sourceType === "browser-profile") ?? null;

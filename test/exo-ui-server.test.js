@@ -228,6 +228,55 @@ test("ui projection cache invalidates when a second WAL-backed motion write chan
 });
 
 test("person route preserves the scaffold compose draft instead of overwriting it during render", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-person-route-user-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+
+  process.env.EXO_STATE_DIR = path.join(tempDir, ".exo");
+  process.env.EXO_HOME_STATE_DIR = process.env.EXO_STATE_DIR;
+  insertUser({
+    id: "user-1",
+    createdAt: "2026-06-08T10:00:00.000Z",
+    updatedAt: "2026-06-08T10:00:00.000Z",
+    label: "person-user",
+    owner: "operator",
+    notes: null,
+    workingHours: { mode: "always", timezone: "America/New_York", weekdays: ["mon"], startLocalTime: "09:00", endLocalTime: "17:00" },
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-08T10:00:00.000Z",
+        updatedAt: "2026-06-08T10:00:00.000Z",
+        capability: "linkedin",
+        handle: "person-user",
+        label: "Person User",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-1",
+        providerAccountId: "acct-person-user",
+        preferred: true,
+        automationControls: { weeklyQuotas: { profileVisits: null, invitations: null, messages: null } },
+        metadata: null,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-1",
+        createdAt: "2026-06-08T10:00:00.000Z",
+        updatedAt: "2026-06-08T10:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+    managedAccountExclusions: [],
+    inboundIgnoreRules: [],
+  });
+
   const composeDraft = { subject: null, body: "" };
   const person = {
     id: "person-1",
@@ -246,83 +295,252 @@ test("person route preserves the scaffold compose draft instead of overwriting i
     },
   });
 
-  const html = await renderRoute("/people/person-1", { userId: "user-1", capability: "linkedin" }, {
-    listInboundObservations: () => [],
-    listMotions: () => [],
-    listCompanies: () => [],
-    buildPersonView: () => person,
-    findTransitionMotion: () => null,
-    renderPersonPage: (receivedPerson, meta) => {
-      assert.equal(receivedPerson, person);
-      assert.equal(receivedPerson.composeDraft, composeDraft);
-      assert.equal(meta.userId, "user-1");
-      assert.equal(meta.transitionMotionId, null);
-      assert.deepEqual(meta.motions, []);
-      return "<html>person</html>";
-    },
-    resolveWorkspaceProjectionForUi: async () => {
-      throw new Error("person route should return before building the shared workspace projection");
-    },
-  });
+  try {
+    const html = await renderRoute("/people/person-1", { userId: "user-1", capability: "linkedin" }, {
+      listInboundObservations: () => [],
+      listMotions: () => [],
+      listCompanies: () => [],
+      buildPersonView: () => person,
+      findTransitionMotion: () => null,
+      renderPersonPage: (receivedPerson, meta) => {
+        assert.equal(receivedPerson, person);
+        assert.equal(receivedPerson.composeDraft, composeDraft);
+        assert.equal(meta.userId, "user-1");
+        assert.equal(meta.transitionMotionId, null);
+        assert.deepEqual(meta.motions, []);
+        return "<html>person</html>";
+      },
+      resolveWorkspaceProjectionForUi: async () => {
+        throw new Error("person route should return before building the shared workspace projection");
+      },
+    });
 
-  assert.equal(html, "<html>person</html>");
+    assert.equal(html, "<html>person</html>");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousStateDir == null) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir == null) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+  }
 });
 
 test("person route builds claim motion choices with offer, premise, and status detail", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-person-claim-motions-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+
+  process.env.EXO_STATE_DIR = path.join(tempDir, ".exo");
+  process.env.EXO_HOME_STATE_DIR = process.env.EXO_STATE_DIR;
+  insertUser({
+    id: "user-1",
+    createdAt: "2026-06-08T10:00:00.000Z",
+    updatedAt: "2026-06-08T10:00:00.000Z",
+    label: "person-user",
+    owner: "operator",
+    notes: null,
+    workingHours: { mode: "always", timezone: "America/New_York", weekdays: ["mon"], startLocalTime: "09:00", endLocalTime: "17:00" },
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-08T10:00:00.000Z",
+        updatedAt: "2026-06-08T10:00:00.000Z",
+        capability: "linkedin",
+        handle: "person-user",
+        label: "Person User",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-1",
+        providerAccountId: "acct-person-user",
+        preferred: true,
+        automationControls: { weeklyQuotas: { profileVisits: null, invitations: null, messages: null } },
+        metadata: null,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-1",
+        createdAt: "2026-06-08T10:00:00.000Z",
+        updatedAt: "2026-06-08T10:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+    managedAccountExclusions: [],
+    inboundIgnoreRules: [],
+  });
+
   const transition = {
     id: "transition-1",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
     name: "transition-inbound-backlog",
     status: "active",
-    offer: { sourceUrl: "https://transition.exo.local/inbound-backlog" },
+    offer: { sourceUrl: "https://transition.exo.local/inbound-backlog", offerNotes: "" },
     premise: {
       statement: "Continue and reconcile relationships started before Exo, then re-home them into real motions once they are understood.",
+      notes: null,
+      source: "operator",
+      status: "defined",
     },
-    offerThesis: { sourceTitle: null },
+    targetingProfile: {
+      geolocations: [],
+      icpTypes: [],
+      industries: [],
+      companyTypes: [],
+      companyShapes: [],
+      companySizes: [],
+      targetTitles: [],
+      roleFamilies: [],
+      segmentVariants: [],
+      stakeholderTargetCount: 3,
+    },
+    suppressionPolicy: {
+      excludedAccounts: [],
+      excludedDomains: [],
+      excludedContacts: [],
+      doNotContactEntries: [],
+      doNotContactSources: [],
+      crmCustomerSuppressionEnabled: false,
+      crmOpportunitySuppressionEnabled: false,
+    },
+    offerThesis: {
+      sourceUrl: "https://transition.exo.local/inbound-backlog",
+      sourceTitle: null,
+      sourceDescription: null,
+      sourceSummary: "",
+      offerNotes: null,
+      problemThesis: null,
+      buyerImpactThesis: null,
+      likelyTriggerThesis: null,
+      likelyRoleThesis: null,
+      likelySegmentThesis: null,
+      status: "needs_inference",
+    },
+    audienceHypotheses: [],
+    signals: [],
+    targetMap: { status: "pending", accounts: [], segments: [] },
+    stakeholderMap: { status: "pending", stakeholders: [] },
+    motionPlan: { status: "pending", variants: [] },
+    nextSteps: [],
+    engagementProfileAssignment: null,
+    engagementUserAssignment: null,
   };
   const motion = {
     id: "motion-1",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
     name: "harsh-spare-mongoose",
     status: "draft",
-    offer: { sourceUrl: "https://www.knitit.ai/" },
+    offer: { sourceUrl: "https://www.knitit.ai/", offerNotes: "" },
     premise: {
       statement: "This offer matters when GTM teams need governed outbound work instead of a pile of disconnected prospecting tasks.",
+      notes: null,
+      source: "operator",
+      status: "defined",
     },
-    offerThesis: { sourceTitle: "Knit" },
+    targetingProfile: {
+      geolocations: [],
+      icpTypes: [],
+      industries: [],
+      companyTypes: [],
+      companyShapes: [],
+      companySizes: [],
+      targetTitles: [],
+      roleFamilies: [],
+      segmentVariants: [],
+      stakeholderTargetCount: 3,
+    },
+    suppressionPolicy: {
+      excludedAccounts: [],
+      excludedDomains: [],
+      excludedContacts: [],
+      doNotContactEntries: [],
+      doNotContactSources: [],
+      crmCustomerSuppressionEnabled: false,
+      crmOpportunitySuppressionEnabled: false,
+    },
+    offerThesis: {
+      sourceUrl: "https://www.knitit.ai/",
+      sourceTitle: "Knit",
+      sourceDescription: null,
+      sourceSummary: "",
+      offerNotes: null,
+      problemThesis: null,
+      buyerImpactThesis: null,
+      likelyTriggerThesis: null,
+      likelyRoleThesis: null,
+      likelySegmentThesis: null,
+      status: "needs_inference",
+    },
+    audienceHypotheses: [],
+    signals: [],
+    targetMap: { status: "pending", accounts: [], segments: [] },
+    stakeholderMap: { status: "pending", stakeholders: [] },
+    motionPlan: { status: "pending", variants: [] },
+    nextSteps: [],
+    engagementProfileAssignment: null,
+    engagementUserAssignment: null,
   };
 
-  const html = await renderRoute("/people/person-1", { userId: "user-1", capability: "linkedin" }, {
-    listInboundObservations: () => [],
-    listMotions: () => [transition, motion],
-    listCompanies: () => [],
-    buildPersonView: () => ({ id: "person-1", matchedProspect: false, hasDurableIdentity: true, suggestedSurface: null }),
-    findTransitionMotion: () => transition,
-    renderPersonPage: (_person, meta) => {
-      assert.deepEqual(meta.motions, [
-        {
-          id: "transition-1",
-          name: "transition-inbound-backlog",
-          offerLabel: "Transition backlog",
-          premise: "Continue and reconcile relationships started before Exo, then re-home them into real motions once they are understood.",
-          status: "active",
-          statusLabel: "Active",
-        },
-        {
-          id: "motion-1",
-          name: "harsh-spare-mongoose",
-          offerLabel: "Knit",
-          premise: "This offer matters when GTM teams need governed outbound work instead of a pile of disconnected prospecting tasks.",
-          status: "draft",
-          statusLabel: "Draft",
-        },
-      ]);
-      return "<html>person-claim-choices</html>";
-    },
-    resolveWorkspaceProjectionForUi: async () => {
-      throw new Error("person route should return before building the shared workspace projection");
-    },
-  });
+  try {
+    const html = await renderRoute("/people/person-1", { userId: "user-1", capability: "linkedin" }, {
+      listInboundObservations: () => [],
+      listMotions: () => [transition, motion],
+      listCompanies: () => [],
+      buildPersonView: () => ({ id: "person-1", matchedProspect: false, hasDurableIdentity: true, suggestedSurface: null }),
+      findTransitionMotion: () => transition,
+      renderPersonPage: (_person, meta) => {
+        assert.deepEqual(meta.motions, [
+          {
+            id: "transition-1",
+            name: "transition-inbound-backlog",
+            offerLabel: "Transition backlog",
+            premise: "Continue and reconcile relationships started before Exo, then re-home them into real motions once they are understood.",
+            status: "active",
+            statusLabel: "Active",
+          },
+          {
+            id: "motion-1",
+            name: "harsh-spare-mongoose",
+            offerLabel: "Knit",
+            premise: "This offer matters when GTM teams need governed outbound work instead of a pile of disconnected prospecting tasks.",
+            status: "draft",
+            statusLabel: "Draft",
+          },
+        ]);
+        return "<html>person-claim-choices</html>";
+      },
+      resolveWorkspaceProjectionForUi: async () => {
+        throw new Error("person route should return before building the shared workspace projection");
+      },
+    });
 
-  assert.equal(html, "<html>person-claim-choices</html>");
+    assert.equal(html, "<html>person-claim-choices</html>");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousStateDir == null) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir == null) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+  }
 });
 
 test("cleanup route renders only stale global-intake claim backlog and exposes the sidebar route", async () => {
@@ -539,6 +757,108 @@ test("motions route passes execution users into the new-motion intake form", asy
   assert.doesNotMatch(html, /No execution users available/);
 });
 
+test("user-specific connections route renders the target user's connections view", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-user-connections-route-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+
+  process.env.EXO_STATE_DIR = path.join(tempDir, ".exo");
+  process.env.EXO_HOME_STATE_DIR = process.env.EXO_STATE_DIR;
+
+  insertUser({
+    id: "user-1",
+    createdAt: "2026-06-07T10:00:00.000Z",
+    updatedAt: "2026-06-07T10:00:00.000Z",
+    label: "Ali Umair",
+    owner: "Ali",
+    notes: null,
+    workingHours: {
+      mode: "always",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "07:00",
+      endLocalTime: "18:00",
+    },
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-07T10:00:00.000Z",
+        updatedAt: "2026-06-07T10:00:00.000Z",
+        capability: "linkedin",
+        handle: "aliumairdev",
+        label: "Ali Umair",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "hc-1",
+        providerAccountId: "acct-ali",
+        preferred: true,
+        automationControls: {
+          weeklyQuotas: {
+            profileVisits: null,
+            invitations: 25,
+            messages: null,
+          },
+        },
+        metadata: null,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [],
+    inboundIgnoreRules: [],
+  });
+
+  t.after(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousStateDir == null) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir == null) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+  });
+
+  const html = await renderRoute("/users/user-1/connections?account=account-1", { userId: "user-1", capability: "linkedin" }, {
+    resolveWorkspaceProjectionForUi: async () => ({
+      data: {
+        user: { id: "user-1", label: "Ali Umair", owner: "Ali" },
+        generatedAt: "2026-06-07T10:00:00.000Z",
+        observations: [],
+        reviewItems: [],
+        agentQueue: { tasks: [], items: [] },
+        truthAccounts: [
+          {
+            accountId: "account-1",
+            capability: "linkedin",
+            handle: "aliumairdev",
+            label: "Ali Umair",
+            preferred: true,
+            surfaces: [
+              {
+                key: "linkedin-sent-invitations",
+                label: "Sent Invitations",
+                lastRunStatus: "success",
+                lastSyncedAt: "2026-06-07T10:00:00.000Z",
+                lastObservedAt: "2026-06-07T10:00:00.000Z",
+                lastItemCount: 0,
+                meta: {},
+              },
+            ],
+          },
+        ],
+      },
+      html: "",
+    }),
+  });
+
+  assert.match(html, /Viewing Ali Umair/);
+  assert.match(html, /Account Ali Umair · aliumairdev/);
+});
+
 test("operator route renders onboarding instead of the workspace projection on a cold-start store", async (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-onboarding-"));
   const previousStateDir = process.env.EXO_STATE_DIR;
@@ -573,6 +893,198 @@ test("operator route renders onboarding instead of the workspace projection on a
   assert.match(html, /local-folder/i);
   assert.match(html, /First outreach user/);
   assert.match(html, /Who is the first user we(?:&#39;|')re managing in Exo\?/);
+});
+
+test("operator route recovers to the one execution-ready user when the bound user is missing", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-missing-user-recovery-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+
+  process.env.EXO_STATE_DIR = path.join(tempDir, ".exo");
+  process.env.EXO_HOME_STATE_DIR = process.env.EXO_STATE_DIR;
+
+  insertUser({
+    id: "user-ready",
+    createdAt: "2026-06-08T10:00:00.000Z",
+    updatedAt: "2026-06-08T10:00:00.000Z",
+    label: "ready-user",
+    owner: "operator",
+    notes: null,
+    workingHours: { mode: "always", timezone: "America/New_York", weekdays: ["mon"], startLocalTime: "09:00", endLocalTime: "17:00" },
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-08T10:00:00.000Z",
+        updatedAt: "2026-06-08T10:00:00.000Z",
+        capability: "linkedin",
+        handle: "ready-user",
+        label: "Ready User",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-1",
+        providerAccountId: "acct-ready",
+        preferred: true,
+        automationControls: { weeklyQuotas: { profileVisits: null, invitations: null, messages: null } },
+        metadata: null,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-1",
+        createdAt: "2026-06-08T10:00:00.000Z",
+        updatedAt: "2026-06-08T10:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+    managedAccountExclusions: [],
+    inboundIgnoreRules: [],
+  });
+
+  t.after(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousStateDir == null) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir == null) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+  });
+
+  let projectedUserId = null;
+  const html = await renderRoute("/operator", { userId: "deleted-user", capability: "linkedin" }, {
+    resolveWorkspaceProjectionForUi: async (input) => {
+      projectedUserId = input.userId;
+      return {
+        data: {
+          user: { id: input.userId, label: "ready-user" },
+          generatedAt: "2026-06-09T12:00:00.000Z",
+          operatorSummary: { checklist: [] },
+          decisionQueue: { items: [] },
+          agentQueue: { items: [], blockers: [] },
+          blockedQueue: { items: [] },
+          dueNowItems: [],
+          waitingItems: [],
+          truthAccounts: [],
+        },
+        html: "",
+      };
+    },
+  });
+
+  assert.equal(projectedUserId, "user-ready");
+  assert.match(html, /ready-user/);
+});
+
+test("operator route recovers to the one execution-ready user when the bound user lost account coverage", async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-unready-user-recovery-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+
+  process.env.EXO_STATE_DIR = path.join(tempDir, ".exo");
+  process.env.EXO_HOME_STATE_DIR = process.env.EXO_STATE_DIR;
+
+  insertUser({
+    id: "user-empty",
+    createdAt: "2026-06-08T10:00:00.000Z",
+    updatedAt: "2026-06-08T10:00:00.000Z",
+    label: "empty-user",
+    owner: "operator",
+    notes: null,
+    workingHours: { mode: "always", timezone: "America/New_York", weekdays: ["mon"], startLocalTime: "09:00", endLocalTime: "17:00" },
+    accounts: [],
+    harnessConnections: [],
+    managedAccountExclusions: [],
+    inboundIgnoreRules: [],
+  });
+  insertUser({
+    id: "user-ready",
+    createdAt: "2026-06-08T11:00:00.000Z",
+    updatedAt: "2026-06-08T11:00:00.000Z",
+    label: "ready-user",
+    owner: "operator",
+    notes: null,
+    workingHours: { mode: "always", timezone: "America/New_York", weekdays: ["mon"], startLocalTime: "09:00", endLocalTime: "17:00" },
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-08T11:00:00.000Z",
+        updatedAt: "2026-06-08T11:00:00.000Z",
+        capability: "linkedin",
+        handle: "ready-user",
+        label: "Ready User",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-1",
+        providerAccountId: "acct-ready",
+        preferred: true,
+        automationControls: { weeklyQuotas: { profileVisits: null, invitations: null, messages: null } },
+        metadata: null,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-1",
+        createdAt: "2026-06-08T11:00:00.000Z",
+        updatedAt: "2026-06-08T11:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+    managedAccountExclusions: [],
+    inboundIgnoreRules: [],
+  });
+
+  t.after(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousStateDir == null) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir == null) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+  });
+
+  let projectedUserId = null;
+  await renderRoute("/operator", { userId: "user-empty", capability: "linkedin" }, {
+    resolveWorkspaceProjectionForUi: async (input) => {
+      projectedUserId = input.userId;
+      return {
+        data: {
+          user: { id: input.userId, label: "ready-user" },
+          generatedAt: "2026-06-09T12:00:00.000Z",
+          operatorSummary: { checklist: [] },
+          decisionQueue: { items: [] },
+          agentQueue: { items: [], blockers: [] },
+          blockedQueue: { items: [] },
+          dueNowItems: [],
+          waitingItems: [],
+          truthAccounts: [],
+        },
+        html: "",
+      };
+    },
+  });
+
+  assert.equal(projectedUserId, "user-ready");
 });
 
 test("ui root redirects to /operator", async (t) => {

@@ -5,6 +5,7 @@ import {
   btn,
   card,
   escapeHtml,
+  formatOperatorSendModeLabel,
   iconSvg,
   liveActionBtn,
 } from "../lib/exo-ui-components.js";
@@ -21,6 +22,12 @@ export function renderAgentRuntimeCard(runtime, meta = {}, options = {}) {
   const showMeta = options.showMeta ?? surface !== "queue";
   const showActions = options.showActions ?? surface !== "queue";
   const chips = showMeta ? renderAgentRuntimeMeta(runtime) : "";
+  const facts = Array.isArray(runtime.statusFacts) && runtime.statusFacts.length
+    ? `<div class="nm-chips">${runtime.statusFacts.map((fact) => `<span class="surface-ref">${escapeHtml(fact)}</span>`).join("")}</div>`
+    : "";
+  const nextAction = runtime.nextAction
+    ? `<div class="nm-sub">Next action: ${escapeHtml(runtime.nextAction)}</div>`
+    : "";
 
   const actions = [];
   if (showActions) {
@@ -59,6 +66,8 @@ export function renderAgentRuntimeCard(runtime, meta = {}, options = {}) {
       `<div class="nm-title">${escapeHtml(runtime.headline)}</div>` +
       `<div class="nm-sub">${escapeHtml(runtime.detail)}</div>` +
       chips +
+      facts +
+      nextAction +
       `</div>` +
       (actions.length ? `<div class="nm-actions">${actions.join("")}</div>` : "") +
       `</div>`,
@@ -76,7 +85,7 @@ export function renderAgentRuntimeMeta(runtime, options = {}) {
   const iconSize = Number.isFinite(options.iconSize) ? Number(options.iconSize) : 12;
   const chips = [
     runtime.cadenceLabel ? `<span class="surface-ref">${iconSvg("clock", iconSize)}${escapeHtml(runtime.cadenceLabel)}</span>` : null,
-    runtime.sendMode ? `<span class="cap-ref">${iconSvg("cpu", iconSize)}${escapeHtml(runtime.sendMode)} mode</span>` : null,
+    runtime.sendMode ? `<span class="cap-ref">${iconSvg("cpu", iconSize)}${escapeHtml(formatOperatorSendModeLabel(runtime.sendMode))}</span>` : null,
     runtime.lastPassSummary ? `<span class="surface-ref">${iconSvg("spark", iconSize)}${escapeHtml(runtime.lastPassSummary)}</span>` : null,
   ]
     .filter(Boolean)

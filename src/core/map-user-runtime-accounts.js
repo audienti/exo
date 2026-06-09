@@ -3,6 +3,7 @@
 import { discoverRuntimeConnectorAccounts } from "./discover-runtime-account-identities.js";
 import { probeUserHarnessConnections } from "./probe-user-harness-connections.js";
 import { upsertUserConnectedAccount, upsertUserHarnessConnection } from "./upsert-user-harness-connection.js";
+import { isManagedAccountExcluded } from "./user-account-governance.js";
 import { userSchema } from "../schema/user.js";
 
 const CONNECTOR_CAPABILITY_MAP = {
@@ -121,10 +122,23 @@ export function mapUserRuntimeAccounts(rawUser, options) {
 
         let action = "ready_to_map";
         let reason = `Managed ${capability} coverage is available through ${probe.runtime}:${probe.connector}.`;
+        const excludedIdentity = discoveredAccount
+          ? isManagedAccountExcluded(updatedUser, {
+            runtime: probe.runtime,
+            connector: probe.connector,
+            capability,
+            providerAccountId: discoveredAccount.providerAccountId ?? null,
+            handle: discoveredAccount.handle ?? null,
+          })
+          : false;
 
         if (probe.detectedStatus !== "available") {
           action = "connector_not_available";
           reason = `Managed ${capability} coverage is not currently available through ${probe.runtime}:${probe.connector}.`;
+        } else if (excludedIdentity) {
+          action = "excluded_identity";
+          const identityLabel = discoveredAccount?.label ?? handle ?? discoveredAccount?.providerAccountId ?? `${capability} identity`;
+          reason = `Managed ${capability} account ${identityLabel} is explicitly excluded for this user and will not be remapped.`;
         } else if (existingManagedAccount) {
           action = "already_mapped";
           reason = `Managed ${capability} is already mapped to this user through ${probe.runtime}:${probe.connector}.`;
@@ -245,6 +259,7 @@ export function mapUserRuntimeAccounts(rawUser, options) {
         mapping.action === "identity_unresolved"
         || mapping.action === "session_unavailable"
       ).length,
+      excludedCount: mappings.filter((mapping) => mapping.action === "excluded_identity").length,
     },
     mappings,
     updatedUser

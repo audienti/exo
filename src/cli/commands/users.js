@@ -4,11 +4,17 @@
 import { addUser } from "../../core/add-user.js";
 import { buildUserIntake } from "../../core/build-user-intake.js";
 import { mapUserRuntimeAccounts } from "../../core/map-user-runtime-accounts.js";
+import {
+  removeManagedAccountExclusion,
+  removeUserConnectedAccount,
+  upsertManagedAccountExclusion,
+} from "../../core/user-account-governance.js";
 import { buildUserWorkingHoursView, setUserWorkingHours } from "../../core/working-hours.js";
 import { probeRuntimeConnectorAvailability, probeUserHarnessConnections } from "../../core/probe-user-harness-connections.js";
 import { resolveUserConnection } from "../../core/resolve-user-connection.js";
 import { upsertUserConnectedAccount, upsertUserHarnessConnection } from "../../core/upsert-user-harness-connection.js";
 import {
+  deleteUser,
   findBrowserProfileById,
   findCompanyById,
   findUserById,
@@ -48,7 +54,10 @@ Examples:
   exo users accounts map-runtime <user-id> --runtime codex --apply --json
   exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --runtime codex --connector <connector-from-probe> --provider-account-id <provider-account-id> --preferred
   exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --runtime codex --connector <connector-from-probe> --provider-account-id acct-linkedin-1 --preferred --max-connection-requests 125
+  exo users accounts remove <user-id> <account-id> --exclude --json
+  exo users accounts exclude <user-id> --runtime codex --connector unipile --capability linkedin --provider-account-id acct-linkedin-2 --label "Wrong LinkedIn" --json
   exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --provider-account-id <provider-account-id> --preferred
+  exo users remove <user-id> --json
   exo users resolve <user-id> --capability gmail --json
 
 Rules:
@@ -152,6 +161,35 @@ Rules:
       }
 
       console.log(renderUserSummary(user));
+    });
+
+  users
+    .command("remove")
+    .description("Remove one execution user.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const raw = findUserById(userId);
+      if (!raw) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      deleteUser(String(raw.id));
+      const result = {
+        removed: true,
+        user: {
+          id: String(raw.id),
+          label: String(raw.label),
+        },
+        message: `Removed execution user ${raw.label}.`,
+      };
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(result.message);
     });
 
   const workingHours = users
@@ -389,6 +427,101 @@ Rules:
     });
 
   accounts
+    .command("remove")
+    .description("Remove one connected account from a user.")
+    .argument("<user-id>", "Execution user identifier")
+    .argument("<account-id>", "Connected account identifier")
+    .option("--exclude", "Also exclude this managed identity so map-runtime will not reattach it later")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, accountId, options) => {
+      const raw = findUserById(userId);
+      if (!raw) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const result = removeUserConnectedAccount(raw, accountId, {
+          excludeManagedIdentity: Boolean(options.exclude),
+        });
+        updateUser(result.updatedUser);
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        console.log(renderUserSummary(result.updatedUser));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  accounts
+    .command("exclude")
+    .description("Exclude one managed account identity so runtime mapping will not reattach it.")
+    .argument("<user-id>", "Execution user identifier")
+    .option("--account <account-id>", "Existing connected account to exclude")
+    .option("--runtime <runtime>", "Runtime such as codex or claude")
+    .option("--connector <connector>", "Connector such as unipile or gmail")
+    .option("--capability <capability>", "generic-web | linkedin | sales-navigator | gmail | hubspot")
+    .option("--provider-account-id <account-id>", "Exact external account identity")
+    .option("--handle <handle>", "Connected account handle")
+    .option("--label <label>", "Optional human-friendly account label")
+    .option("--notes <notes>", "Freeform notes")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, options) => {
+      const raw = findUserById(userId);
+      if (!raw) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const payload = buildManagedExclusionInput(raw, options);
+        const updated = upsertManagedAccountExclusion(raw, payload);
+        updateUser(updated);
+        if (options.json) {
+          console.log(JSON.stringify(updated, null, 2));
+          return;
+        }
+        console.log(renderUserSummary(updated));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  accounts
+    .command("unexclude")
+    .description("Remove one managed account exclusion so runtime mapping may attach it again.")
+    .argument("<user-id>", "Execution user identifier")
+    .argument("<exclusion-id>", "Managed account exclusion identifier")
+    .option("--json", "Emit machine-readable JSON")
+    .action((userId, exclusionId, options) => {
+      const raw = findUserById(userId);
+      if (!raw) {
+        console.error(`User not found: ${userId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const updated = removeManagedAccountExclusion(raw, exclusionId);
+        updateUser(updated);
+        if (options.json) {
+          console.log(JSON.stringify(updated, null, 2));
+          return;
+        }
+        console.log(renderUserSummary(updated));
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  accounts
     .command("map-runtime")
     .description("Probe one runtime for managed capability coverage, then map discovered LinkedIn, email, and related connector accounts onto a user.")
     .argument("<user-id>", "Execution user identifier")
@@ -514,6 +647,56 @@ function buildAccountAutomationControlsFromOptions(options) {
     weeklyQuotas: {
       invitations
     }
+  };
+}
+
+/**
+ * @param {any} rawUser
+ * @param {Record<string, any>} options
+ */
+function buildManagedExclusionInput(rawUser, options) {
+  if (options.account) {
+    const account = Array.isArray(rawUser.accounts)
+      ? rawUser.accounts.find((candidate) => candidate.id === options.account)
+      : null;
+    if (!account) {
+      throw new Error(`Connected account not found: ${options.account}`);
+    }
+    if (account.sourceType !== "harness-connection") {
+      throw new Error(`Connected account ${options.account} is not a managed harness-backed identity.`);
+    }
+    const harnessConnection = Array.isArray(rawUser.harnessConnections)
+      ? rawUser.harnessConnections.find((candidate) => candidate.id === account.harnessConnectionId)
+      : null;
+    if (!harnessConnection) {
+      throw new Error(`Harness connection missing for connected account ${options.account}.`);
+    }
+    return {
+      runtime: harnessConnection.runtime,
+      connector: harnessConnection.connector,
+      capability: account.capability,
+      providerAccountId: account.providerAccountId ?? null,
+      handle: account.handle,
+      label: options.label ?? account.label ?? null,
+      notes: options.notes ?? account.notes ?? null,
+    };
+  }
+
+  if (!options.runtime || !options.connector || !options.capability) {
+    throw new Error("Managed account exclusions require --account or --runtime, --connector, and --capability.");
+  }
+  if (!options.providerAccountId && !options.handle) {
+    throw new Error("Managed account exclusions require --provider-account-id or --handle.");
+  }
+
+  return {
+    runtime: options.runtime,
+    connector: options.connector,
+    capability: browserProfileCapabilitySchema.parse(options.capability),
+    providerAccountId: options.providerAccountId ?? null,
+    handle: options.handle ?? null,
+    label: options.label ?? null,
+    notes: options.notes ?? null,
   };
 }
 

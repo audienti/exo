@@ -22,11 +22,12 @@ import {
  * @param {ReturnType<import("../core/build-connections-view.js").buildConnectionsViewModel>} model
  * @param {{
  *   user?: { label?: string } | null,
- *   generatedAt?: string,
- *   regenerateCommand?: string,
- *   interactive?: boolean,
- *   userId?: string | null,
- *   claimMotions?: Array<{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }>,
+  *   generatedAt?: string,
+  *   regenerateCommand?: string,
+  *   interactive?: boolean,
+  *   userId?: string | null,
+ *   accountPath?: string | null,
+  *   claimMotions?: Array<{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }>,
  * }} [meta]
  * @returns {string}
  */
@@ -45,7 +46,8 @@ export function renderConnectionsPage(model, meta = {}) {
     radios +
     sentFilters +
     `<div class="dom-wrap">` +
-    renderIntro(model) +
+    renderIntro(model, meta) +
+    renderAccountSwitcher(model, meta) +
     `<div class="conn-main">` +
     renderTabs(model.tabs) +
     model.tabs.map((tab) => renderPanel(tab, meta, { agentPassActive })).join("") +
@@ -66,16 +68,70 @@ export function renderConnectionsPage(model, meta = {}) {
   });
 }
 
-/** @param {any} model */
-function renderIntro(model) {
+/**
+ * @param {any} model
+ * @param {{ user?: { label?: string } | null }} [meta]
+ */
+function renderIntro(model, meta = {}) {
+  const userLabel = typeof meta.user?.label === "string" && meta.user.label.trim()
+    ? meta.user.label.trim()
+    : null;
+  const selectedAccount = model.accounts?.find((account) => account.accountId === model.selectedAccountId) ?? null;
   return (
     `<div class="op-intro">` +
     `<div>` +
     `<h1>Connections</h1>` +
-    `<p class="op-line">Your connection surfaces — requests in and out, who follows you, who you follow, and who viewed your profile. Open a surface to act on it.</p>` +
+    (userLabel
+      ? `<p class="op-line"><span class="surface-ref">Viewing ${escapeHtml(userLabel)}</span></p>`
+      : "") +
+    (selectedAccount
+      ? `<p class="op-line"><span class="surface-ref">Account ${escapeHtml(selectedAccount.title)}</span></p>`
+      : "") +
+    `<p class="op-line">Connection surfaces for the active execution user: requests in and out, who follows this user, who this user follows, and who viewed this profile. Open a surface to act on it.</p>` +
     `</div>` +
     `</div>`
   );
+}
+
+/**
+ * @param {{ accounts?: any[], selectedAccountId?: string | null }} model
+ * @param {{ interactive?: boolean, accountPath?: string | null }} meta
+ */
+function renderAccountSwitcher(model, meta) {
+  const accounts = Array.isArray(model.accounts) ? model.accounts : [];
+  if (accounts.length <= 1) {
+    return "";
+  }
+
+  return (
+    `<div class="op-intro"><div>` +
+    `<p class="op-line">Connected accounts in this user context:</p>` +
+    `<div class="cap-cover">` +
+    accounts.map((account) => renderAccountChip(account, model.selectedAccountId ?? null, meta)).join("") +
+    `</div>` +
+    `</div></div>`
+  );
+}
+
+/**
+ * @param {any} account
+ * @param {string | null} selectedAccountId
+ * @param {{ interactive?: boolean, accountPath?: string | null }} meta
+ */
+function renderAccountChip(account, selectedAccountId, meta) {
+  const label = `${account.title}${account.subtitle ? ` · ${account.subtitle}` : ""}`;
+  const selected = account.accountId === selectedAccountId;
+  const truth = truthTag(account.truth ?? "unchecked");
+  if (!meta.interactive || !meta.accountPath) {
+    return `<span class="surface-ref">${escapeHtml(label)}${truth}</span>`;
+  }
+
+  return btn({
+    variant: selected ? "primary" : "secondary",
+    size: "sm",
+    label,
+    href: `${meta.accountPath}?account=${encodeURIComponent(account.accountId)}`,
+  }) + truth;
 }
 
 /** @param {any[]} tabs */

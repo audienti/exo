@@ -180,7 +180,7 @@ function buildFirstAccountPrompt(user, discoveredSources) {
       .slice(0, 3)
       .map((account) => `${account.capability}:${account.handle}`)
       .join(", ");
-    return `I found stored account identities (${examples}). Which of those belongs to ${user.label} first?`;
+    return `I found stored account identities (${examples}), but stored profile clues do not clear onboarding by themselves. Which managed account belongs to ${user.label} first?`;
   }
 
   if (discoveredSources.runtimeConnectors.length) {
@@ -188,10 +188,10 @@ function buildFirstAccountPrompt(user, discoveredSources) {
       .slice(0, 4)
       .map((entry) => `${entry.runtime}:${entry.connector}`)
       .join(", ");
-    return `I found callable runtime connectors (${connectors}), but ${user.label} still has no governed account mapped in Exo. Which account should we attach first?`;
+    return `I found callable runtime connectors (${connectors}), but ${user.label} still has no governed account mapped in Exo. Chrome or stored profiles do not count by themselves. Which managed account should we attach first?`;
   }
 
-  return `${user.label} exists in Exo, but no governed account is mapped yet. Which account should we attach first?`;
+  return `${user.label} exists in Exo, but no governed account is mapped yet. Which managed account should we attach first?`;
 }
 
 /**

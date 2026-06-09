@@ -88,6 +88,14 @@ function execMotionHref(motionId, meta) {
   return meta.interactive ? `/motions/${encodeURIComponent(motionId)}` : `../motions.html#m-${motionId}`;
 }
 
+/**
+ * @param {string} userId
+ * @param {{ interactive?: boolean }} meta
+ */
+function userConnectionsHref(userId, meta) {
+  return meta.interactive ? `/users/${encodeURIComponent(userId)}/connections` : `#u-${userId}-connections`;
+}
+
 /** @param {any} model */
 function renderIntro(model) {
   return (
@@ -140,6 +148,9 @@ function renderUserDetail(u, meta = {}) {
     backLink +
     `<h1>${escapeHtml(u.label)}</h1>` +
     `<p class="op-line">${escapeHtml(u.owner ?? "execution user")}${u.working ? ` · <span class="exec-working">${iconSvg("clock", 11)}${escapeHtml(u.working)}</span>` : ""}</p>` +
+    (meta.interactive
+      ? `<p class="op-line">${btn({ variant: "secondary", size: "sm", icon: "link", label: "Open connections", href: userConnectionsHref(u.id, meta) })}</p>`
+      : "") +
     `</div>` +
     `</div>`;
 

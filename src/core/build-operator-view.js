@@ -41,6 +41,8 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {string | null} cadenceLabel
  * @property {string | null} sendMode
  * @property {string | null} lastPassSummary
+ * @property {string[]} statusFacts
+ * @property {string | null} nextAction
  * @property {number} queueCount
  * @property {number | null | undefined} verificationSendCount
  * @property {boolean} canRunNow
@@ -859,6 +861,7 @@ function shapeAgentRuntime(runtime, queueCount) {
     ? Number(runtime.verificationSendCount)
     : queueCount;
   const lastPassSummary = summarizeLastPass(lastPass);
+  const statusFacts = buildAgentStatusFacts({ lock, scheduler, lastPassSummary });
   const verifyHoldingSends = isVerifyModeHoldingSends({ sendMode, lastPass, verificationSendCount });
   const overdueBySeconds = Number.isFinite(cadence?.overdueBySeconds) ? Number(cadence.overdueBySeconds) : 0;
   const schedulerBehind = Boolean(scheduler?.loaded)
@@ -878,6 +881,8 @@ function shapeAgentRuntime(runtime, queueCount) {
       cadenceLabel,
       sendMode,
       lastPassSummary,
+      statusFacts,
+      nextAction: null,
       queueCount,
       canRunNow: false,
       runLabel: null,
@@ -892,6 +897,8 @@ function shapeAgentRuntime(runtime, queueCount) {
       cadenceLabel,
       sendMode,
       lastPassSummary,
+      statusFacts,
+      nextAction: "Fix the blocked connector path, then run the agent again.",
       queueCount,
       canRunNow: true,
       runLabel: "Run agent now",
@@ -902,15 +909,17 @@ function shapeAgentRuntime(runtime, queueCount) {
     const queueLabel = `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"}`;
     return {
       state: scheduler?.loaded ? "on" : "off",
-      headline: "Verify mode is holding sends",
-      detail: `${queueLabel} already have fresh proof. Verify mode stops those at ready_to_send and will not click Send or write back.`,
+      headline: "Approved drafts are waiting in review only",
+      detail: `${queueLabel} already have fresh proof. Review only will not send them. Switch the agent to send one or send all when you want the next pass to send.`,
       cadenceLabel,
       sendMode,
       lastPassSummary,
+      statusFacts,
+      nextAction: "Switch the agent out of review only when you want the next pass to send approved drafts.",
       queueCount,
       verificationSendCount,
       canRunNow: true,
-      runLabel: "Run proof pass",
+      runLabel: "Run review pass",
     };
   }
 
@@ -922,6 +931,8 @@ function shapeAgentRuntime(runtime, queueCount) {
       cadenceLabel,
       sendMode,
       lastPassSummary,
+      statusFacts,
+      nextAction: "Run the agent now or repair the scheduler so queued work can drain.",
       queueCount,
       canRunNow: true,
       runLabel: "Run agent now",
@@ -938,6 +949,8 @@ function shapeAgentRuntime(runtime, queueCount) {
       cadenceLabel,
       sendMode,
       lastPassSummary,
+      statusFacts,
+      nextAction: scheduler.running ? null : "No repair needed. Let the scheduler run, or run the agent now if you want an immediate pass.",
       queueCount,
       canRunNow: !scheduler.running,
       runLabel: scheduler.running ? null : "Run agent now",
@@ -953,11 +966,15 @@ function shapeAgentRuntime(runtime, queueCount) {
     : "The background agent is not installed on this machine.";
   return {
     state: "off",
-    headline: "Agent is off",
+    headline: "Background agent off",
     detail: `${installDetail} ${offDetail}`.trim(),
     cadenceLabel,
     sendMode,
     lastPassSummary,
+    statusFacts,
+    nextAction: scheduler?.installed
+      ? "Load the installed background agent or run a pass manually."
+      : "Install the background agent before expecting autonomous draining.",
     queueCount,
     canRunNow: true,
     runLabel: "Run agent now",
@@ -1106,6 +1123,21 @@ function isVerifyModeHoldingSends(input) {
   const status = String(input.lastPass?.status ?? "").trim().toLowerCase();
   const reason = String(input.lastPass?.reason ?? "").trim().toLowerCase();
   return status === "noop" && /no unverified send_message tasks left to prove/.test(reason);
+}
+
+/**
+ * @param {{ lock: any, scheduler: any, lastPassSummary: string | null }} input
+ */
+function buildAgentStatusFacts(input) {
+  const installed = input.scheduler?.installed ? "yes" : "no";
+  const loaded = input.scheduler?.loaded ? "yes" : "no";
+  const running = input.lock?.active || input.scheduler?.running ? "yes" : "no";
+  return [
+    `Installed: ${installed}`,
+    `Loaded: ${loaded}`,
+    `Running: ${running}`,
+    `Last pass: ${input.lastPassSummary ?? "none"}`,
+  ];
 }
 
 /**

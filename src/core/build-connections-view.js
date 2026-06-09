@@ -21,6 +21,20 @@ const TABS = [
   { key: "views", label: "Views", icon: "eye", surfaceKey: "linkedin-profile-views" },
 ];
 
+const EXTRA_FRESHNESS_SURFACE_KEYS = [
+  "linkedin-messaging-inbox",
+  "linkedin-comment-replies",
+  "gmail-inbox-threads",
+  "linkedin-catch-up-updates",
+];
+
+const PRIMARY_CONNECTION_SURFACE_KEYS = new Set(TABS.map((tab) => tab.surfaceKey));
+
+const CONNECTION_SURFACE_KEYS = new Set([
+  ...TABS.map((tab) => tab.surfaceKey),
+  ...EXTRA_FRESHNESS_SURFACE_KEYS,
+]);
+
 const TAB_ACTION = {
   received: "accept-decline",
   sent: "withdraw",
@@ -43,6 +57,7 @@ const PRESENT_KINDS_BY_TAB = {
  *   observations?: any[],
  *   truthAccounts: any[],
  *   agentQueue?: { tasks?: any[], items?: any[] } | null,
+ *   selectedAccountId?: string | null,
  *   degreeByProfile?: Map<string, { degree: number, prospectId?: string|null }> | Record<string, { degree: number, prospectId?: string|null }>,
  *   sentAtByProfile?: Map<string, string> | Record<string, string>
  * }} input
@@ -66,12 +81,9 @@ export function buildConnectionsViewModel(input) {
       ? input.sentAtByProfile
       : new Map(Object.entries(input.sentAtByProfile ?? {}));
   const profileViewAfterTouchByIdentity = buildProfileViewAfterTouchIndex(observations);
-  const surfaceByKey = new Map();
-  for (const account of input.truthAccounts ?? []) {
-    for (const surface of account.surfaces ?? []) {
-      surfaceByKey.set(surface.key, { surface, account });
-    }
-  }
+  const accounts = buildConnectionsAccounts(input.truthAccounts ?? []);
+  const selectedAccount = resolveSelectedConnectionsAccount(accounts, input.selectedAccountId ?? null);
+  const surfaceByKey = buildSurfaceIndex(selectedAccount);
   const repairTaskBySurfaceKey = buildRepairTaskIndex(input.agentQueue ?? null);
 
   const tabs = TABS.map((tab) => {
@@ -79,7 +91,9 @@ export function buildConnectionsViewModel(input) {
     const surface = entry?.surface ?? null;
     const truth = surface ? mapSurfaceTruth(surface.lastRunStatus, surface.meta) : "unchecked";
     let items = observations.filter((item) =>
-      item.surfaceKey === tab.surfaceKey && PRESENT_KINDS_BY_TAB[tab.key]?.has(item.kind),
+      observationAccountId(item) === (selectedAccount?.accountId ?? null)
+      && item.surfaceKey === tab.surfaceKey
+      && PRESENT_KINDS_BY_TAB[tab.key]?.has(item.kind),
     );
     if (tab.key === "received") {
       items = items.filter((item) => resolutionOf(item, lookupDegree(item, degreeByProfile).degree) === "pending");
@@ -101,7 +115,14 @@ export function buildConnectionsViewModel(input) {
       gap: gapState.message,
       gapKind: gapState.kind,
       autoRepairable: gapState.autoRepairable,
-      repairTask: gapState.autoRepairable ? repairTaskBySurfaceKey.get(tab.surfaceKey) ?? null : null,
+      repairTask: gapState.autoRepairable
+        ? resolveRepairTaskForSurface(
+          repairTaskBySurfaceKey,
+          selectedAccount?.accountId ?? null,
+          tab.surfaceKey,
+          accounts.length,
+        )
+        : null,
       title: tabTitle(tab.key),
       filters: tab.key === "sent" ? buildSentFilters(people) : null,
       people,
@@ -109,10 +130,9 @@ export function buildConnectionsViewModel(input) {
   });
 
   // Surface freshness footer — every itemizable surface plus messaging/email.
-  const extraKeys = ["linkedin-messaging-inbox", "linkedin-comment-replies", "gmail-inbox-threads", "linkedin-catch-up-updates"];
   const freshness = [
     ...TABS.map((tab) => freshnessChip(tab.label, surfaceByKey.get(tab.surfaceKey)?.surface)),
-    ...extraKeys
+    ...EXTRA_FRESHNESS_SURFACE_KEYS
       .map((key) => surfaceByKey.get(key))
       .filter(Boolean)
       .map((entry) => freshnessChip(entry.surface.label, entry.surface)),
@@ -120,12 +140,71 @@ export function buildConnectionsViewModel(input) {
 
   return {
     counts: {
+      accounts: accounts.length,
       tabs: tabs.length,
       itemized: tabs.reduce((sum, tab) => sum + tab.count, 0),
     },
+    accounts,
+    selectedAccountId: selectedAccount?.accountId ?? null,
     tabs,
     freshness,
   };
+}
+
+/**
+ * @param {any[]} truthAccounts
+ */
+function buildConnectionsAccounts(truthAccounts) {
+  return (truthAccounts ?? [])
+    .filter((account) =>
+      Array.isArray(account?.surfaces) && account.surfaces.some((surface) => PRIMARY_CONNECTION_SURFACE_KEYS.has(surface.key)),
+    )
+    .map((account) => {
+      const handle = normalizeDisplayString(account.handle);
+      const label = normalizeDisplayString(account.label);
+      const surfaces = Array.isArray(account.surfaces) ? account.surfaces.filter((surface) => CONNECTION_SURFACE_KEYS.has(surface.key)) : [];
+      return {
+        accountId: normalizeDisplayString(account.accountId) ?? "",
+        capability: normalizeDisplayString(account.capability) ?? null,
+        handle,
+        label,
+        preferred: account.preferred === true,
+        title: buildConnectionsAccountTitle(label, handle, account.accountId),
+        subtitle: buildConnectionsAccountSubtitle(account),
+        truth: deriveConnectionsAccountTruth(surfaces),
+        surfaces,
+      };
+    })
+    .filter((account) => account.accountId);
+}
+
+/**
+ * @param {ReturnType<typeof buildConnectionsAccounts>} accounts
+ * @param {string | null} selectedAccountId
+ */
+function resolveSelectedConnectionsAccount(accounts, selectedAccountId) {
+  if (!accounts.length) {
+    return null;
+  }
+  if (selectedAccountId) {
+    const matched = accounts.find((account) => account.accountId === selectedAccountId);
+    if (matched) {
+      return matched;
+    }
+  }
+  const preferred = accounts.find((account) => account.preferred);
+  return preferred ?? accounts[0];
+}
+
+/**
+ * @param {ReturnType<typeof resolveSelectedConnectionsAccount>} account
+ */
+function buildSurfaceIndex(account) {
+  const surfaceByKey = new Map();
+  for (const surface of account?.surfaces ?? []) {
+    surfaceByKey.set(surface.key, { surface, account });
+  }
+  return surfaceByKey;
 }
 
 /**
@@ -155,7 +234,7 @@ function buildRepairTaskIndex(agentQueue) {
       if (typeof surfaceKey !== "string" || !surfaceKey.trim()) {
         continue;
       }
-      index.set(surfaceKey, {
+      index.set(buildRepairTaskKey(task?.accountId ?? null, surfaceKey), {
         mode: typeof task?.mode === "string" ? task.mode : null,
         dueAt: task?.dueAt ?? task?.queuedAt ?? null,
         waitingReason: typeof task?.waitingReason === "string" ? task.waitingReason : null,
@@ -165,6 +244,41 @@ function buildRepairTaskIndex(agentQueue) {
   }
 
   return index;
+}
+
+/**
+ * @param {string | null | undefined} accountId
+ * @param {string} surfaceKey
+ */
+function buildRepairTaskKey(accountId, surfaceKey) {
+  return `${normalizeDisplayString(accountId) ?? "unknown"}:${surfaceKey}`;
+}
+
+/**
+ * Legacy queued repair tasks may predate account-scoped keys. Preserve that
+ * state when there is only one eligible connections account, but fail closed on
+ * multi-account views where a surface-only task would be ambiguous.
+ * @param {Map<string, any>} repairTaskBySurfaceKey
+ * @param {string | null | undefined} accountId
+ * @param {string} surfaceKey
+ * @param {number} accountCount
+ */
+function resolveRepairTaskForSurface(repairTaskBySurfaceKey, accountId, surfaceKey, accountCount) {
+  const exact = repairTaskBySurfaceKey.get(buildRepairTaskKey(accountId, surfaceKey)) ?? null;
+  if (exact) {
+    return exact;
+  }
+  if (accountCount !== 1) {
+    return null;
+  }
+  return repairTaskBySurfaceKey.get(buildRepairTaskKey(null, surfaceKey)) ?? null;
+}
+
+/**
+ * @param {any} item
+ */
+function observationAccountId(item) {
+  return normalizeDisplayString(item?.accountId ?? item?.account?.id ?? null);
 }
 
 /**
@@ -562,6 +676,53 @@ function mapSurfaceTruth(lastRunStatus, meta) {
   if (meta?.itemizationGap || meta?.stale || lastRunStatus === "warning") return "partial";
   if (lastRunStatus === "success") return "checked";
   return "quiet";
+}
+
+/**
+ * @param {string | null | undefined} label
+ * @param {string | null | undefined} handle
+ * @param {string | null | undefined} accountId
+ */
+function buildConnectionsAccountTitle(label, handle, accountId) {
+  if (label && handle && label !== handle) {
+    return `${label} · ${handle}`;
+  }
+  return label ?? handle ?? accountId ?? "Connected account";
+}
+
+/** @param {any} account */
+function buildConnectionsAccountSubtitle(account) {
+  const parts = [];
+  const capability = normalizeDisplayString(account.capability);
+  if (capability) {
+    parts.push(capability);
+  }
+  if (account.preferred === true) {
+    parts.push("preferred");
+  }
+  return parts.join(" · ");
+}
+
+/** @param {any[]} surfaces */
+function deriveConnectionsAccountTruth(surfaces) {
+  const truths = (surfaces ?? []).map((surface) => mapSurfaceTruth(surface.lastRunStatus, surface.meta));
+  if (truths.includes("failed")) return "failed";
+  if (truths.includes("partial")) return "partial";
+  if (truths.includes("unchecked")) return "unchecked";
+  if (truths.includes("checked")) return "checked";
+  return "quiet";
+}
+
+/**
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+function normalizeDisplayString(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
 }
 
 /** @param {string | null | undefined} iso */

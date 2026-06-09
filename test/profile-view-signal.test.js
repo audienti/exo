@@ -314,6 +314,98 @@ test("connections sent rows pull in the viewed-after-invite signal", () => {
   assert.match(html, /Viewed your profile after the invite/);
 });
 
+test("connections intro shows which execution user the page belongs to", () => {
+  const model = buildConnectionsViewModel({
+    reviewItems: [],
+    truthAccounts: [baseTruthAccount()],
+  });
+
+  const html = renderConnectionsPage(model, {
+    user: { label: "Ali Umair" },
+    generatedAt: now,
+  });
+
+  assert.match(html, /Viewing Ali Umair/);
+  assert.match(html, /Connection surfaces for the active execution user/i);
+});
+
+test("connections can switch between multiple connected accounts for the same user", () => {
+  const firstAccount = {
+    accountId: "account-1",
+    handle: "williamflanagan",
+    label: "William Flanagan",
+    preferred: true,
+    capability: "linkedin",
+    surfaces: [
+      {
+        key: "linkedin-sent-invitations",
+        label: "Sent Invitations",
+        lastRunStatus: "success",
+        lastSyncedAt: "2026-06-04T16:30:00.000Z",
+        lastObservedAt: "2026-06-04T16:30:00.000Z",
+        lastItemCount: 1,
+        meta: {},
+      },
+    ],
+  };
+  const secondAccount = {
+    accountId: "account-2",
+    handle: "aliumairdev",
+    label: "Ali Umair",
+    preferred: false,
+    capability: "linkedin",
+    surfaces: [
+      {
+        key: "linkedin-sent-invitations",
+        label: "Sent Invitations",
+        lastRunStatus: "success",
+        lastSyncedAt: "2026-06-04T16:30:00.000Z",
+        lastObservedAt: "2026-06-04T16:30:00.000Z",
+        lastItemCount: 1,
+        meta: {},
+      },
+    ],
+  };
+  const williamInvite = baseReviewItem({
+    id: "obs-william",
+    actorName: "William Prospect",
+    actorProfileUrl: "https://www.linkedin.com/in/william-prospect/",
+    accountId: "account-1",
+    account: { id: "account-1", capability: "linkedin" },
+  });
+  const aliInvite = baseReviewItem({
+    id: "obs-ali",
+    actorName: "Ali Prospect",
+    actorProfileUrl: "https://www.linkedin.com/in/ali-prospect/",
+    accountId: "account-2",
+    account: { id: "account-2", capability: "linkedin" },
+  });
+
+  const model = buildConnectionsViewModel({
+    reviewItems: [williamInvite, aliInvite],
+    truthAccounts: [firstAccount, secondAccount],
+    selectedAccountId: "account-2",
+  });
+
+  assert.equal(model.accounts.length, 2);
+  assert.equal(model.selectedAccountId, "account-2");
+  const sentTab = model.tabs.find((tab) => tab.key === "sent");
+  assert.ok(sentTab);
+  assert.equal(sentTab.people.length, 1);
+  assert.equal(sentTab.people[0].name, "Ali Prospect");
+
+  const html = renderConnectionsPage(model, {
+    user: { label: "Ali Umair" },
+    generatedAt: now,
+    interactive: true,
+    accountPath: "/users/user-2/connections",
+  });
+
+  assert.match(html, /Account Ali Umair · aliumairdev/);
+  assert.match(html, /href="\/users\/user-2\/connections\?account=account-1"/);
+  assert.match(html, /href="\/users\/user-2\/connections\?account=account-2"/);
+});
+
 test("connections views rows fall back to the viewed label when stored eventAt is missing", () => {
   const profileView = baseReviewItem({
     id: "obs-view-only",

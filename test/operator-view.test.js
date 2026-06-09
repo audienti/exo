@@ -722,11 +722,13 @@ test("queue page shows the same run-now runtime card when the background agent i
   const introHtml = html.slice(introStart, runtimeCardStart);
   assert.match(html, /data-agent-health="yellow"/);
   assert.match(html, /Agent work queued/i);
-  assert.match(html, /Agent is off/i);
+  assert.match(html, /Background agent off/i);
+  assert.match(html, /The background agent is not installed on this machine\./i);
+  assert.match(html, /Next action: Install the background agent before expecting autonomous draining\./i);
   assert.match(html, /Run agent now/i);
   assert.doesNotMatch(html, /Work the agent will run autonomously/i);
   assert.match(introHtml, /Run agent now/i);
-  assert.match(introHtml, /verify mode/i);
+  assert.match(introHtml, /Review only/i);
   assert.match(html, /data-exo-writer="runAgentQueuePass"/);
 });
 
@@ -1098,22 +1100,26 @@ test("agent runtime spells out that verify mode will not send already-proved dra
   });
 
   const operatorHtml = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
-  assert.match(operatorHtml, /Verify mode is holding sends/i);
+  assert.match(operatorHtml, /Approved drafts are waiting in review only/i);
   assert.match(operatorHtml, /2 queued agent-authored sends already have fresh proof/i);
-  assert.match(operatorHtml, /will not click Send or write back/i);
-  assert.match(operatorHtml, />Run proof pass</i);
+  assert.match(operatorHtml, /Review only will not send them\./i);
+  assert.match(operatorHtml, /Switch the agent out of review only when you want the next pass to send approved drafts\./i);
+  assert.match(operatorHtml, />Run review pass</i);
+  assert.match(operatorHtml, /Installed: yes/i);
   assert.doesNotMatch(operatorHtml, />Run agent now</i);
 
   const queueHtml = renderQueuePage(model, { interactive: true, agentRuntime: runtime });
   const introStart = queueHtml.indexOf("<h1>Agent queue</h1>");
   const runtimeCardStart = queueHtml.indexOf("next-move agent-runtime");
   const introHtml = queueHtml.slice(introStart, runtimeCardStart);
-  assert.match(queueHtml, /Verify mode is holding sends/i);
+  assert.match(queueHtml, /Approved drafts are waiting in review only/i);
   assert.match(queueHtml, /2 queued agent-authored sends already have fresh proof/i);
-  assert.match(queueHtml, /will not click Send or write back/i);
-  assert.match(queueHtml, />Run proof pass</i);
+  assert.match(queueHtml, /Review only will not send them\./i);
+  assert.match(queueHtml, />Run review pass</i);
+  assert.match(queueHtml, /Next action: Switch the agent out of review only when you want the next pass to send approved drafts\./i);
   assert.doesNotMatch(queueHtml, />Run agent now</i);
-  assert.match(introHtml, /Run proof pass/i);
+  assert.match(introHtml, /Run review pass/i);
+  assert.match(introHtml, /Review only/i);
   assert.match(introHtml, /Last pass noop/i);
 });
 

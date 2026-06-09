@@ -135,6 +135,8 @@ test("renderUserDetailPage exposes the claim runtime account control", () => {
   assert.doesNotMatch(html, /placeholder="linkedin handle"/);
   assert.match(html, /William Flanagan/);
   assert.match(html, /linkedin via codex · unipile/);
+  assert.match(html, /href="\/users\/user-1\/connections"/);
+  assert.match(html, /Open connections/);
 });
 
 test("buildExecutionViewModel surfaces multiple unipile accounts as separate claim rows", () => {

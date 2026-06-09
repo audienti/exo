@@ -19,6 +19,12 @@ export function renderUserSummary(user) {
   const harnessLines = user.harnessConnections.length
     ? user.harnessConnections.map((connection) => `  - ${connection.runtime}:${connection.connector} (${connection.status})`)
     : ["  - none"];
+  const exclusionLines = user.managedAccountExclusions?.length
+    ? user.managedAccountExclusions.map((exclusion) => {
+        const identity = exclusion.label ?? exclusion.handle ?? exclusion.providerAccountId ?? "unknown";
+        return `  - ${exclusion.runtime}:${exclusion.connector} ${exclusion.capability}:${identity}`;
+      })
+    : ["  - none"];
 
   return [
     `User: ${user.label}`,
@@ -30,7 +36,9 @@ export function renderUserSummary(user) {
     "Accounts:",
     ...accountLines,
     "Harness Connections:",
-    ...harnessLines
+    ...harnessLines,
+    "Excluded Managed Accounts:",
+    ...exclusionLines
   ].join("\n");
 }
 
@@ -129,7 +137,8 @@ export function renderUserHarnessProbe(result) {
  *     mappedCount: number,
  *     alreadyMappedCount: number,
  *     missingHandleCount: number,
- *     unavailableCount: number
+ *     unavailableCount: number,
+ *     excludedCount?: number
  *   },
  *   mappings: Array<{
  *     runtime: string,
@@ -159,7 +168,8 @@ export function renderUserRuntimeAccountMapping(result) {
     `Already Mapped: ${result.counts.alreadyMappedCount}`,
     `Missing Handle: ${result.counts.missingHandleCount}`,
     `Unavailable: ${result.counts.unavailableCount}`,
-    `Identity Blocked: ${result.counts.identityBlockedCount ?? 0}`
+    `Identity Blocked: ${result.counts.identityBlockedCount ?? 0}`,
+    `Excluded: ${result.counts.excludedCount ?? 0}`
   ];
 
   if (!result.mappings.length) {

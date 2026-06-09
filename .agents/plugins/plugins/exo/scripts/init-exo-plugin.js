@@ -101,11 +101,13 @@ function requireValue(flag, value) {
  * @param {Awaited<ReturnType<typeof buildPayload>>} payload
  */
 function renderHuman(payload) {
+  const onboarding = payload.onboarding.onboarding ?? payload.onboarding;
+  const status = onboarding.status ?? "unknown";
   const lines = [
     `Workspace: ${payload.workspace.workspace}`,
     `Repo root: ${payload.repoRoot}`,
     `Dependencies: ${payload.dependencies.ranInstall ? "installed" : "ready"}`,
-    `Onboarding status: ${payload.onboarding.status ?? payload.onboarding.onboarding?.status ?? "unknown"}`,
+    `Onboarding status: ${status}`,
   ];
 
   if (payload.recognizedServices.available.length) {
@@ -116,9 +118,18 @@ function renderHuman(payload) {
     lines.push("Recognized services: none currently available");
   }
 
-  const install = payload.onboarding.install ?? payload.onboarding.onboarding?.install ?? null;
+  const install = onboarding.install ?? null;
   if (install?.question?.prompt) {
     lines.push(`Next question: ${install.question.prompt}`);
+  }
+
+  if (status === "needs-account-mapping") {
+    lines.push("Exo needs one managed account before launch. Chrome or stored profiles do not clear onboarding.");
+    lines.push("Recommended: Unipile for governed LinkedIn, the Gmail app for inbox truth, HubSpot only if you want CRM context.");
+    lines.push("Without them: Exo can store motion state and show cheap connector discovery, but it stays in onboarding and blocks governed LinkedIn launch.");
+    lines.push("Unipile: https://www.unipile.com/");
+    lines.push("Unipile docs: https://developer.unipile.com/docs/getting-started");
+    lines.push("HubSpot CRM: https://www.hubspot.com/products/crm");
   }
 
   return lines.join("\n");
