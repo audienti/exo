@@ -72,6 +72,15 @@ The plugin install contract is explicit:
 From the repo root:
 
 ```bash
+npm run plugin:check -- --json
+npm run plugin:init -- --json
+```
+
+Use `plugin:check` as the once-a-day health command. It runs the wrapper against the current workspace, proves the cold-start path still works on a temp workspace, and runs the plugin tests that guard version alignment and wrapper behavior.
+
+To inspect only the current workspace through the wrapper:
+
+```bash
 npm run plugin:init -- --json
 ```
 

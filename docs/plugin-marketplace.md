@@ -55,6 +55,19 @@ exo onboarding --scope global-install --apply --json
 From the repo root:
 
 ```bash
+npm run plugin:check -- --json
+```
+
+That daily health check:
+
+1. runs the marketplace wrapper against the target workspace
+2. verifies the true fresh-init path on a temp workspace
+3. runs the plugin versioning and wrapper tests
+4. reports the current repo version and git commit
+
+For the direct wrapper check alone:
+
+```bash
 npm run plugin:init -- --json
 ```
 
