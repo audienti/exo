@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { buildAgentQueue } from "../src/core/build-agent-queue.js";
+import { buildAgentQueue, isBackfillInboundSyncTask } from "../src/core/build-agent-queue.js";
 import { buildInboundAutomationHealthWarnings, buildInboundAutomationWarnings } from "../src/core/user-inbound-sync.js";
 import {
   findCompanyById,
@@ -49,6 +49,7 @@ import {
   setBrowserBackoffForTask,
 } from "../src/lib/agent-host-state.js";
 import { buildPreflightSummary } from "../src/lib/agent-preflight.js";
+import { getTaskExecutionLane, normalizeAgentExecutionLane } from "../src/lib/agent-task-lanes.js";
 import { runLinkedinMaintenanceWithUnipile } from "../src/lib/linkedin-unipile-maintenance.js";
 import { extractUsableDraftBody } from "../src/lib/draft-policy.js";
 import { extractLinkedinPublicId } from "../src/lib/prospect-contacts.js";
@@ -58,13 +59,28 @@ const CODEX_BIN = process.env.EXO_CODEX_BIN || "/Applications/Codex.app/Contents
 const ROOT = process.cwd();
 const STATE_DIR = process.env.EXO_STATE_DIR || path.join(ROOT, ".exo");
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
-const PASS_SUMMARY_PATH = path.join(STATE_DIR, "agent-last-pass.json");
+// When set ("transport" | "research"), this pass only executes tasks in that
+// lane. The lane runner holds a lane-scoped run lock, so a transport pass
+// (sync/sends through the connector identity) and a research pass (native
+// compute) can run concurrently on the same host.
+const EXECUTION_LANE = normalizeAgentExecutionLane(process.env.EXO_AGENT_LANE);
+// Lane passes write lane-scoped summaries; the worker that launches both
+// lanes merges them into the legacy agent-last-pass.json for existing readers.
+const PASS_SUMMARY_PATH = path.join(
+  STATE_DIR,
+  EXECUTION_LANE ? `agent-last-pass.${EXECUTION_LANE}.json` : "agent-last-pass.json",
+);
 const PREFLIGHT_PATH = path.join(STATE_DIR, "agent-preflight.json");
 const HOST_STATE_PATH = path.join(STATE_DIR, "agent-host-state.json");
 const TEMP_ROOT = path.join(STATE_DIR, "automation-tmp");
 const MAX_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_TASKS, 1000);
 const MAX_MAINTENANCE_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_MAINTENANCE_TASKS, 25);
 const STANDARD_PASS_BUDGET_MS = normalizePositiveInteger(process.env.EXO_AGENT_STANDARD_PASS_BUDGET_MS, 14 * 60 * 1000);
+// After this many non-backfill standard tasks, the pass prefers one full-sync
+// backfill slice so backfill keeps progressing even when motion work would
+// otherwise fill the whole pass budget (and vice versa: rank ordering keeps
+// backfill from starving motion work).
+const BACKFILL_INTERLEAVE_EVERY = normalizePositiveInteger(process.env.EXO_AGENT_BACKFILL_INTERLEAVE_EVERY, 3);
 const DRAFT_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_DRAFT_TIMEOUT_MS, 120000);
 const BROWSER_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_BROWSER_TIMEOUT_MS, 300000);
 const INBOUND_CAPTURE_TIMEOUT_MS = normalizePositiveInteger(
@@ -182,10 +198,14 @@ export function runAgentHostPass() {
   const results = [];
   let standardTaskCount = 0;
   let maintenanceTaskCount = 0;
+  let backfillTaskCount = 0;
   let noOpReason = null;
 
   try {
     while (true) {
+      // Reload each iteration so leases/backoffs written by a concurrent lane
+      // worker are visible before we pick the next task.
+      hostState = loadHostState();
       const queue = loadQueue(hostState);
       const queueCheckedAt = new Date().toISOString();
       const rolloutWarnings = loadInboundAutomationRolloutWarnings(queueCheckedAt);
@@ -203,6 +223,7 @@ export function runAgentHostPass() {
           passLane: maintenanceTaskCount > 0 ? "maintenance" : standardTaskCount > 0 ? "standard" : null,
           standardTaskCount,
           maintenanceTaskCount,
+          backfillTaskCount,
         },
       );
       if (!task) {
@@ -229,13 +250,13 @@ export function runAgentHostPass() {
         break;
       }
 
-      const checkout = maybeCheckoutTaskForExecution(hostState, task, queueCheckedAt);
+      let checkout = /** @type {any} */ (null);
+      hostState = mutateHostState((state) => {
+        checkout = maybeCheckoutTaskForExecution(state, task, queueCheckedAt);
+        return checkout.stateChanged ? checkout.state : state;
+      });
       if (!checkout.ok) {
         continue;
-      }
-      if (checkout.stateChanged) {
-        hostState = checkout.state;
-        saveHostState(hostState);
       }
 
       const executableTask = checkout.task;
@@ -246,25 +267,26 @@ export function runAgentHostPass() {
         automationHealthWarnings: rolloutWarnings.automationHealthWarnings,
       }, executionContext);
       if (checkout.stateChanged) {
-        hostState = releaseCheckedOutTask(hostState, executableTask);
-        saveHostState(hostState);
+        hostState = mutateHostState((state) => releaseCheckedOutTask(state, executableTask));
       }
       results.push(result);
       if (shouldRecordMotionTaskRun(executableTask)) {
-        hostState = recordMotionTaskRun(hostState, {
+        hostState = mutateHostState((state) => recordMotionTaskRun(state, {
           taskKind: executableTask.kind,
           motionId: executableTask.motionId,
           companyId: executableTask.companyId ?? null,
           prospectId: executableTask.prospectId ?? null,
           recordedAt: result.finishedAt ?? new Date().toISOString(),
           status: result.status,
-        });
-        saveHostState(hostState);
+        }));
       }
       if (maintenanceTask) {
         maintenanceTaskCount += 1;
       } else {
         standardTaskCount += 1;
+        if (isBackfillInboundSyncTask(executableTask)) {
+          backfillTaskCount += 1;
+        }
       }
 
       const blockedBrowserTask = result.status === "blocked" && BROWSER_TRANSPORT_TASK_KINDS.has(executableTask.kind);
@@ -273,31 +295,29 @@ export function runAgentHostPass() {
         && (selectedMode === "live" || selectedMode === "canary_live" || selectedMode === "operator_live");
       if (blockedBrowserTask) {
         const unavailableUntil = new Date(Date.now() + BROWSER_TRANSPORT_BACKOFF_MS).toISOString();
-        const nextState = setBrowserBackoffForTask(
-          hostState,
+        hostState = mutateHostState((state) => setBrowserBackoffForTask(
+          state,
           executableTask.kind,
           unavailableUntil,
           result.detail?.reason ?? "browser_transport_blocked",
-        );
-        hostState.browserBackoff = nextState.browserBackoff;
-        saveHostState(hostState);
+        ));
       }
 
       if ((result.status === "blocked" || result.status === "failed") && liveSendAttempt) {
         const failureAt = result.finishedAt ?? new Date().toISOString();
-        const breakerBefore = getSendCircuitBreaker(hostState, failureAt);
-        const nextFailureCount = breakerBefore.consecutiveFailures + 1;
-        const nextState = recordSendCircuitFailure(hostState, {
-          failureAt,
-          reason: result.detail?.reason ?? `${result.status}: send task did not complete`,
-          taskFingerprint: createTaskVerificationFingerprint(executableTask),
-          taskLabel: [executableTask.prospectName, executableTask.companyName].filter(Boolean).join(" at ") || executableTask.recipientUrl || executableTask.prospectId || "unknown send",
-          unavailableUntil: nextFailureCount >= SEND_CIRCUIT_BREAKER_THRESHOLD
-            ? new Date(Date.parse(failureAt) + SEND_CIRCUIT_BREAKER_BACKOFF_MS).toISOString()
-            : null,
+        hostState = mutateHostState((state) => {
+          const breakerBefore = getSendCircuitBreaker(state, failureAt);
+          const nextFailureCount = breakerBefore.consecutiveFailures + 1;
+          return recordSendCircuitFailure(state, {
+            failureAt,
+            reason: result.detail?.reason ?? `${result.status}: send task did not complete`,
+            taskFingerprint: createTaskVerificationFingerprint(executableTask),
+            taskLabel: [executableTask.prospectName, executableTask.companyName].filter(Boolean).join(" at ") || executableTask.recipientUrl || executableTask.prospectId || "unknown send",
+            unavailableUntil: nextFailureCount >= SEND_CIRCUIT_BREAKER_THRESHOLD
+              ? new Date(Date.parse(failureAt) + SEND_CIRCUIT_BREAKER_BACKOFF_MS).toISOString()
+              : null,
+          });
         });
-        hostState.sendCircuitBreaker = nextState.sendCircuitBreaker;
-        saveHostState(hostState);
       }
 
       if (blockedBrowserTask) {
@@ -308,28 +328,26 @@ export function runAgentHostPass() {
       }
 
       if (result.status === "completed" && BROWSER_TRANSPORT_TASK_KINDS.has(executableTask.kind)) {
-        const nextState = clearBrowserBackoffForTask(hostState, executableTask.kind);
-        hostState.browserBackoff = nextState.browserBackoff;
-        saveHostState(hostState);
+        hostState = mutateHostState((state) => clearBrowserBackoffForTask(state, executableTask.kind));
       }
 
       if (result.status === "completed" && liveSendAttempt && result.detail?.verificationOnly !== true) {
-        const nextState = clearSendCircuitBreaker(hostState);
-        hostState.sendCircuitBreaker = nextState.sendCircuitBreaker;
-        if (selectedMode === "canary_live") {
-          const cooldownState = recordCanarySendCooldown(hostState, {
-            sentAt: result.finishedAt ?? new Date().toISOString(),
-            unavailableUntil: new Date(Date.parse(result.finishedAt ?? new Date().toISOString()) + CANARY_SEND_COOLDOWN_MS).toISOString(),
-            taskFingerprint: createTaskVerificationFingerprint(executableTask),
-            taskLabel: [executableTask.prospectName, executableTask.companyName].filter(Boolean).join(" at ") || executableTask.recipientUrl || executableTask.prospectId || "unknown send",
-          });
-          hostState.canaryCooldown = cooldownState.canaryCooldown;
-        }
-        saveHostState(hostState);
+        hostState = mutateHostState((state) => {
+          let nextState = clearSendCircuitBreaker(state);
+          if (selectedMode === "canary_live") {
+            nextState = recordCanarySendCooldown(nextState, {
+              sentAt: result.finishedAt ?? new Date().toISOString(),
+              unavailableUntil: new Date(Date.parse(result.finishedAt ?? new Date().toISOString()) + CANARY_SEND_COOLDOWN_MS).toISOString(),
+              taskFingerprint: createTaskVerificationFingerprint(executableTask),
+              taskLabel: [executableTask.prospectName, executableTask.companyName].filter(Boolean).join(" at ") || executableTask.recipientUrl || executableTask.prospectId || "unknown send",
+            });
+          }
+          return nextState;
+        });
       }
 
       if (result.status === "completed" && result.detail?.verificationOnly === true) {
-        const nextState = recordTaskVerification(hostState, {
+        hostState = mutateHostState((state) => recordTaskVerification(state, {
           taskKind: executableTask.kind,
           fingerprint: createTaskVerificationFingerprint(executableTask),
           verifiedAt: result.finishedAt ?? new Date().toISOString(),
@@ -342,9 +360,7 @@ export function runAgentHostPass() {
           verificationStatus: result.detail?.sendStatus ?? null,
           prospectName: executableTask.prospectName ?? null,
           companyName: executableTask.companyName ?? null,
-        });
-        hostState.recentTaskVerifications = nextState.recentTaskVerifications;
-        saveHostState(hostState);
+        }));
       }
 
       if (shouldStopAfterTaskResult(executableTask, result)) {
@@ -381,8 +397,11 @@ export function runAgentHostPass() {
     reason,
     startedAt,
     endedAt,
+    lane: EXECUTION_LANE,
     maxTasksPerPass: MAX_TASKS_PER_PASS,
     maxMaintenanceTasksPerPass: MAX_MAINTENANCE_TASKS_PER_PASS,
+    backfillInterleaveEvery: BACKFILL_INTERLEAVE_EVERY,
+    backfillTaskCount,
     browserReady,
     preflightPath: PREFLIGHT_PATH,
     results,
@@ -471,6 +490,26 @@ export function canRunTaskInCurrentPass(taskKind, results, standardTaskCount, ma
     return false;
   }
   return !passHasMaintenanceWork && standardTaskCount < MAX_TASKS_PER_PASS;
+}
+
+/**
+ * Decide whether the next slot in this pass should go to a full-sync backfill
+ * slice. Backfill ranks last, so without this it only runs when nothing else
+ * is due — and a busy motion could starve it for whole passes. After every
+ * BACKFILL_INTERLEAVE_EVERY non-backfill standard tasks, one backfill slice
+ * is preferred (when one is due).
+ *
+ * @param {{ standardTaskCount?: number, backfillTaskCount?: number }} [passState]
+ */
+export function shouldPreferBackfillSlice(passState = {}) {
+  const standardTaskCount = Number.isFinite(passState?.standardTaskCount)
+    ? Math.max(0, Number(passState.standardTaskCount))
+    : 0;
+  const backfillTaskCount = Number.isFinite(passState?.backfillTaskCount)
+    ? Math.max(0, Number(passState.backfillTaskCount))
+    : 0;
+  const nonBackfillTaskCount = Math.max(0, standardTaskCount - backfillTaskCount);
+  return nonBackfillTaskCount >= BACKFILL_INTERLEAVE_EVERY * (backfillTaskCount + 1);
 }
 
 /**
@@ -711,7 +750,7 @@ function isOperatorControlledSendTask(task) {
  * @param {Array<Record<string, any>>} [automationWarnings]
  * @param {Array<Record<string, any>>} [automationHealthWarnings]
  * @param {boolean} [forceRetrieval]
- * @param {{ passLane?: "standard" | "maintenance" | null, standardTaskCount?: number, maintenanceTaskCount?: number }} [passState]
+ * @param {{ passLane?: "standard" | "maintenance" | null, standardTaskCount?: number, maintenanceTaskCount?: number, backfillTaskCount?: number }} [passState]
  */
 export function chooseNextQueueTask(
   queue,
@@ -730,7 +769,11 @@ export function chooseNextQueueTask(
   const sendCircuitBreaker = getSendCircuitBreaker(hostState, now);
   const canaryCooldown = getCanaryCooldown(hostState, now);
   const automationBlockReason = getInboundAutomationRolloutBlockReason(automationWarnings, sendMode, automationHealthWarnings);
-  for (const task of getQueueTasksForExecution(queue, forceRetrieval, hostState, now)) {
+  const orderedTasks = getQueueTasksForExecution(queue, forceRetrieval, hostState, now);
+  const candidateTasks = shouldPreferBackfillSlice(passState)
+    ? [...orderedTasks.filter(isBackfillInboundSyncTask), ...orderedTasks.filter((task) => !isBackfillInboundSyncTask(task))]
+    : orderedTasks;
+  for (const task of candidateTasks) {
     if (!taskMatchesPassLane(task, passState)) {
       continue;
     }
@@ -769,6 +812,13 @@ export function chooseNextQueueTask(
       );
       if (sendMode === "verify") {
         if (isOperatorControlledSendTask(task)) {
+          // Selection must mirror execution: operator-controlled sends escalate
+          // to live delivery, so apply the live rollout gate here too. Otherwise
+          // the pass selects a send that executeTask refuses, aborts, and the
+          // inbound syncs that would heal the gate never run.
+          if (getInboundAutomationRolloutBlockReason(automationWarnings, "operator_live", automationHealthWarnings)) {
+            continue;
+          }
           return {
             ...task,
             _selectedSendMode: "operator_live",
@@ -823,12 +873,16 @@ export function chooseNextQueueTask(
  * @param {boolean} [forceRetrieval]
  */
 function getQueueTasksForExecution(queue, forceRetrieval = false, hostState = null, now = new Date().toISOString()) {
-  const dueTasks = Array.isArray(queue?.tasks) ? queue.tasks : [];
+  const allDueTasks = Array.isArray(queue?.tasks) ? queue.tasks : [];
+  const dueTasks = EXECUTION_LANE
+    ? allDueTasks.filter((task) => getTaskExecutionLane(task?.kind) === EXECUTION_LANE)
+    : allDueTasks;
   if (!forceRetrieval) {
     return sortQueueTasksForExecution(dueTasks, { hostState, now });
   }
   const waitingRetrievalTasks = Array.isArray(queue?.waiting)
-    ? queue.waiting.filter((task) => task?.kind === "run_inbound_sync")
+    ? queue.waiting.filter((task) => task?.kind === "run_inbound_sync"
+      && (!EXECUTION_LANE || getTaskExecutionLane(task?.kind) === EXECUTION_LANE))
     : [];
   return sortQueueTasksForExecution([...dueTasks, ...waitingRetrievalTasks], {
     forceRetrieval: true,
@@ -853,16 +907,22 @@ function getQueueTasksForExecution(queue, forceRetrieval = false, hostState = nu
 function sortQueueTasksForExecution(tasks, options = {}) {
   const forceRetrieval = options.forceRetrieval === true;
   const hostState = options.hostState ?? null;
+  // Quick inbound sync keeps its slot ahead of research: it is fast and
+  // refreshes the reply/invite truth that gates safe sending. Full backfill
+  // sync (initial itemization / deep history) ranks LAST so a fresh project
+  // starts motion work immediately; backfill progresses through bounded
+  // slices interleaved by the pass loop (see shouldPreferBackfillSlice).
   const rank = {
     send_message: 0,
     write_draft: 1,
     reject_connection_request: 2,
     withdraw_connection: 2,
-    run_inbound_sync: forceRetrieval ? -1 : 3,
+    run_inbound_sync_quick: forceRetrieval ? -1 : 3,
     company_research: 4,
     prospect_selection: 5,
     prospect_research: 6,
     company_discovery: 7,
+    run_inbound_sync_full: forceRetrieval ? -1 : 8,
   };
 
   return [...(tasks ?? [])].sort((left, right) => {
@@ -874,8 +934,8 @@ function sortQueueTasksForExecution(tasks, options = {}) {
         return motionComparison;
       }
     }
-    const leftRank = rank[left?.kind] ?? 99;
-    const rightRank = rank[right?.kind] ?? 99;
+    const leftRank = rank[executionRankKey(left)] ?? 99;
+    const rightRank = rank[executionRankKey(right)] ?? 99;
     if (leftRank !== rightRank) {
       return leftRank - rightRank;
     }
@@ -893,6 +953,16 @@ function sortQueueTasksForExecution(tasks, options = {}) {
     return String(left?.motionId ?? left?.companyId ?? left?.prospectId ?? "")
       .localeCompare(String(right?.motionId ?? right?.companyId ?? right?.prospectId ?? ""));
   });
+}
+
+/**
+ * Full-mode inbound sync is backfill work and ranks behind motion execution;
+ * everything else ranks by kind.
+ * @param {any} task
+ */
+function executionRankKey(task) {
+  if (task?.kind !== "run_inbound_sync") return task?.kind;
+  return isBackfillInboundSyncTask(task) ? "run_inbound_sync_full" : "run_inbound_sync_quick";
 }
 
 /**
@@ -999,6 +1069,19 @@ export function explainNoopPass(
       createTaskVerificationFingerprint(task),
       now,
     ));
+    if (sendMode === "verify") {
+      // Operator-controlled sends escalate to live delivery, so selection
+      // defers them while the live rollout gate is closed. Surface that gate
+      // instead of a generic noop when they are the only sends left.
+      const operatorSendTasks = sendTasks.filter((task) => isOperatorControlledSendTask(task));
+      if (operatorSendTasks.length > 0
+        && verifiedSendTasks.length === verificationRequiredSendTasks.length) {
+        const operatorBlockReason = getInboundAutomationRolloutBlockReason(automationWarnings, "operator_live", automationHealthWarnings);
+        if (operatorBlockReason) {
+          return `Operator-approved sends stay queued while the live rollout gate is closed: ${operatorBlockReason}`;
+        }
+      }
+    }
     if (sendMode === "verify"
       && verificationRequiredSendTasks.length > 0
       && verifiedSendTasks.length === verificationRequiredSendTasks.length) {
@@ -2742,6 +2825,87 @@ function loadHostState() {
 function saveHostState(state) {
   fs.mkdirSync(path.dirname(HOST_STATE_PATH), { recursive: true });
   fs.writeFileSync(HOST_STATE_PATH, JSON.stringify(state, null, 2));
+}
+
+// Host state is a plain JSON file mutated read-modify-write. With two lane
+// workers (transport + research) running concurrently, unguarded writes would
+// clobber each other's leases, backoffs, and motion run records. Every
+// mutation goes through mutateHostState(): take a cross-process mkdir lock,
+// reload the file fresh, apply the mutator, persist, release.
+const HOST_STATE_LOCK_DIR = `${HOST_STATE_PATH}.lock`;
+const HOST_STATE_LOCK_STALE_MS = 30_000;
+const HOST_STATE_LOCK_ACQUIRE_TIMEOUT_MS = 5_000;
+const HOST_STATE_LOCK_RETRY_DELAY_MS = 25;
+
+/** @param {number} ms */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * @template T
+ * @param {() => T} fn
+ * @returns {T}
+ */
+function withHostStateLock(fn) {
+  const deadline = Date.now() + HOST_STATE_LOCK_ACQUIRE_TIMEOUT_MS;
+  let acquired = false;
+  while (!acquired) {
+    try {
+      fs.mkdirSync(path.dirname(HOST_STATE_LOCK_DIR), { recursive: true });
+      fs.mkdirSync(HOST_STATE_LOCK_DIR);
+      acquired = true;
+      break;
+    } catch (error) {
+      if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) {
+        throw error;
+      }
+    }
+
+    try {
+      const lockAgeMs = Date.now() - fs.statSync(HOST_STATE_LOCK_DIR).mtimeMs;
+      if (lockAgeMs > HOST_STATE_LOCK_STALE_MS) {
+        fs.rmSync(HOST_STATE_LOCK_DIR, { recursive: true, force: true });
+        continue;
+      }
+    } catch {
+      // Lock vanished between mkdir and stat; retry immediately.
+      continue;
+    }
+
+    if (Date.now() >= deadline) {
+      // Proceed without the lock rather than deadlocking the pass; the worst
+      // case is the pre-lock behavior (a lost concurrent update).
+      break;
+    }
+    sleepSync(HOST_STATE_LOCK_RETRY_DELAY_MS);
+  }
+
+  try {
+    return fn();
+  } finally {
+    if (acquired) {
+      fs.rmSync(HOST_STATE_LOCK_DIR, { recursive: true, force: true });
+    }
+  }
+}
+
+/**
+ * Apply a host-state mutation against a freshly loaded copy under the
+ * cross-process lock, persisting only when the mutator returns a new object.
+ * Exported so concurrency tests can exercise the lock from sibling processes.
+ * @param {(state: any) => any} mutator
+ * @returns {any} the latest host state (mutated or fresh-loaded)
+ */
+export function mutateHostState(mutator) {
+  return withHostStateLock(() => {
+    const fresh = loadHostState();
+    const next = mutator(fresh) ?? fresh;
+    if (next !== fresh) {
+      saveHostState(next);
+    }
+    return next;
+  });
 }
 
 /** @param {any} [hostState] */

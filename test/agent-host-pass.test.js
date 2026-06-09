@@ -44,6 +44,7 @@ import {
   resolveInboundExoCommandTimeoutMs,
   shouldAbortPassAfterTaskProblem,
   shouldIgnoreCodexUserConfig,
+  shouldPreferBackfillSlice,
 } from "../scripts/run-agent-host-pass.js";
 import {
   checkoutTaskLease,
@@ -298,6 +299,115 @@ test("chooseNextQueueTask runs operator-approved sends live even in verify mode"
   assert.equal(selected?._selectedSendMode, "operator_live");
 });
 
+test("chooseNextQueueTask skips operator sends in verify mode when the live rollout gate is closed", () => {
+  const operatorTask = {
+    kind: "send_message",
+    id: "send-operator",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-one/",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    body: "Operator wrote this.",
+    authoredBy: "operator",
+    editedByOperator: true,
+    writeback: "exo actions result ...prospect-1",
+  };
+  const quickSyncTask = {
+    kind: "run_inbound_sync",
+    id: "sync-quick",
+    mode: "quick",
+    dueAt: "2026-06-03T05:01:00.000Z",
+    queuedAt: "2026-06-03T05:01:00.000Z",
+  };
+  const healthWarnings = [
+    { capability: "linkedin", handle: "aliumairdev", surfaceLabel: "Sent Invitations", freshnessState: "never" },
+  ];
+
+  // Operator sends escalate to live delivery; while inbound retrieval health
+  // gates live sends, the pass must move on to the sync work that heals the
+  // gate instead of selecting a send that execution will refuse.
+  const selected = chooseNextQueueTask(
+    { tasks: [operatorTask, quickSyncTask] },
+    true,
+    { recentTaskVerifications: [] },
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "verify",
+    [],
+    healthWarnings,
+  );
+
+  assert.equal(selected?.id, "sync-quick");
+
+  // Once retrieval health recovers, the same queue escalates the operator
+  // send again.
+  const afterHeal = chooseNextQueueTask(
+    { tasks: [operatorTask, quickSyncTask] },
+    true,
+    { recentTaskVerifications: [] },
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "verify",
+    [],
+    [],
+  );
+
+  assert.equal(afterHeal?.id, "send-operator");
+  assert.equal(afterHeal?._selectedSendMode, "operator_live");
+});
+
+test("chooseNextQueueTask still proves agent sends in verify mode while operator sends are gated", () => {
+  const operatorTask = {
+    kind: "send_message",
+    id: "send-operator",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-one/",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    body: "Operator wrote this.",
+    authoredBy: "operator",
+    editedByOperator: true,
+    writeback: "exo actions result ...prospect-1",
+  };
+  const agentTask = {
+    kind: "send_message",
+    id: "send-agent",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-2",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-two/",
+    queuedAt: "2026-06-03T05:01:00.000Z",
+    body: "Agent wrote this.",
+    authoredBy: "agent",
+    editedByOperator: false,
+    writeback: "exo actions result ...prospect-2",
+  };
+  const healthWarnings = [
+    { capability: "linkedin", handle: "aliumairdev", surfaceLabel: "Sent Invitations", freshnessState: "never" },
+  ];
+
+  // Verify-mode proofs do not deliver anything, so retrieval health only
+  // gates the operator escalation — not verification of agent sends.
+  const selected = chooseNextQueueTask(
+    { tasks: [operatorTask, agentTask] },
+    true,
+    { recentTaskVerifications: [] },
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "verify",
+    [],
+    healthWarnings,
+  );
+
+  assert.equal(selected?.id, "send-agent");
+  assert.equal(selected?._selectedSendMode, "verify");
+});
+
 test("chooseNextQueueTask prefers send work over due retrieval even if retrieval is older", () => {
   const queue = {
     tasks: [
@@ -420,6 +530,100 @@ test("chooseNextQueueTask prefers draft work over due retrieval when no send is 
     chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "live")?.id,
     "draft-1",
   );
+});
+
+test("chooseNextQueueTask runs research before full backfill sync and quick sync before research", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "run_inbound_sync",
+        mode: "full",
+        id: "sync-backfill-1",
+        dueAt: "2026-06-03T04:00:00.000Z",
+        queuedAt: "2026-06-03T04:00:00.000Z",
+      },
+      {
+        kind: "company_research",
+        id: "research-1",
+        dueAt: "2026-06-03T05:00:00.000Z",
+        queuedAt: "2026-06-03T05:00:00.000Z",
+      },
+      {
+        kind: "run_inbound_sync",
+        mode: "quick",
+        id: "sync-quick-1",
+        dueAt: "2026-06-03T04:30:00.000Z",
+        queuedAt: "2026-06-03T04:30:00.000Z",
+      },
+    ],
+  };
+
+  assert.equal(
+    chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "live")?.id,
+    "sync-quick-1",
+  );
+
+  const withoutQuick = { tasks: queue.tasks.filter((task) => task.id !== "sync-quick-1") };
+  assert.equal(
+    chooseNextQueueTask(withoutQuick, true, {}, "2026-06-03T05:15:00.000Z", false, "live")?.id,
+    "research-1",
+  );
+
+  const onlyBackfill = { tasks: queue.tasks.filter((task) => task.id === "sync-backfill-1") };
+  assert.equal(
+    chooseNextQueueTask(onlyBackfill, true, {}, "2026-06-03T05:15:00.000Z", false, "live")?.id,
+    "sync-backfill-1",
+  );
+});
+
+test("chooseNextQueueTask prefers a backfill slice once the interleave quota is met", () => {
+  const queue = {
+    tasks: [
+      {
+        kind: "company_research",
+        id: "research-1",
+        dueAt: "2026-06-03T05:00:00.000Z",
+        queuedAt: "2026-06-03T05:00:00.000Z",
+      },
+      {
+        kind: "run_inbound_sync",
+        mode: "full",
+        id: "sync-backfill-1",
+        dueAt: "2026-06-03T04:00:00.000Z",
+        queuedAt: "2026-06-03T04:00:00.000Z",
+      },
+    ],
+  };
+
+  // Quota met: three non-backfill standard tasks have run, no backfill yet.
+  assert.equal(
+    chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "live", [], [], false, {
+      passLane: "standard",
+      standardTaskCount: 3,
+      maintenanceTaskCount: 0,
+      backfillTaskCount: 0,
+    })?.id,
+    "sync-backfill-1",
+  );
+
+  // Quota not met again yet: one backfill slice already ran this pass.
+  assert.equal(
+    chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "live", [], [], false, {
+      passLane: "standard",
+      standardTaskCount: 4,
+      maintenanceTaskCount: 0,
+      backfillTaskCount: 1,
+    })?.id,
+    "research-1",
+  );
+});
+
+test("shouldPreferBackfillSlice ratchets the quota as backfill slices complete", () => {
+  assert.equal(shouldPreferBackfillSlice({ standardTaskCount: 0, backfillTaskCount: 0 }), false);
+  assert.equal(shouldPreferBackfillSlice({ standardTaskCount: 2, backfillTaskCount: 0 }), false);
+  assert.equal(shouldPreferBackfillSlice({ standardTaskCount: 3, backfillTaskCount: 0 }), true);
+  assert.equal(shouldPreferBackfillSlice({ standardTaskCount: 4, backfillTaskCount: 1 }), false);
+  assert.equal(shouldPreferBackfillSlice({ standardTaskCount: 7, backfillTaskCount: 1 }), true);
 });
 
 test("chooseNextQueueTask prefers send work over cleanup even if cleanup is older", () => {
@@ -1000,6 +1204,40 @@ test("explainNoopPass does not claim verify-only hold for operator-authored send
     ),
     "Verify mode had no unverified send_message tasks left to prove.",
   );
+});
+
+test("explainNoopPass surfaces the live rollout gate for deferred operator sends in verify mode", () => {
+  const operatorTask = {
+    kind: "send_message",
+    id: "send-operator",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-one/",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    body: "Operator wrote this.",
+    authoredBy: "operator",
+    editedByOperator: true,
+    writeback: "exo actions result ...prospect-1",
+  };
+  const healthWarnings = [
+    { capability: "linkedin", handle: "aliumairdev", surfaceLabel: "Sent Invitations", freshnessState: "never" },
+  ];
+
+  const reason = explainNoopPass(
+    { tasks: [operatorTask] },
+    true,
+    { recentTaskVerifications: [] },
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "verify",
+    [],
+    healthWarnings,
+  );
+
+  assert.match(reason, /Operator-approved sends stay queued while the live rollout gate is closed/);
+  assert.match(reason, /autonomous inbound retrieval is healthy again/);
 });
 
 test("chooseNextQueueTask prefers previously verified sends in canary mode before proving new ones", () => {

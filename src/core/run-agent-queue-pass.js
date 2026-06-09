@@ -10,7 +10,7 @@ import { getHomeStateDir } from "../db/paths.js";
 import { inspectAgentRunLock } from "../lib/agent-run-lock.js";
 
 /** @param {Record<string, any>} args */
-export function runAgentQueuePassAction(args) {
+export async function runAgentQueuePassAction(args) {
   const runLock = inspectAgentRunLock({ stateDir: getHomeStateDir() });
   if (runLock.active) {
     throw new Error(`Another agent pass is already active${runLock.pid ? ` (pid ${runLock.pid})` : ""}.`);
@@ -23,7 +23,7 @@ export function runAgentQueuePassAction(args) {
       message: `Agent pass started in background${pid ? ` (pid ${pid})` : ""}.`,
     };
   }
-  const summary = runAgentWorkerPass({
+  const summary = await runAgentWorkerPass({
     quiet: true,
     sendMode: args.sendMode ?? null,
     maxTasks: args.maxTasks ?? null,

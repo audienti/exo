@@ -79,7 +79,15 @@ const SUBJECT_DRAFT_SURFACES = new Set(["email", "in_mail_message"]);
 const AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG = {
   "linkedin-followers-list": { maxPages: 1, pageSize: 10 },
   "linkedin-following-list": { maxPages: 1, pageSize: 10 },
+  "linkedin-profile-views": { maxPages: 1, pageSize: 10 },
+  "linkedin-sent-invitations": { maxPages: 1, pageSize: 10 },
 };
+// Every full-mode (backfill) sync task runs as a bounded slice: the sync stops
+// at the page budget with `page_budget_stopped_early`, persists `nextCursor`,
+// and the still-open itemization gap requeues the next slice with
+// `resumeCursor`. This keeps backfill interleavable instead of one
+// multi-hour task that starves motion work.
+const DEFAULT_AUTONOMOUS_FULL_SURFACE_MAX_PAGES = 2;
 const MOTION_ROUND_ROBIN_TASK_KINDS = new Set([
   "company_discovery",
   "company_research",
@@ -1383,8 +1391,13 @@ function normalizeRecipientString(value) {
  * @param {any} [hostState]
  */
 function taskOrder(a, b, hostState = null) {
+  // Quick inbound sync stays first: it is fast and refreshes the reply/invite
+  // truth that gates safe sending. Full backfill sync (initial itemization /
+  // deep history) ranks LAST so a fresh project starts motion work immediately
+  // instead of grinding through hours of surface backfill. Backfill still
+  // progresses via bounded slices interleaved by the host pass scheduler.
   const rank = {
-    run_inbound_sync: 0,
+    run_inbound_sync_quick: 0,
     company_research: 1,
     prospect_selection: 2,
     prospect_research: 3,
@@ -1393,13 +1406,14 @@ function taskOrder(a, b, hostState = null) {
     withdraw_connection: 6,
     send_message: 7,
     write_draft: 8,
+    run_inbound_sync_full: 9,
   };
   if (isMotionRoundRobinTask(a) && isMotionRoundRobinTask(b)) {
     const motionComparison = compareMotionTaskOrderAcrossKinds(a, b, hostState);
     if (motionComparison !== 0) return motionComparison;
   }
-  const aRank = rank[a.kind] ?? 99;
-  const bRank = rank[b.kind] ?? 99;
+  const aRank = rank[taskRankKey(a)] ?? 99;
+  const bRank = rank[taskRankKey(b)] ?? 99;
   if (aRank !== bRank) return aRank - bRank;
   if (a.kind === "company_discovery" && b.kind === "company_discovery") {
     const deficitDelta = normalizeDiscoveryDeficit(b) - normalizeDiscoveryDeficit(a);
@@ -1408,6 +1422,21 @@ function taskOrder(a, b, hostState = null) {
   const aKey = a.dueAt ?? a.queuedAt ?? a.approvedAt ?? null;
   const bKey = b.dueAt ?? b.queuedAt ?? b.approvedAt ?? null;
   return String(aKey ?? "").localeCompare(String(bKey ?? ""));
+}
+
+/**
+ * Full-mode inbound sync is backfill work (initial itemization, deep history)
+ * and ranks behind motion execution; everything else ranks by kind.
+ * @param {any} task
+ */
+function taskRankKey(task) {
+  if (task?.kind !== "run_inbound_sync") return task?.kind;
+  return task?.mode === "full" ? "run_inbound_sync_full" : "run_inbound_sync_quick";
+}
+
+/** @param {any} task */
+export function isBackfillInboundSyncTask(task) {
+  return task?.kind === "run_inbound_sync" && task?.mode === "full";
 }
 
 /** @param {any} task */
@@ -1686,7 +1715,14 @@ function normalizeNullableString(value) {
  * @param {string} surfaceKey
  */
 function resolveAutonomousInboundPaginationConfig(surfaceKey) {
-  return AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG[surfaceKey] ?? {};
+  const surfaceOverride = AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG[surfaceKey];
+  if (surfaceOverride) return surfaceOverride;
+  const envMaxPages = Number.parseInt(process.env.EXO_AGENT_SYNC_SLICE_MAX_PAGES ?? "", 10);
+  return {
+    maxPages: Number.isInteger(envMaxPages) && envMaxPages > 0
+      ? envMaxPages
+      : DEFAULT_AUTONOMOUS_FULL_SURFACE_MAX_PAGES,
+  };
 }
 
 /**

@@ -11,7 +11,7 @@ import { buildLaunchAgentLabel } from "./agent-routine.js";
 const DEFAULT_AGENT_RUN_LOCK_ROOT = "/tmp";
 
 /**
- * @param {{ username?: string | null, tempDir?: string | null, stateDir?: string | null }} [input]
+ * @param {{ username?: string | null, tempDir?: string | null, stateDir?: string | null, lane?: string | null }} [input]
  */
 export function buildAgentRunLockDir(input = {}) {
   const username = input.username?.trim() || os.userInfo().username;
@@ -20,11 +20,14 @@ export function buildAgentRunLockDir(input = {}) {
     : "";
   const tempDir = input.tempDir?.trim() || envTempDir || DEFAULT_AGENT_RUN_LOCK_ROOT;
   const stateSuffix = buildStateDirSuffix(input.stateDir);
-  return path.join(tempDir, `${buildLaunchAgentLabel(username)}${stateSuffix}.lock`);
+  // Each execution lane holds its own lock so a transport pass and a research
+  // pass can run concurrently; the lane-less form is the legacy whole-host lock.
+  const laneSuffix = input.lane?.trim() ? `.${input.lane.trim()}` : "";
+  return path.join(tempDir, `${buildLaunchAgentLabel(username)}${stateSuffix}${laneSuffix}.lock`);
 }
 
 /**
- * @param {{ username?: string | null, tempDir?: string | null, stateDir?: string | null }} [input]
+ * @param {{ username?: string | null, tempDir?: string | null, stateDir?: string | null, lane?: string | null }} [input]
  */
 export function inspectAgentRunLock(input = {}) {
   const lockDir = buildAgentRunLockDir(input);
@@ -53,7 +56,7 @@ export function inspectAgentRunLock(input = {}) {
 }
 
 /**
- * @param {{ username?: string | null, tempDir?: string | null, stateDir?: string | null, pid?: number | null }} [input]
+ * @param {{ username?: string | null, tempDir?: string | null, stateDir?: string | null, lane?: string | null, pid?: number | null }} [input]
  */
 export function tryAcquireAgentRunLock(input = {}) {
   const lockDir = buildAgentRunLockDir(input);

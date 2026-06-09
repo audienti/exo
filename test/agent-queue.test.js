@@ -330,7 +330,9 @@ test("buildAgentQueue emits a full inbound sync task when an itemization gap exi
   assert.equal(task.mode, "full");
   assert.equal(task.reason, "itemization_gap");
   assert.ok(task.surfaceKeys.includes("linkedin-sent-invitations"));
-  assert.match(task.contractCommand, /exo inbound sync linkedin-live user-1 --account account-1 .*--surface linkedin-sent-invitations .*--mode full --json/);
+  assert.match(task.contractCommand, /exo inbound sync linkedin-live user-1 --account account-1 .*--surface linkedin-sent-invitations .*--mode full.* --max-pages 1 --page-size 10 --json/);
+  assert.equal(task.maxPages, 1);
+  assert.equal(task.pageSize, 10);
   assert.match(task.applyCommand, /exo inbound sync run user-1 --input <combined-inbound-sync\.json> --refresh --json/);
 });
 
@@ -388,6 +390,47 @@ test("buildAgentQueue splits inbound sync work into one task per surface", () =>
   assert.deepEqual(quickTask.surfaceKeys, ["linkedin-messaging-inbox"]);
 });
 
+test("buildAgentQueue ranks quick sync first and full backfill sync after motion work", () => {
+  const queue = buildAgentQueue({
+    ...discoveryQueueInput(),
+    users: [
+      inboundUserFixture({
+        capability: "linkedin",
+        surfaces: [
+          {
+            surfaceKey: "linkedin-sent-invitations",
+            lastRunStatus: "success",
+            lastItemCount: 2,
+            lastVisibleTotalCount: 5,
+            lastObservationCount: 2,
+            lastItemizationGapCount: 3,
+            lastRequestedMode: "quick",
+            lastActualMode: "quick",
+          },
+          {
+            surfaceKey: "linkedin-messaging-inbox",
+            lastRunStatus: "success",
+            lastObservedAt: "2026-05-01T00:00:00.000Z",
+            lastSyncedAt: "2026-05-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    ],
+  });
+
+  const orderedKinds = queue.tasks.map((task) =>
+    task.kind === "run_inbound_sync" ? `run_inbound_sync:${task.mode}` : task.kind,
+  );
+  const quickIndex = orderedKinds.indexOf("run_inbound_sync:quick");
+  const discoveryIndex = orderedKinds.indexOf("company_discovery");
+  const fullIndex = orderedKinds.indexOf("run_inbound_sync:full");
+  assert.ok(quickIndex !== -1, "expected a quick sync task");
+  assert.ok(discoveryIndex !== -1, "expected a company_discovery task");
+  assert.ok(fullIndex !== -1, "expected a full backfill sync task");
+  assert.ok(quickIndex < discoveryIndex, "quick sync should rank ahead of motion work");
+  assert.ok(discoveryIndex < fullIndex, "full backfill sync should rank behind motion work");
+});
+
 test("buildAgentQueue emits a due company_research task for a claimed account packet", () => {
   const queue = buildAgentQueue(
     fixture({
@@ -440,8 +483,13 @@ test("buildAgentQueue emits a due company_research task for a claimable backlog 
   assert.match(task.briefCommand, /exo motion packet-brief motion-1 --packet company_research:company-1 --json/);
 });
 
-test("buildAgentQueue emits a company_discovery task when the motion cannot project enough available prospects from current backlog", () => {
-  const queue = buildAgentQueue({
+/**
+ * Full-shape motion + company input that produces a due company_discovery
+ * task (thin backlog). Shared by the discovery test and the queue-ordering
+ * test so the motion passes schema validation alongside sync-capable users.
+ */
+function discoveryQueueInput() {
+  return {
     motions: [
       {
         id: "motion-1",
@@ -625,7 +673,11 @@ test("buildAgentQueue emits a company_discovery task when the motion cannot proj
     users: [],
     observations: [],
     cues: [],
-  });
+  };
+}
+
+test("buildAgentQueue emits a company_discovery task when the motion cannot project enough available prospects from current backlog", () => {
+  const queue = buildAgentQueue(discoveryQueueInput());
 
   const task = queue.tasks.find((item) => item.kind === "company_discovery");
   assert.ok(task);
