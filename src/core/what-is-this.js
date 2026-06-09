@@ -165,6 +165,10 @@ export function describeExo() {
         purpose: "Inspect or apply the first-run install-scope and execution-user onboarding flow."
       },
       {
+        command: "exo setup intake",
+        purpose: "Route chat-described setup requests into the governed new-user or new-motion intake without scraping the Exo UI."
+      },
+      {
         command: "exo actions list/show/result",
         purpose: "Inspect the canonical Audienti-style GTM action catalog and write back governed action outcomes so cadence, drafts, touch history, and inbound reconciliation stay in one contract."
       },
@@ -303,6 +307,7 @@ export function describeExo() {
             name: "configure-execution-user",
             when: "Use this on a fresh state store or any half-bootstrapped store where Exo still does not know who the first managed execution user is.",
             commands: [
+              "exo setup intake --message \"Add a new user named Sarah Chen\" --json",
               "exo onboarding --label operator-main --apply --json",
               "exo users intake --json",
               "exo users add --label operator-main --json",
@@ -334,11 +339,11 @@ export function describeExo() {
           },
           {
             name: "create-motion",
-            when: "Use this when the operator wants to set up a new motion and you need to ask for specifics one at a time before launch.",
+            when: "Use this when the operator wants to set up a new motion and you need to keep the whole intake in chat rather than scraping the UI.",
             commands: [
-              "exo motion intake --json",
+              "exo setup intake --message \"We need a new motion for https://example.com/product\" --json",
               "exo motion intake --url https://example.com/product --json",
-              "exo motion intake --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --json",
+              "exo onboarding --user <user-id> --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --apply --json",
               "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
             ]
           },
@@ -639,13 +644,17 @@ function buildGettingStarted(stateSummary, onboarding) {
     });
   } else {
     steps.push({
-      title: "Create the first motion",
+      title: onboarding.status === "needs-motion" ? "Finish onboarding with the first motion" : "Create the first motion",
       reason:
-        "Once the execution identity is named, start from the offer URL so Exo can confirm what is being promoted and check for reuse before creating motion state.",
-      commands: [
-        "exo motion intake --json",
-        "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
-      ]
+        onboarding.status === "needs-motion"
+          ? onboarding.next.reason
+          : "Once the execution identity is named, start from the offer URL so Exo can confirm what is being promoted and check for reuse before creating motion state.",
+      commands: onboarding.status === "needs-motion"
+        ? onboarding.next.commands
+        : [
+            "exo motion intake --json",
+            "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
+          ]
     });
   }
 
@@ -766,10 +775,17 @@ function buildRecommendedPath(stateSummary, onboarding) {
       mode: candidateMotion ? "activate-motion" : "create-motion",
       reason: candidateMotion
         ? "Motions exist in state, but none of them are active. Cross-motion execution should only move active motions forward."
-        : "No motions exist in the current Exo state store yet.",
+        : onboarding.status === "needs-motion"
+          ? onboarding.next.reason
+          : "No motions exist in the current Exo state store yet.",
       focusMotionId: candidateMotion?.id ?? null,
       focusMotionName: candidateMotion?.name ?? null,
       blockers: candidateMotion ? ["No active motion exists yet."] : [],
+      prompt: candidateMotion
+        ? `Restart or resume ${candidateMotion.name} before trying to use cross-motion execution.`
+        : onboarding.status === "needs-motion"
+          ? onboarding.next.prompt
+          : "What are we promoting first?",
       commands: candidateMotion
         ? [
             "exo motion list --json",
@@ -777,9 +793,11 @@ function buildRecommendedPath(stateSummary, onboarding) {
             `exo motion restart ${candidateMotion.id} --json`,
             `exo motion clone ${candidateMotion.id} --audience "Secondary ICP" --segment alt-segment --json`
           ]
-        : [
-            "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
-          ]
+        : onboarding.status === "needs-motion"
+          ? onboarding.next.commands
+          : [
+              "exo motion start --url https://example.com/product --premise \"This offer matters when ...\" --audience \"Primary ICP\" --signal \"company::Is there recent evidence that ...?\" --json"
+            ]
     };
   }
 
@@ -823,7 +841,8 @@ function buildRecommendedPath(stateSummary, onboarding) {
  *   focusMotionId: string | null,
  *   focusMotionName: string | null,
  *   blockers: string[],
- *   commands: string[]
+ *   commands: string[],
+ *   prompt?: string | undefined
  * }} recommendedPath
  */
 function buildOperatorInterface(recommendedPath) {
@@ -851,7 +870,7 @@ function buildOperatorInterface(recommendedPath) {
               : recommendedPath.mode === "activate-motion"
                 ? `Activate ${recommendedPath.focusMotionName ?? "a motion"} before trying to use cross-motion execution.`
                 : recommendedPath.mode === "create-motion"
-                  ? "Create the first motion before trying to do anything downstream."
+                  ? "Define the first motion before trying to do anything downstream."
                   : "Follow the current governed path before expanding scope.",
       nextMove:
         recommendedPath.mode === "choose-install-scope"
@@ -865,7 +884,7 @@ function buildOperatorInterface(recommendedPath) {
               : recommendedPath.mode === "activate-motion"
                 ? `Restart or resume ${recommendedPath.focusMotionName ?? "a motion"} first. Draft, paused, and archived motions should not enter the shared execution agenda.`
                 : recommendedPath.mode === "create-motion"
-                  ? "Define a new motion with premise, audience hypothesis, and first signal."
+                  ? "Define the first motion with premise, audience hypothesis, and first signal, then let Exo prepare the first pass."
                   : "Use the recommended path as the next governed move.",
       operatorPrompt:
         recommendedPath.mode === "choose-install-scope"
@@ -879,7 +898,7 @@ function buildOperatorInterface(recommendedPath) {
               : recommendedPath.mode === "activate-motion"
                 ? `Restart or resume ${recommendedPath.focusMotionName ?? "the motion"} first.`
                 : recommendedPath.mode === "create-motion"
-                  ? "No motion exists yet. Do you want to create one now?"
+                  ? recommendedPath.prompt ?? "What are we promoting first?"
                   : "What do you want to do next?",
       blockers: recommendedPath.blockers
     }

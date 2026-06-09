@@ -124,3 +124,56 @@ test("onboarding page keeps LinkedIn blocked when only Gmail is mapped", (t) => 
   assert.match(html, /LinkedIn work still needs one governed account\. Chrome alone does not count\./);
   assert.match(html, /Add Unipile if you want governed LinkedIn execution\./);
 });
+
+test("onboarding advances into first-motion setup once a managed account is mapped", (t) => {
+  const tempDir = withCodexHome(t, [
+    '[plugins."gmail@openai-curated"]',
+    "enabled = true",
+  ]);
+
+  const onboarding = buildOnboardingState({
+    rawUsers: [baseUser({
+      accounts: [
+        {
+          id: "gmail-account",
+          createdAt: "2026-06-09T00:00:00.000Z",
+          updatedAt: "2026-06-09T00:00:00.000Z",
+          capability: "gmail",
+          handle: "operator@example.com",
+          sourceType: "harness-connection",
+          harnessConnectionId: "gmail-harness",
+          providerAccountId: "acct-gmail-1",
+          preferred: true,
+        },
+      ],
+      harnessConnections: [
+        {
+          id: "gmail-harness",
+          createdAt: "2026-06-09T00:00:00.000Z",
+          updatedAt: "2026-06-09T00:00:00.000Z",
+          runtime: "codex",
+          connector: "gmail",
+          status: "available",
+        },
+      ],
+    })],
+    rawProfiles: [],
+    rawMotions: [],
+    rawCompanies: [],
+  }, {
+    cwd: tempDir,
+    env: process.env,
+  });
+
+  assert.equal(onboarding.status, "needs-motion");
+  assert.equal(onboarding.progress.readyForWorkspace, false);
+  assert.equal(onboarding.motion.intake.nextQuestion?.key, "url");
+
+  const html = renderOnboardingPage(onboarding, { interactive: true });
+  assert.match(html, /First motion/);
+  assert.match(html, /The offer is the exact page or product Exo will promote\./);
+  assert.match(html, /The premise is the one-sentence claim about why this offer matters now\./);
+  assert.match(html, /Signals are observable evidence questions Exo can use to decide who should hear this now\./);
+  assert.match(html, /data-exo-writer="startMotionFromIntake"/);
+  assert.match(html, /kickoffAgentPass/);
+});

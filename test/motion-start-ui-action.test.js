@@ -17,6 +17,7 @@ process.env.EXO_STATE_DIR = stateDir;
 const { executeActionIntent } = await import("../src/core/execute-action-intent.js");
 const { findMotionById, insertMotion, listMotions } = await import("../src/db/database.js");
 const { TRANSITION_MOTION_MARKER_URL } = await import("../src/core/ensure-transition-motion.js");
+const { startMotionFromIntakeAction } = await import("../src/core/start-motion-from-intake.js");
 
 const seededOfferHtml = [
   "<html>",
@@ -197,4 +198,30 @@ test("startMotionFromIntake opens the transition backlog container for the selec
   assert.ok(transition, "transition backlog should exist");
   assert.equal(transition?.offer.sourceUrl, TRANSITION_MOTION_MARKER_URL);
   assert.equal(transition?.engagementUserAssignment?.userId, launchUser.id);
+});
+
+test("startMotionFromIntake can kick off the first background pass for setup flow", async () => {
+  const result = await startMotionFromIntakeAction({
+    userId: launchUser.id,
+    url: "data:text/html,%3Chtml%3E%3Chead%3E%3Ctitle%3ESetup%20Kickoff%3C%2Ftitle%3E%3C%2Fhead%3E%3Cbody%3Eok%3C%2Fbody%3E%3C%2Fhtml%3E",
+    premise: "This offer matters when setup should launch the first governed research pass automatically.",
+    audience: "Revenue leaders",
+    signal: "company::Is there recent evidence the team is changing GTM workflow?",
+    kickoffAgentPass: true,
+    redirectTo: "/operator",
+  }, {
+    kickoffAgentQueuePass() {
+      return {
+        ok: true,
+        writer: "runAgentQueuePass",
+        message: "Agent pass started in background (pid 123).",
+      };
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.redirect, "/operator");
+  assert.match(result.message, /Created motion/i);
+  assert.match(result.message, /Agent pass started in background/i);
+  assert.equal(result.kickoff?.writer, "runAgentQueuePass");
 });

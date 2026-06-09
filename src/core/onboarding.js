@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { addUser } from "./add-user.js";
+import { buildMotionIntake } from "./build-motion-intake.js";
 import { buildUserIntake } from "./build-user-intake.js";
 import { mapUserRuntimeAccounts } from "./map-user-runtime-accounts.js";
 import {
@@ -41,6 +42,7 @@ const ONBOARDING_SCOPE_OPTIONS = [
  *   rawMotions?: unknown[] | undefined,
  *   rawCompanies?: unknown[] | undefined,
  *   preferredUserId?: string | null | undefined,
+ *   motionInput?: Parameters<typeof buildMotionIntake>[0] | null | undefined,
  * }} [input]
  * @param {{ cwd?: string | null | undefined, env?: NodeJS.ProcessEnv | null | undefined }} [options]
  */
@@ -66,6 +68,20 @@ export function buildOnboardingState(input = {}, options = {}) {
   );
   const focusUser = resolveFocusUser(rawUsers, input.preferredUserId ?? null);
   const executionCapableCount = rawUsers.filter((user) => Array.isArray(user?.accounts) && user.accounts.length > 0).length;
+  const motionIntake = buildMotionIntake(
+    {
+      url: input.motionInput?.url ?? null,
+      premise: input.motionInput?.premise ?? null,
+      audienceHypotheses: input.motionInput?.audienceHypotheses ?? [],
+      signals: input.motionInput?.signals ?? [],
+      targetingProfile: input.motionInput?.targetingProfile ?? {},
+      suppressionPolicy: input.motionInput?.suppressionPolicy ?? {},
+      launchUserId: focusUser?.id ?? null,
+      existingStrategy: input.motionInput?.existingStrategy ?? null,
+      sourceMotionId: input.motionInput?.sourceMotionId ?? null,
+    },
+    rawMotions,
+  );
   const existingUsers = rawUsers.map((user) => ({
     id: String(user.id),
     label: String(user.label),
@@ -77,12 +93,15 @@ export function buildOnboardingState(input = {}, options = {}) {
       ? "needs-user"
       : executionCapableCount === 0
         ? "needs-account-mapping"
-        : "ready";
+        : rawMotions.length === 0
+          ? "needs-motion"
+          : "ready";
   const next = buildOnboardingNext({
     status,
     scope,
     userIntake,
     focusUser,
+    motionIntake,
   });
 
   return {
@@ -91,7 +110,8 @@ export function buildOnboardingState(input = {}, options = {}) {
       installScopeChosen: !scope.needsDecision,
       executionUserChosen: rawUsers.length > 0,
       executionAccountMapped: executionCapableCount > 0,
-      readyForWorkspace: executionCapableCount > 0,
+      firstMotionDefined: rawMotions.length > 0,
+      readyForWorkspace: executionCapableCount > 0 && rawMotions.length > 0,
     },
     install: {
       ...scope,
@@ -113,6 +133,10 @@ export function buildOnboardingState(input = {}, options = {}) {
       executionCapableCount,
       nextQuestion: status === "needs-user" ? userIntake.nextQuestion : null,
       discoveredSources: userIntake.discoveredSources,
+    },
+    motion: {
+      intake: motionIntake,
+      launchUserId: focusUser?.id ?? null,
     },
     next,
   };
@@ -331,6 +355,7 @@ function resolveFocusUser(rawUsers, preferredUserId) {
  *   scope: ReturnType<typeof inferInstallScope>,
  *   userIntake: ReturnType<typeof buildUserIntake>,
  *   focusUser: { id: string, label: string, accountCount: number } | null,
+ *   motionIntake: ReturnType<typeof buildMotionIntake>,
  * }} input
  */
 function buildOnboardingNext(input) {
@@ -370,10 +395,22 @@ function buildOnboardingNext(input) {
     };
   }
 
+  if (input.status === "needs-motion") {
+    return {
+      headline: `Define the first motion for ${input.focusUser?.label ?? "the execution user"} and let Exo prepare the first pass.`,
+      prompt: input.motionIntake.nextQuestion?.prompt ?? "What are we promoting first?",
+      reason: "A governed execution identity exists now, but Exo still needs the first offer, premise, audience, and signals before it can prepare the operator workspace around real work.",
+      commands: [
+        "exo setup intake --message \"We need a new motion for https://example.com/product\" --json",
+        `exo onboarding --user ${input.focusUser?.id ?? "<user-id>"} --url https://example.com/product --premise "This offer matters when ..." --audience "Primary ICP" --signal "company::Is there recent evidence that ...?" --apply --json`,
+      ],
+    };
+  }
+
   return {
     headline: "Onboarding is complete.",
     prompt: "Open the live operator workspace and continue the governed path.",
-    reason: "Exo has an execution-capable user and can now serve the real workspace instead of the bootstrap flow.",
+    reason: "Exo has an execution-capable user and at least one governed motion, so it can serve the real workspace instead of the bootstrap flow.",
     commands: [
       "exo ui",
       "exo next --json",

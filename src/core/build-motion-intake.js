@@ -14,6 +14,24 @@ export const MOTION_INTAKE_PROMPTS = {
   suppression: "Are there any accounts, domains, contacts, or DNC entries we should exclude before launch?",
 };
 
+export const MOTION_INTAKE_DEFINITIONS = [
+  {
+    key: "offer",
+    label: "Offer",
+    body: "The offer is the exact page or product Exo will promote.",
+  },
+  {
+    key: "premise",
+    label: "Premise",
+    body: "The premise is the one-sentence claim about why this offer matters now.",
+  },
+  {
+    key: "signals",
+    label: "Signals",
+    body: "Signals are observable evidence questions Exo can use to decide who should hear this now.",
+  },
+];
+
 /**
  * @param {{
  *   url?: string | null,
@@ -158,9 +176,15 @@ export function buildMotionIntake(input, storedMotions) {
   return {
     status: readyToLaunch ? "ready-to-launch" : questions.length ? "needs-question" : "needs-review",
     readyToLaunch,
-    nextQuestion: questions[0] ?? null,
+    nextQuestion: questions[0]
+      ? {
+          ...questions[0],
+          definition: resolveQuestionDefinition(questions[0].key),
+        }
+      : null,
     remainingQuestions: questions,
     existingMotions,
+    definitions: MOTION_INTAKE_DEFINITIONS,
     knownSpecifics: {
       url: input.url ?? null,
       premiseDefined: Boolean(input.premise?.statement),
@@ -174,6 +198,22 @@ export function buildMotionIntake(input, storedMotions) {
       ? buildLaunchCommandHint(input)
       : null
   };
+}
+
+/**
+ * @param {string} key
+ */
+function resolveQuestionDefinition(key) {
+  if (key === "url") {
+    return MOTION_INTAKE_DEFINITIONS.find((entry) => entry.key === "offer") ?? null;
+  }
+  if (key === "premise") {
+    return MOTION_INTAKE_DEFINITIONS.find((entry) => entry.key === "premise") ?? null;
+  }
+  if (key === "signals") {
+    return MOTION_INTAKE_DEFINITIONS.find((entry) => entry.key === "signals") ?? null;
+  }
+  return null;
 }
 
 /**

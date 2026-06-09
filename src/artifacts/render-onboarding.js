@@ -28,6 +28,7 @@ export function renderOnboardingPage(onboarding, meta = {}) {
     renderIntro(onboarding) +
     renderScopeSection(onboarding) +
     renderUserSection(onboarding) +
+    renderMotionSection(onboarding) +
     renderRequirementsSection(onboarding) +
     renderDiscoverySection(onboarding) +
     `</div>`;
@@ -51,6 +52,7 @@ function renderIntro(onboarding) {
     stateDot(onboarding.progress.installScopeChosen ? "ready" : "draft", onboarding.progress.installScopeChosen ? "scope chosen" : "pick scope"),
     stateDot(onboarding.progress.executionUserChosen ? "ready" : "draft", onboarding.progress.executionUserChosen ? "user set" : "name user"),
     stateDot(onboarding.progress.executionAccountMapped ? "ready" : "waiting", onboarding.progress.executionAccountMapped ? "managed account ready" : "map account"),
+    stateDot(onboarding.progress.firstMotionDefined ? "ready" : onboarding.progress.executionAccountMapped ? "waiting" : "draft", onboarding.progress.firstMotionDefined ? "motion ready" : "define motion"),
   ].join("");
 
   return (
@@ -188,9 +190,69 @@ function renderUserSection(onboarding) {
     );
   }
 
+  return "";
+}
+
+/**
+ * @param {ReturnType<import("../core/onboarding.js").buildOnboardingState>} onboarding
+ */
+function renderMotionSection(onboarding) {
+  if (onboarding.status === "needs-scope" || onboarding.status === "needs-user" || onboarding.status === "needs-account-mapping") {
+    return "";
+  }
+
+  if (onboarding.status === "needs-motion") {
+    const focusUser = onboarding.user.focusUser;
+    return (
+      `<section class="op-sec onboarding-sec">` +
+      sectionHead({ icon: "spark", title: "First motion", sub: focusUser ? `Define the first governed motion for ${focusUser.label}.` : "Define the first governed motion." }) +
+      `<div class="onboarding-grid">` +
+      card({
+        className: "onboarding-option",
+        children:
+          `<div class="compose-label">Motion concepts</div>` +
+          `<div class="onboarding-list-row"><b>Offer</b><span>${escapeHtml(onboarding.motion.intake.definitions.find((entry) => entry.key === "offer")?.body ?? "")}</span></div>` +
+          `<div class="onboarding-list-row"><b>Premise</b><span>${escapeHtml(onboarding.motion.intake.definitions.find((entry) => entry.key === "premise")?.body ?? "")}</span></div>` +
+          `<div class="onboarding-list-row"><b>Signals</b><span>${escapeHtml(onboarding.motion.intake.definitions.find((entry) => entry.key === "signals")?.body ?? "")}</span></div>`,
+      }) +
+      `<div class="exo-action onboarding-form" data-exo-writer="startMotionFromIntake" data-exo-args="${escapeAttr(JSON.stringify({
+        userId: focusUser?.id ?? null,
+        kickoffAgentPass: true,
+        sendMode: "verify",
+        redirectTo: "/operator",
+      }))}" data-exo-fields="url:url,premise:premise,audience:audience,signal:signal">` +
+      `<label class="compose-field motion-intake-field">` +
+      `<span class="compose-label">Offer URL</span>` +
+      `<p class="motion-intake-helper">${escapeHtml(onboarding.motion.intake.nextQuestion?.key === "url" ? onboarding.motion.intake.nextQuestion.prompt : "What are we promoting? Give me the offer URL first.")}</p>` +
+      `<input class="compose-input" type="url" name="url" placeholder="https://example.com/offer" autocomplete="off" />` +
+      `</label>` +
+      `<label class="compose-field motion-intake-field">` +
+      `<span class="compose-label">Premise</span>` +
+      `<p class="motion-intake-helper">${escapeHtml(onboarding.motion.intake.definitions.find((entry) => entry.key === "premise")?.body ?? "")}</p>` +
+      `<textarea class="compose-body motion-intake-textarea" name="premise" placeholder="This offer matters when ..."></textarea>` +
+      `</label>` +
+      `<label class="compose-field motion-intake-field">` +
+      `<span class="compose-label">Primary audience</span>` +
+      `<p class="motion-intake-helper">Who should care first? Name the primary audience or ICP you want to target.</p>` +
+      `<input class="compose-input" type="text" name="audience" placeholder="Primary ICP or audience" autocomplete="off" />` +
+      `</label>` +
+      `<label class="compose-field motion-intake-field">` +
+      `<span class="compose-label">Signal questions</span>` +
+      `<p class="motion-intake-helper">${escapeHtml(onboarding.motion.intake.definitions.find((entry) => entry.key === "signals")?.body ?? "")} Enter one question per line.</p>` +
+      `<textarea class="compose-body motion-intake-textarea motion-intake-textarea-signals" name="signal" placeholder="company::Is there recent evidence the team widened GTM scope?&#10;company::Is there recent evidence the team is adding outbound capacity?"></textarea>` +
+      `</label>` +
+      `<div class="compose-actions motion-intake-actions">` +
+      `<button class="btn btn-primary btn-sm" type="button"><span>Start first pass in review only</span></button>` +
+      `</div>` +
+      `</div>` +
+      `</div>` +
+      `</section>`
+    );
+  }
+
   return (
     `<section class="op-sec onboarding-sec">` +
-    sectionHead({ icon: "check", title: "Ready", sub: "The workspace now has an execution-capable user." }) +
+    sectionHead({ icon: "check", title: "Ready", sub: "The workspace now has an execution-capable user and a governed motion." }) +
     card({
       className: "onboarding-option",
       children:

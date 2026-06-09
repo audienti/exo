@@ -10,13 +10,7 @@
 
 import { assignCompanyUser } from "./assign-company-user.js";
 import { assignMotionUser } from "./assign-motion-user.js";
-import { buildMotionIntake } from "./build-motion-intake.js";
 import { ignoreInboundObservation } from "./ignore-inbound-observation.js";
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { approveMotionProspectDraft } from "./set-prospect-draft.js";
 import { addMotionProspectTimelineNote } from "./add-prospect-note.js";
 import { claimMotionTargetAccountPacket } from "./claim-target-account-packet.js";
@@ -25,18 +19,15 @@ import { recordMotionProspectTouch } from "./record-prospect-touch.js";
 import { rehomeProspect } from "./rehome-prospect.js";
 import { runTransitionPromote } from "./run-transition-promote.js";
 import { autoPromoteInboundAccepts } from "./auto-promote-inbound-accepts.js";
+import { runAgentQueuePassAction } from "./run-agent-queue-pass.js";
 import { setMotionProspectCadence } from "./set-prospect-cadence.js";
+import { startMotionFromIntakeAction } from "./start-motion-from-intake.js";
 import { transitionInboundObservation } from "./transition-inbound-observation.js";
 import { claimUserRuntimeAccount } from "./claim-user-runtime-account.js";
 import { removeMotionGoverned } from "./remove-motion.js";
 import { addMotionSignals, removeMotionSignal } from "./manage-motion-signals.js";
 import { applyInstallScope, completeOnboardingUser } from "./onboarding.js";
-import { ensureTransitionMotion } from "./ensure-transition-motion.js";
-import { runAgentWorkerPass } from "../cli/commands/agent.js";
 import { findActionResultForTouch } from "../lib/action-result-catalog.js";
-import { inspectAgentRunLock } from "../lib/agent-run-lock.js";
-import { getHomeStateDir } from "../db/paths.js";
-import { startMotion } from "./start-motion.js";
 import { transitionMotionStatus } from "./transition-motion-status.js";
 import {
   toggleWorkspaceEnrichmentProvider,
@@ -46,7 +37,6 @@ import {
   findCompanyById,
   findMotionById,
   findUserById,
-  insertMotion,
   listBrowserProfiles,
   listCompanies,
   listInboundObservations,
@@ -89,7 +79,7 @@ export async function executeActionIntent(intent) {
     case "claimRuntimeAccount":
       return runClaimRuntimeAccount(args);
     case "runAgentQueuePass":
-      return runAgentQueuePass(args);
+      return runAgentQueuePassAction(args);
     case "claimInboundPersonToMotion": {
       if (!args.observationId) throw new Error("claimInboundPersonToMotion requires observationId.");
       const promoted = await runTransitionPromote({
@@ -152,7 +142,7 @@ export async function executeActionIntent(intent) {
     case "rehomeProspect":
       return runRehome(args);
     case "startMotionFromIntake":
-      return await runStartMotionFromIntake(args);
+      return await startMotionFromIntakeAction(args);
     case "addMotionSignals":
       return runAddMotionSignals(args);
     case "removeMotionSignal":
@@ -322,118 +312,6 @@ function runSetWorkspacePhoneEnrichmentPolicy(args) {
 }
 
 /** @param {Record<string, any>} args */
-async function runStartMotionFromIntake(args) {
-  const mode = normalizeMotionIntakeMode(args.mode);
-  const userId = normalizeOptionalString(args.userId);
-  if (!userId) {
-    throw new Error(mode === "transition"
-      ? "Select an execution user before opening the transition backlog."
-      : "Select a launch user before starting a motion.");
-  }
-  const rawUser = findUserById(userId);
-  if (!rawUser) {
-    throw new Error(`User not found: ${userId}`);
-  }
-
-  if (mode === "transition") {
-    const transitionMotion = await ensureTransitionMotion();
-    const assigned = assignMotionUser(transitionMotion, rawUser, listBrowserProfiles(), {
-      assignedBy: "exo-ui",
-      reason: "Carry ongoing interface-driven relationships through one governed container",
-    });
-    updateMotion(assigned);
-    return {
-      ok: true,
-      writer: "startMotionFromIntake",
-      message: `Opened transition backlog and assigned it to ${assigned.engagementUserAssignment?.label ?? rawUser.label}.`,
-      redirect: `/motions/${assigned.id}`,
-    };
-  }
-
-  const url = String(args.url ?? "").trim();
-  const allMotions = listMotions();
-  const existingMatches = allMotions.filter((motion) => motion.offer?.sourceUrl === url);
-  const existingStrategy = existingMatches.length > 0
-    ? normalizeExistingStrategy(args.existingStrategy)
-    : null;
-  const sourceMotionId = existingMatches.length > 0 ? normalizeOptionalString(args.sourceMotionId) : null;
-  const shouldDefineFresh = existingMatches.length === 0 || existingStrategy === "new";
-  const intake = buildMotionIntake(
-    {
-      url,
-      existingStrategy,
-      sourceMotionId,
-      premise: shouldDefineFresh ? buildPremiseInput(args.premise) : null,
-      audienceHypotheses: shouldDefineFresh ? buildAudienceInputs(args.audience) : [],
-      signals: shouldDefineFresh ? buildSignalInputs(args.signal) : [],
-      launchUserId: userId,
-      targetingProfile: {},
-      suppressionPolicy: {},
-    },
-    allMotions,
-  );
-
-  if (!intake.readyToLaunch) {
-    throw new Error(intake.nextQuestion?.prompt ?? "Motion intake still needs more definition.");
-  }
-
-  const result = await startMotion(
-    {
-      url,
-      offerNotes: null,
-      existingStrategy,
-      sourceMotionId,
-      premise: shouldDefineFresh ? buildPremiseInput(args.premise) : null,
-      audienceHypotheses: shouldDefineFresh ? buildAudienceInputs(args.audience) : [],
-      signals: shouldDefineFresh ? buildSignalInputs(args.signal) : [],
-      targetingProfile: {},
-      suppressionPolicy: {},
-    },
-    allMotions,
-  );
-
-  if (result.status === "decision-required") {
-    throw new Error("This URL already has a motion. Choose continue, clone, or start fresh.");
-  }
-
-  if (result.status === "continued") {
-    const maybeAssigned = assignLaunchUserIfNeeded(result.motion, rawUser, {
-      assignedBy: "exo-ui",
-      reason: "Keep one execution identity for this motion",
-      force: false,
-    });
-    if (maybeAssigned.changed) {
-      updateMotion(maybeAssigned.motion);
-    }
-    return {
-      ok: true,
-      writer: "startMotionFromIntake",
-      message: maybeAssigned.changed
-        ? `Continuing ${maybeAssigned.motion.name} and assigned it to ${maybeAssigned.motion.engagementUserAssignment?.label ?? rawUser.label}.`
-        : `Continuing ${result.motion.name}.`,
-      redirect: `/motions/${result.motion.id}`,
-    };
-  }
-
-  const motionWithUser = result.status === "created" || result.status === "cloned"
-    ? assignMotionUser(result.motion, rawUser, listBrowserProfiles(), {
-        assignedBy: "exo-ui",
-        reason: "Keep one execution identity for this motion",
-      })
-    : result.motion;
-  const storedMotion = result.status === "created" || result.status === "cloned"
-    ? insertMotion(motionWithUser)
-    : motionWithUser;
-  const verb = result.status === "cloned" ? "Cloned" : "Created";
-  return {
-    ok: true,
-    writer: "startMotionFromIntake",
-    message: `${verb} motion ${storedMotion.name} and assigned it to ${storedMotion.engagementUserAssignment?.label ?? rawUser.label}.`,
-    redirect: `/motions/${storedMotion.id}`,
-  };
-}
-
-/** @param {Record<string, any>} args */
 function runActionResult(args) {
   const result = recordActionResult({
     actionKey: args.actionKey,
@@ -588,87 +466,6 @@ function runRemoveMotionSignal(args) {
   };
 }
 
-/**
- * @param {unknown} value
- * @returns {"continue" | "clone" | "new" | null}
- */
-function normalizeExistingStrategy(value) {
-  const normalized = normalizeOptionalString(value);
-  return normalized === "continue" || normalized === "clone" || normalized === "new"
-    ? normalized
-    : null;
-}
-
-/**
- * @param {unknown} value
- * @returns {"motion" | "transition"}
- */
-function normalizeMotionIntakeMode(value) {
-  return normalizeOptionalString(value) === "transition" ? "transition" : "motion";
-}
-
-/**
- * @param {unknown} value
- * @returns {string | null}
- */
-function normalizeOptionalString(value) {
-  const normalized = String(value ?? "").trim();
-  return normalized ? normalized : null;
-}
-
-/**
- * @param {unknown} value
- */
-function buildPremiseInput(value) {
-  const statement = normalizeOptionalString(value);
-  return statement
-    ? {
-      statement,
-      source: "operator",
-    }
-    : null;
-}
-
-/**
- * @param {unknown} value
- */
-function buildAudienceInputs(value) {
-  const normalized = normalizeOptionalString(value);
-  return normalized ? [normalized] : [];
-}
-
-/**
- * @param {unknown} value
- */
-function buildSignalInputs(value) {
-  return String(value ?? "")
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-/**
- * @param {import("../schema/motion.js").motionSchema._type} rawMotion
- * @param {import("../schema/user.js").userSchema._type} rawUser
- * @param {{ assignedBy?: string | null, reason?: string | null, force?: boolean }} [options]
- */
-function assignLaunchUserIfNeeded(rawMotion, rawUser, options = {}) {
-  const assignedUserId = rawMotion.engagementUserAssignment?.userId ?? null;
-  if (assignedUserId === rawUser.id) {
-    return { motion: rawMotion, changed: false };
-  }
-  if (assignedUserId && !options.force) {
-    return { motion: rawMotion, changed: false };
-  }
-  return {
-    motion: assignMotionUser(rawMotion, rawUser, listBrowserProfiles(), {
-      assignedBy: options.assignedBy ?? null,
-      reason: options.reason ?? null,
-    }),
-    changed: true,
-  };
-}
-
 /** @param {Record<string, any>} args */
 function runClaimTargetAccountPacket(args) {
   if (!args.companyId || !args.motionId) {
@@ -733,80 +530,6 @@ function runClaimRuntimeAccount(args) {
     writer: "claimRuntimeAccount",
     message: `Claimed ${result.account.handle} as ${result.account.capability} on ${result.harnessConnection.runtime}:${result.harnessConnection.connector} for ${result.updatedUser.label}.`,
   };
-}
-
-/** @param {Record<string, any>} args */
-function runAgentQueuePass(args) {
-  const runLock = inspectAgentRunLock({ stateDir: getHomeStateDir() });
-  if (runLock.active) {
-    throw new Error(`Another agent pass is already active${runLock.pid ? ` (pid ${runLock.pid})` : ""}.`);
-  }
-  if (args.background !== false) {
-    const pid = launchDetachedAgentQueuePass(args);
-    return {
-      ok: true,
-      writer: "runAgentQueuePass",
-      message: `Agent pass started in background${pid ? ` (pid ${pid})` : ""}.`,
-    };
-  }
-  const summary = runAgentWorkerPass({
-    quiet: true,
-    sendMode: args.sendMode ?? null,
-    maxTasks: args.maxTasks ?? null,
-    forceRetrieval: Boolean(args.forceRetrieval),
-    ignoreBrowserBackoff: Boolean(args.ignoreBrowserBackoff),
-  });
-  if (summary?.status === "noop" && /already active/i.test(String(summary.reason ?? ""))) {
-    throw new Error(String(summary.reason).trim() || "Another agent pass is already active.");
-  }
-  return {
-    ok: true,
-    writer: "runAgentQueuePass",
-    message: summarizeAgentQueuePass(summary),
-  };
-}
-
-/** @param {Record<string, any>} args */
-function launchDetachedAgentQueuePass(args) {
-  const stateDir = getHomeStateDir();
-  const cliPath = fileURLToPath(new URL("../cli/index.js", import.meta.url));
-  const logPath = path.join(stateDir, "agent.log");
-  fs.mkdirSync(path.dirname(logPath), { recursive: true });
-
-  const childArgs = [cliPath, "agent", "run", "--json"];
-  if (args.sendMode != null && String(args.sendMode).trim()) {
-    childArgs.push("--send-mode", String(args.sendMode).trim());
-  }
-  if (args.maxTasks != null && String(args.maxTasks).trim()) {
-    childArgs.push("--max-tasks", String(args.maxTasks).trim());
-  }
-  if (args.forceRetrieval) {
-    childArgs.push("--force-retrieval");
-  }
-  if (args.ignoreBrowserBackoff) {
-    childArgs.push("--ignore-browser-backoff");
-  }
-
-  const stdoutFd = fs.openSync(logPath, "a");
-  const stderrFd = fs.openSync(logPath, "a");
-  try {
-    const child = spawn(process.execPath, childArgs, {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        EXO_STATE_DIR: stateDir,
-      },
-      detached: true,
-      stdio: ["ignore", stdoutFd, stderrFd],
-    });
-    child.unref();
-    return child.pid ?? null;
-  } finally {
-    fs.closeSync(stdoutFd);
-    if (stderrFd !== stdoutFd) {
-      fs.closeSync(stderrFd);
-    }
-  }
 }
 
 /** @param {Record<string, any>} args */
@@ -883,24 +606,6 @@ function runApproveDraft(args) {
     writer: "approveProspectDraft",
     message: `Approved ${String(args.surface).replaceAll("_", " ")} for ${prospect?.name ?? "prospect"} — queued for the agent to send.`,
   };
-}
-
-/** @param {any} summary */
-function summarizeAgentQueuePass(summary) {
-  const results = Array.isArray(summary?.results) ? summary.results : [];
-  const count = results.length;
-  const finalQueue = summary?.finalQueueCounts ?? {};
-  const queueSentence = `Queue now ${finalQueue.dueTaskCount ?? 0} due, ${finalQueue.waitingTaskCount ?? 0} waiting, ${finalQueue.blockerCount ?? 0} blockers.`;
-  if (summary?.status === "noop") {
-    return `Agent checked the queue. Nothing ran. ${queueSentence}`;
-  }
-  const lastReason = summary?.reason
-    ?? results.at(-1)?.detail?.reason
-    ?? null;
-  const ranSentence = summary?.status === "partial"
-    ? `Agent made progress on ${count} task${count === 1 ? "" : "s"}.`
-    : `Agent ran ${count} task${count === 1 ? "" : "s"}${summary?.status === "blocked" ? " before blocking" : ""}.`;
-  return [ranSentence, lastReason, queueSentence].filter(Boolean).join(" ");
 }
 
 /** @param {Record<string, any>} args */

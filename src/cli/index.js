@@ -15,6 +15,7 @@ import { registerNext } from "./commands/next.js";
 import { registerPolicy } from "./commands/policy.js";
 import { registerProfiles } from "./commands/profiles.js";
 import { registerReport } from "./commands/report.js";
+import { registerSetup } from "./commands/setup.js";
 import { registerTransition } from "./commands/transition.js";
 import { registerUi } from "./commands/ui.js";
 import { registerUsers } from "./commands/users.js";
@@ -38,10 +39,12 @@ Operating rules:
   - Browser profiles are legacy state only. They do not create a governed execution path.
   - Use exo users intake when the store is still missing its first managed execution user.
   - Use exo motion intake when an agent should ask one setup question at a time before launching a new motion.
+  - Use exo setup intake when chat language might be introducing a new user or a new motion.
 
 Common patterns:
   exo what-is-this --json
   exo users intake --json
+  exo setup intake --message "We need a new motion for https://example.com/product" --json
   exo motion intake --json
   exo motion start --url https://example.com/product --premise "This offer matters when regulated lenders enter more complex credit-decision environments." --audience "Traditional FI risk owners" --signal "company::Is there recent evidence that this company expanded into a more complex lending segment?" --json
   exo motion start --url https://example.com/product --existing continue --json
@@ -114,6 +117,7 @@ registerNext(program);
 registerPolicy(program);
 registerProfiles(program);
 registerReport(program);
+registerSetup(program);
 registerTransition(program);
 registerUi(program);
 registerUsers(program);
