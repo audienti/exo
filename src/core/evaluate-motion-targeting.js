@@ -15,15 +15,17 @@ export const MINIMUM_AVAILABLE_PROSPECTS = 25;
  * @param {unknown[]} rawProfiles
  * @param {unknown[]} rawUsers
  * @param {{
- *   capability?: import("../schema/browser-profile.js").browserProfileCapabilitySchema._type
+ *   capability?: import("../schema/browser-profile.js").browserProfileCapabilitySchema._type,
+ *   includeExecutionIdentity?: boolean
  * }} [options]
  */
 export function evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, rawUsers, options = {}) {
   const motion = motionSchema.parse(rawMotion);
   const capability = browserProfileCapabilitySchema.parse(options.capability ?? "linkedin");
+  const includeExecutionIdentity = options.includeExecutionIdentity !== false;
   const companies = rawCompanies
+    .filter((company) => rawCompanyBelongsToMotion(company, motion.id))
     .map((company) => companySchema.parse(company))
-    .filter((company) => company.motionIds.includes(motion.id))
     .sort((left, right) => left.name.localeCompare(right.name));
   const profiles = rawProfiles
     .map((profile) => browserProfileSchema.parse(profile))
@@ -31,7 +33,9 @@ export function evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, ra
   const users = rawUsers.map((user) => userSchema.parse(user));
   const motionPreflight = buildMotionPreflight(motion);
   const browserGate = buildBrowserGate(profiles, capability);
-  const companyLoop = companies.map((company) => buildCompanyTargetingState(company, motion, profiles, users, capability, browserGate));
+  const companyLoop = companies.map((company) => buildCompanyTargetingState(company, motion, profiles, users, capability, browserGate, {
+    includeExecutionIdentity,
+  }));
   const engagementGate = buildEngagementGate({
     capability,
     browserGate,
@@ -71,6 +75,19 @@ export function evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, ra
     readyToEngage,
     nextActions: buildNextActions(motion, motionPreflight, engagementGate, companyLoop, users, queue, inventoryTarget)
   };
+}
+
+/**
+ * @param {unknown} company
+ * @param {string} motionId
+ */
+function rawCompanyBelongsToMotion(company, motionId) {
+  return Boolean(
+    company
+      && typeof company === "object"
+      && Array.isArray(company.motionIds)
+      && company.motionIds.includes(motionId)
+  );
 }
 
 /**
@@ -134,14 +151,17 @@ function buildBrowserGate(profiles, capability) {
  * @param {import("../schema/user.js").userSchema._type[]} users
  * @param {import("../schema/browser-profile.js").browserProfileCapabilitySchema._type} capability
  * @param {ReturnType<typeof buildBrowserGate>} browserGate
+ * @param {{ includeExecutionIdentity?: boolean }} [options]
  */
-function buildCompanyTargetingState(company, motion, profiles, users, capability, browserGate) {
+function buildCompanyTargetingState(company, motion, profiles, users, capability, browserGate, options = {}) {
   const rawAccount = motion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
   const account = rawAccount ? withDerivedTargetAccountQueueState(rawAccount) : null;
   const prospects = account?.prospects ?? [];
   const readyCadenceCount = prospects.filter((prospect) => prospect.cadenceState.status === "ready").length;
   const missingEmailFallbackCount = prospects.filter((prospect) => !prospect.email).length;
-  const executionIdentity = resolveCompanyExecutionIdentity(company, motion, profiles, users, capability, browserGate.resolvedProfile);
+  const executionIdentity = options.includeExecutionIdentity === false
+    ? buildDeferredExecutionIdentity(capability)
+    : resolveCompanyExecutionIdentity(company, motion, profiles, users, capability, browserGate.resolvedProfile);
 
   let stage = "targeting-ready";
   if (!company.websiteUrl || !company.linkedinCompanyUrl) {
@@ -169,6 +189,18 @@ function buildCompanyTargetingState(company, motion, profiles, users, capability
     missingEmailFallbackCount,
     executionIdentity,
     nextCommand: buildCompanyNextCommand(company.id, motion.id, stage)
+  };
+}
+
+/** @param {string} capability */
+function buildDeferredExecutionIdentity(capability) {
+  return {
+    status: "not-evaluated",
+    transportKind: null,
+    resolutionSource: "lightweight-targeting",
+    message: `Execution identity was not evaluated for ${capability} in this lightweight targeting pass.`,
+    profile: null,
+    user: null
   };
 }
 
@@ -277,6 +309,17 @@ function resolveCompanyExecutionIdentity(company, motion, profiles, users, capab
  * }} input
  */
 function buildEngagementGate(input) {
+  if (input.companyLoop.some((company) => company.executionIdentity.status === "not-evaluated")) {
+    return {
+      status: "not-evaluated",
+      capability: input.capability,
+      blocksEngagement: true,
+      message: `Execution identity was not evaluated for ${input.capability} in this lightweight targeting pass.`,
+      resolvedProfile: null,
+      trustedProfileCount: 0
+    };
+  }
+
   const capabilityAccountCount = countCapabilityAccounts(input.users, input.capability);
   const readyConnectorCount = input.companyLoop.filter((company) =>
     company.executionIdentity.status === "pinned-ready"
@@ -456,7 +499,7 @@ function buildNextActions(motion, motionPreflight, browserGate, companyLoop, use
       continue;
     }
 
-    if (company.executionIdentity.status !== "pinned-ready") {
+    if (company.executionIdentity.status !== "not-evaluated" && company.executionIdentity.status !== "pinned-ready") {
       if (
         company.executionIdentity.transportKind === "harness-connection"
         && company.executionIdentity.status !== "pinned-untrusted"

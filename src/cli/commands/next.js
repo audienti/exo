@@ -89,6 +89,7 @@ Rules:
         rawUsers,
         rawObservations: workspaceContext?.observations ?? rawObservations,
         rawCues: workspaceContext?.cues ?? [],
+        description,
         filters: {
           motionId: options.motion ?? null,
           companyId: options.company ?? null,

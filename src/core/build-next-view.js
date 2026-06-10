@@ -1,8 +1,8 @@
 // @ts-check
 
-import { listBrowserProfiles } from "../db/database.js";
 import { buildDailyView } from "./build-daily-view.js";
 import { buildMotionReport } from "./build-motion-report.js";
+import { evaluateMotionTargeting } from "./evaluate-motion-targeting.js";
 import { describeExo } from "./what-is-this.js";
 import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
@@ -19,6 +19,7 @@ import { buildOperatorPromptFromDailyItem, buildOperatorPromptFromExecutionActio
  *   rawUsers: unknown[],
  *   rawObservations: unknown[],
  *   rawCues?: unknown[] | undefined,
+ *   description?: ReturnType<typeof describeExo> | null | undefined,
  *   filters?: {
  *     motionId?: string | null | undefined,
  *     companyId?: string | null | undefined,
@@ -27,11 +28,12 @@ import { buildOperatorPromptFromDailyItem, buildOperatorPromptFromExecutionActio
  * }} input
  */
 export function buildNextView(input) {
-  const description = describeExo();
+  let description = input.description ?? null;
+  const getDescription = () => {
+    description ??= describeExo();
+    return description;
+  };
   const filters = input.filters ?? {};
-  const executionBootstrapIncomplete =
-    description.agentUsage.recommendedPath.mode === "configure-execution-user"
-    || description.agentUsage.recommendedPath.mode === "configure-execution-connectors";
 
   if (input.rawUser) {
     const daily = buildDailyView(input.rawUser, input.rawMotions, input.rawCompanies, input.rawProfiles, input.rawObservations, {
@@ -72,6 +74,11 @@ export function buildNextView(input) {
     }
   }
 
+  description = getDescription();
+  const executionBootstrapIncomplete =
+    description.agentUsage.recommendedPath.mode === "configure-execution-user"
+    || description.agentUsage.recommendedPath.mode === "configure-execution-connectors";
+
   if (executionBootstrapIncomplete) {
     return {
       source: "operator-call",
@@ -109,10 +116,10 @@ export function buildNextView(input) {
   }
 
   if (input.rawMotion) {
-    const report = buildMotionReport(
+    const report = buildMotionNextReport(
       input.rawMotion,
       input.rawCompanies,
-      listBrowserProfiles(),
+      input.rawProfiles,
       input.rawUsers
     );
     const executionNext = report.targeting.readyToEngage
@@ -253,6 +260,26 @@ export function buildNextView(input) {
         kind: description.agentUsage.recommendedPath.mode
       }
     }
+  };
+}
+
+function buildMotionNextReport(rawMotion, rawCompanies, rawProfiles, rawUsers) {
+  const targeting = evaluateMotionTargeting(rawMotion, rawCompanies, rawProfiles, rawUsers, {
+    includeExecutionIdentity: false,
+  });
+  if (targeting.readyToTarget) {
+    return buildMotionReport(rawMotion, rawCompanies, rawProfiles, rawUsers);
+  }
+
+  return {
+    motion: {
+      id: targeting.motion.id,
+      name: targeting.motion.name,
+    },
+    targeting,
+    prospects: {
+      prospects: [],
+    },
   };
 }
 
