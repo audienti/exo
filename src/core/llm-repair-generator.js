@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resolveCodexCliCommand } from "../lib/codex-cli.js";
+import { execWithClosedStdin } from "../lib/exec-with-closed-stdin.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -175,23 +176,6 @@ function normalizeGeneratedRepair(generated) {
     throw new Error("The repair runtime returned an incomplete repair description.");
   }
   return { replacementContract, summary, explanation };
-}
-
-/**
- * Both runtimes read stdin when it is a pipe ("Reading additional input from
- * stdin..."), and execFile always wires stdin as a pipe — left open, codex
- * blocks until the timeout kills it. Close it immediately: the prompt travels
- * as an argument, never on stdin.
- *
- * @param {typeof execFileAsync} execFileImpl
- * @param {string} cli
- * @param {string[]} args
- * @param {object} options
- */
-function execWithClosedStdin(execFileImpl, cli, args, options) {
-  const pending = execFileImpl(cli, args, options);
-  /** @type {{ child?: { stdin?: { end: () => void } } }} */ (pending).child?.stdin?.end();
-  return pending;
 }
 
 /**

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveCodexCliCommand } from "../lib/codex-cli.js";
+import { execWithClosedStdin } from "../lib/exec-with-closed-stdin.js";
 import {
   browserProfileAuthProbeResultSchema,
   browserProfileCapabilitySchema,
@@ -279,7 +280,7 @@ async function captureBrowserProfileAuthThroughCodex(input) {
       env.CODEX_HOME = input.codexHome;
     }
 
-    await execFileAsync(input.codexCli, args, {
+    await execWithClosedStdin(execFileAsync, input.codexCli, args, {
       cwd: tempDir,
       env,
       maxBuffer: 10 * 1024 * 1024,
@@ -321,7 +322,7 @@ async function captureBrowserProfileAuthThroughClaude(input) {
   ];
 
   try {
-    const { stdout } = await execFileAsync(input.claudeCli, args, {
+    const { stdout } = await execWithClosedStdin(execFileAsync, input.claudeCli, args, {
       cwd: tempDir,
       env: process.env,
       maxBuffer: 10 * 1024 * 1024,
@@ -423,13 +424,18 @@ function normalizeNullableString(value) {
 }
 
 /**
+ * Like promisify(execFile), the returned promise exposes the spawned process
+ * as `child` so execWithClosedStdin can close its stdin pipe.
+ *
  * @param {string} command
  * @param {string[]} args
  * @param {import("node:child_process").ExecFileOptions} options
  */
 function execFileAsync(command, args, options) {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, options, (error, stdout, stderr) => {
+  /** @type {import("node:child_process").ChildProcess} */
+  let child;
+  const pending = new Promise((resolve, reject) => {
+    child = execFile(command, args, options, (error, stdout, stderr) => {
       if (error) {
         reject(new Error(buildExecErrorMessage(command, stdout, stderr, error)));
         return;
@@ -438,6 +444,7 @@ function execFileAsync(command, args, options) {
       resolve({ stdout, stderr });
     });
   });
+  return Object.assign(pending, { child });
 }
 
 /**
