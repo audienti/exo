@@ -1923,7 +1923,7 @@ function renderComposePanel(p, meta = {}) {
       `<div class="compose-panel" id="${escapeAttr(panelId)}">` +
       `<a class="compose-backdrop" href="#p-${escapeAttr(p.id)}" aria-label="Close"></a>` +
       `<div class="compose-sheet">${head}` +
-      `<div class="cap-note">${iconSvg("alert", 14)}<div><strong>No note available.</strong> ${escapeHtml(meta.assignedIdentity ?? "This identity")} is on a free LinkedIn tier, which can't attach a note to a connection request. Assign a <strong>Premium</strong> or <strong>Sales Navigator</strong> identity to enable notes.</div></div>` +
+      `<div class="cap-note">${iconSvg("alert", 14)}<div><strong>No note available.</strong> ${escapeHtml(meta.assignedIdentity ?? "The assigned identity")}, the LinkedIn account Exo sends this request from, is on the free LinkedIn tier, so LinkedIn drops notes on its connection requests. The recipient's own plan does not matter here. Assign a <strong>Premium</strong> or <strong>Sales Navigator</strong> sending identity to enable notes.</div></div>` +
       `<p class="compose-empty">A note-less connection request will be queued.</p>` +
       `<div class="compose-actions">` +
       `<div class="exo-action" data-exo-writer="approveProspectDraft" data-exo-args="${escapeAttr(blockedArgs)}">` +
@@ -1943,7 +1943,9 @@ function renderComposePanel(p, meta = {}) {
     : "";
 
   const unknownNotice = noteUnknown
-    ? `<div class="cap-note">${iconSvg("alert", 14)}<div>No identity is assigned yet. Notes require a <strong>Premium</strong> or <strong>Sales Navigator</strong> identity. Assign one before sending.</div></div>`
+    ? meta.assignedIdentity
+      ? `<div class="cap-note">${iconSvg("alert", 14)}<div><strong>Note availability unverified.</strong> Exo has not confirmed whether ${escapeHtml(meta.assignedIdentity)}, the LinkedIn account it sends from, has <strong>Premium</strong> or <strong>Sales Navigator</strong>. Notes only go out when the sending account has one of those plans.</div></div>`
+      : `<div class="cap-note">${iconSvg("alert", 14)}<div>No sending identity is assigned yet. Notes require <strong>Premium</strong> or <strong>Sales Navigator</strong> on the LinkedIn account Exo sends from. Assign one before sending.</div></div>`
     : "";
 
   // If they're Open Profile and our identity is Premium/Sales Navigator, a

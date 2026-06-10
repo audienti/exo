@@ -397,15 +397,24 @@ export async function renderRoute(route, ctx, hooks = {}) {
       userId: session.userId,
       searchQuery,
       transitionMotionId: transition?.id ?? null,
-      // Whether the sending identity can attach a note to a connection request
-      // (Premium / Sales Navigator). null = no identity pinned yet.
+      // Whether the LinkedIn account Exo sends from can attach a note to a
+      // connection request (Premium / Sales Navigator). true/false are
+      // verified verdicts; null means no identity is pinned yet or the plan
+      // tier has not been verified.
       connectionNoteCapable: resolveConnectionNoteCapability({
         resolvedAccount: linkedinExecution?.resolvedAccount ?? null,
         accountRefs: linkedinExecution?.userAssignmentRecord?.accountRefs
           ?? company?.engagementUserAssignment?.accountRefs
           ?? null,
       }),
-      assignedIdentity: company?.engagementUserAssignment?.label ?? null,
+      // Name the identity that actually resolved for sending, so the compose
+      // panel talks about the same account the send path will use. The cached
+      // company assignment label is only a fallback: with several users the
+      // resolution can legitimately land on a different identity than the
+      // stale cached label suggests.
+      assignedIdentity: describeResolvedLinkedinIdentity(linkedinExecution)
+        ?? company?.engagementUserAssignment?.label
+        ?? null,
       motions: buildClaimMotionChoices(
         listMotions().filter((motion) => motion.status !== "archived"),
         transition,
@@ -867,6 +876,33 @@ function isOperatorControlledQueueSendTask(task) {
   return task?.authoredBy === "operator"
     || task?.editedByOperator === true
     || task?.approvedByOperator === true;
+}
+
+/**
+ * Human label for the LinkedIn identity the execution resolution actually
+ * landed on: "user-label (handle)" when both are known. Returns null when the
+ * resolution produced no identity, so callers can fall back or say so.
+ *
+ * @param {any} execution result of resolveScopedExecutionAssignment
+ * @returns {string | null}
+ */
+function describeResolvedLinkedinIdentity(execution) {
+  if (!execution) return null;
+  const userLabel = typeof execution.assignedUser?.label === "string" && execution.assignedUser.label.trim()
+    ? execution.assignedUser.label.trim()
+    : null;
+  const handle = typeof execution.resolvedAccount?.handle === "string" && execution.resolvedAccount.handle.trim()
+    ? execution.resolvedAccount.handle.trim()
+    : null;
+  if (userLabel && handle && handle.toLowerCase() !== userLabel.toLowerCase()) {
+    return `${userLabel} (${handle})`;
+  }
+  if (userLabel) return userLabel;
+  if (handle) return handle;
+  const profileLabel = typeof execution.assignedProfile?.label === "string" && execution.assignedProfile.label.trim()
+    ? execution.assignedProfile.label.trim()
+    : null;
+  return profileLabel;
 }
 
 function buildAgentRuntimeSnapshot(userId = null) {

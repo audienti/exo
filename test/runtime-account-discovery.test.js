@@ -185,12 +185,13 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed LinkedIn accou
               id: "acct-linkedin-1",
               type: "LINKEDIN",
               name: "William Flanagan",
-              premiumFeatures: ["sales_navigator"],
               connection_params: {
                 im: {
                   id: "urn:li:member:1",
                   username: "William Flanagan",
                   publicIdentifier: "williamflanagan",
+                  premiumId: "premium-contract-1",
+                  premiumFeatures: ["sales_navigator"],
                 },
               },
             },
@@ -203,6 +204,21 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed LinkedIn accou
                   id: "urn:li:member:2",
                   username: "Knit Operator",
                   publicIdentifier: "knit-operator",
+                  premiumId: null,
+                  premiumFeatures: [],
+                },
+              },
+            },
+            {
+              id: "acct-linkedin-3",
+              type: "LINKEDIN",
+              name: "Legacy Shape",
+              premiumFeatures: ["linkedin_premium"],
+              connection_params: {
+                im: {
+                  id: "urn:li:member:3",
+                  username: "Legacy Operator",
+                  publicIdentifier: "legacy-operator",
                 },
               },
             },
@@ -211,11 +227,20 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed LinkedIn accou
       }),
     });
 
-    assert.equal(result.length, 2);
+    assert.equal(result.length, 3);
     assert.ok(result.every((item) => item.identityState === "confirmed"));
-    assert.deepEqual(result.map((item) => item.handle).sort(), ["knit-operator", "williamflanagan"]);
-    assert.deepEqual(result.map((item) => item.providerAccountId).sort(), ["acct-linkedin-1", "acct-linkedin-2"]);
-    assert.deepEqual(result.find((item) => item.providerAccountId === "acct-linkedin-1")?.metadata?.premiumFeatures, ["sales_navigator"]);
+    assert.deepEqual(result.map((item) => item.handle).sort(), ["knit-operator", "legacy-operator", "williamflanagan"]);
+    assert.deepEqual(result.map((item) => item.providerAccountId).sort(), ["acct-linkedin-1", "acct-linkedin-2", "acct-linkedin-3"]);
+    const premiumAccount = result.find((item) => item.providerAccountId === "acct-linkedin-1");
+    assert.deepEqual(premiumAccount?.metadata?.premiumFeatures, ["sales_navigator"]);
+    assert.equal(premiumAccount?.metadata?.isPremium, true);
+    // A free account keeps an explicit empty list: verified free, not unknown.
+    const freeAccount = result.find((item) => item.providerAccountId === "acct-linkedin-2");
+    assert.deepEqual(freeAccount?.metadata?.premiumFeatures, []);
+    assert.equal(freeAccount?.metadata?.isPremium, undefined);
+    // Top-level premiumFeatures still works as a legacy fallback shape.
+    const legacyAccount = result.find((item) => item.providerAccountId === "acct-linkedin-3");
+    assert.deepEqual(legacyAccount?.metadata?.premiumFeatures, ["linkedin_premium"]);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

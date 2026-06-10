@@ -369,12 +369,16 @@ function extractLinkedinEvidenceMetadataCandidate(parsed) {
 
   const capturedAccount = parsed?.account;
   if (capturedAccount && typeof capturedAccount === "object") {
+    // Folder inference can only prove premium, never free: a capture without
+    // SALES_NAVIGATOR folders says nothing about the plan tier. Only pass the
+    // feature list along when it carries positive evidence.
+    const inferredPremiumFeatures = collectLinkedinEvidencePremiumFeatures(parsed);
     return buildLinkedinEvidenceMetadataCandidate({
       providerAccountId: capturedAccount.account_id,
       accountType: capturedAccount.provider,
       publicIdentifier: capturedAccount.public_identifier,
       username: capturedAccount.name,
-      premiumFeatures: collectLinkedinEvidencePremiumFeatures(parsed),
+      premiumFeatures: inferredPremiumFeatures.length ? inferredPremiumFeatures : null,
     });
   }
 
@@ -391,19 +395,24 @@ function extractLinkedinEvidenceMetadataCandidate(parsed) {
  * }} input
  */
 function buildLinkedinEvidenceMetadataCandidate(input) {
+  // Keep premiumFeatures only when the evidence actually carried the field.
+  // A present-but-empty array means a verified free tier; an absent key means
+  // the evidence said nothing about the plan tier.
   const premiumFeatures = Array.isArray(input.premiumFeatures)
     ? input.premiumFeatures
         .map((feature) => normalizeNullableString(feature))
         .filter(Boolean)
-    : [];
+    : null;
   const metadata = {
     accountType: normalizeNullableString(input.accountType) ?? null,
     publicIdentifier: normalizeNullableString(input.publicIdentifier) ?? null,
     username: normalizeNullableString(input.username) ?? null,
-    premiumFeatures,
   };
+  if (premiumFeatures) {
+    metadata.premiumFeatures = premiumFeatures;
+  }
 
-  if (!metadata.accountType && !metadata.publicIdentifier && !metadata.username && !metadata.premiumFeatures.length) {
+  if (!metadata.accountType && !metadata.publicIdentifier && !metadata.username && !premiumFeatures?.length) {
     return null;
   }
 

@@ -314,3 +314,145 @@ test("resolveScopedExecutionAssignment honors a company-level pinned gmail accou
   assert.equal(resolution.resolvedAccount?.providerAccountId, "acct-mail-2");
   assert.equal(resolution.accountResolution?.status, "resolved");
 });
+
+test("resolveScopedExecutionAssignment fails closed when the company-assigned user no longer exists", () => {
+  const survivingUser = {
+    ...userFixture(),
+    id: "user-2",
+    label: "Other Operator",
+    accounts: [managedAccountFixture({ id: "account-2", handle: "other-operator", providerAccountId: "acct-linkedin-2", preferred: true })],
+    harnessConnections: [managedHarnessFixture()],
+  };
+
+  const company = {
+    ...companyFixture(),
+    engagementUserAssignment: {
+      userId: "user-gone",
+      label: "Departed Operator",
+      owner: "operator",
+      accountRefs: ["linkedin:departed-operator"],
+      assignedAt: "2026-06-01T00:00:00.000Z",
+      assignedBy: "exo-ui",
+      reason: "Original owner",
+      sticky: true,
+    },
+  };
+
+  const resolution = resolveScopedExecutionAssignment({
+    rawCompany: company,
+    rawProfiles: [],
+    rawUsers: [survivingUser],
+    capability: "linkedin",
+  });
+
+  // The explicit assignment must not silently fall through to the other
+  // user's identity.
+  assert.equal(resolution.source, "company-user");
+  assert.equal(resolution.assignedUser, null);
+  assert.equal(resolution.resolvedAccount, null);
+  assert.equal(resolution.accountResolution?.status, "assigned_user_missing");
+  assert.match(resolution.accountResolution?.reason ?? "", /Departed Operator/);
+  assert.match(resolution.accountResolution?.reason ?? "", /no longer exists/);
+});
+
+test("resolveScopedExecutionAssignment fails closed when the motion-assigned user no longer exists", () => {
+  const survivingUser = {
+    ...userFixture(),
+    id: "user-2",
+    label: "Other Operator",
+    accounts: [managedAccountFixture({ id: "account-2", handle: "other-operator", providerAccountId: "acct-linkedin-2", preferred: true })],
+    harnessConnections: [managedHarnessFixture()],
+  };
+
+  const motion = {
+    id: "motion-1",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    name: "test-motion",
+    status: "active",
+    offer: {
+      sourceUrl: "https://acme.example/product",
+      offerNotes: null,
+    },
+    premise: {
+      statement: "This offer matters when teams need it.",
+      notes: null,
+      source: "operator",
+      status: "defined",
+    },
+    targetingProfile: {
+      geolocations: [],
+      icpTypes: [],
+      industries: [],
+      companyTypes: [],
+      companyShapes: [],
+      companySizes: [],
+      targetTitles: [],
+      roleFamilies: [],
+      segmentVariants: [],
+      stakeholderTargetCount: 3,
+    },
+    suppressionPolicy: {
+      excludedAccounts: [],
+      excludedDomains: [],
+      excludedContacts: [],
+      doNotContactEntries: [],
+      doNotContactSources: [],
+      crmCustomerSuppressionEnabled: false,
+      crmOpportunitySuppressionEnabled: false,
+    },
+    offerThesis: {
+      sourceUrl: "https://acme.example/product",
+      sourceTitle: null,
+      sourceDescription: null,
+      sourceSummary: "",
+      offerNotes: null,
+      problemThesis: null,
+      buyerImpactThesis: null,
+      likelyTriggerThesis: null,
+      likelyRoleThesis: null,
+      likelySegmentThesis: null,
+      status: "seeded",
+    },
+    audienceHypotheses: [],
+    signals: [],
+    targetMap: {
+      status: "pending",
+      accounts: [],
+      segments: [],
+    },
+    stakeholderMap: {
+      status: "pending",
+      stakeholders: [],
+    },
+    motionPlan: {
+      status: "pending",
+      variants: [],
+    },
+    nextSteps: [],
+    engagementProfileAssignment: null,
+    engagementUserAssignment: {
+      userId: "user-gone",
+      label: "Departed Operator",
+      owner: "operator",
+      accountRefs: ["linkedin:departed-operator"],
+      assignedAt: "2026-06-01T00:00:00.000Z",
+      assignedBy: "exo-ui",
+      reason: "Original owner",
+      sticky: true,
+    },
+  };
+
+  const resolution = resolveScopedExecutionAssignment({
+    rawCompany: companyFixture(),
+    rawMotion: motion,
+    rawProfiles: [],
+    rawUsers: [survivingUser],
+    capability: "linkedin",
+  });
+
+  assert.equal(resolution.source, "motion-user");
+  assert.equal(resolution.assignedUser, null);
+  assert.equal(resolution.resolvedAccount, null);
+  assert.equal(resolution.accountResolution?.status, "assigned_user_missing");
+});

@@ -336,6 +336,28 @@ function selectUnipileCapabilityAccounts(items, capability) {
           ?? normalizeNullableString(im.username)
           ?? normalizeNullableString(im.publicIdentifier)
           ?? "LinkedIn via Unipile";
+        // Unipile reports the plan tier under connection_params.im. The key is
+        // present even for free accounts (an empty array), so a present-but-empty
+        // list means "verified free tier" while an absent key means unverified.
+        const rawPremiumFeatures = Array.isArray(im?.premiumFeatures)
+          ? im.premiumFeatures
+          : Array.isArray(item?.premiumFeatures)
+            ? item.premiumFeatures
+            : null;
+        const premiumId = normalizeNullableString(im?.premiumId);
+        const metadata = {
+          accountType: item.type ?? null,
+          publicIdentifier: normalizeNullableString(im.publicIdentifier) ?? null,
+          username: normalizeNullableString(im.username) ?? null,
+        };
+        if (rawPremiumFeatures) {
+          metadata.premiumFeatures = rawPremiumFeatures
+            .map((feature) => normalizeNullableString(feature))
+            .filter(Boolean);
+        }
+        if (premiumId) {
+          metadata.isPremium = true;
+        }
         return {
           runtime: "codex",
           connector: "unipile",
@@ -345,16 +367,7 @@ function selectUnipileCapabilityAccounts(items, capability) {
           label,
           identityState: "confirmed",
           reason: `Resolved LinkedIn account identity from Unipile for ${label}.`,
-          metadata: {
-            accountType: item.type ?? null,
-            publicIdentifier: normalizeNullableString(im.publicIdentifier) ?? null,
-            username: normalizeNullableString(im.username) ?? null,
-            premiumFeatures: Array.isArray(item?.premiumFeatures)
-              ? item.premiumFeatures
-                  .map((feature) => normalizeNullableString(feature))
-                  .filter(Boolean)
-              : [],
-          },
+          metadata,
         };
       });
   }

@@ -36,6 +36,19 @@ export function resolveScopedExecutionAssignment(input) {
       ...companyUserResolution
     };
   }
+  if (company.engagementUserAssignment?.userId) {
+    // The company is explicitly assigned to a user that no longer exists in
+    // the workspace. Fail closed instead of silently falling through to a
+    // motion assignment or the auto-singleton: with several users that
+    // fallthrough would execute as a different identity than the operator
+    // assigned.
+    return buildMissingAssignedUserResolution(
+      "company-user",
+      company.engagementUserAssignment,
+      company.engagementProfileAssignment,
+      input.capability
+    );
+  }
 
   const companyProfileResolution = resolveProfileAssignment(
     company.engagementProfileAssignment?.profileId ?? null,
@@ -65,6 +78,16 @@ export function resolveScopedExecutionAssignment(input) {
         profileAssignmentRecord: motion.engagementProfileAssignment,
         ...motionUserResolution
       };
+    }
+    if (motion.engagementUserAssignment?.userId) {
+      // Same fail-closed rule as the company assignment: an explicit motion
+      // assignment to a missing user must not fall through to auto-singleton.
+      return buildMissingAssignedUserResolution(
+        "motion-user",
+        motion.engagementUserAssignment,
+        motion.engagementProfileAssignment,
+        input.capability
+      );
     }
 
     const motionProfileResolution = resolveProfileAssignment(
@@ -100,6 +123,31 @@ export function resolveScopedExecutionAssignment(input) {
     resolvedAccount: null,
     resolvedProfile: null,
     accountResolution: null
+  };
+}
+
+/**
+ * @param {"company-user" | "motion-user"} source
+ * @param {any} userAssignmentRecord
+ * @param {any} profileAssignmentRecord
+ * @param {string} capability
+ */
+function buildMissingAssignedUserResolution(source, userAssignmentRecord, profileAssignmentRecord, capability) {
+  const assignedLabel = userAssignmentRecord?.label ?? userAssignmentRecord?.userId ?? "an unknown user";
+  const scopeLabel = source === "company-user" ? "company" : "motion";
+  return {
+    source,
+    userAssignmentRecord,
+    profileAssignmentRecord,
+    assignedUser: null,
+    assignedProfile: null,
+    resolvedAccount: null,
+    resolvedProfile: null,
+    accountResolution: {
+      status: "assigned_user_missing",
+      reason: `This ${scopeLabel} is assigned to ${assignedLabel}, but that user no longer exists in the workspace. Reassign the ${scopeLabel} to a current user before ${capability} execution can resume.`,
+      sourceType: null
+    }
   };
 }
 
