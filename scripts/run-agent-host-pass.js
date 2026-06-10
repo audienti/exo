@@ -38,16 +38,22 @@ import {
   getBrowserBackoffForTask,
   getRecentMotionTaskRunAt,
   getRecentTaskVerification,
+  getRuntimeUsageLimit,
   getSendCircuitBreaker,
   normalizeAgentHostState,
   pruneExpiredBrowserBackoffs,
   recordMotionTaskRun,
+  recordRuntimeUsageLimit,
   recordSendCircuitFailure,
   recordTaskVerification,
   recordCanarySendCooldown,
   releaseTaskLease,
   setBrowserBackoffForTask,
 } from "../src/lib/agent-host-state.js";
+import {
+  DEFAULT_RUNTIME_USAGE_LIMIT_BACKOFF_MS,
+  classifyRuntimeUsageLimitFailure,
+} from "../src/lib/runtime-usage-limit.js";
 import { buildPreflightSummary } from "../src/lib/agent-preflight.js";
 import { getTaskExecutionLane, normalizeAgentExecutionLane } from "../src/lib/agent-task-lanes.js";
 import { runLinkedinMaintenanceWithUnipile } from "../src/lib/linkedin-unipile-maintenance.js";
@@ -206,6 +212,16 @@ export function runAgentHostPass() {
       // Reload each iteration so leases/backoffs written by a concurrent lane
       // worker are visible before we pick the next task.
       hostState = loadHostState();
+      // While the model subscription is out of messages, every runtime task
+      // would fail the same way. Hold the whole pass instead of burning
+      // through the queue; the backoff expires on its own at the reset time.
+      const usageLimit = getRuntimeUsageLimit(hostState);
+      if (usageLimit.active && !isRuntimeUsageLimitIgnored()) {
+        if (results.length === 0) {
+          noOpReason = describeRuntimeUsageLimitHold(usageLimit);
+        }
+        break;
+      }
       const queue = loadQueue(hostState);
       const queueCheckedAt = new Date().toISOString();
       const rolloutWarnings = loadInboundAutomationRolloutWarnings(queueCheckedAt);
@@ -318,6 +334,29 @@ export function runAgentHostPass() {
               : null,
           });
         });
+      }
+
+      // A runtime usage-limit failure (out of Codex messages, rate limit, 429)
+      // is a host-wide condition, not a prospect problem. Record the hold and
+      // stop the pass so the rest of the queue does not fail the same way.
+      const failureReasonText = (result.status === "failed" || result.status === "blocked")
+        && typeof result.detail?.reason === "string"
+        ? result.detail.reason
+        : null;
+      if (failureReasonText) {
+        const usageLimitClassification = classifyRuntimeUsageLimitFailure(failureReasonText);
+        if (usageLimitClassification.limited) {
+          const detectedAt = result.finishedAt ?? new Date().toISOString();
+          const unavailableUntil = usageLimitClassification.resetAt
+            ?? new Date(Date.parse(detectedAt) + DEFAULT_RUNTIME_USAGE_LIMIT_BACKOFF_MS).toISOString();
+          hostState = mutateHostState((state) => recordRuntimeUsageLimit(state, {
+            detectedAt,
+            unavailableUntil,
+            reason: failureReasonText,
+            runtime: "codex",
+          }));
+          break;
+        }
       }
 
       if (blockedBrowserTask) {
@@ -1047,6 +1086,11 @@ export function explainNoopPass(
     return forceRetrieval
       ? "No due tasks or waiting autonomous retrieval tasks were available."
       : "No due tasks were available.";
+  }
+
+  const usageLimit = getRuntimeUsageLimit(hostState, now);
+  if (usageLimit.active && !isRuntimeUsageLimitIgnored()) {
+    return describeRuntimeUsageLimitHold(usageLimit);
   }
 
   if (!browserReady) {
@@ -3257,6 +3301,21 @@ function isBrowserBackoffIgnored() {
 
 function isRetrievalForceEnabled() {
   return normalizeBoolean(process.env.EXO_AGENT_FORCE_RETRIEVAL, false);
+}
+
+function isRuntimeUsageLimitIgnored() {
+  return normalizeBoolean(process.env.EXO_AGENT_IGNORE_USAGE_LIMIT, false);
+}
+
+/**
+ * @param {{ runtime?: string | null, unavailableUntil?: string | null }} usageLimit
+ */
+function describeRuntimeUsageLimitHold(usageLimit) {
+  const runtimeLabel = usageLimit?.runtime === "claude" ? "Claude" : "Codex";
+  const until = usageLimit?.unavailableUntil ?? null;
+  return until
+    ? `${runtimeLabel} hit its usage limit. Queued work is on hold and draining resumes automatically after ${until}.`
+    : `${runtimeLabel} hit its usage limit. Queued work is on hold until the limit resets.`;
 }
 
 function getSendMode() {

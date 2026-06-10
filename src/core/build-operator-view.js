@@ -10,7 +10,8 @@
 // and src/artifacts/render-queue.js turn this into HTML using the shared UI
 // primitives.
 
-import { listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
+import { getRuntimeUsageLimit, listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
+import { formatUsageLimitResumeLabel } from "../lib/runtime-usage-limit.js";
 import { isCleanupLaneItem } from "./cleanup-lane.js";
 
 /**
@@ -892,6 +893,30 @@ function shapeAgentRuntime(runtime, queueCount, checkedAt = null) {
       lastPassSummary,
       statusFacts,
       nextAction: null,
+      queueCount,
+      canRunNow: false,
+      runLabel: null,
+    };
+  }
+
+  const usageLimit = getRuntimeUsageLimit(runtime.hostState ?? null, checkedAt ?? undefined);
+  if (usageLimit.active) {
+    const runtimeLabel = usageLimit.runtime === "claude" ? "Claude" : "Codex";
+    const resumeLabel = formatUsageLimitResumeLabel(usageLimit.unavailableUntil, { now: checkedAt ?? undefined });
+    return {
+      state: "paused",
+      headline: `Agent paused: ${runtimeLabel} usage limit`,
+      detail: `${runtimeLabel} ran out of messages, so the agent paused instead of failing queued work. Queued tasks keep their place and drafts stay approved. Draining resumes automatically${resumeLabel ? ` about ${resumeLabel}` : " when the limit resets"}.`,
+      cadenceLabel,
+      sendMode,
+      lastPassSummary,
+      statusFacts,
+      usageLimit: {
+        runtime: usageLimit.runtime,
+        unavailableUntil: usageLimit.unavailableUntil,
+        resumeLabel,
+      },
+      nextAction: `Nothing to repair. Add ${runtimeLabel} credits to resume sooner, or let the limit reset on its own.`,
       queueCount,
       canRunNow: false,
       runLabel: null,

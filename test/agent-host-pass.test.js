@@ -2194,3 +2194,42 @@ test("normalizeInboundCaptureForWriteback keeps top-level warning captures free 
   assert.equal(normalized.status, "warning");
   assert.equal(normalized.error, null);
 });
+
+test("explainNoopPass surfaces an active runtime usage-limit hold", () => {
+  const reason = explainNoopPass(
+    { tasks: [{ kind: "write_draft", id: "draft-1", motionId: "motion-1" }] },
+    true,
+    {
+      runtimeUsageLimit: {
+        detectedAt: "2026-06-09T16:41:00.000Z",
+        unavailableUntil: "2026-06-09T19:12:00.000Z",
+        reason: "Codex task failed: You're out of Codex messages.",
+        runtime: "codex",
+      },
+    },
+    "2026-06-09T17:00:00.000Z",
+    false,
+    "verify",
+  );
+  assert.match(reason, /Codex hit its usage limit/);
+  assert.match(reason, /2026-06-09T19:12:00\.000Z/);
+});
+
+test("explainNoopPass ignores an expired runtime usage-limit hold", () => {
+  const reason = explainNoopPass(
+    { tasks: [] },
+    true,
+    {
+      runtimeUsageLimit: {
+        detectedAt: "2026-06-09T16:41:00.000Z",
+        unavailableUntil: "2026-06-09T19:12:00.000Z",
+        reason: "Codex task failed: You're out of Codex messages.",
+        runtime: "codex",
+      },
+    },
+    "2026-06-09T20:00:00.000Z",
+    false,
+    "verify",
+  );
+  assert.doesNotMatch(reason, /usage limit/i);
+});

@@ -1441,3 +1441,85 @@ test("agent runtime calls out launchd TCC exit codes as a permissions block", ()
   assert.match(model.agentRuntime?.detail ?? "", /protected folder/i);
   assert.match(model.agentRuntime?.nextAction ?? "", /install-routine/);
 });
+
+test("operator runtime pauses on an active runtime usage limit instead of failing queued work", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "live" },
+    checkedAt: "2026-06-04T11:00:00.000Z",
+    lastPass: {
+      status: "failed",
+      reason: "Codex task failed: You're out of Codex messages. Your rate limit resets on 19:12.",
+      endedAt: "2026-06-04T10:58:39.906Z",
+    },
+    hostState: {
+      runtimeUsageLimit: {
+        detectedAt: "2026-06-04T10:58:39.906Z",
+        unavailableUntil: "2026-06-04T19:12:00.000Z",
+        reason: "Codex task failed: You're out of Codex messages. Your rate limit resets on 19:12.",
+        runtime: "codex",
+      },
+    },
+    queueCount: 9,
+    blockerCount: 0,
+  };
+
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-04T11:00:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+
+  assert.equal(model.agentRuntime?.state, "paused");
+  assert.equal(model.agentRuntime?.headline, "Agent paused: Codex usage limit");
+  assert.match(model.agentRuntime?.detail ?? "", /paused instead of failing queued work/i);
+  assert.match(model.agentRuntime?.detail ?? "", /resumes automatically/i);
+  assert.equal(model.agentRuntime?.canRunNow, false);
+  assert.equal(model.agentRuntime?.usageLimit?.unavailableUntil, "2026-06-04T19:12:00.000Z");
+  assert.match(model.agentRuntime?.nextAction ?? "", /Nothing to repair/i);
+
+  const operatorHtml = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
+  assert.match(operatorHtml, /Agent paused: Codex usage limit/i);
+  assert.match(operatorHtml, /paused instead of failing queued work/i);
+  assert.match(operatorHtml, /Resumes (about|when)/i);
+  assert.doesNotMatch(operatorHtml, />Run agent now</i);
+});
+
+test("operator runtime resumes normally after the usage limit expires", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "live" },
+    lastPass: { status: "completed", endedAt: "2026-06-04T20:00:00.000Z" },
+    hostState: {
+      runtimeUsageLimit: {
+        detectedAt: "2026-06-04T10:58:39.906Z",
+        unavailableUntil: "2026-06-04T19:12:00.000Z",
+        reason: "Codex task failed: You're out of Codex messages.",
+        runtime: "codex",
+      },
+    },
+    queueCount: 2,
+    blockerCount: 0,
+  };
+
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-04T20:05:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+
+  assert.notEqual(model.agentRuntime?.state, "paused");
+  assert.doesNotMatch(model.agentRuntime?.headline ?? "", /usage limit/i);
+});

@@ -5,13 +5,16 @@ import assert from "node:assert/strict";
 
 import {
   checkoutTaskLease,
+  clearRuntimeUsageLimit,
   createTaskLeaseFingerprint,
   getActiveTaskLease,
   getRecentMotionRunAt,
   getRecentMotionTaskRunAt,
+  getRuntimeUsageLimit,
   normalizeAgentHostState,
   pruneExpiredBrowserBackoffs,
   recordMotionTaskRun,
+  recordRuntimeUsageLimit,
   releaseTaskLease,
 } from "../src/lib/agent-host-state.js";
 
@@ -163,4 +166,43 @@ test("getRecentMotionRunAt returns the latest recorded motion activity across ta
     "2026-06-06T20:00:00.000Z",
   );
   assert.equal(getRecentMotionRunAt(state, "motion-2"), "2026-06-06T22:00:00.000Z");
+});
+
+test("runtime usage limit records, reads, expires, and clears", () => {
+  const recorded = recordRuntimeUsageLimit(normalizeAgentHostState(null), {
+    detectedAt: "2026-06-09T16:41:00.000Z",
+    unavailableUntil: "2026-06-09T19:12:00.000Z",
+    reason: "Codex task failed: You're out of Codex messages.",
+    runtime: "codex",
+  });
+
+  const active = getRuntimeUsageLimit(recorded, "2026-06-09T17:00:00.000Z");
+  assert.equal(active.active, true);
+  assert.equal(active.unavailableUntil, "2026-06-09T19:12:00.000Z");
+  assert.equal(active.runtime, "codex");
+  assert.match(active.reason ?? "", /out of Codex messages/);
+
+  // Past the reset time the hold expires on its own.
+  const expired = getRuntimeUsageLimit(recorded, "2026-06-09T19:12:01.000Z");
+  assert.equal(expired.active, false);
+  assert.equal(expired.unavailableUntil, null);
+
+  // Pruning drops the expired entry from the persisted shape too.
+  const pruned = pruneExpiredBrowserBackoffs(recorded, "2026-06-09T19:12:01.000Z");
+  assert.equal(pruned.runtimeUsageLimit.unavailableUntil, null);
+  assert.equal(pruned.runtimeUsageLimit.reason, null);
+
+  const cleared = clearRuntimeUsageLimit(recorded);
+  assert.equal(getRuntimeUsageLimit(cleared, "2026-06-09T17:00:00.000Z").active, false);
+});
+
+test("runtime usage limit survives normalization round trips", () => {
+  const recorded = recordRuntimeUsageLimit(normalizeAgentHostState(null), {
+    detectedAt: "2026-06-09T16:41:00.000Z",
+    unavailableUntil: "2026-06-09T19:12:00.000Z",
+    reason: "usage limit",
+    runtime: "codex",
+  });
+  const roundTripped = normalizeAgentHostState(JSON.parse(JSON.stringify(recorded)));
+  assert.equal(getRuntimeUsageLimit(roundTripped, "2026-06-09T17:00:00.000Z").active, true);
 });

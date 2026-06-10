@@ -7,7 +7,8 @@
 // are plain string-template functions so other view renderers (Motions,
 // Prospects, etc.) can reuse them without a JS runtime.
 
-import { listActiveBrowserBackoffs } from "./agent-host-state.js";
+import { getRuntimeUsageLimit, listActiveBrowserBackoffs } from "./agent-host-state.js";
+import { classifyRuntimeUsageLimitFailure, formatUsageLimitResumeLabel } from "./runtime-usage-limit.js";
 
 /** @param {string | number | null | undefined} value */
 export function escapeHtml(value) {
@@ -926,7 +927,7 @@ function renderAgentStatusMenu(runtime, opts = {}) {
       }),
     );
   } else {
-    actions.push(`<span class="agent-passive">${iconSvg("clock", 12)}Background pass in progress</span>`);
+    actions.push(`<span class="agent-passive">${iconSvg("clock", 12)}${escapeHtml(status.passiveLabel ?? "Background pass in progress")}</span>`);
   }
   if (opts.interactive) {
     actions.push(btn({ variant: "secondary", size: "sm", icon: "queue", label: "Open queue", href: "/queue" }));
@@ -1120,6 +1121,25 @@ function summarizeAgentHeaderRuntime(runtime) {
     };
   }
 
+  const usageLimit = getRuntimeUsageLimit(runtime.hostState ?? null, runtime.checkedAt ?? undefined);
+  if (usageLimit.active) {
+    const runtimeLabel = usageLimit.runtime === "claude" ? "Claude" : "Codex";
+    const resumeLabel = formatUsageLimitResumeLabel(usageLimit.unavailableUntil, { now: runtime.checkedAt ?? undefined });
+    return {
+      health: "yellow",
+      label: "Paused",
+      headline: `Agent paused: ${runtimeLabel} usage limit`,
+      detail: `${runtimeLabel} ran out of messages, so the agent paused instead of failing queued work. Queued tasks keep their place and drafts stay approved. Draining resumes automatically${resumeLabel ? ` about ${resumeLabel}` : " when the limit resets"}.`,
+      cadence,
+      sendMode,
+      statusFacts,
+      nextAction: `Nothing to repair. Add ${runtimeLabel} credits to resume sooner, or let the limit reset on its own.`,
+      canRunNow: false,
+      runLabel: null,
+      passiveLabel: resumeLabel ? `Resumes about ${resumeLabel}` : "Resumes when the limit resets",
+    };
+  }
+
   if (activeBackoff) {
     return {
       health: "yellow",
@@ -1286,6 +1306,10 @@ function summarizeAgentFailureReason(runtime, input) {
     : null;
   if (!rawReason) {
     return null;
+  }
+
+  if (classifyRuntimeUsageLimitFailure(rawReason).limited) {
+    return "The last pass stopped because the model runtime hit its usage limit. Queued work held its place and resumes once the limit resets.";
   }
 
   if (/Codex task failed: .*ETIMEDOUT/i.test(rawReason)) {

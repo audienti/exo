@@ -43,6 +43,12 @@ export function normalizeAgentHostState(state) {
       lastTaskFingerprint: null,
       lastTaskLabel: null,
     },
+    runtimeUsageLimit: {
+      unavailableUntil: null,
+      reason: null,
+      detectedAt: null,
+      runtime: null,
+    },
     taskLeases: [],
     recentTaskVerifications: [],
     recentMotionTaskRuns: [],
@@ -84,6 +90,13 @@ export function normalizeAgentHostState(state) {
     lastSentAt: normalizeIsoDatetime(state?.canaryCooldown?.lastSentAt),
     lastTaskFingerprint: normalizeReason(state?.canaryCooldown?.lastTaskFingerprint),
     lastTaskLabel: normalizeReason(state?.canaryCooldown?.lastTaskLabel),
+  };
+
+  normalized.runtimeUsageLimit = {
+    unavailableUntil: normalizeIsoDatetime(state?.runtimeUsageLimit?.unavailableUntil),
+    reason: normalizeReason(state?.runtimeUsageLimit?.reason),
+    detectedAt: normalizeIsoDatetime(state?.runtimeUsageLimit?.detectedAt),
+    runtime: normalizeReason(state?.runtimeUsageLimit?.runtime),
   };
 
   const leases = Array.isArray(state?.taskLeases)
@@ -152,6 +165,15 @@ export function pruneExpiredBrowserBackoffs(state, now = new Date().toISOString(
       lastSentAt: normalized.canaryCooldown?.lastSentAt ?? null,
       lastTaskFingerprint: normalized.canaryCooldown?.lastTaskFingerprint ?? null,
       lastTaskLabel: normalized.canaryCooldown?.lastTaskLabel ?? null,
+    };
+  }
+  const usageLimitUntil = normalizeIsoDatetime(normalized.runtimeUsageLimit?.unavailableUntil);
+  if (usageLimitUntil && Date.parse(now) >= Date.parse(usageLimitUntil)) {
+    normalized.runtimeUsageLimit = {
+      unavailableUntil: null,
+      reason: null,
+      detectedAt: null,
+      runtime: null,
     };
   }
   return normalized;
@@ -429,6 +451,56 @@ export function recordCanarySendCooldown(state, entry) {
     lastSentAt: normalizeIsoDatetime(entry?.sentAt),
     lastTaskFingerprint: normalizeReason(entry?.taskFingerprint),
     lastTaskLabel: normalizeReason(entry?.taskLabel),
+  };
+  return normalized;
+}
+
+/**
+ * @param {any} state
+ * @param {string} [now]
+ */
+export function getRuntimeUsageLimit(state, now = new Date().toISOString()) {
+  const normalized = pruneExpiredBrowserBackoffs(state, now);
+  const entry = normalized.runtimeUsageLimit ?? null;
+  const unavailableUntil = normalizeIsoDatetime(entry?.unavailableUntil);
+  const active = Boolean(unavailableUntil && Date.parse(now) < Date.parse(unavailableUntil));
+  return {
+    active,
+    unavailableUntil,
+    reason: normalizeReason(entry?.reason),
+    detectedAt: normalizeIsoDatetime(entry?.detectedAt),
+    runtime: normalizeReason(entry?.runtime),
+  };
+}
+
+/**
+ * @param {any} state
+ * @param {{
+ *   detectedAt: string,
+ *   unavailableUntil: string,
+ *   reason?: string | null,
+ *   runtime?: string | null,
+ * }} entry
+ */
+export function recordRuntimeUsageLimit(state, entry) {
+  const normalized = normalizeAgentHostState(state);
+  normalized.runtimeUsageLimit = {
+    unavailableUntil: normalizeIsoDatetime(entry?.unavailableUntil),
+    reason: normalizeReason(entry?.reason),
+    detectedAt: normalizeIsoDatetime(entry?.detectedAt),
+    runtime: normalizeReason(entry?.runtime),
+  };
+  return normalized;
+}
+
+/** @param {any} state */
+export function clearRuntimeUsageLimit(state) {
+  const normalized = normalizeAgentHostState(state);
+  normalized.runtimeUsageLimit = {
+    unavailableUntil: null,
+    reason: null,
+    detectedAt: null,
+    runtime: null,
   };
   return normalized;
 }
