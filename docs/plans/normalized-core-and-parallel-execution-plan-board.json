@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T16:50:47Z"
+    "updatedAt": "2026-06-10T16:59:04Z"
   },
   "tasks": [
     {
@@ -127,7 +127,7 @@
     {
       "id": "T03",
       "title": "Move lane-lock ownership into host pass",
-      "status": "ready",
+      "status": "done",
       "priority": 1,
       "dependsOn": [
         "T01"
@@ -152,16 +152,20 @@
         "npm run check",
         "npm test"
       ],
-      "outputs": [],
-      "attemptCount": 0,
+      "outputs": [
+        "run-agent-host-pass.js now owns its lane-scoped run lock and persists a noop lane summary with holder pid detail when the lane is already active.",
+        "agent run no longer pre-acquires per-lane locks; child summaries are merged and sibling lanes keep running independently.",
+        "The shared agent run lock is now released after lane workers are spawned, making it a spawn guard instead of a wait-duration lock."
+      ],
+      "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "f9f32975a87685abf2d34f65d5c674d959fe1f88",
+      "notes": "Red: node --test test/agent-run.test.js test/agent-host-pass.test.js failed on host-pass lane-lock ownership, CLI duplicate lane pre-lock, and spawn guard release. Green: targeted tests passed. Gate: npm run check and npm test passed with 672 tests."
     },
     {
       "id": "T04",
       "title": "Share merged lane summary writer",
-      "status": "backlog",
+      "status": "ready",
       "priority": 2,
       "dependsOn": [
         "T03"
