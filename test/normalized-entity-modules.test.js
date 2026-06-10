@@ -9,17 +9,28 @@ import path from "node:path";
 import {
   appendActivityEvent,
   buildAccountRelationshipMap,
+  acceptMotionAccountPacket,
+  acceptProspectPacket,
   claimMotionAccountPacket,
   claimProspectPacket,
+  clearMotionAccountPacket,
+  clearProspectPacket,
   findCrossMotionOwner,
   findOrCreateCompany,
   getLocalDatabase,
   listContactPointsForPerson,
   listDueProspects,
+  listActivityEvents,
   normalizeContactValue,
   releaseMotionAccountPacket,
   resolvePersonIdentity,
+  returnMotionAccountPacket,
+  returnProspectPacket,
   selectPrimaryEmployment,
+  setAccountDisposition,
+  setProspectDisposition,
+  submitMotionAccountPacket,
+  submitProspectPacket,
   transitionProspectDraftStatus,
   upsertEmployment,
   upsertMotionAccount,
@@ -314,6 +325,94 @@ test("normalized packet claims, due scans, events, drafts, signals, and ownershi
     const relationshipMap = buildAccountRelationshipMap(company.id);
     assert.equal(relationshipMap.people[0].personId, person.id);
     assert.equal(relationshipMap.people[0].latestActivity?.id, event.id);
+  });
+});
+
+test("disposition and packet review states gate workable branches through normalized rows", () => {
+  withIsolatedExoState(() => {
+    const database = getLocalDatabase();
+    seedLocalUser(database, "user-1");
+    seedMotion(database, "motion-1");
+
+    const company = findOrCreateCompany({ name: "Lifecycle Co", domain: "lifecycle.example" });
+    const person = resolvePersonIdentity({
+      name: "Lifecycle Lead",
+      contactPoints: [{ kind: "linkedin_public_id", value: "lifecycle-lead" }]
+    }).person;
+    const motionAccount = upsertMotionAccount({
+      motionId: "motion-1",
+      companyId: company.id,
+      executionUserId: "user-1",
+      queueStatus: "selected"
+    });
+    const prospect = upsertProspect({
+      motionId: "motion-1",
+      companyId: company.id,
+      motionAccountId: motionAccount.id,
+      personId: person.id,
+      queueStatus: "selected",
+      cadenceStatus: "ready",
+      cadenceNextActionDueAt: "2026-06-09T12:00:00.000Z"
+    });
+
+    assert.equal(motionAccount.disposition, "active");
+    assert.equal(motionAccount.packetStatus, null);
+    assert.equal(prospect.disposition, "active");
+    assert.equal(prospect.packetStatus, null);
+    assert.equal(claimMotionAccountPacket(motionAccount.id, { workerLabel: "account-worker" })?.packetStatus, "claimed");
+    assert.equal(submitMotionAccountPacket(motionAccount.id, { now: "2026-06-10T12:01:00.000Z" })?.packetStatus, "submitted");
+    assert.equal(returnMotionAccountPacket(motionAccount.id, { now: "2026-06-10T12:02:00.000Z" })?.packetStatus, "returned");
+    assert.equal(acceptMotionAccountPacket(motionAccount.id, { now: "2026-06-10T12:03:00.000Z" })?.packetStatus, null);
+    assert.equal(clearMotionAccountPacket(motionAccount.id, { now: "2026-06-10T12:04:00.000Z" })?.packetStatus, null);
+    assert.equal(claimProspectPacket(prospect.id, { workerLabel: "prospect-worker" })?.packetStatus, "claimed");
+    assert.equal(submitProspectPacket(prospect.id, { now: "2026-06-10T12:05:00.000Z" })?.packetStatus, "submitted");
+    assert.equal(returnProspectPacket(prospect.id, { now: "2026-06-10T12:06:00.000Z" })?.packetStatus, "returned");
+    assert.equal(acceptProspectPacket(prospect.id, { now: "2026-06-10T12:07:00.000Z" })?.packetStatus, null);
+    assert.equal(clearProspectPacket(prospect.id, { now: "2026-06-10T12:08:00.000Z" })?.packetStatus, null);
+
+    assert.deepEqual(listDueProspects({
+      executionUserId: "user-1",
+      now: "2026-06-10T12:00:00.000Z"
+    }).map((row) => row.id), [prospect.id]);
+
+    const nurturedAccount = setAccountDisposition(motionAccount.id, {
+      disposition: "nurture",
+      actor: "operator",
+      reason: "Wait for budget cycle",
+      at: "2026-06-10T13:00:00.000Z"
+    });
+    assert.equal(nurturedAccount.disposition, "nurture");
+    assert.equal(nurturedAccount.queueStatus, "selected");
+    assert.deepEqual(listDueProspects({
+      executionUserId: "user-1",
+      now: "2026-06-10T13:01:00.000Z"
+    }).map((row) => row.id), []);
+
+    setAccountDisposition(motionAccount.id, {
+      disposition: "active",
+      actor: "operator",
+      reason: "Re-opened",
+      at: "2026-06-10T14:00:00.000Z"
+    });
+    const suppressedProspect = setProspectDisposition(prospect.id, {
+      disposition: "not_a_fit",
+      actor: "agent",
+      reason: "No longer matches ICP",
+      at: "2026-06-10T14:05:00.000Z"
+    });
+    assert.equal(suppressedProspect.disposition, "not_a_fit");
+    assert.equal(suppressedProspect.queueStatus, "suppressed");
+    assert.deepEqual(listDueProspects({
+      executionUserId: "user-1",
+      now: "2026-06-10T14:06:00.000Z"
+    }).map((row) => row.id), []);
+
+    const dispositionEvents = listActivityEvents({ prospectId: prospect.id })
+      .filter((event) => event.kind === "system" && event.payload?.type === "disposition_changed");
+    assert.equal(dispositionEvents.length, 1);
+    assert.equal(dispositionEvents[0].payload.from, "active");
+    assert.equal(dispositionEvents[0].payload.to, "not_a_fit");
+    assert.equal(dispositionEvents[0].payload.actor, "agent");
   });
 });
 

@@ -59,6 +59,8 @@ test("motion rows store core only and hydrate a legacy targetMap view from norma
       motionId: motion.id,
       companyId: company.id,
       queueStatus: "researched",
+      disposition: "nurture",
+      packetStatus: "submitted",
       lastResearchAt: "2026-06-10T10:00:00.000Z",
       payload: {
         notes: "Account note",
@@ -92,6 +94,8 @@ test("motion rows store core only and hydrate a legacy targetMap view from norma
       motionAccountId: motionAccount.id,
       personId: person.id,
       queueStatus: "selected",
+      disposition: "not_a_fit",
+      packetStatus: "returned",
       cadenceStatus: "ready",
       cadenceCurrentStep: "connection-request",
       cadenceNextActionDueAt: "2026-06-11T12:00:00.000Z",
@@ -161,10 +165,16 @@ test("motion rows store core only and hydrate a legacy targetMap view from norma
     assert.equal(hydrated.targetMap.status, "ready");
     assert.equal(hydrated.targetMap.accounts.length, 1);
     assert.equal(hydrated.targetMap.accounts[0].companyName, "Hydrate Co");
+    assert.equal(hydrated.targetMap.accounts[0].disposition, "nurture");
+    assert.equal(hydrated.targetMap.accounts[0].packetStatus, "submitted");
+    assert.equal(hydrated.targetMap.accounts[0].queueState.status, "ready");
     assert.equal(hydrated.targetMap.accounts[0].signalMatches[0].id, signal.id);
     assert.equal(hydrated.targetMap.accounts[0].prospects.length, 1);
     assert.equal(hydrated.targetMap.accounts[0].prospects[0].name, "Jane Buyer");
     assert.equal(hydrated.targetMap.accounts[0].prospects[0].title, "VP Revenue");
+    assert.equal(hydrated.targetMap.accounts[0].prospects[0].disposition, "not_a_fit");
+    assert.equal(hydrated.targetMap.accounts[0].prospects[0].packetStatus, "returned");
+    assert.equal(hydrated.targetMap.accounts[0].prospects[0].queueState.status, "ready");
     assert.equal(hydrated.targetMap.accounts[0].prospects[0].email, "jane@hydrate.example");
     assert.equal(hydrated.targetMap.accounts[0].prospects[0].cadenceState.status, "ready");
     assert.equal(hydrated.targetMap.accounts[0].prospects[0].touches[0].id, "touch-jane-connection");

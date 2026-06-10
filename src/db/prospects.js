@@ -1,7 +1,8 @@
 // @ts-check
 
-import { activityEventFromRow } from "./activity-events.js";
+import { activityEventFromRow, appendActivityEvent } from "./activity-events.js";
 import { getLocalDatabase } from "./database.js";
+import { queueStatusForDisposition, workableBranchPredicateSql } from "./lifecycle-state.js";
 import {
   NORMALIZED_SCHEMA_VERSION,
   createEntityId,
@@ -17,6 +18,10 @@ import {
  *   personId: string,
  *   motionAccountId: string,
  *   queueStatus?: string,
+ *   disposition?: string,
+ *   dispositionAt?: string | null,
+ *   dispositionActor?: "operator" | "agent" | "system" | null,
+ *   packetStatus?: "claimed" | "submitted" | "returned" | null,
  *   cadenceStatus?: "pending" | "ready",
  *   cadenceCurrentStep?: string | null,
  *   cadenceNextActionDueAt?: string | null,
@@ -60,6 +65,10 @@ export function upsertProspect(input) {
       cadence_last_touch_outcome,
       packet_claimed_by,
       packet_claimed_at,
+      packet_status,
+      disposition,
+      disposition_at,
+      disposition_actor,
       schema_version,
       created_at,
       updated_at,
@@ -79,6 +88,10 @@ export function upsertProspect(input) {
       @cadenceLastTouchOutcome,
       NULL,
       NULL,
+      @packetStatus,
+      @disposition,
+      @dispositionAt,
+      @dispositionActor,
       @schemaVersion,
       @createdAt,
       @updatedAt,
@@ -93,6 +106,10 @@ export function upsertProspect(input) {
       cadence_next_action_due_at = excluded.cadence_next_action_due_at,
       cadence_last_touch_at = excluded.cadence_last_touch_at,
       cadence_last_touch_outcome = excluded.cadence_last_touch_outcome,
+      packet_status = excluded.packet_status,
+      disposition = excluded.disposition,
+      disposition_at = excluded.disposition_at,
+      disposition_actor = excluded.disposition_actor,
       schema_version = excluded.schema_version,
       updated_at = excluded.updated_at,
       payload_json = excluded.payload_json
@@ -103,6 +120,10 @@ export function upsertProspect(input) {
     personId: input.personId,
     motionAccountId: input.motionAccountId,
     queueStatus: input.queueStatus ?? existing?.queue_status ?? "discovered",
+    packetStatus: input.packetStatus ?? existing?.packet_status ?? null,
+    disposition: input.disposition ?? existing?.disposition ?? "active",
+    dispositionAt: input.dispositionAt ?? existing?.disposition_at ?? null,
+    dispositionActor: input.dispositionActor ?? existing?.disposition_actor ?? null,
     cadenceStatus: input.cadenceStatus ?? existing?.cadence_status ?? "pending",
     cadenceCurrentStep: input.cadenceCurrentStep ?? existing?.cadence_current_step ?? null,
     cadenceNextActionDueAt: input.cadenceNextActionDueAt ?? existing?.cadence_next_action_due_at ?? null,
@@ -137,6 +158,7 @@ export function claimProspectPacket(id, input) {
       UPDATE prospects
       SET packet_claimed_by = @workerLabel,
           packet_claimed_at = @claimedAt,
+          packet_status = 'claimed',
           updated_at = @claimedAt
       WHERE id = @id
         AND packet_claimed_by IS NULL
@@ -154,20 +176,103 @@ export function claimProspectPacket(id, input) {
  * @param {string} id
  */
 export function releaseProspectPacket(id) {
+  return clearProspectPacket(id);
+}
+
+/**
+ * @param {string} id
+ * @param {{ now?: string }} [input]
+ */
+export function submitProspectPacket(id, input = {}) {
+  return updateProspectPacketStatus(id, "submitted", input.now);
+}
+
+/**
+ * @param {string} id
+ * @param {{ now?: string }} [input]
+ */
+export function returnProspectPacket(id, input = {}) {
+  return updateProspectPacketStatus(id, "returned", input.now);
+}
+
+/**
+ * @param {string} id
+ * @param {{ now?: string }} [input]
+ */
+export function acceptProspectPacket(id, input = {}) {
+  return clearProspectPacket(id, input);
+}
+
+/**
+ * @param {string} id
+ * @param {{ now?: string }} [input]
+ */
+export function clearProspectPacket(id, input = {}) {
   const row = getLocalDatabase()
     .prepare(`
       UPDATE prospects
       SET packet_claimed_by = NULL,
           packet_claimed_at = NULL,
+          packet_status = NULL,
           updated_at = @updatedAt
       WHERE id = @id
       RETURNING *
     `)
     .get({
       id,
-      updatedAt: new Date().toISOString(),
+      updatedAt: input.now ?? new Date().toISOString(),
     });
   return row ? prospectFromRow(row) : null;
+}
+
+/**
+ * @param {string} id
+ * @param {{ disposition: string, actor: "operator" | "agent" | "system", reason?: string | null, at?: string }} input
+ */
+export function setProspectDisposition(id, input) {
+  const database = getLocalDatabase();
+  const now = input.at ?? new Date().toISOString();
+  return runTransaction(() => {
+    const existing = database.prepare("SELECT * FROM prospects WHERE id = ?").get(id);
+    if (!existing) return null;
+    const nextQueueStatus = queueStatusForDisposition(input.disposition, existing.queue_status);
+    const row = database.prepare(`
+      UPDATE prospects
+      SET disposition = @disposition,
+          disposition_at = @dispositionAt,
+          disposition_actor = @dispositionActor,
+          queue_status = @queueStatus,
+          updated_at = @updatedAt
+      WHERE id = @id
+      RETURNING *
+    `).get({
+      id,
+      disposition: input.disposition,
+      dispositionAt: now,
+      dispositionActor: input.actor,
+      queueStatus: nextQueueStatus,
+      updatedAt: now,
+    });
+    appendActivityEvent({
+      dedupeKey: `prospect-disposition:${id}:${existing.disposition ?? "active"}:${input.disposition}:${now}`,
+      kind: "system",
+      personId: existing.person_id,
+      prospectId: existing.id,
+      motionId: existing.motion_id,
+      companyId: existing.company_id,
+      direction: "system",
+      occurredAt: now,
+      payload: {
+        type: "disposition_changed",
+        subject: "prospect",
+        from: existing.disposition ?? "active",
+        to: input.disposition,
+        reason: input.reason ?? null,
+        actor: input.actor,
+      },
+    });
+    return row ? prospectFromRow(row) : null;
+  });
 }
 
 /**
@@ -183,7 +288,7 @@ export function listDueProspects(input) {
       JOIN motion_accounts ON motion_accounts.id = prospects.motion_account_id
       WHERE motion_accounts.execution_user_id = @executionUserId
         AND prospects.cadence_status = 'ready'
-        AND prospects.queue_status NOT IN ('suppressed', 'exhausted', 'held_cross_motion')
+        AND ${workableBranchPredicateSql}
         AND (
           prospects.cadence_next_action_due_at IS NULL
           OR prospects.cadence_next_action_due_at <= @now
@@ -206,10 +311,11 @@ export function findCrossMotionOwner(input) {
     .prepare(`
       SELECT prospects.*, activity_events.id AS event_id
       FROM prospects
+      JOIN motion_accounts ON motion_accounts.id = prospects.motion_account_id
       JOIN activity_events ON activity_events.person_id = prospects.person_id
       WHERE prospects.person_id = @personId
         AND (@excludeMotionId IS NULL OR prospects.motion_id != @excludeMotionId)
-        AND prospects.queue_status NOT IN ('suppressed', 'exhausted', 'held_cross_motion')
+        AND ${workableBranchPredicateSql}
         AND activity_events.direction = 'outbound'
         AND activity_events.outcome IN ('pending', 'sent', 'accepted', 'opened-no-reply')
       ORDER BY activity_events.occurred_at DESC
@@ -304,6 +410,10 @@ export function prospectFromRow(row) {
     personId: row.person_id,
     motionAccountId: row.motion_account_id,
     queueStatus: row.queue_status,
+    packetStatus: row.packet_status ?? null,
+    disposition: row.disposition ?? "active",
+    dispositionAt: row.disposition_at ?? null,
+    dispositionActor: row.disposition_actor ?? null,
     cadenceStatus: row.cadence_status,
     cadenceCurrentStep: row.cadence_current_step ?? null,
     cadenceNextActionDueAt: row.cadence_next_action_due_at ?? null,
@@ -314,4 +424,41 @@ export function prospectFromRow(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+/**
+ * @param {string} id
+ * @param {"submitted" | "returned"} status
+ * @param {string | undefined} now
+ */
+function updateProspectPacketStatus(id, status, now) {
+  const updatedAt = now ?? new Date().toISOString();
+  const row = getLocalDatabase()
+    .prepare(`
+      UPDATE prospects
+      SET packet_status = @status,
+          updated_at = @updatedAt
+      WHERE id = @id
+      RETURNING *
+    `)
+    .get({ id, status, updatedAt });
+  return row ? prospectFromRow(row) : null;
+}
+
+/**
+ * @template T
+ * @param {() => T} callback
+ * @returns {T}
+ */
+function runTransaction(callback) {
+  const database = getLocalDatabase();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = callback();
+    database.exec("COMMIT");
+    return result;
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }

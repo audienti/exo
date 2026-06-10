@@ -124,6 +124,16 @@ const migrations = [
           )),
           packet_claimed_by TEXT,
           packet_claimed_at TEXT,
+          packet_status TEXT CHECK (packet_status IS NULL OR packet_status IN (
+            'claimed','submitted','returned'
+          )),
+          disposition TEXT NOT NULL DEFAULT 'active' CHECK (disposition IN (
+            'active','nurture','not_a_fit','no_longer_target','exhausted'
+          )),
+          disposition_at TEXT,
+          disposition_actor TEXT CHECK (disposition_actor IS NULL OR disposition_actor IN (
+            'operator','agent','system'
+          )),
           last_research_at TEXT,
           schema_version INTEGER NOT NULL,
           created_at TEXT NOT NULL,
@@ -132,6 +142,8 @@ const migrations = [
           UNIQUE (motion_id, company_id)
         );
         CREATE INDEX motion_accounts_by_user ON motion_accounts(execution_user_id);
+        CREATE INDEX motion_accounts_review ON motion_accounts(motion_id)
+          WHERE packet_status IN ('submitted','returned');
 
         CREATE TABLE signal_matches (
           id TEXT PRIMARY KEY,
@@ -221,13 +233,26 @@ const migrations = [
           cadence_last_touch_outcome TEXT,
           packet_claimed_by TEXT,
           packet_claimed_at TEXT,
+          packet_status TEXT CHECK (packet_status IS NULL OR packet_status IN (
+            'claimed','submitted','returned'
+          )),
+          disposition TEXT NOT NULL DEFAULT 'active' CHECK (disposition IN (
+            'active','nurture','not_a_fit','no_longer_target','exhausted'
+          )),
+          disposition_at TEXT,
+          disposition_actor TEXT CHECK (disposition_actor IS NULL OR disposition_actor IN (
+            'operator','agent','system'
+          )),
           schema_version INTEGER NOT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           payload_json TEXT NOT NULL,
           UNIQUE (motion_id, person_id)
         );
-        CREATE INDEX prospects_due ON prospects(cadence_status, cadence_next_action_due_at);
+        CREATE INDEX prospects_due ON prospects(cadence_status, cadence_next_action_due_at)
+          WHERE disposition = 'active';
+        CREATE INDEX prospects_review ON prospects(motion_id)
+          WHERE packet_status IN ('submitted','returned');
         CREATE INDEX prospects_by_motion ON prospects(motion_id, queue_status);
         CREATE INDEX prospects_by_company ON prospects(company_id);
         CREATE INDEX prospects_by_person ON prospects(person_id);

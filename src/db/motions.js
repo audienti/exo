@@ -247,6 +247,8 @@ function hydrateTargetAccountRow(row) {
       status: row.queue_status,
       updatedAt: row.updated_at,
     },
+    disposition: row.disposition ?? "active",
+    packetStatus: row.packet_status ?? null,
     packetState: payload.packetState ?? buildPacketState(row, "company_research"),
     lastResearchAt: row.last_research_at ?? null,
     notes: payload.notes ?? null,
@@ -299,6 +301,8 @@ function hydrateProspectRow(row, companyId) {
       status: row.queue_status,
       updatedAt: row.updated_at,
     },
+    disposition: row.disposition ?? "active",
+    packetStatus: row.packet_status ?? null,
     packetState: payload.packetState ?? buildPacketState(row, "prospect_research"),
     cadenceState: {
       ...(payload.cadenceState ?? {}),
@@ -420,6 +424,8 @@ function replaceMotionTargetMapRows(motion) {
       companyId: company.id,
       executionUserId: motion.engagementUserAssignment?.userId ?? null,
       queueStatus: account.queueState?.status ?? "discovered",
+      disposition: account.disposition,
+      packetStatus: account.packetStatus ?? packetStatusFromPacketState(account.packetState),
       lastResearchAt: account.lastResearchAt,
       payload: {
         ...account,
@@ -471,6 +477,8 @@ function syncProspectFromView(input) {
     motionAccountId: input.motionAccountId,
     personId: person.id,
     queueStatus: input.prospect.queueState?.status ?? "selected",
+    disposition: input.prospect.disposition,
+    packetStatus: input.prospect.packetStatus ?? packetStatusFromPacketState(input.prospect.packetState),
     cadenceStatus: input.prospect.cadenceState?.status ?? "pending",
     cadenceCurrentStep: input.prospect.cadenceState?.currentStep ?? null,
     cadenceNextActionDueAt: input.prospect.cadenceState?.nextActionDueAt ?? null,
@@ -736,7 +744,7 @@ function unwrapPayloadEnvelope(payload) {
  * @param {"company_research" | "prospect_selection" | "prospect_research"} kind
  */
 function buildPacketState(row, kind) {
-  if (!row.packet_claimed_by && !row.packet_claimed_at) return null;
+  if (row.packet_status !== "claimed" && !row.packet_claimed_by && !row.packet_claimed_at) return null;
   return {
     kind,
     status: "claimed",
@@ -745,6 +753,15 @@ function buildPacketState(row, kind) {
     completedAt: null,
     notes: null,
   };
+}
+
+/**
+ * @param {unknown} packetState
+ * @returns {"claimed" | null}
+ */
+function packetStatusFromPacketState(packetState) {
+  if (!packetState || typeof packetState !== "object" || Array.isArray(packetState)) return null;
+  return packetState.status === "claimed" ? "claimed" : null;
 }
 
 /**
