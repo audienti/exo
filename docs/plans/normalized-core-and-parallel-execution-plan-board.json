@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T17:48:21Z"
+    "updatedAt": "2026-06-10T17:49:08Z"
   },
   "tasks": [
     {
@@ -246,7 +246,7 @@
     {
       "id": "T06",
       "title": "Implement normalized entity DB modules",
-      "status": "ready",
+      "status": "done",
       "priority": 1,
       "dependsOn": [
         "T05"
@@ -272,14 +272,21 @@
         "npm run check and npm test are green."
       ],
       "verification": [
+        "node --test test/normalized-entity-modules.test.js",
+        "node --test test/database-schema.test.js test/normalized-entity-modules.test.js",
         "npm run check",
         "npm test"
       ],
-      "outputs": [],
-      "attemptCount": 0,
+      "outputs": [
+        "Added normalized DB modules for company identity, person/contact resolution, employment, motion accounts, prospects, activity events, prospect drafts, and signal matches.",
+        "Wired database.js to export local/home connection helpers and re-export the normalized entity modules for later plan tasks.",
+        "Implemented row-backed company find-or-create, LinkedIn/email contact normalization, review-grade identity conflict handling, employment primary selection, atomic packet claims, due-prospect scans, cross-motion ownership, relationship maps, deduped activity events, draft status transitions, and signal match queries.",
+        "Added test/normalized-entity-modules.test.js covering identity edge cases, v10 LinkedIn/email normalization, employment transitions, packet claims, events, drafts, due scans, signal matches, ownership, and account relationship maps."
+      ],
+      "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "6c4d3b48a30d78d911d6e4a9b67ff0366bb8d4e6",
+      "notes": "Red: node --test test/normalized-entity-modules.test.js initially failed on missing appendActivityEvent export. Green: node --test test/normalized-entity-modules.test.js passed 6/6; node --test test/database-schema.test.js test/normalized-entity-modules.test.js passed 8/8; npm run check passed; npm test passed with 681 tests. After a test-name wording cleanup, node --test test/normalized-entity-modules.test.js passed 6/6 again."
     },
     {
       "id": "T07",
