@@ -74,14 +74,34 @@ export function insertMotion(motion) {
   const database = getLocalDatabase();
   const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
   const statement = database.prepare(`
-    INSERT INTO motions (id, status, source_url, created_at, updated_at, payload_json)
-    VALUES (@id, @status, @sourceUrl, @createdAt, @updatedAt, @payloadJson)
+    INSERT INTO motions (
+      id,
+      name,
+      status,
+      source_url,
+      schema_version,
+      created_at,
+      updated_at,
+      payload_json
+    )
+    VALUES (
+      @id,
+      @name,
+      @status,
+      @sourceUrl,
+      @schemaVersion,
+      @createdAt,
+      @updatedAt,
+      @payloadJson
+    )
   `);
 
   statement.run({
     id: storedMotion.id,
+    name: storedMotion.name,
     status: storedMotion.status,
     sourceUrl: storedMotion.offer.sourceUrl,
+    schemaVersion: 1,
     createdAt: storedMotion.createdAt,
     updatedAt: storedMotion.updatedAt,
     payloadJson: JSON.stringify(storedMotion, null, 2)
@@ -99,8 +119,10 @@ export function updateMotion(motion) {
   const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
   const statement = database.prepare(`
     UPDATE motions
-    SET status = @status,
+    SET name = @name,
+        status = @status,
         source_url = @sourceUrl,
+        schema_version = @schemaVersion,
         updated_at = @updatedAt,
         payload_json = @payloadJson
     WHERE id = @id
@@ -108,8 +130,10 @@ export function updateMotion(motion) {
 
   statement.run({
     id: storedMotion.id,
+    name: storedMotion.name,
     status: storedMotion.status,
     sourceUrl: storedMotion.offer.sourceUrl,
+    schemaVersion: 1,
     updatedAt: storedMotion.updatedAt,
     payloadJson: JSON.stringify(storedMotion, null, 2)
   });
@@ -548,6 +572,7 @@ export function upsertInboundObservation(observation) {
       motion_id,
       company_id,
       prospect_id,
+      person_id,
       payload_json
     )
     VALUES (
@@ -563,6 +588,7 @@ export function upsertInboundObservation(observation) {
       @motionId,
       @companyId,
       @prospectId,
+      @personId,
       @payloadJson
     )
     ON CONFLICT(dedupe_key) DO UPDATE SET
@@ -577,6 +603,7 @@ export function upsertInboundObservation(observation) {
       motion_id = excluded.motion_id,
       company_id = excluded.company_id,
       prospect_id = excluded.prospect_id,
+      person_id = excluded.person_id,
       payload_json = excluded.payload_json
   `);
 
@@ -593,6 +620,7 @@ export function upsertInboundObservation(observation) {
     motionId: normalized.motionId,
     companyId: normalized.companyId,
     prospectId: normalized.prospectId,
+    personId: normalized.personId,
     payloadJson: JSON.stringify(normalized, null, 2)
   });
 
@@ -706,8 +734,30 @@ export function listInboundObservations(filters = {}) {
  */
 export function insertCompany(company) {
   const statement = getLocalDatabase().prepare(`
-    INSERT INTO companies (id, name, search_name, domain, created_at, updated_at, payload_json)
-    VALUES (@id, @name, @searchName, @domain, @createdAt, @updatedAt, @payloadJson)
+    INSERT INTO companies (
+      id,
+      name,
+      search_name,
+      domain,
+      linkedin_company_url,
+      website_url,
+      schema_version,
+      created_at,
+      updated_at,
+      payload_json
+    )
+    VALUES (
+      @id,
+      @name,
+      @searchName,
+      @domain,
+      @linkedinCompanyUrl,
+      @websiteUrl,
+      @schemaVersion,
+      @createdAt,
+      @updatedAt,
+      @payloadJson
+    )
   `);
 
   statement.run({
@@ -715,6 +765,9 @@ export function insertCompany(company) {
     name: company.name,
     searchName: company.name.trim().toLowerCase(),
     domain: company.domain ? company.domain.trim().toLowerCase() : null,
+    linkedinCompanyUrl: company.linkedinCompanyUrl ?? null,
+    websiteUrl: company.websiteUrl ?? null,
+    schemaVersion: 1,
     createdAt: company.createdAt,
     updatedAt: company.updatedAt,
     payloadJson: JSON.stringify(company, null, 2)
@@ -731,6 +784,9 @@ export function updateCompany(company) {
     SET name = @name,
         search_name = @searchName,
         domain = @domain,
+        linkedin_company_url = @linkedinCompanyUrl,
+        website_url = @websiteUrl,
+        schema_version = @schemaVersion,
         updated_at = @updatedAt,
         payload_json = @payloadJson
     WHERE id = @id
@@ -741,6 +797,9 @@ export function updateCompany(company) {
     name: company.name,
     searchName: company.name.trim().toLowerCase(),
     domain: company.domain ? company.domain.trim().toLowerCase() : null,
+    linkedinCompanyUrl: company.linkedinCompanyUrl ?? null,
+    websiteUrl: company.websiteUrl ?? null,
+    schemaVersion: 1,
     updatedAt: company.updatedAt,
     payloadJson: JSON.stringify(company, null, 2)
   });
@@ -811,15 +870,19 @@ function persistNormalizedMotion(motion) {
   getLocalDatabase()
     .prepare(`
       UPDATE motions
-      SET status = @status,
+      SET name = @name,
+          status = @status,
           source_url = @sourceUrl,
+          schema_version = @schemaVersion,
           payload_json = @payloadJson
       WHERE id = @id
     `)
     .run({
       id: motion.id,
+      name: motion.name,
       status: motion.status,
       sourceUrl: motion.offer.sourceUrl,
+      schemaVersion: 1,
       payloadJson: JSON.stringify(motion, null, 2)
     });
 }
@@ -871,7 +934,7 @@ function motionNameExists(name, motionId, database) {
       SELECT id
       FROM motions
       WHERE id != @id
-        AND json_extract(payload_json, '$.name') = @name
+        AND name = @name
       LIMIT 1
     `)
     .get({

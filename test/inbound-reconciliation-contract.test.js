@@ -95,6 +95,28 @@ function runCli(tempDir, args) {
   });
 }
 
+/**
+ * @template T
+ * @param {() => T} callback
+ * @returns {T}
+ */
+function withIsolatedExoState(callback) {
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-core-"));
+  process.env.EXO_STATE_DIR = stateDir;
+
+  try {
+    return callback();
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
 test("linkedin capture payload preserves visible totals and reconcile metadata for partial sent-invitation surfaces", () => {
   const result = buildLinkedinInboundSyncPayload(
     {
@@ -461,10 +483,10 @@ test("full authoritative sent-invitation reconciliation can complete after termi
     }
   });
 
-  const prepared = prepareUserInboundSyncRun(rawUser, result.payload, {
+  const prepared = withIsolatedExoState(() => prepareUserInboundSyncRun(rawUser, result.payload, {
     rawMotions: [],
     rawExistingObservations: []
-  });
+  }));
 
   const sentInvitations = prepared.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-sent-invitations");
   assert.ok(sentInvitations);
@@ -503,7 +525,7 @@ test("full authoritative inbound sync cannot claim success when exhaustion is in
   };
 
   assert.throws(
-    () => prepareUserInboundSyncRun(rawUser, {
+    () => withIsolatedExoState(() => prepareUserInboundSyncRun(rawUser, {
       mode: "full",
       accounts: [
         {
@@ -555,7 +577,7 @@ test("full authoritative inbound sync cannot claim success when exhaustion is in
     }, {
       rawMotions: [],
       rawExistingObservations: []
-    }),
+    })),
     /must use warning status when exhaustion is incomplete/i
   );
 });
@@ -2450,28 +2472,30 @@ test("thread update observations stay visible as medium-priority inbox deltas in
     ]
   };
 
-  const linkedinObservation = recordInboundObservation(rawUser, {
-    accountId: "linkedin-account-1",
-    surfaceKey: "linkedin-messaging-inbox",
-    kind: "thread_updated",
-    externalId: "thread-1",
-    observedAt: "2026-05-31T16:00:00.000Z",
-    actorName: "Muhammad Usama Sajjad",
-    actorProfileUrl: "https://www.linkedin.com/in/muhammad-usama-sajjad/",
-    threadUrl: "https://www.linkedin.com/messaging/thread/1/",
-    summary: "Muhammad Usama Sajjad's LinkedIn thread moved even though the newest visible change was not a clear reply."
-  });
-  const gmailObservation = recordInboundObservation(rawUser, {
-    accountId: "gmail-account-1",
-    surfaceKey: "gmail-inbox-threads",
-    kind: "email_thread_updated",
-    externalId: "gmail-thread-1",
-    observedAt: "2026-05-31T16:05:00.000Z",
-    actorName: "Pauline Baker",
-    threadUrl: "https://mail.google.com/mail/u/0/#inbox/gmail-thread-1",
-    sourceUrl: "https://mail.google.com/mail/u/0/#inbox/gmail-thread-1",
-    summary: "Pauline Baker's Gmail thread changed, but the newest visible state was not a clear reply yet."
-  });
+  const [linkedinObservation, gmailObservation] = withIsolatedExoState(() => [
+    recordInboundObservation(rawUser, {
+      accountId: "linkedin-account-1",
+      surfaceKey: "linkedin-messaging-inbox",
+      kind: "thread_updated",
+      externalId: "thread-1",
+      observedAt: "2026-05-31T16:00:00.000Z",
+      actorName: "Muhammad Usama Sajjad",
+      actorProfileUrl: "https://www.linkedin.com/in/muhammad-usama-sajjad/",
+      threadUrl: "https://www.linkedin.com/messaging/thread/1/",
+      summary: "Muhammad Usama Sajjad's LinkedIn thread moved even though the newest visible change was not a clear reply."
+    }),
+    recordInboundObservation(rawUser, {
+      accountId: "gmail-account-1",
+      surfaceKey: "gmail-inbox-threads",
+      kind: "email_thread_updated",
+      externalId: "gmail-thread-1",
+      observedAt: "2026-05-31T16:05:00.000Z",
+      actorName: "Pauline Baker",
+      threadUrl: "https://mail.google.com/mail/u/0/#inbox/gmail-thread-1",
+      sourceUrl: "https://mail.google.com/mail/u/0/#inbox/gmail-thread-1",
+      summary: "Pauline Baker's Gmail thread changed, but the newest visible state was not a clear reply yet."
+    })
+  ]);
 
   const inbox = buildInboxView(rawUser, [linkedinObservation, gmailObservation], [], []);
   const review = buildInboundReviewView(rawUser, [linkedinObservation, gmailObservation], [], []);
@@ -2521,46 +2545,53 @@ test("steady follower and following confirmations stay out of inbox and review w
     harnessConnections: []
   };
 
-  const followerConfirmed = recordInboundObservation(rawUser, {
-    accountId: "linkedin-account-1",
-    surfaceKey: "linkedin-followers-list",
-    kind: "follower_confirmed",
-    externalId: "follower-1",
-    observedAt: "2026-06-05T11:00:00.000Z",
-    actorName: "Grace Follower",
-    actorProfileUrl: "https://www.linkedin.com/in/grace-follower/",
-    summary: "Grace Follower is present in the LinkedIn follower list."
-  });
-  const followerAdded = recordInboundObservation(rawUser, {
-    accountId: "linkedin-account-1",
-    surfaceKey: "linkedin-followers-list",
-    kind: "follower_added",
-    externalId: "follower-2",
-    observedAt: "2026-06-05T11:05:00.000Z",
-    actorName: "Jordan Newfollower",
-    actorProfileUrl: "https://www.linkedin.com/in/jordan-newfollower/",
-    summary: "Jordan Newfollower newly appeared in the live followers list."
-  });
-  const followConfirmed = recordInboundObservation(rawUser, {
-    accountId: "linkedin-account-1",
-    surfaceKey: "linkedin-following-list",
-    kind: "follow_state_confirmed",
-    externalId: "following-1",
-    observedAt: "2026-06-05T11:10:00.000Z",
-    actorName: "Harper Followed",
-    actorProfileUrl: "https://www.linkedin.com/in/harper-followed/",
-    summary: "Harper Followed is still present in the LinkedIn following list."
-  });
-  const followChanged = recordInboundObservation(rawUser, {
-    accountId: "linkedin-account-1",
-    surfaceKey: "linkedin-following-list",
-    kind: "follow_state_changed",
-    externalId: "following-2",
-    observedAt: "2026-06-05T11:15:00.000Z",
-    actorName: "Drew Followed",
-    actorProfileUrl: "https://www.linkedin.com/in/drew-followed/",
-    summary: "Drew Followed newly appeared in the live following list."
-  });
+  const [
+    followerConfirmed,
+    followerAdded,
+    followConfirmed,
+    followChanged
+  ] = withIsolatedExoState(() => [
+    recordInboundObservation(rawUser, {
+      accountId: "linkedin-account-1",
+      surfaceKey: "linkedin-followers-list",
+      kind: "follower_confirmed",
+      externalId: "follower-1",
+      observedAt: "2026-06-05T11:00:00.000Z",
+      actorName: "Grace Follower",
+      actorProfileUrl: "https://www.linkedin.com/in/grace-follower/",
+      summary: "Grace Follower is present in the LinkedIn follower list."
+    }),
+    recordInboundObservation(rawUser, {
+      accountId: "linkedin-account-1",
+      surfaceKey: "linkedin-followers-list",
+      kind: "follower_added",
+      externalId: "follower-2",
+      observedAt: "2026-06-05T11:05:00.000Z",
+      actorName: "Jordan Newfollower",
+      actorProfileUrl: "https://www.linkedin.com/in/jordan-newfollower/",
+      summary: "Jordan Newfollower newly appeared in the live followers list."
+    }),
+    recordInboundObservation(rawUser, {
+      accountId: "linkedin-account-1",
+      surfaceKey: "linkedin-following-list",
+      kind: "follow_state_confirmed",
+      externalId: "following-1",
+      observedAt: "2026-06-05T11:10:00.000Z",
+      actorName: "Harper Followed",
+      actorProfileUrl: "https://www.linkedin.com/in/harper-followed/",
+      summary: "Harper Followed is still present in the LinkedIn following list."
+    }),
+    recordInboundObservation(rawUser, {
+      accountId: "linkedin-account-1",
+      surfaceKey: "linkedin-following-list",
+      kind: "follow_state_changed",
+      externalId: "following-2",
+      observedAt: "2026-06-05T11:15:00.000Z",
+      actorName: "Drew Followed",
+      actorProfileUrl: "https://www.linkedin.com/in/drew-followed/",
+      summary: "Drew Followed newly appeared in the live following list."
+    })
+  ]);
 
   const inbox = buildInboxView(rawUser, [
     followerConfirmed,

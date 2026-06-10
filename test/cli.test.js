@@ -1203,11 +1203,10 @@ test("motion clone forks an existing motion into a new retargeted draft", () => 
   }
 });
 
-test("database migrations upgrade legacy motion payloads before motion list and show run", () => {
+test("pre-0.3.0 database ledgers require reinitialization instead of repair migration", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-migrate-"));
   const stateDir = path.join(tempDir, ".exo");
   const dbPath = path.join(stateDir, "exo.db");
-  const legacyMotionId = "be872300-11cb-4abf-bb11-f96c89b0f3d8";
 
   fs.mkdirSync(stateDir, { recursive: true });
 
@@ -1221,10 +1220,11 @@ test("database migrations upgrade legacy motion payloads before motion list and 
       updated_at TEXT NOT NULL,
       payload_json TEXT NOT NULL
     );
+    PRAGMA user_version = 8;
   `);
 
   const legacyMotion = {
-    id: legacyMotionId,
+    id: "be872300-11cb-4abf-bb11-f96c89b0f3d8",
     createdAt: "2026-05-26T12:00:00.000Z",
     updatedAt: "2026-05-26T12:00:00.000Z",
     status: "draft",
@@ -1301,47 +1301,14 @@ test("database migrations upgrade legacy motion payloads before motion list and 
   database.close();
 
   try {
-    const listed = JSON.parse(
-      execFileSync("node", [cliPath, "motion", "list", "--json"], {
+    assert.throws(
+      () => execFileSync("node", [cliPath, "motion", "list", "--json"], {
         cwd: tempDir,
-        encoding: "utf8"
-      })
+        encoding: "utf8",
+        stdio: "pipe",
+      }),
+      /reinitialize required/i,
     );
-
-    assert.equal(listed.length, 1);
-    assert.equal(listed[0].id, legacyMotionId);
-    assert.match(listed[0].name, generatedMotionNamePattern);
-    assert.notEqual(listed[0].name, "Example Motion");
-    assert.equal(listed[0].premise.status, "missing");
-    assert.deepEqual(listed[0].signals, []);
-
-    const shown = JSON.parse(
-      execFileSync("node", [cliPath, "motion", "show", legacyMotionId, "--json"], {
-        cwd: tempDir,
-        encoding: "utf8"
-      })
-    );
-
-    assert.equal(shown.id, legacyMotionId);
-    assert.match(shown.name, generatedMotionNamePattern);
-    assert.equal(shown.premise.status, "missing");
-    assert.ok(
-      shown.nextSteps.some((step) => /premise/i.test(step)),
-      "expected migrated motion to recompute next steps"
-    );
-
-    const migratedDb = new DatabaseSync(dbPath);
-    const versionRow = migratedDb.prepare("PRAGMA user_version").get();
-    const migratedRow = migratedDb.prepare("SELECT payload_json FROM motions WHERE id = ?").get(legacyMotionId);
-    migratedDb.close();
-
-    assert.equal(versionRow.user_version, 8);
-
-    const migratedPayload = JSON.parse(migratedRow.payload_json);
-    assert.match(migratedPayload.name, generatedMotionNamePattern);
-    assert.equal(migratedPayload.premise.status, "missing");
-    assert.ok(Array.isArray(migratedPayload.audienceHypotheses));
-    assert.ok(Array.isArray(migratedPayload.signals));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -15453,9 +15420,12 @@ test("CLI help explains agent-safe usage and profile gating", () => {
   assert.match(nextHelp, /strongest governed next move/i);
 });
 
-test("what-is-this returns machine-readable orientation for agents", () => {
+test("what-is-this returns machine-readable orientation for agents", (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-what-is-this-"));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+
   const plainOutput = execFileSync("node", [cliPath, "what-is-this"], {
-    cwd: repoRoot,
+    cwd: tempDir,
     encoding: "utf8"
   });
   assert.match(plainOutput, /Current call:/);
@@ -15463,7 +15433,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   assert.doesNotMatch(plainOutput, /Agent Start Here|Guide The Agent|Current Commands|Operating Rules/);
 
   const output = execFileSync("node", [cliPath, "what-is-this", "--json"], {
-    cwd: repoRoot,
+    cwd: tempDir,
     encoding: "utf8"
   });
 
@@ -15625,7 +15595,7 @@ test("what-is-this returns machine-readable orientation for agents", () => {
   );
   assert.match(
     about.operatorInterface.currentCall.nextMove,
-    /motion|browser|company/i,
+    /motion|browser|company|onboarding|state|install/i,
     "expected operator interface to provide a next move"
   );
   assert.ok(
@@ -15689,6 +15659,9 @@ test("what-is-this returns machine-readable orientation for agents", () => {
       "continue-motion",
       "activate-motion",
       "create-motion",
+      "choose-install-scope",
+      "configure-execution-user",
+      "configure-execution-connectors",
       "prepare-browser-work",
       "manage-companies"
     ].includes(about.agentUsage.recommendedPath.mode),
