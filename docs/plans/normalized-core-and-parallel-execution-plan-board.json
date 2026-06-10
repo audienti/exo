@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T18:38:26Z"
+    "updatedAt": "2026-06-10T20:12:43Z"
   },
   "tasks": [
     {
@@ -378,7 +378,7 @@
     {
       "id": "T08",
       "title": "Flip execution write paths to rows and events",
-      "status": "running",
+      "status": "done",
       "priority": 1,
       "dependsOn": [
         "T07",
@@ -406,16 +406,22 @@
         "npm run check",
         "npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Rewired execution mutators for touches, drafts, draft sends, cadence, prospect add/update, packet claims, packet completions, signal matches, action results, inbound transitions, connection-degree reconciliation, motion removal, and config import to persist normalized rows/events instead of replaying targetMap state.",
+        "Narrowed updateMotion to versioned motion-core persistence, added stale-version conflict handling, and added updateMotionWithRetry for motion-core operator paths.",
+        "Added row-backed packet claim/completion behavior, terminal disposition writes with system activity events, cross-motion active-owner holds/releases, and a stale outbound-send ownership guard.",
+        "Updated send handoff writebacks to carry --motion so outbound result writes land on the intended motion branch.",
+        "Expanded regression coverage for stale outbound sends, optimistic version conflicts, retry behavior, terminal packet disposition events, send writeback motion ids, and normalized-state test setup."
+      ],
       "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Started 2026-06-10 after T16 froze disposition and packet review columns."
+      "commit": "455933556ebb495e3654cd798dba3fd0a59b9346",
+      "notes": "Green: node --test test/promote-inbound-person.test.js passed 4/4; npm run check passed; node --test test/action-result.test.js test/cli.test.js test/motion-hydration.test.js passed 100/100; git diff --check passed; final npm test passed 690/690."
     },
     {
       "id": "T09",
       "title": "Convert read paths and hot scans to SQL",
-      "status": "backlog",
+      "status": "ready",
       "priority": 1,
       "dependsOn": [
         "T08"
