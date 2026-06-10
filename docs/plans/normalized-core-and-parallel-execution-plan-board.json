@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T16:59:04Z"
+    "updatedAt": "2026-06-10T17:08:30Z"
   },
   "tasks": [
     {
@@ -165,7 +165,7 @@
     {
       "id": "T04",
       "title": "Share merged lane summary writer",
-      "status": "ready",
+      "status": "done",
       "priority": 2,
       "dependsOn": [
         "T03"
@@ -191,16 +191,21 @@
         "npm run check",
         "npm test"
       ],
-      "outputs": [],
-      "attemptCount": 0,
+      "outputs": [
+        "Moved mergeLanePassSummaries into src/lib/agent-pass-summary.js and routed both agent run and run-agent-host-pass.js through the shared writer.",
+        "Lane host-pass exits now write agent-last-pass.<lane>.json and rebuild the legacy agent-last-pass.json from all lane summaries under the shared host-state lock.",
+        "Extracted the host-state file lock to src/lib/agent-host-state-lock.js for reuse by host-state mutation and summary refresh.",
+        "Bumped routine artifact version to 2026-06-10-1 and updated generated launchd/cron runners so their shell lock releases immediately after spawning lane workers."
+      ],
+      "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "6dd41536748af1ecf750bb998ebcffbd8c5cf9e0",
+      "notes": "Red: node --test test/agent-host-pass.test.js failed because scheduled-style lane runs left stale agent-last-pass.json in place. Green: node --test test/agent-run.test.js test/agent-host-pass.test.js test/agent-routine.test.js passed. Gate: npm run check and npm test passed with 673 tests."
     },
     {
       "id": "T05",
       "title": "Add consolidated normalized schema baseline",
-      "status": "backlog",
+      "status": "ready",
       "priority": 1,
       "dependsOn": [
         "T01",
