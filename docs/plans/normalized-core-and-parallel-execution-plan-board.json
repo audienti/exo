@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T16:36:32Z"
+    "updatedAt": "2026-06-10T16:50:47Z"
   },
   "tasks": [
     {
@@ -92,7 +92,7 @@
     {
       "id": "T02",
       "title": "Make exo next reuse lazy description",
-      "status": "ready",
+      "status": "done",
       "priority": 2,
       "dependsOn": [],
       "ownerLane": "controller",
@@ -113,16 +113,21 @@
         "npm test",
         "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo node ./src/cli/index.js next --json"
       ],
-      "outputs": [],
-      "attemptCount": 0,
+      "outputs": [
+        "buildNextView now reuses a provided description and computes describeExo lazily only for fallback paths.",
+        "exo next passes its prebuilt description into buildNextView.",
+        "Motion fallback uses a lightweight targeting pass for non-targeting-ready motions and preserves the exact live JSON output.",
+        "Live EXO_STATE_DIR baseline best 1017ms; after best 232ms; 77 percent reduction; output byte-for-byte unchanged against /tmp/exo-next-before-t02.json."
+      ],
+      "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "74cb746976066a8bf60d73f6a4785da0803b9394",
+      "notes": "Red: node --test test/build-next-view.test.js failed because fallback ignored the provided description; node --test test/evaluate-motion-targeting.test.js failed because unrelated companies were parsed before filtering. Green: focused tests passed. Gate: npm run check and npm test passed with 669 tests."
     },
     {
       "id": "T03",
       "title": "Move lane-lock ownership into host pass",
-      "status": "backlog",
+      "status": "ready",
       "priority": 1,
       "dependsOn": [
         "T01"
