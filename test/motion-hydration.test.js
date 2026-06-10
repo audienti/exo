@@ -12,13 +12,22 @@ import {
   findOrCreateCompany,
   getLocalDatabase,
   insertMotion,
+  listActivityEvents,
+  MotionVersionConflictError,
   resolvePersonIdentity,
+  updateMotion,
+  updateMotionWithRetry,
   upsertEmployment,
   upsertMotionAccount,
   upsertProspect,
   upsertProspectDraft,
   upsertSignalMatch,
 } from "../src/db/database.js";
+import { claimMotionProspectPacket } from "../src/core/claim-motion-prospect-packet.js";
+import { claimMotionTargetAccountPacket } from "../src/core/claim-target-account-packet.js";
+import { completeMotionProspectPacket } from "../src/core/complete-motion-prospect-packet.js";
+import { completeMotionTargetAccountPacket } from "../src/core/complete-target-account-packet.js";
+import { recordMotionProspect } from "../src/core/record-prospect.js";
 import {
   motionCoreSchema,
   motionSchema,
@@ -182,6 +191,139 @@ test("motion rows store core only and hydrate a legacy targetMap view from norma
   });
 });
 
+test("motion core updates reject stale versions and preserve the winning update", () => {
+  withIsolatedExoState(() => {
+    const motion = insertMotion(buildMotionView());
+    const copyA = findMotionById(motion.id);
+    const copyB = findMotionById(motion.id);
+
+    const storedA = updateMotion({
+      ...copyA,
+      status: "paused",
+      updatedAt: "2026-06-10T12:01:00.000Z",
+    });
+    assert.equal(storedA.version, 2);
+    assert.equal(storedA.status, "paused");
+
+    assert.throws(
+      () => updateMotion({
+        ...copyB,
+        status: "archived",
+        updatedAt: "2026-06-10T12:02:00.000Z",
+      }),
+      MotionVersionConflictError
+    );
+
+    const stored = findMotionById(motion.id);
+    assert.equal(stored.status, "paused");
+    assert.equal(stored.version, 2);
+  });
+});
+
+test("motion core retry helper reloads after a version conflict", () => {
+  withIsolatedExoState(() => {
+    const motion = insertMotion(buildMotionView());
+    let attempts = 0;
+
+    const stored = updateMotionWithRetry(motion.id, (current) => {
+      attempts += 1;
+      if (attempts === 1) {
+        updateMotion({
+          ...current,
+          status: "paused",
+          updatedAt: "2026-06-10T12:01:00.000Z",
+        });
+      }
+      return {
+        ...current,
+        status: "archived",
+        updatedAt: "2026-06-10T12:02:00.000Z",
+      };
+    });
+
+    assert.equal(attempts, 2);
+    assert.equal(stored.status, "archived");
+    assert.equal(stored.version, 3);
+  });
+});
+
+test("packet completion writes terminal dispositions and system events to normalized rows", () => {
+  withIsolatedExoState(() => {
+    const motion = insertMotion(buildMotionView());
+    const accountCompany = buildFullCompany(findOrCreateCompany({
+      id: "company-account-terminal",
+      name: "Account Terminal Co",
+      domain: "account-terminal.example",
+      websiteUrl: "https://account-terminal.example",
+    }), motion.id);
+    const claimedAccountMotion = claimMotionTargetAccountPacket(motion, accountCompany, {
+      workerLabel: "account-worker",
+    });
+
+    completeMotionTargetAccountPacket(claimedAccountMotion, accountCompany, {
+      workerLabel: "account-worker",
+      nextStatus: "suppressed",
+      notes: "No longer a target.",
+    });
+
+    const accountRow = getLocalDatabase()
+      .prepare("SELECT * FROM motion_accounts WHERE motion_id = ? AND company_id = ?")
+      .get(motion.id, accountCompany.id);
+    assert.equal(accountRow.queue_status, "suppressed");
+    assert.equal(accountRow.disposition, "no_longer_target");
+    assert.equal(accountRow.packet_status, null);
+    assert.equal(accountRow.packet_claimed_by, null);
+    assert.equal(
+      listActivityEvents({ motionId: motion.id, companyId: accountCompany.id })
+        .filter((event) => event.kind === "system" && event.payload?.subject === "account")
+        .length,
+      1
+    );
+
+    const prospectCompany = buildFullCompany(findOrCreateCompany({
+      id: "company-prospect-terminal",
+      name: "Prospect Terminal Co",
+      domain: "prospect-terminal.example",
+      websiteUrl: "https://prospect-terminal.example",
+    }), motion.id);
+    const prospectMotion = recordMotionProspect(findMotionById(motion.id), prospectCompany, {
+      name: "Pat Packet",
+      title: "VP Sales",
+      linkedinProfileUrl: "https://www.linkedin.com/in/pat-packet",
+      whyRelevant: "Owns packet completion proof.",
+    });
+    const prospect = prospectMotion.targetMap.accounts
+      .find((account) => account.companyId === prospectCompany.id)
+      ?.prospects[0];
+    assert.ok(prospect);
+    const claimedProspectMotion = claimMotionProspectPacket(prospectMotion, prospectCompany, {
+      prospectId: prospect.id,
+      workerLabel: "prospect-worker",
+    });
+
+    completeMotionProspectPacket(claimedProspectMotion, prospectCompany, {
+      prospectId: prospect.id,
+      workerLabel: "prospect-worker",
+      nextStatus: "exhausted",
+      notes: "No viable path remains.",
+    });
+
+    const prospectRow = getLocalDatabase()
+      .prepare("SELECT * FROM prospects WHERE id = ?")
+      .get(prospect.id);
+    assert.equal(prospectRow.queue_status, "exhausted");
+    assert.equal(prospectRow.disposition, "exhausted");
+    assert.equal(prospectRow.packet_status, null);
+    assert.equal(prospectRow.packet_claimed_by, null);
+    assert.equal(
+      listActivityEvents({ prospectId: prospect.id })
+        .filter((event) => event.kind === "system" && event.payload?.subject === "prospect")
+        .length,
+      1
+    );
+  });
+});
+
 function buildMotionView() {
   const now = "2026-06-10T12:00:00.000Z";
   return motionViewSchema.parse({
@@ -234,6 +376,21 @@ function buildMotionView() {
     engagementProfileAssignment: null,
     engagementUserAssignment: null,
   });
+}
+
+/**
+ * @param {any} company
+ * @param {string} motionId
+ */
+function buildFullCompany(company, motionId) {
+  return {
+    ...company,
+    notes: company.notes ?? null,
+    tags: company.tags ?? [],
+    motionIds: company.motionIds ?? [motionId],
+    engagementProfileAssignment: company.engagementProfileAssignment ?? null,
+    engagementUserAssignment: company.engagementUserAssignment ?? null,
+  };
 }
 
 /**

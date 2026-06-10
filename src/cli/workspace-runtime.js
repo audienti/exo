@@ -279,11 +279,10 @@ function runClaimTargetAccountPacketAction(action) {
     throw new Error(`Motion not found: ${action.motionId}`);
   }
 
-  const updatedMotion = claimMotionTargetAccountPacket(rawMotion, rawCompany, {
+  const storedMotion = claimMotionTargetAccountPacket(rawMotion, rawCompany, {
     workerLabel: action.workerLabel,
     notes: action.notes ?? null,
   });
-  const storedMotion = updateMotion(updatedMotion);
 
   return {
     message: `Claimed ${rawCompany.name}'s account packet on ${storedMotion.name}.`,
@@ -308,12 +307,11 @@ function runClaimMotionProspectPacketAction(action) {
     throw new Error(`Motion not found: ${action.motionId}`);
   }
 
-  const updatedMotion = claimMotionProspectPacket(rawMotion, rawCompany, {
+  const storedMotion = claimMotionProspectPacket(rawMotion, rawCompany, {
     prospectId: action.prospectId,
     workerLabel: action.workerLabel,
     notes: action.notes ?? null,
   });
-  const storedMotion = updateMotion(updatedMotion);
 
   return {
     message: `Claimed the prospect packet on ${storedMotion.name}.`,

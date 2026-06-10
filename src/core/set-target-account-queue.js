@@ -3,6 +3,11 @@
 import { targetAccountSchema } from "../schema/target-account.js";
 import { applyManualTargetAccountQueueState, isMotionQueueStatus } from "../lib/motion-queue.js";
 import {
+  findMotionById,
+  setAccountDisposition,
+  upsertMotionAccount,
+} from "../db/database.js";
+import {
   finalizeTargetAccountUpdate,
   prepareTargetAccountContext
 } from "./target-account-state.js";
@@ -20,7 +25,7 @@ export function setMotionTargetAccountQueue(rawMotion, rawCompany, input) {
     throw new Error(`Unsupported queue status: ${input.status}`);
   }
 
-  const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
+  const { motion, company, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
   const queuedAccount = applyManualTargetAccountQueueState(baseAccount, {
       status: input.status,
       notes: input.notes
@@ -30,5 +35,50 @@ export function setMotionTargetAccountQueue(rawMotion, rawCompany, input) {
     packetState: input.status === "queued_for_research" ? queuedAccount.packetState ?? null : null
   });
 
-  return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  const updatedMotion = finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  const motionAccount = upsertMotionAccount({
+    id: buildMotionAccountId(motion.id, company.id),
+    motionId: motion.id,
+    companyId: company.id,
+    executionUserId: motion.engagementUserAssignment?.userId ?? null,
+    queueStatus: updatedAccount.queueState?.status ?? input.status,
+    disposition: updatedAccount.disposition,
+    packetStatus: updatedAccount.packetStatus,
+    lastResearchAt: updatedAccount.lastResearchAt,
+    payload: {
+      ...updatedAccount,
+      prospects: undefined,
+      signalMatches: undefined,
+    },
+    now,
+  });
+
+  const terminalDisposition = accountDispositionForQueueStatus(input.status);
+  if (terminalDisposition && motionAccount) {
+    setAccountDisposition(motionAccount.id, {
+      disposition: terminalDisposition,
+      actor: "operator",
+      reason: input.notes ?? null,
+      at: now,
+    });
+  }
+
+  return findMotionById(motion.id) ?? updatedMotion;
+}
+
+/**
+ * @param {string} status
+ */
+function accountDispositionForQueueStatus(status) {
+  if (status === "suppressed") return "no_longer_target";
+  if (status === "exhausted") return "exhausted";
+  return null;
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} companyId
+ */
+function buildMotionAccountId(motionId, companyId) {
+  return `motion-account-${motionId}-${companyId}`;
 }

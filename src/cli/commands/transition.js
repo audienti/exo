@@ -11,8 +11,8 @@ import {
   listCompanies,
   listInboundObservations,
   listMotions,
+  moveProspectToMotionRows,
   updateCompany,
-  updateMotion,
   upsertInboundObservation,
 } from "../../db/database.js";
 
@@ -157,8 +157,10 @@ Rules:
           relatedObservations: related,
         });
         updateCompany(result.company);
-        updateMotion(result.fromMotion);
-        updateMotion(result.toMotion);
+        moveProspectToMotionRows({
+          prospectId: result.prospectId,
+          toMotionId: result.toMotion.id,
+        });
         for (const observation of result.observations) {
           upsertInboundObservation(observation);
         }

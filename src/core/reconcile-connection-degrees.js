@@ -13,7 +13,6 @@ import {
   findCompanyById,
   findMotionById,
   listInboundObservations,
-  updateMotion,
 } from "../db/database.js";
 import { updateMotionProspect } from "./record-prospect.js";
 
@@ -45,8 +44,9 @@ export function reconcileConnectionDegreesFromAccepts() {
       prospectId: observation.prospectId,
       linkedinProfileSnapshot: { connectionDegree: 1 },
     });
-    updateMotion(next);
-    updated.push({ prospectId: observation.prospectId, name: prospect.name, motionId: observation.motionId });
+    if (next) {
+      updated.push({ prospectId: observation.prospectId, name: prospect.name, motionId: observation.motionId });
+    }
   }
 
   return updated;

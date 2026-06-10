@@ -1,8 +1,7 @@
 // @ts-check
 
-import { cadenceStateSchema, prospectSchema, targetAccountSchema } from "../schema/target-account.js";
+import { findMotionById, findProspectById, updateProspectCadence } from "../db/database.js";
 import {
-  finalizeTargetAccountUpdate,
   normalizeNullableString,
   normalizeStringArray,
   prepareTargetAccountContext
@@ -25,7 +24,7 @@ import {
  * }} input
  */
 export function setMotionProspectCadence(rawMotion, rawCompany, input) {
-  const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
+  const { motion, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
   const prospectIndex = baseAccount.prospects.findIndex((prospect) => prospect.id === input.prospectId);
   const normalizedLastTouchAt = normalizeOptionalNullableString(input.lastTouchAt);
   const normalizedNextAction = normalizeOptionalNullableString(input.nextAction);
@@ -36,41 +35,23 @@ export function setMotionProspectCadence(rawMotion, rawCompany, input) {
     throw new Error(`Prospect not found: ${input.prospectId}`);
   }
 
-  const prospects = baseAccount.prospects.map((prospect, index) => {
-    if (index !== prospectIndex) {
-      return prospect;
-    }
+  if (!findProspectById(input.prospectId)) {
+    throw new Error(`Prospect row not found: ${input.prospectId}`);
+  }
 
-    return prospectSchema.parse({
-      ...prospect,
-      cadenceState: cadenceStateSchema.parse({
-        ...prospect.cadenceState,
-        status: "ready",
-        currentStep: input.currentStep ?? prospect.cadenceState.currentStep ?? null,
-        lastTouchChannel: input.lastTouchChannel ?? prospect.cadenceState.lastTouchChannel ?? null,
-        lastTouchOutcome: input.lastTouchOutcome ?? prospect.cadenceState.lastTouchOutcome ?? null,
-        lastTouchAt: normalizedLastTouchAt === undefined ? prospect.cadenceState.lastTouchAt ?? null : normalizedLastTouchAt,
-        nextAction: normalizedNextAction === undefined ? prospect.cadenceState.nextAction ?? null : normalizedNextAction,
-        nextActionDueAt:
-          normalizedNextActionDueAt === undefined ? prospect.cadenceState.nextActionDueAt ?? null : normalizedNextActionDueAt,
-        blockedChannels:
-          input.blockedChannels !== undefined
-            ? normalizeStringArray(input.blockedChannels)
-            : prospect.cadenceState.blockedChannels,
-        requireNewHook: input.requireNewHook ?? prospect.cadenceState.requireNewHook,
-        notes: normalizedNotes === undefined ? prospect.cadenceState.notes ?? null : normalizedNotes,
-        updatedAt: now
-      })
-    });
+  updateProspectCadence(input.prospectId, {
+    currentStep: input.currentStep,
+    lastTouchChannel: input.lastTouchChannel,
+    lastTouchOutcome: input.lastTouchOutcome,
+    lastTouchAt: normalizedLastTouchAt,
+    nextAction: normalizedNextAction,
+    nextActionDueAt: normalizedNextActionDueAt,
+    blockedChannels: input.blockedChannels !== undefined ? normalizeStringArray(input.blockedChannels) : undefined,
+    requireNewHook: input.requireNewHook,
+    notes: normalizedNotes,
   });
 
-  const updatedAccount = targetAccountSchema.parse({
-    ...baseAccount,
-    lastResearchAt: now,
-    prospects
-  });
-
-  return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  return findMotionById(motion.id) ?? motion;
 }
 
 /**

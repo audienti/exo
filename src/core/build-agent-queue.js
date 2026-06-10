@@ -1261,7 +1261,7 @@ function buildSendMessageTask({
     // Run this AFTER the send actually happens — it records the outbound
     // touch (so the timeline shows "Sent"), marks the draft sent, and
     // advances cadence to "wait for a reply before the next step".
-    writeback: writeback ?? `exo actions result --action ${action} --result sent --company ${account.companyId} --prospect ${prospect.id} --surface ${resolvedSurface}`,
+    writeback: writeback ?? `exo actions result --action ${action} --result sent --company ${account.companyId} --prospect ${prospect.id} --motion ${motion.id} --surface ${resolvedSurface}`,
     writebackByTargetUrl,
     unavailableWriteback,
     postSendNextAction,

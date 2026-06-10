@@ -84,6 +84,14 @@ export function upsertMotionAccount(input) {
     ON CONFLICT(motion_id, company_id) DO UPDATE SET
       execution_user_id = excluded.execution_user_id,
       queue_status = excluded.queue_status,
+      packet_claimed_by = CASE
+        WHEN excluded.packet_status = 'claimed' THEN motion_accounts.packet_claimed_by
+        ELSE NULL
+      END,
+      packet_claimed_at = CASE
+        WHEN excluded.packet_status = 'claimed' THEN motion_accounts.packet_claimed_at
+        ELSE NULL
+      END,
       packet_status = excluded.packet_status,
       disposition = excluded.disposition,
       disposition_at = excluded.disposition_at,
@@ -98,7 +106,7 @@ export function upsertMotionAccount(input) {
     companyId: input.companyId,
     executionUserId: input.executionUserId ?? existing?.execution_user_id ?? null,
     queueStatus: input.queueStatus ?? existing?.queue_status ?? "discovered",
-    packetStatus: input.packetStatus ?? existing?.packet_status ?? null,
+    packetStatus: input.packetStatus !== undefined ? input.packetStatus : existing?.packet_status ?? null,
     disposition: input.disposition ?? existing?.disposition ?? "active",
     dispositionAt: input.dispositionAt ?? existing?.disposition_at ?? null,
     dispositionActor: input.dispositionActor ?? existing?.disposition_actor ?? null,
@@ -119,6 +127,17 @@ export function findMotionAccountById(id) {
   const row = getLocalDatabase()
     .prepare("SELECT * FROM motion_accounts WHERE id = ?")
     .get(id);
+  return row ? motionAccountFromRow(row) : null;
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} companyId
+ */
+export function findMotionAccountByMotionAndCompany(motionId, companyId) {
+  const row = getLocalDatabase()
+    .prepare("SELECT * FROM motion_accounts WHERE motion_id = @motionId AND company_id = @companyId")
+    .get({ motionId, companyId });
   return row ? motionAccountFromRow(row) : null;
 }
 

@@ -135,11 +135,32 @@ export function upsertProspectDraft(input) {
  *   approvedByUserId?: string | null,
  *   approvedAt?: string | null,
  *   sentAt?: string | null,
- *   editedByOperator?: boolean
+ *   editedByOperator?: boolean,
+ *   notes?: string | null,
+ *   now?: string
  * }} input
  */
 export function transitionProspectDraftStatus(id, input) {
-  const now = new Date().toISOString();
+  const existing = getLocalDatabase()
+    .prepare("SELECT * FROM prospect_drafts WHERE id = ?")
+    .get(id);
+  if (!existing) return null;
+
+  const now = input.now ?? new Date().toISOString();
+  const payload = parsePayload(existing);
+  const sentAt = input.status === "sent" ? input.sentAt ?? now : existing.sent_at ?? null;
+  const approvedAt = input.approvedAt ?? existing.approved_at ?? null;
+  const nextPayload = {
+    ...payload,
+    status: input.status,
+    editedByOperator: input.editedByOperator ?? fromSqlBoolean(existing.edited_by_operator),
+    approvedByOperator: input.status === "approved" ? true : fromSqlBoolean(existing.approved_by_operator),
+    approvedByUserId: input.approvedByUserId ?? existing.approved_by_user_id ?? null,
+    approvedAt,
+    sentAt,
+    notes: input.notes === undefined ? payload.notes ?? null : input.notes,
+    updatedAt: now,
+  };
   const row = getLocalDatabase()
     .prepare(`
       UPDATE prospect_drafts
@@ -158,7 +179,8 @@ export function transitionProspectDraftStatus(id, input) {
             WHEN @status = 'sent' THEN COALESCE(@sentAt, @updatedAt)
             ELSE sent_at
           END,
-          updated_at = @updatedAt
+          updated_at = @updatedAt,
+          payload_json = @payloadJson
       WHERE id = @id
       RETURNING *
     `)
@@ -170,6 +192,7 @@ export function transitionProspectDraftStatus(id, input) {
       approvedAt: input.approvedAt ?? null,
       sentAt: input.sentAt ?? null,
       updatedAt: now,
+      payloadJson: toPayloadJson(nextPayload),
     });
   return row ? prospectDraftFromRow(row) : null;
 }
@@ -181,6 +204,25 @@ export function findProspectDraftById(id) {
   const row = getLocalDatabase()
     .prepare("SELECT * FROM prospect_drafts WHERE id = ?")
     .get(id);
+  return row ? prospectDraftFromRow(row) : null;
+}
+
+/**
+ * @param {string} prospectId
+ * @param {string} surface
+ */
+export function findActiveProspectDraftBySurface(prospectId, surface) {
+  const row = getLocalDatabase()
+    .prepare(`
+      SELECT *
+      FROM prospect_drafts
+      WHERE prospect_id = @prospectId
+        AND surface = @surface
+        AND status NOT IN ('sent', 'discarded')
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT 1
+    `)
+    .get({ prospectId, surface });
   return row ? prospectDraftFromRow(row) : null;
 }
 

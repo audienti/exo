@@ -100,7 +100,8 @@ export const queueStatusSchema = z.enum([
   "selected",
   "ready",
   "suppressed",
-  "exhausted"
+  "exhausted",
+  "held_cross_motion"
 ]);
 export const dispositionSchema = z.enum(["active", "nurture", "not_a_fit", "no_longer_target", "exhausted"]);
 export const packetStatusSchema = z.enum(["claimed", "submitted", "returned"]);

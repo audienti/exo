@@ -1,11 +1,9 @@
 // @ts-check
 
 import crypto from "node:crypto";
-import { prospectSchema, targetAccountSchema, touchSchema } from "../schema/target-account.js";
-import {
-  finalizeTargetAccountUpdate,
-  prepareTargetAccountContext
-} from "./target-account-state.js";
+import { touchSchema } from "../schema/target-account.js";
+import { appendActivityEvent, findMotionById, findProspectById, updateProspectCadence } from "../db/database.js";
+import { prepareTargetAccountContext } from "./target-account-state.js";
 
 /**
  * @param {unknown} rawMotion
@@ -24,11 +22,16 @@ import {
  * }} input
  */
 export function recordMotionProspectTouch(rawMotion, rawCompany, input) {
-  const { motion, company, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
+  const { motion, company, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
   const index = baseAccount.prospects.findIndex((prospect) => prospect.id === input.prospectId);
 
   if (index === -1) {
     throw new Error(`Prospect not found on ${company.name}: ${input.prospectId}`);
+  }
+  const prospect = baseAccount.prospects[index];
+  const rowProspect = findProspectById(input.prospectId);
+  if (!rowProspect) {
+    throw new Error(`Prospect row not found: ${input.prospectId}`);
   }
 
   const touch = touchSchema.parse({
@@ -44,40 +47,31 @@ export function recordMotionProspectTouch(rawMotion, rawCompany, input) {
     notes: input.notes ?? null
   });
 
-  const prospects = baseAccount.prospects.map((prospect, prospectIndex) => {
-    if (prospectIndex !== index) {
-      return prospect;
-    }
+  appendActivityEvent({
+    id: touch.id,
+    dedupeKey: `touch:${motion.id}:${rowProspect.id}:${touch.id}`,
+    kind: "touch",
+    personId: rowProspect.personId,
+    prospectId: rowProspect.id,
+    motionId: motion.id,
+    companyId: company.id,
+    surface: touch.surface,
+    direction: touch.direction,
+    outcome: touch.outcome,
+    occurredAt: touch.occurredAt,
+    payload: touch,
+  });
 
-    const touches = [...prospect.touches, touch].sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
-    const shouldRefreshLastTouch = !prospect.cadenceState.lastTouchAt || prospect.cadenceState.lastTouchAt <= touch.occurredAt;
-
-    return prospectSchema.parse({
-      ...prospect,
-      touches,
-      cadenceState: {
-        ...prospect.cadenceState,
-        lastTouchChannel: shouldRefreshLastTouch ? deriveCadenceChannel(touch.surface) : prospect.cadenceState.lastTouchChannel,
-        lastTouchOutcome: shouldRefreshLastTouch ? touch.outcome : prospect.cadenceState.lastTouchOutcome,
-        lastTouchAt: shouldRefreshLastTouch ? touch.occurredAt : prospect.cadenceState.lastTouchAt,
-        updatedAt: now
-      }
+  const shouldRefreshLastTouch = !prospect.cadenceState.lastTouchAt || prospect.cadenceState.lastTouchAt <= touch.occurredAt;
+  if (shouldRefreshLastTouch) {
+    updateProspectCadence(rowProspect.id, {
+      lastTouchChannel: deriveCadenceChannel(touch.surface),
+      lastTouchOutcome: touch.outcome,
+      lastTouchAt: touch.occurredAt,
     });
-  });
+  }
 
-  const updatedAccount = targetAccountSchema.parse({
-    ...baseAccount,
-    companyName: company.name,
-    domain: company.domain,
-    websiteUrl: company.websiteUrl,
-    linkedinCompanyUrl: company.linkedinCompanyUrl,
-    companyLogoSourceUrl: company.logoSourceUrl,
-    companyLogoUrl: company.logoUrl,
-    lastResearchAt: now,
-    prospects
-  });
-
-  return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  return findMotionById(motion.id) ?? motion;
 }
 
 /**

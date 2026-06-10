@@ -12,7 +12,13 @@
 
 import crypto from "node:crypto";
 import { prepareTargetAccountContext } from "./target-account-state.js";
-import { prospectSchema, targetAccountSchema } from "../schema/target-account.js";
+import {
+  findActiveProspectDraftBySurface,
+  findMotionById,
+  findProspectById,
+  transitionProspectDraftStatus,
+  upsertProspectDraft,
+} from "../db/database.js";
 import { isSendableDraftStatus } from "../lib/draft-policy.js";
 
 /** linkedin vs email by surface */
@@ -38,49 +44,10 @@ const SURFACE_HAS_SUBJECT = new Set(["email", "in_mail_message"]);
  * @param {{ prospectId: string, surface: string, body: string, subject?: string|null, status?: string, authoredBy?: "agent"|"operator", notes?: string|null }} input
  */
 export function setMotionProspectDraft(rawMotion, rawCompany, input) {
-  return mutateDraft(rawMotion, rawCompany, input.prospectId, (drafts, now) => {
-    const channel = SURFACE_CHANNEL[input.surface] ?? "linkedin";
-    const subject = SURFACE_HAS_SUBJECT.has(input.surface) ? (input.subject ?? null) : null;
-    const status = input.status ?? "ready";
-    const sendReadyAt = isSendableDraftStatus(status) ? now : null;
-    const existing = drafts.find((draft) => draft.surface === input.surface && draft.status !== "sent" && draft.status !== "discarded");
-    if (existing) {
-      return drafts.map((draft) =>
-        draft === existing
-          ? {
-              ...draft,
-              channel,
-              subject,
-              body: input.body,
-              status,
-              authoredBy: input.authoredBy ?? draft.authoredBy ?? "agent",
-              notes: input.notes ?? draft.notes ?? null,
-              approvedAt: sendReadyAt,
-              updatedAt: now,
-            }
-          : draft,
-      );
-    }
-    return [
-      ...drafts,
-      {
-        id: crypto.randomUUID(),
-        surface: input.surface,
-        channel,
-        subject,
-        body: input.body,
-        status,
-        authoredBy: input.authoredBy ?? "agent",
-        editedByOperator: false,
-        approvedByOperator: false,
-        createdAt: now,
-        updatedAt: now,
-        approvedAt: sendReadyAt,
-        sentAt: null,
-        notes: input.notes ?? null,
-      },
-    ];
+  const { motion } = writeProspectDraft(rawMotion, rawCompany, input, {
+    defaultAuthoredBy: input.authoredBy ?? "agent",
   });
+  return motion;
 }
 
 /**
@@ -92,51 +59,26 @@ export function setMotionProspectDraft(rawMotion, rawCompany, input) {
  * @param {{ prospectId: string, surface: string, body: string, subject?: string|null, authoredBy?: "agent"|"operator" }} input
  */
 export function approveMotionProspectDraft(rawMotion, rawCompany, input) {
-  return mutateDraft(rawMotion, rawCompany, input.prospectId, (drafts, now) => {
-    const channel = SURFACE_CHANNEL[input.surface] ?? "linkedin";
-    const subject = SURFACE_HAS_SUBJECT.has(input.surface) ? (input.subject ?? null) : null;
-    const existing = drafts.find((draft) => draft.surface === input.surface && draft.status !== "sent" && draft.status !== "discarded");
-    if (existing) {
-      return drafts.map((draft) =>
-        draft === existing
-          ? {
-              ...draft,
-              channel,
-              subject,
-              body: input.body,
-              status: "approved",
-              editedByOperator: draft.editedByOperator || existing.body !== input.body || (existing.subject ?? null) !== subject,
-              approvedByOperator: true,
-              approvedAt: now,
-              updatedAt: now,
-            }
-          : draft,
-      );
-    }
-    // Approving with no prior draft creates one straight to approved. Authorship
-    // is whoever actually wrote the text (the caller declares it) — NOT "whoever
-    // approved it". Approval itself is still an operator-controlled send signal.
-    const authoredBy = input.authoredBy === "agent" ? "agent" : input.authoredBy === "operator" ? "operator" : "operator";
-    return [
-      ...drafts,
-      {
-        id: crypto.randomUUID(),
-        surface: input.surface,
-        channel,
-        subject,
-        body: input.body,
-        status: "approved",
-        authoredBy,
-        editedByOperator: authoredBy === "operator",
-        approvedByOperator: true,
-        createdAt: now,
-        updatedAt: now,
-        approvedAt: now,
-        sentAt: null,
-        notes: null,
-      },
-    ];
+  const existing = findActiveProspectDraftBySurface(input.prospectId, input.surface);
+  const subject = SURFACE_HAS_SUBJECT.has(input.surface) ? (input.subject ?? null) : null;
+  // Approving with no prior draft creates one straight to approved. Authorship
+  // is whoever actually wrote the text (the caller declares it) — NOT "whoever
+  // approved it". Approval itself is still an operator-controlled send signal.
+  const authoredBy = input.authoredBy === "agent" ? "agent" : input.authoredBy === "operator" ? "operator" : "operator";
+  const { motion } = writeProspectDraft(rawMotion, rawCompany, {
+    ...input,
+    status: "approved",
+    authoredBy,
+    notes: null,
+  }, {
+    approvedByOperator: true,
+    editedByOperator: Boolean(
+      existing?.editedByOperator
+      || (existing && (existing.body !== input.body || (existing.subject ?? null) !== subject))
+      || (!existing && authoredBy === "operator")
+    ),
   });
+  return motion;
 }
 
 /**
@@ -147,42 +89,90 @@ export function approveMotionProspectDraft(rawMotion, rawCompany, input) {
  * @param {{ prospectId: string, surface: string }} input
  */
 export function markMotionProspectDraftSent(rawMotion, rawCompany, input) {
-  return mutateDraft(rawMotion, rawCompany, input.prospectId, (drafts, now) =>
-    drafts.map((draft) =>
-      draft.surface === input.surface && isSendableDraftStatus(draft.status)
-        ? { ...draft, status: "sent", sentAt: now, updatedAt: now }
-        : draft,
-    ),
-  );
+  const { motion, prospect } = loadDraftContext(rawMotion, rawCompany, input.prospectId);
+  const existing = findActiveProspectDraftBySurface(prospect.id, input.surface);
+  if (existing && isSendableDraftStatus(existing.status)) {
+    transitionProspectDraftStatus(existing.id, { status: "sent" });
+  }
+  return findMotionById(motion.id) ?? motion;
+}
+
+/**
+ * @param {unknown} rawMotion
+ * @param {unknown} rawCompany
+ * @param {{ prospectId: string, surface: string, body: string, subject?: string|null, status?: string, authoredBy?: "agent"|"operator", notes?: string|null }} input
+ * @param {{ approvedByOperator?: boolean, editedByOperator?: boolean, defaultAuthoredBy?: "agent" | "operator" }} options
+ */
+function writeProspectDraft(rawMotion, rawCompany, input, options) {
+  const { motion, prospect, rowProspect } = loadDraftContext(rawMotion, rawCompany, input.prospectId);
+  const now = new Date().toISOString();
+  const channel = SURFACE_CHANNEL[input.surface] ?? "linkedin";
+  const subject = SURFACE_HAS_SUBJECT.has(input.surface) ? (input.subject ?? null) : null;
+  const status = input.status ?? "ready";
+  const sendReadyAt = isSendableDraftStatus(status) ? now : null;
+  const existing = findActiveProspectDraftBySurface(rowProspect.id, input.surface);
+  const id = existing?.id ?? crypto.randomUUID();
+  const authoredBy = input.authoredBy ?? existing?.authoredBy ?? options.defaultAuthoredBy ?? "agent";
+  const editedByOperator = options.editedByOperator ?? existing?.editedByOperator ?? false;
+  const approvedByOperator = options.approvedByOperator ?? existing?.approvedByOperator ?? false;
+
+  upsertProspectDraft({
+    id,
+    prospectId: rowProspect.id,
+    motionId: motion.id,
+    personId: rowProspect.personId,
+    surface: input.surface,
+    channel,
+    status,
+    authoredBy,
+    subject,
+    body: input.body,
+    editedByOperator,
+    approvedByOperator,
+    approvedAt: sendReadyAt,
+    sentAt: existing?.sentAt ?? null,
+    payload: {
+      ...(existing ?? {}),
+      id,
+      surface: input.surface,
+      channel,
+      subject,
+      body: input.body,
+      status,
+      authoredBy,
+      editedByOperator,
+      approvedByOperator,
+      approvedAt: sendReadyAt,
+      sentAt: existing?.sentAt ?? null,
+      notes: input.notes ?? existing?.notes ?? null,
+    },
+    now,
+  });
+
+  return {
+    motion: findMotionById(motion.id) ?? motion,
+    prospect,
+  };
 }
 
 /**
  * @param {unknown} rawMotion
  * @param {unknown} rawCompany
  * @param {string} prospectId
- * @param {(drafts: any[], now: string) => any[]} transform
  */
-function mutateDraft(rawMotion, rawCompany, prospectId, transform) {
-  const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
+function loadDraftContext(rawMotion, rawCompany, prospectId) {
+  const { motion, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
   const index = baseAccount.prospects.findIndex((prospect) => prospect.id === prospectId);
   if (index === -1) {
     throw new Error(`Prospect not found: ${prospectId}`);
   }
-
-  const prospects = baseAccount.prospects.map((prospect, i) =>
-    i === index
-      ? prospectSchema.parse({ ...prospect, drafts: transform(prospect.drafts ?? [], now) })
-      : prospect,
-  );
-  const updatedAccount = targetAccountSchema.parse({ ...baseAccount, prospects });
-  const exists = accounts.some((account) => account.companyId === updatedAccount.companyId);
-  const nextAccounts = exists
-    ? accounts.map((account) => (account.companyId === updatedAccount.companyId ? updatedAccount : account))
-    : [...accounts, updatedAccount];
-
+  const rowProspect = findProspectById(prospectId);
+  if (!rowProspect) {
+    throw new Error(`Prospect row not found: ${prospectId}`);
+  }
   return {
-    ...motion,
-    targetMap: { ...motion.targetMap, accounts: nextAccounts },
-    updatedAt: now,
+    motion,
+    prospect: baseAccount.prospects[index],
+    rowProspect,
   };
 }

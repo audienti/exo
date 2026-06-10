@@ -27,6 +27,22 @@ import {
   toPayloadJson,
 } from "./normalized-utils.js";
 
+export class MotionVersionConflictError extends Error {
+  /**
+   * @param {{ motionId: string, expectedVersion: number, actualVersion?: number | null }} input
+   */
+  constructor(input) {
+    super(
+      `Motion ${input.motionId} was updated concurrently; expected version ${input.expectedVersion}` +
+      `${input.actualVersion ? ` but found ${input.actualVersion}` : ""}.`
+    );
+    this.name = "MotionVersionConflictError";
+    this.motionId = input.motionId;
+    this.expectedVersion = input.expectedVersion;
+    this.actualVersion = input.actualVersion ?? null;
+  }
+}
+
 /**
  * @param {unknown} motion
  * @returns {import("../schema/motion.js").motionViewSchema._type}
@@ -83,31 +99,79 @@ export function updateMotion(motion) {
   const database = getLocalDatabase();
   const view = ensureUniqueGeneratedMotionName(toMotionView(motion), database);
   const core = toMotionCore(view);
+  const expectedVersion = core.version;
+  const nextCore = {
+    ...core,
+    version: expectedVersion + 1,
+  };
 
   runTransaction(database, () => {
-    database.prepare(`
+    const result = database.prepare(`
       UPDATE motions
       SET name = @name,
           status = @status,
           source_url = @sourceUrl,
+          version = @nextVersion,
           schema_version = @schemaVersion,
           updated_at = @updatedAt,
           payload_json = @payloadJson
       WHERE id = @id
+        AND version = @expectedVersion
     `).run({
       id: core.id,
       name: core.name,
       status: core.status,
       sourceUrl: core.offer.sourceUrl,
+      nextVersion: nextCore.version,
+      expectedVersion,
       schemaVersion: NORMALIZED_SCHEMA_VERSION,
       updatedAt: core.updatedAt,
-      payloadJson: toPayloadJson(core),
+      payloadJson: toPayloadJson(nextCore),
     });
 
-    replaceMotionTargetMapRows(view);
+    if (result.changes === 0) {
+      const current = database.prepare("SELECT version FROM motions WHERE id = ?").get(core.id);
+      if (!current) {
+        throw new Error(`Motion not found: ${core.id}`);
+      }
+      throw new MotionVersionConflictError({
+        motionId: core.id,
+        expectedVersion,
+        actualVersion: current.version ?? null,
+      });
+    }
   });
 
   return findMotionById(view.id) ?? view;
+}
+
+/**
+ * @param {string} motionId
+ * @param {(motion: import("../schema/motion.js").motionViewSchema._type) => unknown} buildNextMotion
+ * @param {{ attempts?: number }} [options]
+ * @returns {import("../schema/motion.js").motionViewSchema._type}
+ */
+export function updateMotionWithRetry(motionId, buildNextMotion, options = {}) {
+  const attempts = Math.max(1, options.attempts ?? 3);
+  /** @type {unknown} */
+  let lastConflict = null;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const current = findMotionById(motionId);
+    if (!current) {
+      throw new Error(`Motion not found: ${motionId}`);
+    }
+    try {
+      return updateMotion(buildNextMotion(current));
+    } catch (error) {
+      if (!(error instanceof MotionVersionConflictError)) {
+        throw error;
+      }
+      lastConflict = error;
+    }
+  }
+
+  throw lastConflict;
 }
 
 /**
@@ -187,6 +251,7 @@ function hydrateMotionRow(row) {
   const view = toMotionView({
     ...source,
     id: row.id,
+    version: row.version ?? source.version ?? 1,
     name: row.name,
     status: row.status,
     updatedAt: source.updatedAt ?? row.updated_at,
@@ -232,6 +297,7 @@ function hydrateTargetAccountRow(row) {
   const company = findNormalizedCompanyById(row.company_id);
   const prospects = hydrateProspectsForAccount(row.id, row.company_id);
   const signalMatches = hydrateSignalMatchesForAccount(row.id);
+  const currentPacketState = buildPacketState(row, packetKindForAccountRow(row, payload.packetState), payload.packetState);
 
   return rehydrateTargetAccount({
     ...payload,
@@ -245,11 +311,12 @@ function hydrateTargetAccountRow(row) {
     queueState: {
       ...(payload.queueState ?? {}),
       status: row.queue_status,
+      source: queueStateSourceForAccountRow(row, payload.queueState),
       updatedAt: row.updated_at,
     },
     disposition: row.disposition ?? "active",
     packetStatus: row.packet_status ?? null,
-    packetState: payload.packetState ?? buildPacketState(row, "company_research"),
+    packetState: currentPacketState ?? payload.packetState ?? null,
     lastResearchAt: row.last_research_at ?? null,
     notes: payload.notes ?? null,
   });
@@ -284,6 +351,7 @@ function hydrateProspectRow(row, companyId) {
   const linkedinProfileUrl =
     payload.linkedinProfileUrl
     ?? buildLinkedinProfileUrlFromPublicId(person?.linkedinPublicId ?? null);
+  const currentPacketState = buildPacketState(row, "prospect_research", payload.packetState);
 
   return {
     ...payload,
@@ -291,7 +359,7 @@ function hydrateProspectRow(row, companyId) {
     name: person?.name ?? payload.name ?? "Unknown prospect",
     title: payload.title ?? employment?.title ?? "Unknown role",
     linkedinProfileUrl,
-    email: person?.primaryEmail ?? payload.email ?? null,
+    email: payload.email ?? person?.primaryEmail ?? null,
     sourceUrl: payload.sourceUrl ?? linkedinProfileUrl ?? null,
     observedAt: payload.observedAt ?? row.created_at,
     whyRelevant: payload.whyRelevant ?? "Selected for this motion.",
@@ -303,7 +371,7 @@ function hydrateProspectRow(row, companyId) {
     },
     disposition: row.disposition ?? "active",
     packetStatus: row.packet_status ?? null,
-    packetState: payload.packetState ?? buildPacketState(row, "prospect_research"),
+    packetState: currentPacketState ?? payload.packetState ?? null,
     cadenceState: {
       ...(payload.cadenceState ?? {}),
       status: row.cadence_status,
@@ -742,17 +810,54 @@ function unwrapPayloadEnvelope(payload) {
 /**
  * @param {any} row
  * @param {"company_research" | "prospect_selection" | "prospect_research"} kind
+ * @param {unknown} [payloadPacketState]
  */
-function buildPacketState(row, kind) {
+function buildPacketState(row, kind, payloadPacketState = null) {
   if (row.packet_status !== "claimed" && !row.packet_claimed_by && !row.packet_claimed_at) return null;
+  const payload = payloadPacketState && typeof payloadPacketState === "object" && !Array.isArray(payloadPacketState)
+    ? payloadPacketState
+    : {};
   return {
     kind,
     status: "claimed",
-    workerLabel: row.packet_claimed_by ?? null,
-    claimedAt: row.packet_claimed_at ?? null,
+    workerLabel: row.packet_claimed_by ?? payload.workerLabel ?? null,
+    claimedAt: row.packet_claimed_at ?? payload.claimedAt ?? null,
     completedAt: null,
-    notes: null,
+    notes: payload.notes ?? null,
   };
+}
+
+/**
+ * @param {any} row
+ * @param {unknown} payloadPacketState
+ * @returns {"company_research" | "prospect_selection"}
+ */
+function packetKindForAccountRow(row, payloadPacketState) {
+  if (
+    row.packet_status === "claimed"
+    && payloadPacketState
+    && typeof payloadPacketState === "object"
+    && !Array.isArray(payloadPacketState)
+    && (payloadPacketState.kind === "company_research" || payloadPacketState.kind === "prospect_selection")
+  ) {
+    return payloadPacketState.kind;
+  }
+  return row.queue_status === "researched" ? "prospect_selection" : "company_research";
+}
+
+/**
+ * @param {any} row
+ * @param {unknown} payloadQueueState
+ */
+function queueStateSourceForAccountRow(row, payloadQueueState) {
+  if (["queued_for_research", "suppressed", "exhausted"].includes(row.queue_status)) {
+    return "manual";
+  }
+  if (payloadQueueState && typeof payloadQueueState === "object" && !Array.isArray(payloadQueueState)) {
+    const source = payloadQueueState.source;
+    if (typeof source === "string" && source.length) return source;
+  }
+  return "derived";
 }
 
 /**

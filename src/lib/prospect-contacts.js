@@ -79,7 +79,8 @@ export function buildLinkedinProfileUrlFromPublicId(value) {
  */
 export function withDerivedProspectContacts(prospect) {
   const explicitPoints = (Array.isArray(prospect.contactPoints) ? prospect.contactPoints : [])
-    .filter((point) => point?.source !== "legacy-email-field" && point?.source !== "legacy-linkedin-field");
+    .filter((point) => point?.source !== "legacy-email-field" && point?.source !== "legacy-linkedin-field")
+    .filter((point) => !isStaleDerivedEmailPoint(point, prospect.email));
   const legacyPoints = [];
 
   if (prospect.linkedinProfileUrl) {
@@ -129,9 +130,22 @@ export function withDerivedProspectContacts(prospect) {
   return {
     ...prospect,
     contactPoints,
-    email: bestEmail?.value ?? prospect.email ?? null,
+    email: prospect.email ?? bestEmail?.value ?? null,
     linkedinProfileUrl: bestLinkedin?.value ?? prospect.linkedinProfileUrl ?? null
   };
+}
+
+/**
+ * @param {Record<string, any>} point
+ * @param {string | null | undefined} email
+ */
+function isStaleDerivedEmailPoint(point, email) {
+  return Boolean(
+    email
+    && point?.kind === EMAIL_KIND
+    && (point.source === "motion-view" || point.source === "motion-prospect")
+    && normalizeContactValue(EMAIL_KIND, point.value) !== normalizeContactValue(EMAIL_KIND, email)
+  );
 }
 
 /**

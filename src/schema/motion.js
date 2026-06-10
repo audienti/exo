@@ -22,6 +22,7 @@ const targetMapSchema = z.object({
 
 export const motionCoreSchema = z.object({
   id: z.string().min(1),
+  version: z.number().int().positive().default(1),
   name: z.string().trim().min(1),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),

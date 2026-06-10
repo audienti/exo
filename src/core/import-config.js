@@ -14,7 +14,7 @@ import {
   insertUser,
   updateBrowserProfile,
   updateCompany,
-  updateMotion,
+  updateMotionWithRetry,
   updateUser
 } from "../db/database.js";
 import { browserProfileSchema } from "../schema/browser-profile.js";
@@ -43,7 +43,11 @@ export function importConfigBundle(rawConfigBundle) {
     const motion = motionSchema.parse(rawMotion);
 
     if (findMotionById(motion.id)) {
-      updateMotion(motion);
+      updateMotionWithRetry(motion.id, (currentMotion) => ({
+        ...motion,
+        version: currentMotion.version,
+        targetMap: currentMotion.targetMap,
+      }));
       updatedMotions += 1;
       continue;
     }

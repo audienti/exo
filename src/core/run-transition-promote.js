@@ -11,13 +11,13 @@ import { warmImageProxies } from "../lib/image-proxy.js";
 import { normalizeResolvableCompanyName } from "../lib/company-name.js";
 import {
   findInboundObservationById,
+  findCompanyById,
   findMotionById,
   findUserById,
   insertCompany,
   listCompanies,
   listInboundObservations,
   updateCompany,
-  updateMotion,
   upsertInboundObservation,
 } from "../db/database.js";
 
@@ -67,12 +67,11 @@ export async function runTransitionPromote(input) {
     resolvedCompanyProfile,
   });
 
-  if (result.companyCreated) {
+  if (result.companyCreated && !findCompanyById(result.company.id)) {
     insertCompany(result.company);
   } else {
     updateCompany(result.company);
   }
-  updateMotion(result.motion);
   for (const observation of result.observations) {
     upsertInboundObservation(observation);
   }

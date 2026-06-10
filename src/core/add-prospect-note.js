@@ -10,7 +10,11 @@
 
 import crypto from "node:crypto";
 import { prepareTargetAccountContext } from "./target-account-state.js";
-import { prospectSchema, targetAccountSchema } from "../schema/target-account.js";
+import {
+  appendActivityEvent,
+  findMotionById,
+  findProspectById,
+} from "../db/database.js";
 
 /**
  * @param {unknown} rawMotion
@@ -19,10 +23,14 @@ import { prospectSchema, targetAccountSchema } from "../schema/target-account.js
  * @returns {{ motion: any, note: { id: string, kind: "note"|"steer"|"system", body: string, author: string|null, createdAt: string } }}
  */
 export function addMotionProspectTimelineNote(rawMotion, rawCompany, input) {
-  const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
+  const { motion, company, now, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
   const index = baseAccount.prospects.findIndex((prospect) => prospect.id === input.prospectId);
   if (index === -1) {
     throw new Error(`Prospect not found: ${input.prospectId}`);
+  }
+  const rowProspect = findProspectById(input.prospectId);
+  if (!rowProspect) {
+    throw new Error(`Prospect row not found: ${input.prospectId}`);
   }
 
   const note = {
@@ -33,19 +41,23 @@ export function addMotionProspectTimelineNote(rawMotion, rawCompany, input) {
     createdAt: now,
   };
 
-  const prospects = baseAccount.prospects.map((prospect, i) =>
-    i === index
-      ? prospectSchema.parse({ ...prospect, timelineNotes: [...(prospect.timelineNotes ?? []), note] })
-      : prospect,
-  );
-  const updatedAccount = targetAccountSchema.parse({ ...baseAccount, prospects });
-  const exists = accounts.some((account) => account.companyId === updatedAccount.companyId);
-  const nextAccounts = exists
-    ? accounts.map((account) => (account.companyId === updatedAccount.companyId ? updatedAccount : account))
-    : [...accounts, updatedAccount];
+  appendActivityEvent({
+    id: note.id,
+    dedupeKey: `timeline-note:${motion.id}:${rowProspect.id}:${note.id}`,
+    kind: "timeline_note",
+    personId: rowProspect.personId,
+    prospectId: rowProspect.id,
+    motionId: motion.id,
+    companyId: company.id,
+    surface: null,
+    direction: "system",
+    outcome: null,
+    occurredAt: note.createdAt,
+    payload: note,
+  });
 
   return {
-    motion: { ...motion, targetMap: { ...motion.targetMap, accounts: nextAccounts }, updatedAt: now },
+    motion: findMotionById(motion.id) ?? motion,
     note,
   };
 }

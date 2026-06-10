@@ -33,7 +33,11 @@ import {
  */
 export function upsertProspect(input) {
   const now = input.now ?? new Date().toISOString();
-  const existing = getLocalDatabase()
+  const database = getLocalDatabase();
+  const existingById = input.id
+    ? database.prepare("SELECT * FROM prospects WHERE id = ?").get(input.id)
+    : null;
+  const existing = existingById ?? database
     .prepare("SELECT * FROM prospects WHERE motion_id = @motionId AND person_id = @personId")
     .get({
       motionId: input.motionId,
@@ -49,8 +53,64 @@ export function upsertProspect(input) {
     personId: input.personId,
     motionAccountId: input.motionAccountId,
   };
+  const params = {
+    id,
+    motionId: input.motionId,
+    companyId: input.companyId,
+    personId: input.personId,
+    motionAccountId: input.motionAccountId,
+    queueStatus: input.queueStatus ?? existing?.queue_status ?? "discovered",
+    packetStatus: input.packetStatus !== undefined ? input.packetStatus : existing?.packet_status ?? null,
+    disposition: input.disposition ?? existing?.disposition ?? "active",
+    dispositionAt: input.dispositionAt ?? existing?.disposition_at ?? null,
+    dispositionActor: input.dispositionActor ?? existing?.disposition_actor ?? null,
+    cadenceStatus: input.cadenceStatus ?? existing?.cadence_status ?? "pending",
+    cadenceCurrentStep: input.cadenceCurrentStep ?? existing?.cadence_current_step ?? null,
+    cadenceNextActionDueAt: input.cadenceNextActionDueAt ?? existing?.cadence_next_action_due_at ?? null,
+    cadenceLastTouchAt: input.cadenceLastTouchAt ?? existing?.cadence_last_touch_at ?? null,
+    cadenceLastTouchOutcome: input.cadenceLastTouchOutcome ?? existing?.cadence_last_touch_outcome ?? null,
+    schemaVersion: NORMALIZED_SCHEMA_VERSION,
+    createdAt: existing?.created_at ?? now,
+    updatedAt: now,
+    payloadJson: toPayloadJson(payload),
+  };
 
-  getLocalDatabase().prepare(`
+  if (existingById) {
+    const row = database.prepare(`
+      UPDATE prospects
+      SET motion_id = @motionId,
+          company_id = @companyId,
+          person_id = @personId,
+          motion_account_id = @motionAccountId,
+          queue_status = @queueStatus,
+          cadence_status = @cadenceStatus,
+          cadence_current_step = @cadenceCurrentStep,
+          cadence_next_action_due_at = @cadenceNextActionDueAt,
+          cadence_last_touch_at = @cadenceLastTouchAt,
+          cadence_last_touch_outcome = @cadenceLastTouchOutcome,
+          packet_claimed_by = CASE
+            WHEN @packetStatus = 'claimed' THEN packet_claimed_by
+            ELSE NULL
+          END,
+          packet_claimed_at = CASE
+            WHEN @packetStatus = 'claimed' THEN packet_claimed_at
+            ELSE NULL
+          END,
+          packet_status = @packetStatus,
+          disposition = @disposition,
+          disposition_at = @dispositionAt,
+          disposition_actor = @dispositionActor,
+          schema_version = @schemaVersion,
+          created_at = @createdAt,
+          updated_at = @updatedAt,
+          payload_json = @payloadJson
+      WHERE id = @id
+      RETURNING *
+    `).get(params);
+    return row ? prospectFromRow(row) : null;
+  }
+
+  database.prepare(`
     INSERT INTO prospects (
       id,
       motion_id,
@@ -106,6 +166,14 @@ export function upsertProspect(input) {
       cadence_next_action_due_at = excluded.cadence_next_action_due_at,
       cadence_last_touch_at = excluded.cadence_last_touch_at,
       cadence_last_touch_outcome = excluded.cadence_last_touch_outcome,
+      packet_claimed_by = CASE
+        WHEN excluded.packet_status = 'claimed' THEN prospects.packet_claimed_by
+        ELSE NULL
+      END,
+      packet_claimed_at = CASE
+        WHEN excluded.packet_status = 'claimed' THEN prospects.packet_claimed_at
+        ELSE NULL
+      END,
       packet_status = excluded.packet_status,
       disposition = excluded.disposition,
       disposition_at = excluded.disposition_at,
@@ -113,27 +181,7 @@ export function upsertProspect(input) {
       schema_version = excluded.schema_version,
       updated_at = excluded.updated_at,
       payload_json = excluded.payload_json
-  `).run({
-    id,
-    motionId: input.motionId,
-    companyId: input.companyId,
-    personId: input.personId,
-    motionAccountId: input.motionAccountId,
-    queueStatus: input.queueStatus ?? existing?.queue_status ?? "discovered",
-    packetStatus: input.packetStatus ?? existing?.packet_status ?? null,
-    disposition: input.disposition ?? existing?.disposition ?? "active",
-    dispositionAt: input.dispositionAt ?? existing?.disposition_at ?? null,
-    dispositionActor: input.dispositionActor ?? existing?.disposition_actor ?? null,
-    cadenceStatus: input.cadenceStatus ?? existing?.cadence_status ?? "pending",
-    cadenceCurrentStep: input.cadenceCurrentStep ?? existing?.cadence_current_step ?? null,
-    cadenceNextActionDueAt: input.cadenceNextActionDueAt ?? existing?.cadence_next_action_due_at ?? null,
-    cadenceLastTouchAt: input.cadenceLastTouchAt ?? existing?.cadence_last_touch_at ?? null,
-    cadenceLastTouchOutcome: input.cadenceLastTouchOutcome ?? existing?.cadence_last_touch_outcome ?? null,
-    schemaVersion: NORMALIZED_SCHEMA_VERSION,
-    createdAt: existing?.created_at ?? now,
-    updatedAt: now,
-    payloadJson: toPayloadJson(payload),
-  });
+  `).run(params);
 
   return findProspectById(id);
 }
@@ -145,6 +193,73 @@ export function findProspectById(id) {
   const row = getLocalDatabase()
     .prepare("SELECT * FROM prospects WHERE id = ?")
     .get(id);
+  return row ? prospectFromRow(row) : null;
+}
+
+/**
+ * @param {string} id
+ * @param {{
+ *   currentStep?: string | null,
+ *   lastTouchChannel?: string | null,
+ *   lastTouchOutcome?: string | null,
+ *   lastTouchAt?: string | null,
+ *   nextAction?: string | null,
+ *   nextActionDueAt?: string | null,
+ *   blockedChannels?: string[],
+ *   requireNewHook?: boolean,
+ *   notes?: string | null,
+ *   now?: string
+ * }} input
+ */
+export function updateProspectCadence(id, input) {
+  const database = getLocalDatabase();
+  const existing = database.prepare("SELECT * FROM prospects WHERE id = ?").get(id);
+  if (!existing) return null;
+
+  const now = input.now ?? new Date().toISOString();
+  const payload = parsePayload(existing);
+  const cadenceState = payload.cadenceState && typeof payload.cadenceState === "object"
+    ? payload.cadenceState
+    : {};
+  const nextCadenceState = {
+    ...cadenceState,
+    status: "ready",
+    currentStep: input.currentStep === undefined ? existing.cadence_current_step ?? null : input.currentStep,
+    lastTouchChannel: input.lastTouchChannel === undefined ? cadenceState.lastTouchChannel ?? null : input.lastTouchChannel,
+    lastTouchOutcome: input.lastTouchOutcome === undefined ? existing.cadence_last_touch_outcome ?? null : input.lastTouchOutcome,
+    lastTouchAt: input.lastTouchAt === undefined ? existing.cadence_last_touch_at ?? null : input.lastTouchAt,
+    nextAction: input.nextAction === undefined ? cadenceState.nextAction ?? null : input.nextAction,
+    nextActionDueAt: input.nextActionDueAt === undefined ? existing.cadence_next_action_due_at ?? null : input.nextActionDueAt,
+    blockedChannels: input.blockedChannels === undefined ? cadenceState.blockedChannels ?? [] : input.blockedChannels,
+    requireNewHook: input.requireNewHook === undefined ? cadenceState.requireNewHook ?? false : input.requireNewHook,
+    notes: input.notes === undefined ? cadenceState.notes ?? null : input.notes,
+    updatedAt: now,
+  };
+  const nextPayload = {
+    ...payload,
+    cadenceState: nextCadenceState,
+  };
+
+  const row = database.prepare(`
+    UPDATE prospects
+    SET cadence_status = 'ready',
+        cadence_current_step = @currentStep,
+        cadence_next_action_due_at = @nextActionDueAt,
+        cadence_last_touch_at = @lastTouchAt,
+        cadence_last_touch_outcome = @lastTouchOutcome,
+        updated_at = @updatedAt,
+        payload_json = @payloadJson
+    WHERE id = @id
+    RETURNING *
+  `).get({
+    id,
+    currentStep: nextCadenceState.currentStep,
+    nextActionDueAt: nextCadenceState.nextActionDueAt,
+    lastTouchAt: nextCadenceState.lastTouchAt,
+    lastTouchOutcome: nextCadenceState.lastTouchOutcome,
+    updatedAt: now,
+    payloadJson: toPayloadJson(nextPayload),
+  });
   return row ? prospectFromRow(row) : null;
 }
 
@@ -271,8 +386,83 @@ export function setProspectDisposition(id, input) {
         actor: input.actor,
       },
     });
+    if ((existing.disposition ?? "active") === "active" && input.disposition !== "active") {
+      releaseHeldCrossMotionProspects(database, {
+        personId: existing.person_id,
+        ownerMotionId: existing.motion_id,
+        ownerProspectId: existing.id,
+        actor: input.actor,
+        now,
+      });
+    }
     return row ? prospectFromRow(row) : null;
   });
+}
+
+/**
+ * @param {ReturnType<typeof getLocalDatabase>} database
+ * @param {{
+ *   personId: string,
+ *   ownerMotionId: string,
+ *   ownerProspectId: string,
+ *   actor: "operator" | "agent" | "system",
+ *   now: string
+ * }} input
+ */
+function releaseHeldCrossMotionProspects(database, input) {
+  const rows = database.prepare(`
+    SELECT *
+    FROM prospects
+    WHERE person_id = @personId
+      AND motion_id != @ownerMotionId
+      AND queue_status = 'held_cross_motion'
+      AND disposition = 'active'
+  `).all({
+    personId: input.personId,
+    ownerMotionId: input.ownerMotionId,
+  });
+
+  for (const held of rows) {
+    const payload = parsePayload(held);
+    const queueState = {
+      ...(payload.queueState ?? {}),
+      status: "selected",
+      source: "derived",
+      updatedAt: input.now,
+      notes: null,
+    };
+    delete queueState.crossMotionOwner;
+    database.prepare(`
+      UPDATE prospects
+      SET queue_status = 'selected',
+          updated_at = @updatedAt,
+          payload_json = @payloadJson
+      WHERE id = @id
+    `).run({
+      id: held.id,
+      updatedAt: input.now,
+      payloadJson: toPayloadJson({
+        ...payload,
+        queueState,
+      }),
+    });
+    appendActivityEvent({
+      dedupeKey: `prospect-cross-motion-release:${held.id}:${input.ownerProspectId}:${input.now}`,
+      kind: "system",
+      personId: held.person_id,
+      prospectId: held.id,
+      motionId: held.motion_id,
+      companyId: held.company_id,
+      direction: "system",
+      occurredAt: input.now,
+      payload: {
+        type: "cross_motion_hold_released",
+        ownerProspectId: input.ownerProspectId,
+        ownerMotionId: input.ownerMotionId,
+        actor: input.actor,
+      },
+    });
+  }
 }
 
 /**
@@ -304,6 +494,83 @@ export function listDueProspects(input) {
 }
 
 /**
+ * @param {{
+ *   prospectId: string,
+ *   toMotionId: string,
+ *   now?: string
+ * }} input
+ */
+export function moveProspectToMotionRows(input) {
+  const database = getLocalDatabase();
+  const now = input.now ?? new Date().toISOString();
+  return runTransaction(() => {
+    const prospect = database.prepare("SELECT * FROM prospects WHERE id = ?").get(input.prospectId);
+    if (!prospect) {
+      throw new Error(`Prospect not found: ${input.prospectId}`);
+    }
+    if (prospect.motion_id === input.toMotionId) {
+      return prospectFromRow(prospect);
+    }
+
+    const targetMotion = database.prepare("SELECT * FROM motions WHERE id = ?").get(input.toMotionId);
+    if (!targetMotion) {
+      throw new Error(`Destination motion not found: ${input.toMotionId}`);
+    }
+
+    const motionAccount = ensureMotionAccountForMove(database, {
+      motionId: input.toMotionId,
+      companyId: prospect.company_id,
+      now,
+    });
+
+    const payload = parsePayload(prospect);
+    const moved = database.prepare(`
+      UPDATE prospects
+      SET motion_id = @motionId,
+          motion_account_id = @motionAccountId,
+          updated_at = @updatedAt,
+          payload_json = @payloadJson
+      WHERE id = @id
+      RETURNING *
+    `).get({
+      id: prospect.id,
+      motionId: input.toMotionId,
+      motionAccountId: motionAccount.id,
+      updatedAt: now,
+      payloadJson: toPayloadJson({
+        ...payload,
+        motionId: input.toMotionId,
+        motionAccountId: motionAccount.id,
+      }),
+    });
+
+    database.prepare(`
+      UPDATE prospect_drafts
+      SET motion_id = @motionId,
+          updated_at = @updatedAt
+      WHERE prospect_id = @prospectId
+    `).run({
+      motionId: input.toMotionId,
+      prospectId: prospect.id,
+      updatedAt: now,
+    });
+
+    database.prepare(`
+      UPDATE activity_events
+      SET motion_id = @motionId,
+          company_id = @companyId
+      WHERE prospect_id = @prospectId
+    `).run({
+      motionId: input.toMotionId,
+      companyId: prospect.company_id,
+      prospectId: prospect.id,
+    });
+
+    return moved ? prospectFromRow(moved) : null;
+  });
+}
+
+/**
  * @param {{ personId: string, excludeMotionId?: string | null }} input
  */
 export function findCrossMotionOwner(input) {
@@ -326,6 +593,84 @@ export function findCrossMotionOwner(input) {
       excludeMotionId: input.excludeMotionId ?? null,
     });
   return row ? prospectFromRow(row) : null;
+}
+
+/**
+ * @param {ReturnType<typeof getLocalDatabase>} database
+ * @param {{ motionId: string, companyId: string, now: string }} input
+ */
+function ensureMotionAccountForMove(database, input) {
+  const existing = database.prepare(`
+    SELECT *
+    FROM motion_accounts
+    WHERE motion_id = @motionId
+      AND company_id = @companyId
+  `).get({
+    motionId: input.motionId,
+    companyId: input.companyId,
+  });
+  if (existing) return existing;
+
+  const id = `motion-account-${input.motionId}-${input.companyId}`;
+  database.prepare(`
+    INSERT INTO motion_accounts (
+      id,
+      motion_id,
+      company_id,
+      execution_user_id,
+      queue_status,
+      packet_claimed_by,
+      packet_claimed_at,
+      packet_status,
+      disposition,
+      disposition_at,
+      disposition_actor,
+      last_research_at,
+      schema_version,
+      created_at,
+      updated_at,
+      payload_json
+    )
+    VALUES (
+      @id,
+      @motionId,
+      @companyId,
+      NULL,
+      'selected',
+      NULL,
+      NULL,
+      NULL,
+      'active',
+      NULL,
+      NULL,
+      @lastResearchAt,
+      @schemaVersion,
+      @createdAt,
+      @updatedAt,
+      @payloadJson
+    )
+  `).run({
+    id,
+    motionId: input.motionId,
+    companyId: input.companyId,
+    lastResearchAt: input.now,
+    schemaVersion: NORMALIZED_SCHEMA_VERSION,
+    createdAt: input.now,
+    updatedAt: input.now,
+    payloadJson: toPayloadJson({
+      id,
+      motionId: input.motionId,
+      companyId: input.companyId,
+      queueState: {
+        status: "selected",
+        source: "manual",
+        updatedAt: input.now,
+        notes: null,
+      },
+      lastResearchAt: input.now,
+    }),
+  });
+  return database.prepare("SELECT * FROM motion_accounts WHERE id = ?").get(id);
 }
 
 /**

@@ -52,6 +52,7 @@ export function rehydrateMotion(rawMotion) {
 
   const motion = motionSchema.parse({
     id: source.id,
+    version: Number.isInteger(source.version) && source.version > 0 ? source.version : 1,
     name: buildMotionName({
       explicitName: source.name,
       seed: source.id,

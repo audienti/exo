@@ -668,7 +668,7 @@ Rules:
           personName: options.personName ?? null,
           personTitle: options.personTitle ?? null
         });
-        const storedMotion = updateMotion(updatedMotion);
+        const storedMotion = updatedMotion;
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const result = {
           company,
@@ -856,8 +856,7 @@ Rules:
       const { company, rawMotion } = context;
 
       try {
-        const updatedMotion = recordMotionProspect(rawMotion, company, buildProspectInputFromOptions(options));
-        const storedMotion = updateMotion(updatedMotion);
+        const storedMotion = recordMotionProspect(rawMotion, company, buildProspectInputFromOptions(options));
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const result = {
           company,
@@ -994,11 +993,10 @@ Rules:
       const { company, rawMotion } = context;
 
       try {
-        const updatedMotion = updateMotionProspect(rawMotion, company, {
+        const storedMotion = updateMotionProspect(rawMotion, company, {
           prospectId: options.prospect,
           ...buildProspectInputFromOptions(options)
         });
-        const storedMotion = updateMotion(updatedMotion);
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const storedProspect = account?.prospects.find((prospect) => prospect.id === options.prospect) ?? null;
 
@@ -1099,7 +1097,7 @@ Rules:
           },
         });
 
-        const updatedMotion = updateMotionProspect(rawMotion, company, {
+        const storedMotion = updateMotionProspect(rawMotion, company, {
           prospectId: options.prospect,
           name: payload.displayName ?? undefined,
           title: payload.currentRoleTitle ?? undefined,
@@ -1163,7 +1161,6 @@ Rules:
             : null,
           contactPoints: contactPoints.length ? contactPoints : undefined
         });
-        const storedMotion = updateMotion(updatedMotion);
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const storedProspect = account?.prospects.find((prospect) => prospect.id === options.prospect) ?? null;
         // Warm the freshly-captured avatar through the proxy now, while the
@@ -1300,12 +1297,11 @@ Rules:
       const { company, rawMotion } = context;
 
       try {
-        const updatedMotion = claimMotionProspectPacket(rawMotion, company, {
+        const storedMotion = claimMotionProspectPacket(rawMotion, company, {
           prospectId: options.prospect,
           workerLabel: options.worker,
           notes: options.notes ?? null
         });
-        const storedMotion = updateMotion(updatedMotion);
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
 
@@ -1391,7 +1387,7 @@ Rules:
           nextStatus,
           notes: options.notes ?? null
         });
-        const storedMotion = updateMotion(updatedMotion);
+        const storedMotion = updatedMotion;
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
 
@@ -1459,7 +1455,7 @@ Rules:
             throw new Error(brief.surface.missingReason ?? `Surface ${options.surface} is not currently writeable for this prospect.`);
           }
         }
-        const updated = setMotionProspectDraft(context.rawMotion, context.company, {
+        const stored = setMotionProspectDraft(context.rawMotion, context.company, {
           prospectId: options.prospect,
           surface: options.surface,
           body: options.body,
@@ -1467,7 +1463,6 @@ Rules:
           status: options.status ?? "ready",
           notes: options.notes ?? null,
         });
-        const stored = updateMotion(updated);
         emitDraft(stored, companyId, options.prospect, options.surface, options.json, "Draft stored");
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -1489,13 +1484,12 @@ Rules:
       const context = loadCompanyMotionContext(companyId, options.motion);
       if (!context) return;
       try {
-        const updated = approveMotionProspectDraft(context.rawMotion, context.company, {
+        const stored = approveMotionProspectDraft(context.rawMotion, context.company, {
           prospectId: options.prospect,
           surface: options.surface,
           body: options.body,
           subject: options.subject ?? null,
         });
-        const stored = updateMotion(updated);
         emitDraft(stored, companyId, options.prospect, options.surface, options.json, "Draft approved — queued for send");
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -1515,11 +1509,10 @@ Rules:
       const context = loadCompanyMotionContext(companyId, options.motion);
       if (!context) return;
       try {
-        const updated = markMotionProspectDraftSent(context.rawMotion, context.company, {
+        const stored = markMotionProspectDraftSent(context.rawMotion, context.company, {
           prospectId: options.prospect,
           surface: options.surface,
         });
-        const stored = updateMotion(updated);
         emitDraft(stored, companyId, options.prospect, options.surface, options.json, "Draft marked sent");
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -1639,7 +1632,7 @@ Rules:
       const { company, rawMotion } = context;
 
       try {
-        const updatedMotion = setMotionProspectCadence(rawMotion, company, {
+        const storedMotion = setMotionProspectCadence(rawMotion, company, {
           prospectId: options.prospect,
           currentStep: normalizeCadenceStep(options.currentStep),
           lastTouchChannel: normalizeOutreachChannel(options.lastTouchChannel),
@@ -1651,7 +1644,6 @@ Rules:
           requireNewHook: options.requireNewHook ? true : undefined,
           notes: options.notes
         });
-        const storedMotion = updateMotion(updatedMotion);
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
         const result = {
@@ -1784,7 +1776,7 @@ Rules:
             throw new Error(`Motion not found after action-result writeback: ${actionResult.actionResult.motionId}`);
           }
         } else {
-          const updatedMotion = recordMotionProspectTouch(rawMotion, company, {
+          storedMotion = recordMotionProspectTouch(rawMotion, company, {
             prospectId: options.prospect,
             surface,
             direction,
@@ -1796,7 +1788,6 @@ Rules:
             sourceUrl: options.sourceUrl,
             notes: options.notes
           });
-          storedMotion = updateMotion(updatedMotion);
         }
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
         const prospect = account?.prospects.find((item) => item.id === options.prospect) ?? null;
@@ -2039,7 +2030,7 @@ Examples:
           status: normalizeMotionQueueStatus(options.status),
           notes: options.notes ?? null
         });
-        const storedMotion = updateMotion(updatedMotion);
+        const storedMotion = updatedMotion;
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
 
         if (options.json) {
@@ -2094,11 +2085,10 @@ Examples:
       const { company, rawMotion } = context;
 
       try {
-        const updatedMotion = claimMotionTargetAccountPacket(rawMotion, company, {
+        const storedMotion = claimMotionTargetAccountPacket(rawMotion, company, {
           workerLabel: options.worker,
           notes: options.notes ?? null
         });
-        const storedMotion = updateMotion(updatedMotion);
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
 
         if (options.json) {
@@ -2159,7 +2149,7 @@ Examples:
           nextStatus: normalizeOptionalPacketCompletionStatus(options.nextStatus),
           notes: options.notes ?? null
         });
-        const storedMotion = updateMotion(updatedMotion);
+        const storedMotion = updatedMotion;
         const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
 
         if (options.json) {

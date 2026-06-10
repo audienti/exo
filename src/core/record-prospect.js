@@ -9,6 +9,16 @@ import {
 import { applyManualProspectQueueState, isMotionQueueStatus } from "../lib/motion-queue.js";
 import { normalizeImageProxyFields } from "../lib/image-proxy.js";
 import {
+  findMotionById,
+  findCompanyById,
+  findCrossMotionOwner,
+  insertCompany,
+  resolvePersonIdentity,
+  upsertEmployment,
+  upsertMotionAccount,
+  upsertProspect as upsertProspectRow,
+} from "../db/database.js";
+import {
   finalizeTargetAccountUpdate,
   normalizeNullableString,
   normalizeStringArray,
@@ -236,7 +246,152 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
     prospects
   });
 
-  return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  const updatedMotion = finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  const persistedProspect = prospects.find((prospect) => prospectsReferToSamePerson(prospect, nextProspect))
+    ?? prospects.find((prospect) => prospect.id === nextProspect.id)
+    ?? prospects[prospects.length - 1];
+  persistProspectRows({
+    motion: updatedMotion,
+    company,
+    account: updatedAccount,
+    prospect: persistedProspect,
+    now,
+  });
+
+  return findMotionById(motion.id) ?? updatedMotion;
+}
+
+/**
+ * @param {{
+ *   motion: any,
+ *   company: any,
+ *   account: import("../schema/target-account.js").targetAccountSchema._type,
+ *   prospect: import("../schema/target-account.js").prospectSchema._type,
+ *   now: string
+ * }} input
+ */
+export function persistProspectRows(input) {
+  if (!findCompanyById(input.company.id)) {
+    insertCompany(input.company);
+  }
+  const motionAccount = upsertMotionAccount({
+    id: buildMotionAccountId(input.motion.id, input.company.id),
+    motionId: input.motion.id,
+    companyId: input.company.id,
+    executionUserId: input.motion.engagementUserAssignment?.userId ?? null,
+    queueStatus: input.account.queueState?.status ?? "selected",
+    disposition: input.account.disposition,
+    packetStatus: input.account.packetStatus,
+    lastResearchAt: input.account.lastResearchAt,
+    payload: {
+      ...input.account,
+      prospects: undefined,
+      signalMatches: undefined,
+    },
+    now: input.now,
+  });
+  const person = resolvePersonIdentity({
+    name: input.prospect.name,
+    contactPoints: buildIdentityContactPoints(input.prospect),
+  }).person;
+  const queueState = queueStateWithCrossMotionHold(input.prospect.queueState, {
+    owner: findCrossMotionOwner({ personId: person.id, excludeMotionId: input.motion.id }),
+    now: input.now,
+  });
+  upsertEmployment({
+    personId: person.id,
+    companyId: input.company.id,
+    title: input.prospect.title,
+    source: "motion-prospect",
+    observedAt: input.prospect.observedAt ?? input.now,
+  });
+  upsertProspectRow({
+    id: input.prospect.id,
+    motionId: input.motion.id,
+    companyId: input.company.id,
+    personId: person.id,
+    motionAccountId: motionAccount.id,
+    queueStatus: queueState?.status ?? "selected",
+    disposition: input.prospect.disposition,
+    packetStatus: input.prospect.packetStatus,
+    cadenceStatus: input.prospect.cadenceState?.status ?? "pending",
+    cadenceCurrentStep: input.prospect.cadenceState?.currentStep ?? null,
+    cadenceNextActionDueAt: input.prospect.cadenceState?.nextActionDueAt ?? null,
+    cadenceLastTouchAt: input.prospect.cadenceState?.lastTouchAt ?? null,
+    cadenceLastTouchOutcome: input.prospect.cadenceState?.lastTouchOutcome ?? null,
+    payload: {
+      ...input.prospect,
+      personId: person.id,
+      queueState,
+      touches: undefined,
+      drafts: undefined,
+      timelineNotes: undefined,
+    },
+    now: input.now,
+  });
+}
+
+/**
+ * @param {import("../schema/target-account.js").prospectSchema._type["queueState"] | undefined} queueState
+ * @param {{ owner: ReturnType<typeof findCrossMotionOwner> | null, now: string }} input
+ */
+function queueStateWithCrossMotionHold(queueState, input) {
+  if (!input.owner) return queueState;
+  return {
+    ...(queueState ?? {}),
+    status: "held_cross_motion",
+    source: "manual",
+    updatedAt: input.now,
+    notes: queueState?.notes ?? `Held because this person has active outbound work in motion ${input.owner.motionId}.`,
+    crossMotionOwner: {
+      motionId: input.owner.motionId,
+      prospectId: input.owner.id,
+      companyId: input.owner.companyId,
+    },
+  };
+}
+
+/**
+ * @param {import("../schema/target-account.js").prospectSchema._type} prospect
+ */
+function buildIdentityContactPoints(prospect) {
+  const contactPoints = [...(prospect.contactPoints ?? [])].map((point) => ({
+    kind: point.kind === "linkedin_profile" ? "linkedin_profile_url" : point.kind,
+    value: point.value,
+    verificationStatus: point.verificationStatus,
+    confidence: point.confidence === "high" ? 1 : point.confidence === "moderate" ? 0.7 : point.confidence === "low" ? 0.3 : null,
+    source: point.source,
+    observedAt: point.observedAt,
+  }));
+  if (prospect.linkedinProfileUrl) {
+    contactPoints.push({
+      kind: "linkedin_profile_url",
+      value: prospect.linkedinProfileUrl,
+      verificationStatus: "observed",
+      confidence: 1,
+      source: "motion-prospect",
+      observedAt: prospect.profileViewedAt ?? prospect.observedAt,
+    });
+  }
+  if (prospect.email) {
+    contactPoints.push({
+      kind: "email",
+      value: prospect.email,
+      verificationStatus: "verified",
+      confidence: 1,
+      source: "motion-prospect",
+      observedAt: prospect.observedAt,
+    });
+  }
+  return contactPoints;
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} companyId
+ */
+function buildMotionAccountId(motionId, companyId) {
+  return `motion-account-${motionId}-${companyId}`;
 }
 
 /**
@@ -509,7 +664,19 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
     prospects: updatedProspects
   });
 
-  return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  const updatedMotion = finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  const persistedProspect = updatedProspects.find((prospect) => prospect.id === input.prospectId);
+  if (persistedProspect) {
+    persistProspectRows({
+      motion: updatedMotion,
+      company,
+      account: updatedAccount,
+      prospect: persistedProspect,
+      now,
+    });
+  }
+
+  return findMotionById(motion.id) ?? updatedMotion;
 }
 
 /**

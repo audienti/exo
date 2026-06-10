@@ -462,7 +462,7 @@ Rules:
             profileViewedAt: normalizeNullableCliString(options.profileViewedAt),
             notes: normalizeNullableCliString(options.notes)
           });
-          const storedMotion = updateMotion(updatedMotion);
+          const storedMotion = updatedMotion;
           const account = storedMotion.targetMap.accounts.find((item) => item.companyId === company.id) ?? null;
           const prospect = account?.prospects.find((item) =>
             item.name === personName
@@ -512,10 +512,10 @@ Rules:
 
       let storedMotion = motionSchema.parse(rawMotion);
       if (queueStatus === "queued_for_research") {
-        storedMotion = updateMotion(setMotionTargetAccountQueue(storedMotion, company, {
+        storedMotion = setMotionTargetAccountQueue(storedMotion, company, {
           status: queueStatus,
           notes: options.queueNotes ?? null
-        }));
+        });
       }
 
       const queueSummary = buildMotionQueueSummary(storedMotion, [company], { companyId: company.id });
@@ -639,10 +639,10 @@ Examples:
 
       let storedMotion = motionSchema.parse(rawMotion);
       if (queueStatus === "queued_for_research") {
-        storedMotion = updateMotion(setMotionTargetAccountQueue(storedMotion, company, {
+        storedMotion = setMotionTargetAccountQueue(storedMotion, company, {
           status: queueStatus,
           notes: options.queueNotes ?? null
-        }));
+        });
       }
 
       const queueSummary = buildMotionQueueSummary(storedMotion, [company], { companyId: company.id });
