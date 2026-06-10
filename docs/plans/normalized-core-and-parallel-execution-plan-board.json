@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T20:12:43Z"
+    "updatedAt": "2026-06-10T20:13:37Z"
   },
   "tasks": [
     {
@@ -421,7 +421,7 @@
     {
       "id": "T09",
       "title": "Convert read paths and hot scans to SQL",
-      "status": "ready",
+      "status": "running",
       "priority": 1,
       "dependsOn": [
         "T08"
@@ -448,10 +448,10 @@
         "npm test"
       ],
       "outputs": [],
-      "attemptCount": 0,
+      "attemptCount": 1,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Started 2026-06-10 after T08 row-backed write paths landed green."
     },
     {
       "id": "T10",
