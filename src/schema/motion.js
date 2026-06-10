@@ -14,8 +14,13 @@ import {
 } from "./company.js";
 
 const statusSchema = z.enum(["draft", "active", "paused", "archived"]);
+const targetMapSchema = z.object({
+  status: z.enum(["pending", "ready"]),
+  accounts: z.array(targetAccountSchema).default([]),
+  segments: z.array(z.string()).default([])
+});
 
-export const motionSchema = z.object({
+export const motionCoreSchema = z.object({
   id: z.string().min(1),
   name: z.string().trim().min(1),
   createdAt: z.string().datetime(),
@@ -31,11 +36,6 @@ export const motionSchema = z.object({
   offerThesis: offerThesisSchema,
   audienceHypotheses: z.array(audienceHypothesisSchema).default([]),
   signals: z.array(signalSchema).default([]),
-  targetMap: z.object({
-    status: z.enum(["pending", "ready"]),
-    accounts: z.array(targetAccountSchema).default([]),
-    segments: z.array(z.string()).default([])
-  }),
   stakeholderMap: z.object({
     status: z.enum(["pending", "ready"]),
     stakeholders: z.array(z.unknown()).default([])
@@ -48,3 +48,9 @@ export const motionSchema = z.object({
   engagementProfileAssignment: companyEngagementProfileAssignmentSchema.nullable().default(null),
   engagementUserAssignment: companyEngagementUserAssignmentSchema.nullable().default(null)
 });
+
+export const motionViewSchema = motionCoreSchema.extend({
+  targetMap: targetMapSchema
+});
+
+export const motionSchema = motionViewSchema;

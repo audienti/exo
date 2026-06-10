@@ -56,6 +56,27 @@ test("normalized company identity finds by domain before LinkedIn company URL", 
   });
 });
 
+test("normalized company identity treats explicit legacy ids as idempotent", () => {
+  withIsolatedExoState(() => {
+    const first = findOrCreateCompany({
+      id: "company_legacy_id",
+      name: "Legacy Account"
+    });
+
+    const again = findOrCreateCompany({
+      id: first.id,
+      name: "Legacy Account"
+    });
+
+    const rows = getLocalDatabase()
+      .prepare("SELECT id FROM companies WHERE id = ?")
+      .all(first.id);
+
+    assert.equal(again.id, first.id);
+    assert.equal(rows.length, 1);
+  });
+});
+
 test("person resolver extracts LinkedIn identities, preserves member-id case, and retains old slug aliases", () => {
   withIsolatedExoState(() => {
     const created = resolvePersonIdentity({

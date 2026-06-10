@@ -2,8 +2,6 @@
 
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { buildMotionName } from "../core/motion-support.js";
-import { rehydrateMotion } from "../core/rehydrate-motion.js";
 import { inboundCueSchema, inboundObservationSchema } from "../schema/inbound.js";
 import { applyMigrations } from "./migrations.js";
 import {
@@ -64,131 +62,6 @@ function safelyEnableWal(database) {
       throw error;
     }
   }
-}
-
-/**
- * @param {import("../schema/motion.js").motionSchema._type} motion
- * @returns {import("../schema/motion.js").motionSchema._type}
- */
-export function insertMotion(motion) {
-  const database = getLocalDatabase();
-  const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
-  const statement = database.prepare(`
-    INSERT INTO motions (
-      id,
-      name,
-      status,
-      source_url,
-      schema_version,
-      created_at,
-      updated_at,
-      payload_json
-    )
-    VALUES (
-      @id,
-      @name,
-      @status,
-      @sourceUrl,
-      @schemaVersion,
-      @createdAt,
-      @updatedAt,
-      @payloadJson
-    )
-  `);
-
-  statement.run({
-    id: storedMotion.id,
-    name: storedMotion.name,
-    status: storedMotion.status,
-    sourceUrl: storedMotion.offer.sourceUrl,
-    schemaVersion: 1,
-    createdAt: storedMotion.createdAt,
-    updatedAt: storedMotion.updatedAt,
-    payloadJson: JSON.stringify(storedMotion, null, 2)
-  });
-
-  return storedMotion;
-}
-
-/**
- * @param {import("../schema/motion.js").motionSchema._type} motion
- * @returns {import("../schema/motion.js").motionSchema._type}
- */
-export function updateMotion(motion) {
-  const database = getLocalDatabase();
-  const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
-  const statement = database.prepare(`
-    UPDATE motions
-    SET name = @name,
-        status = @status,
-        source_url = @sourceUrl,
-        schema_version = @schemaVersion,
-        updated_at = @updatedAt,
-        payload_json = @payloadJson
-    WHERE id = @id
-  `);
-
-  statement.run({
-    id: storedMotion.id,
-    name: storedMotion.name,
-    status: storedMotion.status,
-    sourceUrl: storedMotion.offer.sourceUrl,
-    schemaVersion: 1,
-    updatedAt: storedMotion.updatedAt,
-    payloadJson: JSON.stringify(storedMotion, null, 2)
-  });
-
-  return storedMotion;
-}
-
-/**
- * @param {string} id
- * @returns {unknown | null}
- */
-export function findMotionById(id) {
-  const row = getLocalDatabase()
-    .prepare(`SELECT payload_json FROM motions WHERE id = ?`)
-    .get(id);
-
-  if (!row) return null;
-
-  const { motion, repaired } = rehydrateMotion(JSON.parse(row.payload_json));
-  if (repaired) {
-    persistNormalizedMotion(motion);
-  }
-
-  return motion;
-}
-
-/**
- * @returns {unknown[]}
- */
-export function listMotions() {
-  const rows = getLocalDatabase()
-    .prepare(`
-      SELECT payload_json
-      FROM motions
-      ORDER BY created_at DESC
-    `)
-    .all();
-
-  return rows.map((row) => {
-    const { motion, repaired } = rehydrateMotion(JSON.parse(row.payload_json));
-    if (repaired) {
-      persistNormalizedMotion(motion);
-    }
-
-    return motion;
-  });
-}
-
-/**
- * @param {string} id
- */
-export function deleteMotion(id) {
-  getLocalDatabase()
-    .prepare(`DELETE FROM motions WHERE id = ?`)
-    .run(id);
 }
 
 /**
@@ -864,88 +737,6 @@ export function listCompanies() {
 }
 
 /**
- * @param {import("../schema/motion.js").motionSchema._type} motion
- */
-function persistNormalizedMotion(motion) {
-  getLocalDatabase()
-    .prepare(`
-      UPDATE motions
-      SET name = @name,
-          status = @status,
-          source_url = @sourceUrl,
-          schema_version = @schemaVersion,
-          payload_json = @payloadJson
-      WHERE id = @id
-    `)
-    .run({
-      id: motion.id,
-      name: motion.name,
-      status: motion.status,
-      sourceUrl: motion.offer.sourceUrl,
-      schemaVersion: 1,
-      payloadJson: JSON.stringify(motion, null, 2)
-    });
-}
-
-/**
- * @param {import("../schema/motion.js").motionSchema._type} motion
- * @param {DatabaseSync} database
- * @returns {import("../schema/motion.js").motionSchema._type}
- */
-function ensureUniqueGeneratedMotionName(motion, database) {
-  const generatedBaseName = buildMotionName({
-    seed: motion.id
-  });
-
-  if (motion.name !== generatedBaseName) {
-    return motion;
-  }
-
-  let attempt = 0;
-  let candidate = generatedBaseName;
-
-  while (motionNameExists(candidate, motion.id, database)) {
-    attempt += 1;
-    candidate = buildMotionName({
-      seed: motion.id,
-      attempt
-    });
-  }
-
-  if (candidate === motion.name) {
-    return motion;
-  }
-
-  return {
-    ...motion,
-    name: candidate
-  };
-}
-
-/**
- * @param {string} name
- * @param {string} motionId
- * @param {DatabaseSync} database
- * @returns {boolean}
- */
-function motionNameExists(name, motionId, database) {
-  const row = database
-    .prepare(`
-      SELECT id
-      FROM motions
-      WHERE id != @id
-        AND name = @name
-      LIMIT 1
-    `)
-    .get({
-      id: motionId,
-      name
-    });
-
-  return Boolean(row);
-}
-
-/**
  * @param {string} term
  * @returns {unknown[]}
  */
@@ -967,6 +758,7 @@ export function searchCompanies(term) {
 export * from "./activity-events.js";
 export * from "./companies.js";
 export * from "./drafts.js";
+export * from "./motions.js";
 export * from "./motion-accounts.js";
 export * from "./people.js";
 export * from "./prospects.js";

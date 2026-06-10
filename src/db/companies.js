@@ -24,7 +24,7 @@ export function findOrCreateCompany(input) {
   const database = getLocalDatabase();
   const now = input.now ?? new Date().toISOString();
   const identity = normalizeCompanyIdentity(input);
-  const existing = findCompanyRowByIdentity(identity);
+  const existing = (input.id ? findCompanyRowById(input.id) : null) ?? findCompanyRowByIdentity(identity);
 
   if (existing) {
     const company = companyFromRow(existing);
@@ -119,6 +119,15 @@ function findCompanyRowByIdentity(identity) {
   }
 
   return null;
+}
+
+/**
+ * @param {string} id
+ */
+function findCompanyRowById(id) {
+  return getLocalDatabase()
+    .prepare("SELECT * FROM companies WHERE id = ? LIMIT 1")
+    .get(id);
 }
 
 /**
