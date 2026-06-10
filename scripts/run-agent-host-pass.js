@@ -78,6 +78,10 @@ const PASS_SUMMARY_PATH = path.join(
 );
 const PREFLIGHT_PATH = path.join(STATE_DIR, "agent-preflight.json");
 const HOST_STATE_PATH = path.join(STATE_DIR, "agent-host-state.json");
+const HOST_STATE_LOCK_DIR = `${HOST_STATE_PATH}.lock`;
+const HOST_STATE_LOCK_STALE_MS = 30_000;
+const HOST_STATE_LOCK_ACQUIRE_TIMEOUT_MS = 5_000;
+const HOST_STATE_LOCK_RETRY_DELAY_MS = 25;
 const TEMP_ROOT = path.join(STATE_DIR, "automation-tmp");
 const MAX_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_TASKS, 1000);
 const MAX_MAINTENANCE_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_MAINTENANCE_TASKS, 25);
@@ -176,23 +180,11 @@ function resolveCodexTaskHomeDir(codexHome, currentHome) {
   return os.homedir();
 }
 
-if (isMainModule(import.meta.url)) {
-  try {
-    const summary = runAgentHostPass();
-    fs.mkdirSync(path.dirname(PASS_SUMMARY_PATH), { recursive: true });
-    fs.writeFileSync(PASS_SUMMARY_PATH, JSON.stringify(summary, null, 2));
-    console.log(JSON.stringify(summary, null, 2));
-  } catch (error) {
-    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
-    process.exitCode = 1;
-  }
-}
-
 export function runAgentHostPass() {
   fs.mkdirSync(TEMP_ROOT, { recursive: true });
 
+  let hostState = cleanupHostStateOnStartup();
   const preflight = buildAndPersistPreflight();
-  let hostState = loadHostState();
   const executionContext = createAgentExecutionContext();
   const browserReady = preflight.browser?.ready !== false;
   const ignoreBrowserBackoff = isBrowserBackoffIgnored();
@@ -2857,6 +2849,10 @@ function buildAndPersistPreflight() {
   return preflight;
 }
 
+function cleanupHostStateOnStartup() {
+  return mutateHostState((state) => pruneExpiredBrowserBackoffs(state));
+}
+
 function loadHostState() {
   if (!fs.existsSync(HOST_STATE_PATH)) {
     return normalizeAgentHostState(null);
@@ -2876,11 +2872,6 @@ function saveHostState(state) {
 // clobber each other's leases, backoffs, and motion run records. Every
 // mutation goes through mutateHostState(): take a cross-process mkdir lock,
 // reload the file fresh, apply the mutator, persist, release.
-const HOST_STATE_LOCK_DIR = `${HOST_STATE_PATH}.lock`;
-const HOST_STATE_LOCK_STALE_MS = 30_000;
-const HOST_STATE_LOCK_ACQUIRE_TIMEOUT_MS = 5_000;
-const HOST_STATE_LOCK_RETRY_DELAY_MS = 25;
-
 /** @param {number} ms */
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -3908,4 +3899,16 @@ function normalizeIsoDatetime(value) {
   }
 
   return date.toISOString();
+}
+
+if (isMainModule(import.meta.url)) {
+  try {
+    const summary = runAgentHostPass();
+    fs.mkdirSync(path.dirname(PASS_SUMMARY_PATH), { recursive: true });
+    fs.writeFileSync(PASS_SUMMARY_PATH, JSON.stringify(summary, null, 2));
+    console.log(JSON.stringify(summary, null, 2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+    process.exitCode = 1;
+  }
 }
