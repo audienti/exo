@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T17:08:30Z"
+    "updatedAt": "2026-06-10T17:48:21Z"
   },
   "tasks": [
     {
@@ -205,7 +205,7 @@
     {
       "id": "T05",
       "title": "Add consolidated normalized schema baseline",
-      "status": "ready",
+      "status": "done",
       "priority": 1,
       "dependsOn": [
         "T01",
@@ -232,16 +232,21 @@
         "npm run check",
         "npm test"
       ],
-      "outputs": [],
-      "attemptCount": 0,
+      "outputs": [
+        "Replaced historical migrations with a consolidated normalized schema baseline at user_version 1, including motion_accounts, signal_matches, people, contact_points, employments, prospects, activity_events, and prospect_drafts.",
+        "Added fail-closed ReinitializeRequiredError handling for pre-0.3.0 ledgers and enabled SQLite foreign key enforcement during migration setup.",
+        "Updated motion, company, and inbound observation persistence for new normalized columns including motion.name, schema_version, company URLs, and nullable personId.",
+        "Added database schema coverage and updated CLI/inbound reconciliation tests for clean baseline behavior and isolated EXO_STATE_DIR usage."
+      ],
+      "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "636d1f2f7c23f77242102ff0d620bbb4d8c6dd2e",
+      "notes": "Green: node --test test/database-schema.test.js passed 2/2; node --test test/cli.test.js passed 87/87; node --test test/inbound-reconciliation-contract.test.js passed 19/19. Gate: npm run check passed; npm test passed with 675 tests. After a test-only cleanup, node --test test/cli.test.js passed 87/87 again."
     },
     {
       "id": "T06",
       "title": "Implement normalized entity DB modules",
-      "status": "backlog",
+      "status": "ready",
       "priority": 1,
       "dependsOn": [
         "T05"
