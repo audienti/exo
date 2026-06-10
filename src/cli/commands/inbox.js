@@ -7,6 +7,7 @@ import { buildUserWorkspaceContext } from "../../core/workspace-context.js";
 import { findUserById, listCompanies, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
 import { summarizeExecutionUsers } from "../../lib/execution-users.js";
 import { buildUserScopedBootstrapView } from "../../lib/user-scoped-bootstrap.js";
+import { runCliRepairableContract } from "../repairable-contracts.js";
 
 /**
  * @param {import("commander").Command} program
@@ -35,7 +36,7 @@ Rules:
   - It does not replace cadence or daily planning; it feeds them.
 `
     )
-    .action((options) => {
+    .action(async (options) => {
       const resolution = resolveInboxUser(options.user, { json: Boolean(options.json) });
       if (!resolution.user) {
         if (resolution.bootstrapView) {
@@ -56,8 +57,25 @@ Rules:
       const workspaceContext = buildUserWorkspaceContext(user, {
         rawObservations: observations,
       });
-      const result = buildInboxView(workspaceContext.user, workspaceContext.observations, listMotions(), listCompanies(), {
-        accountId: options.account ?? null
+      const inboxViewInput = {
+        rawUser: workspaceContext.user,
+        rawObservations: workspaceContext.observations,
+        rawMotions: listMotions(),
+        rawCompanies: listCompanies(),
+        options: {
+          accountId: options.account ?? null
+        }
+      };
+      const { contract: result } = await runCliRepairableContract({
+        contractKind: "inbox",
+        build: () => buildInboxView(
+          inboxViewInput.rawUser,
+          inboxViewInput.rawObservations,
+          inboxViewInput.rawMotions,
+          inboxViewInput.rawCompanies,
+          inboxViewInput.options
+        ),
+        normalizedInputs: inboxViewInput
       });
 
       if (options.json) {

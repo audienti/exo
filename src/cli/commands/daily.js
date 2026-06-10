@@ -7,6 +7,7 @@ import { buildUserWorkspaceContext } from "../../core/workspace-context.js";
 import { findUserById, listBrowserProfiles, listCompanies, listInboundCues, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
 import { summarizeExecutionUsers } from "../../lib/execution-users.js";
 import { buildUserScopedBootstrapView } from "../../lib/user-scoped-bootstrap.js";
+import { runCliRepairableContract } from "../repairable-contracts.js";
 
 /**
  * @param {import("commander").Command} program
@@ -34,7 +35,7 @@ Rules:
   - It shows what is due now, what is waiting, and what inbound movement overrode the old plan.
 `
     )
-    .action((options) => {
+    .action(async (options) => {
       const resolution = resolveDailyUser(options.user, { json: Boolean(options.json) });
       if (!resolution.user) {
         if (resolution.bootstrapView) {
@@ -57,13 +58,32 @@ Rules:
           status: "open"
         }),
       });
-      const result = buildDailyView(workspaceContext.user, listMotions(), listCompanies(), listBrowserProfiles(), workspaceContext.observations, {
-        rawUsers: listUsers(),
-        rawCues: workspaceContext.cues,
-        motionId: options.motion ?? null,
-        companyId: options.company ?? null,
-        prospectId: options.prospect ?? null,
-        limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
+      const dailyViewInput = {
+        rawUser: workspaceContext.user,
+        rawMotions: listMotions(),
+        rawCompanies: listCompanies(),
+        rawProfiles: listBrowserProfiles(),
+        rawObservations: workspaceContext.observations,
+        options: {
+          rawUsers: listUsers(),
+          rawCues: workspaceContext.cues,
+          motionId: options.motion ?? null,
+          companyId: options.company ?? null,
+          prospectId: options.prospect ?? null,
+          limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
+        }
+      };
+      const { contract: result } = await runCliRepairableContract({
+        contractKind: "daily",
+        build: () => buildDailyView(
+          dailyViewInput.rawUser,
+          dailyViewInput.rawMotions,
+          dailyViewInput.rawCompanies,
+          dailyViewInput.rawProfiles,
+          dailyViewInput.rawObservations,
+          dailyViewInput.options
+        ),
+        normalizedInputs: dailyViewInput
       });
 
       if (options.json) {

@@ -15,6 +15,7 @@ import { releaseAgentRunLock, tryAcquireAgentRunLock } from "../../lib/agent-run
 import { AGENT_EXECUTION_LANES, normalizeAgentExecutionLane } from "../../lib/agent-task-lanes.js";
 import { buildPreflightSummary } from "../../lib/agent-preflight.js";
 import { buildLaunchAgentLabel, buildRoutinePlan, ROUTINE_ARTIFACT_VERSION } from "../../lib/agent-routine.js";
+import { runCliRepairableContract } from "../repairable-contracts.js";
 
 /**
  * @param {import("commander").Command} program
@@ -50,8 +51,13 @@ needs operator input.
     .command("queue")
     .description("List no-operator-input work the agent can execute now.")
     .option("--json", "Emit machine-readable JSON")
-    .action((options) => {
-      const queue = loadAgentQueue();
+    .action(async (options) => {
+      const queueInput = buildAgentQueueInput();
+      const { contract: queue } = await runCliRepairableContract({
+        contractKind: "agent_queue",
+        build: () => buildAgentQueue(queueInput),
+        normalizedInputs: queueInput
+      });
       if (options.json) {
         console.log(JSON.stringify(queue, null, 2));
         return;
@@ -799,10 +805,10 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function loadAgentQueue() {
+function buildAgentQueueInput() {
   const stateDir = getHomeStateDir();
   const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")));
-  return buildAgentQueue({
+  return {
     motions: listMotions(),
     companies: listCompanies(),
     profiles: listBrowserProfiles(),
@@ -810,7 +816,11 @@ function loadAgentQueue() {
     observations: listInboundObservations(),
     cues: listInboundCues(),
     hostState,
-  });
+  };
+}
+
+function loadAgentQueue() {
+  return buildAgentQueue(buildAgentQueueInput());
 }
 
 function buildAgentDoctorReport() {

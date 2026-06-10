@@ -3,6 +3,7 @@
 
 import { buildNextView } from "../../core/build-next-view.js";
 import { buildUserWorkspaceContext } from "../../core/workspace-context.js";
+import { runCliRepairableContract } from "../repairable-contracts.js";
 import { describeExo } from "../../core/what-is-this.js";
 import {
   findMotionById,
@@ -43,7 +44,7 @@ Rules:
   - Otherwise it falls back to the motion path, then the general operator call.
 `
     )
-    .action((options) => {
+    .action(async (options) => {
       const description = describeExo();
       const rawMotions = listMotions();
       const rawCompanies = listCompanies();
@@ -79,7 +80,7 @@ Rules:
           })
         : null;
 
-      const result = buildNextView({
+      const nextViewInput = {
         rawUser: workspaceContext?.user ?? rawUser,
         rawMotion,
         rawMotions,
@@ -93,6 +94,11 @@ Rules:
           companyId: options.company ?? null,
           prospectId: options.prospect ?? null
         }
+      };
+      const { contract: result } = await runCliRepairableContract({
+        contractKind: "next",
+        build: () => buildNextView(nextViewInput),
+        normalizedInputs: nextViewInput
       });
 
       if (options.json) {
