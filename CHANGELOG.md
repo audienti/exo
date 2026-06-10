@@ -6,6 +6,14 @@ All notable changes to Exo's public plugin surface land here.
 
 - No unreleased plugin-facing changes yet.
 
+## [0.2.4] - 2026-06-10
+
+- The agent host now recognizes runtime usage-limit failures (out of Codex messages, usage/rate limit reached, HTTP 429) and pauses queue draining instead of failing every queued task one by one. The hold is recorded in `agent-host-state.json` with the reset time parsed from the error when present (30 minutes otherwise), passes skip while it is active, and draining resumes on its own once the limit resets. `EXO_AGENT_IGNORE_USAGE_LIMIT=1` forces a pass through the hold.
+- The operator header and agent status panel show the pause plainly ("Agent paused: Codex usage limit", resume time included) instead of a generic failure, and stale usage-limit failure reasons from the last pass are humanized the same way.
+- Fixed LinkedIn plan-tier discovery reading `premiumFeatures` from the wrong place in the Unipile account inventory. Every account read as free tier, so Sales Navigator and Premium senders were told their connection requests could not carry a note. Discovery also records `isPremium` from the Unipile premium contract id.
+- Connection-note capability is now a tri-state verdict: verified premium, verified free, or unverified. The compose panel says explicitly that the verdict is about the LinkedIn account Exo sends from (never the recipient's plan), names the resolved sending identity (user label plus handle) instead of a possibly stale cached assignment label, and shows distinct copy when the tier has not been verified yet.
+- Execution resolution fails closed when a company or motion is explicitly assigned to a user that no longer exists in the workspace. Previously the resolution silently fell through to another user's identity, which in a two-user workspace could send from the wrong LinkedIn account; now it surfaces an `assigned_user_missing` blocker asking for reassignment.
+
 ## [0.2.3] - 2026-06-10
 
 - Fixed every live runtime call — Gmail and LinkedIn live sync, Gmail thread disposal, harness-connection probes, and the LLM repair generator — leaving the spawned `claude`/`codex` CLI's stdin open. Both CLIs read stdin when it is a pipe, and codex blocked on that read until its timeout, adding latency to or hanging capture, disposal, and probe passes. The prompt always travels as an argument, so stdin is now closed immediately after the process is spawned.
