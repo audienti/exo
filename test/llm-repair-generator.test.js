@@ -25,7 +25,17 @@ function failedDailyContract() {
   };
 }
 
+/** What the CLI runtimes emit: the contract JSON-encoded as a string. */
 function repairedDailyPayload() {
+  return {
+    replacementContractJson: JSON.stringify({ ...failedDailyContract(), counts: { itemCount: 1 } }),
+    summary: "Recomputed itemCount from the items array.",
+    explanation: "counts.itemCount disagreed with items.length; recomputed it."
+  };
+}
+
+/** What the generator returns to the executor: the contract parsed back. */
+function expectedDailyRepair() {
   return {
     replacementContract: { ...failedDailyContract(), counts: { itemCount: 1 } },
     summary: "Recomputed itemCount from the items array.",
@@ -58,12 +68,12 @@ test("resolveRepairGeneratorRuntime honors EXO_REPAIR_GENERATOR", () => {
 });
 
 test("the claude runtime repairs from the failed contract and failure artifact only", async () => {
-  /** @type {Array<{ cli: string, args: string[] }>} */
+  /** @type {Array<{ cli: string, args: string[], options: any }>} */
   const calls = [];
   const generator = createLlmRepairGenerator({
     env: { EXO_REPAIR_GENERATOR: "claude", EXO_CLAUDE_CLI: "claude-test" },
-    execFileImpl: /** @type {any} */ (async (cli, args) => {
-      calls.push({ cli, args });
+    execFileImpl: /** @type {any} */ (async (cli, args, options) => {
+      calls.push({ cli, args, options });
       return { stdout: claudeStdout(repairedDailyPayload()), stderr: "" };
     })
   });
@@ -76,11 +86,14 @@ test("the claude runtime repairs from the failed contract and failure artifact o
     normalizedInputs: { secretWorkspaceBlob: "must-not-be-sent" }
   });
 
-  assert.deepEqual(generated, repairedDailyPayload());
+  assert.deepEqual(generated, expectedDailyRepair());
   assert.equal(calls.length, 1);
   assert.equal(calls[0].cli, "claude-test");
   assert.ok(calls[0].args.includes("-p"));
   assert.ok(calls[0].args.includes("--json-schema"));
+  assert.equal(calls[0].args[calls[0].args.indexOf("--tools") + 1], "", "all built-in tools must be disabled");
+  assert.ok(calls[0].args.includes("--strict-mcp-config"), "configured MCP servers must be ignored");
+  assert.equal(calls[0].options.timeout, 180000);
 
   const prompt = calls[0].args[calls[0].args.length - 1];
   assert.match(prompt, /"daily" contract that failed validation/);
@@ -88,6 +101,26 @@ test("the claude runtime repairs from the failed contract and failure artifact o
   assert.match(prompt, /Alicia Buyer/, "the failed contract itself is in the prompt");
   assert.ok(!prompt.includes("must-not-be-sent"), "raw normalized inputs must never reach the generator prompt");
   assert.match(prompt, /Do not use any tools/);
+});
+
+test("EXO_REPAIR_GENERATOR_TIMEOUT_MS overrides the CLI timeout", async () => {
+  /** @type {any} */
+  let seenOptions = null;
+  const generator = createLlmRepairGenerator({
+    env: { EXO_REPAIR_GENERATOR: "claude", EXO_REPAIR_GENERATOR_TIMEOUT_MS: "5000" },
+    execFileImpl: /** @type {any} */ (async (cli, args, options) => {
+      seenOptions = options;
+      return { stdout: claudeStdout(repairedDailyPayload()), stderr: "" };
+    })
+  });
+  assert.ok(generator);
+  await generator({
+    contractKind: "daily",
+    failedContract: failedDailyContract(),
+    failureArtifact: FAILURE_ARTIFACT,
+    normalizedInputs: {}
+  });
+  assert.equal(seenOptions.timeout, 5000);
 });
 
 test("the generator declines when the builder threw and produced no contract", async () => {
@@ -112,34 +145,53 @@ test("the generator declines when the builder threw and produced no contract", a
   assert.equal(execCalls, 0, "no CLI run when there is nothing safe to reshape");
 });
 
-test("a missing claude CLI falls back to codex in auto mode only", async () => {
-  /** @type {string[]} */
-  const cliOrder = [];
-  const enoent = Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" });
-
-  const autoGenerator = createLlmRepairGenerator({
-    env: { EXO_CODEX_CLI: "codex-test" },
-    execFileImpl: /** @type {any} */ (async (cli, args) => {
-      cliOrder.push(cli);
-      if (cli === "claude") {
-        throw enoent;
-      }
-      // codex writes its result to the -o output path
-      const outputPath = args[args.indexOf("-o") + 1];
-      fs.writeFileSync(outputPath, JSON.stringify(repairedDailyPayload()));
-      return { stdout: "", stderr: "" };
+test("a broken claude CLI falls back to codex in auto mode only", async () => {
+  const claudeFailureModes = {
+    // not installed
+    not_installed: async () => {
+      throw Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" });
+    },
+    // installed but unauthenticated: exits 0 with an error envelope and no
+    // structured_output (observed live with an expired claude login)
+    unauthenticated: async () => ({
+      stdout: JSON.stringify({ type: "result", subtype: "success", is_error: true, result: "Failed to authenticate. API Error: 401" }),
+      stderr: ""
     })
-  });
-  assert.ok(autoGenerator);
+  };
 
-  const generated = await autoGenerator({
-    contractKind: "daily",
-    failedContract: failedDailyContract(),
-    failureArtifact: FAILURE_ARTIFACT,
-    normalizedInputs: {}
-  });
-  assert.deepEqual(generated, repairedDailyPayload());
-  assert.deepEqual(cliOrder, ["claude", "codex-test"]);
+  for (const [mode, claudeBehavior] of Object.entries(claudeFailureModes)) {
+    /** @type {string[]} */
+    const cliOrder = [];
+    /** @type {string[]} */
+    let codexArgs = [];
+    const autoGenerator = createLlmRepairGenerator({
+      env: { EXO_CODEX_CLI: "codex-test" },
+      execFileImpl: /** @type {any} */ (async (cli, args) => {
+        cliOrder.push(cli);
+        if (cli === "claude") {
+          return claudeBehavior();
+        }
+        // codex writes its result to the -o output path
+        codexArgs = args;
+        const outputPath = args[args.indexOf("-o") + 1];
+        fs.writeFileSync(outputPath, JSON.stringify(repairedDailyPayload()));
+        return { stdout: "", stderr: "" };
+      })
+    });
+    assert.ok(autoGenerator);
+
+    const generated = await autoGenerator({
+      contractKind: "daily",
+      failedContract: failedDailyContract(),
+      failureArtifact: FAILURE_ARTIFACT,
+      normalizedInputs: {}
+    });
+    assert.deepEqual(generated, expectedDailyRepair(), `claude ${mode} must fall back to codex`);
+    assert.deepEqual(cliOrder, ["claude", "codex-test"], `claude ${mode} must try claude first, then codex`);
+    assert.equal(codexArgs[codexArgs.indexOf("--sandbox") + 1], "read-only", "codex must run in a read-only sandbox");
+  }
+
+  const enoent = Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" });
 
   // Explicitly pinned to claude: ENOENT fails closed instead of falling back.
   const pinnedGenerator = createLlmRepairGenerator({
@@ -171,7 +223,11 @@ test("CLI failures and malformed output resolve to null, never throw", async () 
     // missing structured_output
     async () => ({ stdout: JSON.stringify({ type: "result" }), stderr: "" }),
     // structured_output missing required fields
-    async () => ({ stdout: claudeStdout({ replacementContract: { ok: true }, summary: "", explanation: "" }), stderr: "" })
+    async () => ({ stdout: claudeStdout({ replacementContractJson: JSON.stringify({ ok: true }), summary: "", explanation: "" }), stderr: "" }),
+    // replacement contract is not valid JSON
+    async () => ({ stdout: claudeStdout({ replacementContractJson: "{not json", summary: "s", explanation: "e" }), stderr: "" }),
+    // replacement contract is not an object
+    async () => ({ stdout: claudeStdout({ replacementContractJson: "42", summary: "s", explanation: "e" }), stderr: "" })
   ];
 
   for (const execFileImpl of cases) {

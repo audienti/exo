@@ -426,6 +426,64 @@ test("a repaired agent_queue may only drop or reorder tasks, never synthesize th
   }
 });
 
+test("repaired contracts may drop, reorder, or fix bookkeeping — never rewrite content", () => {
+  // agent_queue: promoting waiting work into the runnable lane is rejected,
+  // even though the task is byte-identical to one in the failed contract.
+  const failedQueue = {
+    ...validQueueContract(),
+    count: 3, // postcondition failure
+    waitingCount: 1,
+    waiting: [{ kind: "company_research", companyName: "Globex", briefCommand: "exo companies brief company-2" }]
+  };
+  const promoted = {
+    ...failedQueue,
+    count: 3,
+    itemCount: 3,
+    waitingCount: 0,
+    tasks: [...failedQueue.tasks, ...failedQueue.waiting],
+    waiting: []
+  };
+  const promotion = validateStructuredContract("agent_queue", promoted, failedQueue);
+  assert.equal(promotion.ok, false);
+  assert.equal(promotion.ok === false && promotion.artifact.postconditionKey, "queue_repair_subset_only");
+
+  // daily: rewriting an item is rejected; dropping it and fixing counts passes.
+  const failedDaily = { ...validDailyContract(), counts: { itemCount: 5 } };
+  const rewrittenDaily = { ...failedDaily, counts: { itemCount: 1 }, items: [{ prospectName: "Mallory Injected", priority: "action" }] };
+  const dailyRewrite = validateStructuredContract("daily", rewrittenDaily, failedDaily);
+  assert.equal(dailyRewrite.ok, false);
+  assert.equal(dailyRewrite.ok === false && dailyRewrite.artifact.postconditionKey, "daily_repair_items_subset_only");
+  assert.equal(validateStructuredContract("daily", { ...failedDaily, counts: { itemCount: 0 }, items: [] }, failedDaily).ok, true);
+
+  // inbox: same subset rule.
+  const failedInbox = { user: { id: "u1", label: "Op" }, counts: { itemCount: 9 }, surfaces: {}, items: [{ subject: "Re: pricing" }] };
+  const inboxRewrite = validateStructuredContract("inbox", { ...failedInbox, counts: { itemCount: 1 }, items: [{ subject: "Injected" }] }, failedInbox);
+  assert.equal(inboxRewrite.ok, false);
+  assert.equal(inboxRewrite.ok === false && inboxRewrite.artifact.postconditionKey, "inbox_repair_items_subset_only");
+
+  // next: operator guidance that was already valid must survive byte-identical.
+  const failedNext = {
+    source: "pipeline",
+    headline: "Follow up with Acme",
+    nextMove: "Send the proposal recap to Alicia.",
+    status: { kind: "ready" },
+    guidance: null,
+    context: { extra: true }
+  };
+  const nextRewrite = validateStructuredContract("next", { ...failedNext, nextMove: "Do something else entirely." }, failedNext);
+  assert.equal(nextRewrite.ok, false);
+  assert.equal(nextRewrite.ok === false && nextRewrite.artifact.postconditionKey, "next_repair_preserves_valid_fields");
+  assert.equal(
+    validateStructuredContract("next", failedNext, { ...failedNext, headline: "" }).ok,
+    true,
+    "a repair may fill a field that was invalid in the failed contract"
+  );
+
+  // With no baseline (builder threw → {} sentinel), structural repairs fail closed.
+  assert.equal(validateStructuredContract("daily", validDailyContract(), {}).ok, false);
+  assert.equal(validateStructuredContract("agent_queue", validQueueContract(), {}).ok, false);
+});
+
 test("redactForSubmission hashes every string leaf and records the paths", () => {
   const { redacted, redactedFieldPaths } = redactForSubmission({
     name: "Alicia Buyer",

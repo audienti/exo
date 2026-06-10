@@ -86,16 +86,43 @@ const CONTRACT_POSTCONDITIONS = {
 
 /**
  * Extra postconditions that only apply to a repaired contract, checked against
- * the failed builder output it replaces. The agent_queue feeds the host pass
- * executor, so a repaired queue may only drop or reorder what the real
- * builder produced — never synthesize tasks or novel contract commands.
+ * the failed builder output it replaces. Repairs may only reshape what the
+ * real builder produced: drop or reorder entries and fix bookkeeping fields,
+ * never synthesize items, rewrite operator guidance, or move work between
+ * queue lanes.
  *
  * @type {Record<string, Array<{ key: string, check: (repaired: any, failed: any) => boolean }>>}
  */
 const REPAIRED_CONTRACT_POSTCONDITIONS = {
-  next: [],
-  daily: [],
-  inbox: [],
+  next: [
+    {
+      // Operator guidance that was already valid must survive byte-identical:
+      // a repair may fill broken fields, never rewrite good ones.
+      key: "next_repair_preserves_valid_fields",
+      check: (repaired, failed) => [
+        [failed?.source, repaired.source],
+        [failed?.headline, repaired.headline],
+        [failed?.nextMove, repaired.nextMove],
+        [failed?.status?.kind, repaired.status?.kind]
+      ].every(([failedValue, repairedValue]) =>
+        typeof failedValue !== "string" || failedValue.trim() === "" || repairedValue === failedValue
+      )
+    }
+  ],
+  daily: [
+    {
+      key: "daily_repair_items_subset_only",
+      check: (repaired, failed) =>
+        Array.isArray(failed?.items) && entriesAreSubsetByValue(repaired.items, failed.items)
+    }
+  ],
+  inbox: [
+    {
+      key: "inbox_repair_items_subset_only",
+      check: (repaired, failed) =>
+        Array.isArray(failed?.items) && entriesAreSubsetByValue(repaired.items, failed.items)
+    }
+  ],
   agent_queue: [
     {
       key: "queue_repair_subset_only",
@@ -103,19 +130,31 @@ const REPAIRED_CONTRACT_POSTCONDITIONS = {
         if (!failed || !Array.isArray(failed.tasks) || !Array.isArray(failed.waiting)) {
           return false;
         }
-        const allowed = new Set(
-          [...failed.tasks, ...failed.waiting]
-            .map((task) => safeStableStringify(task))
-            .filter((key) => key !== null)
-        );
-        return [...repaired.tasks, ...repaired.waiting].every((task) => {
-          const key = safeStableStringify(task);
-          return key !== null && allowed.has(key);
-        });
+        // Checked per lane: cross-lane membership would let a repair promote
+        // waiting (future/blocked) work into the runnable lane.
+        return entriesAreSubsetByValue(repaired.tasks, failed.tasks)
+          && entriesAreSubsetByValue(repaired.waiting, failed.waiting);
       }
     }
   ]
 };
+
+/**
+ * Every repaired entry must be byte-for-byte (stable-stringified) present in
+ * the failed builder output: drop and reorder are the only legal moves.
+ *
+ * @param {unknown[]} repairedEntries
+ * @param {unknown[]} failedEntries
+ */
+function entriesAreSubsetByValue(repairedEntries, failedEntries) {
+  const allowed = new Set(
+    failedEntries.map((entry) => safeStableStringify(entry)).filter((key) => key !== null)
+  );
+  return repairedEntries.every((entry) => {
+    const key = safeStableStringify(entry);
+    return key !== null && allowed.has(key);
+  });
+}
 
 /** @param {unknown} value */
 function safeStableStringify(value) {
@@ -344,8 +383,10 @@ export async function executeRepairableContract(input) {
   }
 
   // One retry, validated as strictly as the original — including
-  // repaired-only postconditions like the agent_queue subset rule.
-  const revalidation = validateStructuredContract(contractKind, replacementContract, failedContract ?? { tasks: [], waiting: [] });
+  // repaired-only postconditions like the subset rules. The {} sentinel keeps
+  // those postconditions active when the builder threw: with no baseline to
+  // compare against, the structural checks fail closed.
+  const revalidation = validateStructuredContract(contractKind, replacementContract, failedContract ?? {});
   if (!revalidation.ok) {
     failClosed(`The ${contractKind} repair candidate failed validation too (fingerprint ${fingerprint}); failing closed.`, fingerprint);
   }
