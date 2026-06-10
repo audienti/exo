@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T17:49:08Z"
+    "updatedAt": "2026-06-10T18:06:31Z"
   },
   "tasks": [
     {
@@ -291,7 +291,7 @@
     {
       "id": "T07",
       "title": "Split motion core and hydrated view schemas",
-      "status": "backlog",
+      "status": "running",
       "priority": 1,
       "dependsOn": [
         "T06"
@@ -316,10 +316,10 @@
         "npm test"
       ],
       "outputs": [],
-      "attemptCount": 0,
+      "attemptCount": 1,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Started controller execution after T06 entity modules landed."
     },
     {
       "id": "T08",
