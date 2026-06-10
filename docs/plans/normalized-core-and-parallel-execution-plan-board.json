@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T21:09:51Z"
+    "updatedAt": "2026-06-10T21:10:41Z"
   },
   "tasks": [
     {
@@ -509,7 +509,7 @@
     {
       "id": "T11",
       "title": "Update config portability and shrink repair scope",
-      "status": "ready",
+      "status": "running",
       "priority": 2,
       "dependsOn": [
         "T10"
@@ -537,10 +537,10 @@
         "rg -n \"targetMap\" src/db src/core src/cli"
       ],
       "outputs": [],
-      "attemptCount": 0,
+      "attemptCount": 1,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Started 2026-06-10 after T10 race regressions and fixture support landed green. Scope is config export/import portability plus removing prospect/touch repair-on-read outside CLI-boundary LLM contract repair."
     },
     {
       "id": "T12",
