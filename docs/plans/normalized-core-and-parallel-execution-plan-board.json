@@ -552,7 +552,7 @@
     {
       "id": "T12",
       "title": "Run WS3 cutover and release bookkeeping",
-      "status": "backlog",
+      "status": "done",
       "priority": 1,
       "dependsOn": [
         "T11"
@@ -582,11 +582,18 @@
         "npm run check",
         "npm test"
       ],
-      "outputs": [],
-      "attemptCount": 0,
+      "outputs": [
+        "Recorded the operator gate for the approved wipe and captured pre-wipe queue discard facts: 138 runnable tasks, 4 waiting tasks, 2 blockers; runnable work was 120 run_inbound_sync, 12 company_discovery, 3 prospect_research, 2 send_message, and 1 write_draft.",
+        "Created a pre-cutover backup at /Users/williamflanagan/exo-backup/pre-0.3-20260610-172601 with a full .exo snapshot, agent queue export, and config export from the legacy 0.2.4 state.",
+        "Stopped the existing routine if present, removed only the approved disposable state files, imported the config into a fresh 0.3.0 normalized store, and verified imported counts: 52 motions, 877 companies, 31 browser profiles, and 35 users.",
+        "Reinstalled the queue routine in verify mode through launchd, then verified agent doctor reported the scheduler installed, loaded, and running.",
+        "Verified the post-cutover queue rebuilt cleanly with 132 items, 0 waiting tasks, and 0 blockers: 120 run_inbound_sync tasks and 12 company_discovery tasks.",
+        "Aligned release surfaces to 0.3.0 across package.json, package-lock.json, .codex-plugin/plugin.json, and CHANGELOG.md, then merged the plan branch into main."
+      ],
+      "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": "User said yes to wipe it and start over on 2026-06-10; still perform backup and record gate before destructive cutover."
+      "commit": "04beecfe2a873a23b0e36b577b6f64c9a44ebb39",
+      "notes": "User said yes to wipe it and start over on 2026-06-10; backup and discard gate completed before destructive cutover. Evidence files live under /Users/williamflanagan/exo-backup/pre-0.3-20260610-172601. Post-cutover sqlite user_version is 1; normalized execution tables intentionally start empty after config-only import. Green: npm run check passed; node --test test/plugin-versioning.test.js test/config-portability.test.js passed 5/5; final npm test passed 703/703. Main merge commit: a7d973e3f13ec1c69de124c7909b8d126f744347."
     },
     {
       "id": "T13",
