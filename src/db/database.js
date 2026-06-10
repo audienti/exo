@@ -42,14 +42,14 @@ function getDatabase(scope = "local") {
 /**
  * @returns {DatabaseSync}
  */
-function getHomeDatabase() {
+export function getHomeDatabase() {
   return getDatabase("home");
 }
 
 /**
  * @returns {DatabaseSync}
  */
-function getLocalDatabase() {
+export function getLocalDatabase() {
   return getDatabase("local");
 }
 
@@ -963,3 +963,11 @@ export function searchCompanies(term) {
 
   return rows.map((row) => JSON.parse(row.payload_json));
 }
+
+export * from "./activity-events.js";
+export * from "./companies.js";
+export * from "./drafts.js";
+export * from "./motion-accounts.js";
+export * from "./people.js";
+export * from "./prospects.js";
+export * from "./signal-matches.js";
