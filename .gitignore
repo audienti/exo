@@ -10,6 +10,7 @@ coverage/
 .direnv/
 .idea/
 .vscode/
+.worktrees/
 prototype/motion-workspace.html
 docs/wip/*/**
 docs/superpowers/*/**
