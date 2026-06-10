@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T18:06:31Z"
+    "updatedAt": "2026-06-10T18:37:14Z"
   },
   "tasks": [
     {
@@ -291,7 +291,7 @@
     {
       "id": "T07",
       "title": "Split motion core and hydrated view schemas",
-      "status": "running",
+      "status": "done",
       "priority": 1,
       "dependsOn": [
         "T06"
@@ -312,14 +312,59 @@
         "npm run check and npm test are green."
       ],
       "verification": [
+        "node --test test/motion-hydration.test.js",
+        "node --test test/database-schema.test.js test/normalized-entity-modules.test.js test/motion-hydration.test.js test/cli.test.js test/execute-action-intent.test.js",
+        "npm run check",
+        "git diff --check",
+        "npm test"
+      ],
+      "outputs": [
+        "Split motion schemas into stored motionCoreSchema and hydrated motionViewSchema while keeping motionSchema as the legacy-compatible view contract.",
+        "Moved motion persistence into src/db/motions.js; motions.payload_json now stores core motion state without targetMap.",
+        "Hydrated targetMap accounts, prospects, contact points, touches, timeline notes, drafts, and signal matches from normalized rows.",
+        "Kept transitional legacy updateMotion/insertMotion targetMap sync so existing write paths remain compatible until T08 flips mutators directly to rows.",
+        "Made normalized company resolution idempotent for id-only legacy target-map accounts after the full suite exposed duplicate company inserts during inbound-person promotion."
+      ],
+      "attemptCount": 1,
+      "lastFailure": "",
+      "commit": "e97fe522f5c9691957811355d39e54e25e731aaf",
+      "notes": "Red: node --test test/motion-hydration.test.js initially failed on missing motionCoreSchema export. First CLI compatibility run exposed nested activity payload, signal ordering, contact merge, and transition-backlog uniqueness regressions; fixed before focused CLI passed. Full npm test then exposed id-only legacy company inserts during inbound-person promotion; fixed findOrCreateCompany idempotency and added a normalized entity regression. Green: focused T07 integration passed 123/123; npm run check passed; git diff --check passed; npm test passed 684/684."
+    },
+    {
+      "id": "T16",
+      "title": "Add disposition axis and packet review states (Amendment A1)",
+      "status": "ready",
+      "priority": 1,
+      "dependsOn": [
+        "T06",
+        "T07"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "src/db/migrations.js",
+        "src/db/prospects.js",
+        "src/db/motion-accounts.js",
+        "src/db/activity-events.js",
+        "src/schema/motion.js",
+        "test"
+      ],
+      "context": "Amendment A1 in docs/wip/normalized-core-and-parallel-execution-plan.md (source: docs/wip/prospect-lifecycle-and-packet-review-plan.md, issue omalab/exo#12). Pre-cutover baseline edit, no migration. (1) migrations.js: add to BOTH prospects and motion_accounts: disposition TEXT NOT NULL DEFAULT 'active' CHECK (disposition IN ('active','nurture','not_a_fit','no_longer_target','exhausted')); disposition_at TEXT; disposition_actor TEXT CHECK (disposition_actor IS NULL OR disposition_actor IN ('operator','agent','system')); packet_status TEXT CHECK (packet_status IS NULL OR packet_status IN ('claimed','submitted','returned')). Replace prospects_due with partial index WHERE disposition = 'active'; add prospects_review ON prospects(motion_id) WHERE packet_status IN ('submitted','returned') and motion_accounts_review likewise. (2) Entity modules: setProspectDisposition/setAccountDisposition as the ONLY writers of disposition columns -- apply the legacy queue_status invariant (not_a_fit/no_longer_target => suppressed, exhausted => exhausted, nurture leaves queue_status untouched), append a kind='system' activity_events row (payload: from, to, reason, actor), commit in one transaction. Packet transitions claim/submit/accept/return/clear on packet_status. Shared workable-branch predicate helper: prospect.disposition='active' AND its motion_account.disposition='active'. (3) Hydrated motion views expose disposition and packetStatus as additive fields; legacy queueState.status renders unchanged.",
+      "doneWhen": [
+        "Baseline schema has disposition, disposition_at, disposition_actor, and packet_status on prospects and motion_accounts with the A1 CHECK constraints, partial prospects_due, and review indexes.",
+        "Disposition setters enforce the queue_status invariant, append a system activity event, and commit atomically; no other module writes these columns (test gate).",
+        "Shared workable-branch predicate excludes non-active dispositions at prospect and account level.",
+        "Hydrated views expose disposition and packetStatus additively while the legacy view shape parses unchanged.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
         "npm run check",
         "npm test"
       ],
       "outputs": [],
-      "attemptCount": 1,
+      "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Started controller execution after T06 entity modules landed."
+      "notes": "Inserted 2026-06-10 by Amendment A1 so the schema freezes in final form before T08/T09 encode write and scan semantics."
     },
     {
       "id": "T08",
@@ -327,7 +372,8 @@
       "status": "backlog",
       "priority": 1,
       "dependsOn": [
-        "T07"
+        "T07",
+        "T16"
       ],
       "ownerLane": "controller",
       "files": [
@@ -338,11 +384,12 @@
         "test/action-result.test.js",
         "test/cli.test.js"
       ],
-      "context": "WS3 step 4. Rewrite mutators transactionally over rows/events: record-prospect-touch, set-prospect-draft, markMotionProspectDraftSent, set-prospect-cadence, update-prospect, record-prospect add, claim target/prospect packet, record-action-result, transition-inbound-observation, reconcile-connection-degrees, remove-motion, import-config. updateMotion narrows to motion core with optimistic version check and retry helper for operator-facing callers. Add cross-motion selection and send gates plus terminal release under cooldown.",
+      "context": "WS3 step 4. Rewrite mutators transactionally over rows/events: record-prospect-touch, set-prospect-draft, markMotionProspectDraftSent, set-prospect-cadence, update-prospect, record-prospect add, claim target/prospect packet, record-action-result, transition-inbound-observation, reconcile-connection-degrees, remove-motion, import-config. updateMotion narrows to motion core with optimistic version check and retry helper for operator-facing callers. Add cross-motion selection and send gates plus terminal release under cooldown. Amendment A1: route every suppress/exhaust write and packet completion through setProspectDisposition/setAccountDisposition (invariant + system event); completion preserves today's observable auto-advance behavior (review-policy behavior is post-cutover); cross-motion terminal release keys on the owning prospect's disposition leaving 'active'.",
       "doneWhen": [
         "Touch, draft, cadence, action result, claim, inbound transition, remove, and import paths write relational rows transactionally.",
         "Optimistic motion-core version conflict throws and callers retry where appropriate.",
         "Selection gate holds second active branch for owned person and send gate blocks stale ownership race.",
+        "Suppress and exhaust paths leave a truthful disposition plus a system activity event; held cross-motion assignments release when the owning disposition leaves active.",
         "npm run check and npm test are green."
       ],
       "verification": [
@@ -373,11 +420,12 @@
         "src/cli/exo-ui-server.js",
         "test"
       ],
-      "context": "WS3 step 5. listMotions/findMotionById return hydrated views, and repair-on-read persistence is deleted. Convert hot scans to SQL: build-agent-queue due scan, outbound capacity counts, daily candidate selection, and slim next-candidate happy path as indexed due-prospect query plus single-branch hydration. Run the mid-branch tracer gate before moving on: in temp workspace, one due send executes end-to-end while concurrent research lane writes draft to sibling prospect of same motion; both persist.",
+      "context": "WS3 step 5. listMotions/findMotionById return hydrated views, and repair-on-read persistence is deleted. Convert hot scans to SQL: build-agent-queue due scan, outbound capacity counts, daily candidate selection, and slim next-candidate happy path as indexed due-prospect query plus single-branch hydration. Run the mid-branch tracer gate before moving on: in temp workspace, one due send executes end-to-end while concurrent research lane writes draft to sibling prospect of same motion; both persist. Amendment A1: due-scan and selection SQL gate on disposition = 'active' at both prospect and account level (partial prospects_due index).",
       "doneWhen": [
         "Reads are pure and no longer persist repair while listing/finding motions.",
         "Agent queue, daily capacity/candidate selection, and next happy path use indexed normalized scans.",
         "Tracer gate passes under concurrent send and research draft writes.",
+        "Queue scans exclude non-active dispositions at both prospect and account level.",
         "npm run check and npm test are green."
       ],
       "verification": [
@@ -403,7 +451,7 @@
         "test/support",
         "test"
       ],
-      "context": "WS3 steps 6-7. Add seedMotionView(view) helper that writes legacy-shaped motion literals into normalized rows. Port fixture-heavy tests mechanically. Add race tests: concurrent draft write and touch record on same motion from two processes both persist; optimistic-version conflict on motion core; two-process atomic claim contention. Complete identity, employment, email-policy, and cross-motion tests listed in the plan if not already covered by T06/T08.",
+      "context": "WS3 steps 6-7. Add seedMotionView(view) helper that writes legacy-shaped motion literals into normalized rows. Port fixture-heavy tests mechanically. Add race tests: concurrent draft write and touch record on same motion from two processes both persist; optimistic-version conflict on motion core; two-process atomic claim contention. Complete identity, employment, email-policy, and cross-motion tests listed in the plan if not already covered by T06/T08. Amendment A1 lifecycle regressions: a held cross-motion assignment releases when the owning branch's disposition leaves active; terminal and nurture branches never re-enter the due scan.",
       "doneWhen": [
         "Fixture helper supports old motion literals through normalized rows.",
         "Race tests fail against main blob writes and pass on branch, or their bug demonstration is documented if not practical to run inside the suite.",
