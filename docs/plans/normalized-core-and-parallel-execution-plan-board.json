@@ -54,13 +54,13 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T16:25:29Z"
+    "updatedAt": "2026-06-10T16:36:32Z"
   },
   "tasks": [
     {
       "id": "T01",
       "title": "Fix host-pass main-module startup lock touch",
-      "status": "ready",
+      "status": "done",
       "priority": 1,
       "dependsOn": [],
       "ownerLane": "controller",
@@ -80,11 +80,14 @@
         "npm run check",
         "npm test"
       ],
-      "outputs": [],
-      "attemptCount": 0,
+      "outputs": [
+        "Added spawned main-module host-pass coverage for empty workspaces and expired host-state cleanup across default and transport lane passes.",
+        "Hoisted host-state lock constants, moved the main-module entrypoint to EOF, and persisted startup pruning through mutateHostState."
+      ],
+      "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "2952472736e80aae5d6604dc2f9502853d06155c",
+      "notes": "Red: node --test test/agent-host-pass.test.js failed because expired taskLeases remained persisted. Green: node --test test/agent-host-pass.test.js passed. Gate: npm run check and npm test passed with 667 tests."
     },
     {
       "id": "T02",
