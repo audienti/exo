@@ -12,6 +12,7 @@ import { buildInboundAutomationHealthWarnings, buildInboundAutomationWarnings } 
 import {
   findCompanyById,
   findMotionById,
+  listAgentQueueProspectBranches,
   listCompanies,
   listInboundCues,
   listInboundObservations,
@@ -2923,6 +2924,7 @@ function loadQueue(hostState = null) {
     users: listUsers(),
     observations: listInboundObservations(),
     cues: listInboundCues(),
+    prospectBranches: listAgentQueueProspectBranches(),
     hostState,
     includeWaitingRetrieval: isRetrievalForceEnabled(),
   });

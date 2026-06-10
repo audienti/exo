@@ -19,6 +19,9 @@ import { buildOperatorPromptFromDailyItem, buildOperatorPromptFromExecutionActio
  *   rawUsers: unknown[],
  *   rawObservations: unknown[],
  *   rawCues?: unknown[] | undefined,
+ *   now?: string | null | undefined,
+ *   capacityAccounts?: Array<{ motion: any, account: any }> | undefined,
+ *   prospectBranches?: Array<{ motion: any, account: any, prospect: any }> | undefined,
  *   description?: ReturnType<typeof describeExo> | null | undefined,
  *   filters?: {
  *     motionId?: string | null | undefined,
@@ -39,6 +42,9 @@ export function buildNextView(input) {
     const daily = buildDailyView(input.rawUser, input.rawMotions, input.rawCompanies, input.rawProfiles, input.rawObservations, {
       rawUsers: input.rawUsers,
       rawCues: input.rawCues ?? [],
+      now: input.now ?? null,
+      capacityAccounts: input.capacityAccounts,
+      prospectBranches: input.prospectBranches,
       motionId: filters.motionId ?? null,
       companyId: filters.companyId ?? null,
       prospectId: filters.prospectId ?? null,

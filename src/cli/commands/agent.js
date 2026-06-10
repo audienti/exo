@@ -8,7 +8,17 @@ import { execFile, execFileSync } from "node:child_process";
 import { buildAgentQueue } from "../../core/build-agent-queue.js";
 import { buildSendHandoff } from "../../core/build-send-handoff.js";
 import { buildInboundAutomationHealthWarnings, buildInboundAutomationStatus, buildInboundAutomationWarnings } from "../../core/user-inbound-sync.js";
-import { findCompanyById, findMotionById, listBrowserProfiles, listCompanies, listInboundCues, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
+import {
+  findCompanyById,
+  findMotionById,
+  listAgentQueueProspectBranches,
+  listBrowserProfiles,
+  listCompanies,
+  listInboundCues,
+  listInboundObservations,
+  listMotions,
+  listUsers,
+} from "../../db/database.js";
 import { getHomeStateDir } from "../../db/paths.js";
 import { createTaskVerificationFingerprint, getCanaryCooldown, getRecentTaskVerification, getSendCircuitBreaker, listActiveBrowserBackoffs, pruneExpiredBrowserBackoffs } from "../../lib/agent-host-state.js";
 import { releaseAgentRunLock, tryAcquireAgentRunLock } from "../../lib/agent-run-lock.js";
@@ -758,6 +768,7 @@ function buildAgentQueueInput() {
     users: listUsers(),
     observations: listInboundObservations(),
     cues: listInboundCues(),
+    prospectBranches: listAgentQueueProspectBranches(),
     hostState,
   };
 }

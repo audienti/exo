@@ -123,6 +123,7 @@ export function buildAgentQueue(input) {
   const now = normalizeNowIso(input.now);
   const includeWaitingRetrieval = input.includeWaitingRetrieval === true;
   const activeMotions = (input.motions ?? []).filter((motion) => isExecutionEligibleMotionStatus(motion?.status));
+  const activeMotionIds = new Set(activeMotions.map((motion) => motion.id));
   const normalizedCues = normalizeInboundCues(input.cues ?? []);
   const profilesById = new Map((input.profiles ?? []).map((profile) => [profile.id, profile]));
   const companiesById = new Map((input.companies ?? []).map((company) => [company.id, company]));
@@ -163,13 +164,14 @@ export function buildAgentQueue(input) {
       }
     }
   }
+  const queueProspectBranches = buildQueueProspectBranches(input, activeMotions, activeMotionIds, now);
+  const queueProspectBranchesByAccount = groupBy(
+    queueProspectBranches,
+    (branch) => `${branch.motion.id}:${branch.account.companyId}`,
+  );
   const prospectContextById = new Map();
-  for (const motion of activeMotions) {
-    for (const account of (motion.targetMap?.accounts ?? []).map((item) => normalizeAccountForAgentQueue(item, now))) {
-      for (const prospect of account.prospects ?? []) {
-        prospectContextById.set(prospect.id, { motion, account, prospect });
-      }
-    }
+  for (const { motion, account, prospect } of queueProspectBranches) {
+    prospectContextById.set(prospect.id, { motion, account, prospect });
   }
   const tasks = [];
   const waiting = [];
@@ -467,7 +469,9 @@ export function buildAgentQueue(input) {
           account,
         }), { now, tasks, waiting });
       }
-      for (const prospect of account.prospects ?? []) {
+      const queueBranches = queueProspectBranchesByAccount.get(`${motion.id}:${account.companyId}`) ?? [];
+      for (const branch of queueBranches) {
+        const prospect = branch.prospect;
         // Honor operator steers FIRST. A "do not contact / works for us" steer
         // removes the prospect from the loop entirely — the unattended agent
         // must never draft for or message someone the operator excluded.
@@ -787,6 +791,45 @@ function isClaimableProspectSelectionAccount(account) {
 function isAccountProspectSelectionClaimed(account) {
   return account?.packetState?.kind === "prospect_selection"
     && account?.packetState?.status === "claimed";
+}
+
+/**
+ * @param {any} input
+ * @param {any[]} activeMotions
+ * @param {Set<string>} activeMotionIds
+ * @param {string} now
+ */
+function buildQueueProspectBranches(input, activeMotions, activeMotionIds, now) {
+  if (Array.isArray(input.prospectBranches)) {
+    return input.prospectBranches
+      .map((branch) => {
+        const motion = branch?.motion ?? null;
+        const prospect = branch?.prospect ? withDerivedProspectQueueState(branch.prospect, now) : null;
+        const account = branch?.account
+          ? {
+              ...normalizeAccountForAgentQueue(branch.account, now),
+              prospects: prospect ? [prospect] : [],
+            }
+          : null;
+        return motion && account && prospect ? { motion, account, prospect } : null;
+      })
+      .filter((branch) =>
+        branch
+        && (
+          activeMotionIds.size
+            ? activeMotionIds.has(branch.motion.id)
+            : isExecutionEligibleMotionStatus(branch.motion?.status)
+        )
+      );
+  }
+
+  return activeMotions.flatMap((motion) =>
+    (motion.targetMap?.accounts ?? [])
+      .map((item) => normalizeAccountForAgentQueue(item, now))
+      .flatMap((account) =>
+        (account.prospects ?? []).map((prospect) => ({ motion, account, prospect }))
+      )
+  );
 }
 
 /**

@@ -12,6 +12,7 @@ import { appendActivityEvent } from "./activity-events.js";
 import { findNormalizedCompanyById, findOrCreateCompany } from "./companies.js";
 import { getLocalDatabase } from "./database.js";
 import { upsertProspectDraft } from "./drafts.js";
+import { workableBranchPredicateSql } from "./lifecycle-state.js";
 import { upsertMotionAccount } from "./motion-accounts.js";
 import {
   findPersonById,
@@ -200,6 +201,190 @@ export function listMotions() {
 }
 
 /**
+ * @param {{
+ *   executionUserId: string,
+ *   now?: string,
+ *   limit?: number | null,
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null
+ * }} input
+ * @returns {Array<{
+ *   motion: import("../schema/motion.js").motionViewSchema._type,
+ *   account: import("../schema/target-account.js").targetAccountSchema._type,
+ *   prospect: import("../schema/target-account.js").prospectSchema._type
+ * }>}
+ */
+export function listDueProspectBranches(input) {
+  return listPlannerProspectBranches({
+    ...input,
+    dueOnly: true,
+  });
+}
+
+/**
+ * @param {{
+ *   executionUserId?: string | null,
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null
+ * }} [input]
+ * @returns {Array<{
+ *   motion: import("../schema/motion.js").motionViewSchema._type,
+ *   account: import("../schema/target-account.js").targetAccountSchema._type,
+ *   prospect: import("../schema/target-account.js").prospectSchema._type
+ * }>}
+ */
+export function listAgentQueueProspectBranches(input = {}) {
+  const rows = getLocalDatabase()
+    .prepare(`
+      SELECT
+        prospects.id AS prospect_id,
+        prospects.motion_id AS motion_id,
+        prospects.motion_account_id AS motion_account_id
+      FROM prospects
+      JOIN motion_accounts ON motion_accounts.id = prospects.motion_account_id
+      JOIN motions ON motions.id = prospects.motion_id
+      WHERE motions.status = 'active'
+        AND ${workableBranchPredicateSql}
+        AND (@executionUserId IS NULL OR motion_accounts.execution_user_id = @executionUserId OR motion_accounts.execution_user_id IS NULL)
+        AND (@motionId IS NULL OR prospects.motion_id = @motionId)
+        AND (@companyId IS NULL OR prospects.company_id = @companyId)
+        AND (@prospectId IS NULL OR prospects.id = @prospectId)
+      ORDER BY motion_accounts.created_at ASC, prospects.created_at ASC
+    `)
+    .all({
+      executionUserId: input.executionUserId ?? null,
+      motionId: input.motionId ?? null,
+      companyId: input.companyId ?? null,
+      prospectId: input.prospectId ?? null,
+    });
+
+  return rows
+    .map((row) => hydrateMotionProspectBranch(row))
+    .filter(Boolean);
+}
+
+/**
+ * @param {{
+ *   executionUserId?: string | null,
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null
+ * }} [input]
+ * @returns {Array<{
+ *   motion: import("../schema/motion.js").motionViewSchema._type,
+ *   account: import("../schema/target-account.js").targetAccountSchema._type
+ * }>}
+ */
+export function listOutboundCapacityAccounts(input = {}) {
+  const rows = getLocalDatabase()
+    .prepare(`
+      SELECT
+        motion_accounts.id AS motion_account_id,
+        motion_accounts.motion_id AS motion_id
+      FROM motion_accounts
+      JOIN motions ON motions.id = motion_accounts.motion_id
+      WHERE motions.status = 'active'
+        AND motion_accounts.disposition = 'active'
+        AND motion_accounts.queue_status NOT IN ('suppressed', 'exhausted')
+        AND (@executionUserId IS NULL OR motion_accounts.execution_user_id = @executionUserId OR motion_accounts.execution_user_id IS NULL)
+        AND (@motionId IS NULL OR motion_accounts.motion_id = @motionId)
+        AND (@companyId IS NULL OR motion_accounts.company_id = @companyId)
+        AND (
+          @prospectId IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM prospects
+            WHERE prospects.motion_account_id = motion_accounts.id
+              AND prospects.id = @prospectId
+              AND ${workableProspectPredicateSql}
+          )
+        )
+      ORDER BY motion_accounts.created_at ASC
+    `)
+    .all({
+      executionUserId: input.executionUserId ?? null,
+      motionId: input.motionId ?? null,
+      companyId: input.companyId ?? null,
+      prospectId: input.prospectId ?? null,
+    });
+
+  return rows
+    .map((row) => hydrateMotionAccountBranch(row, {
+      prospectId: input.prospectId ?? null,
+      workableProspectsOnly: true,
+    }))
+    .filter(Boolean);
+}
+
+/**
+ * @param {{
+ *   executionUserId: string,
+ *   now?: string,
+ *   limit?: number | null,
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null,
+ *   dueOnly?: boolean
+ * }} input
+ * @returns {Array<{
+ *   motion: import("../schema/motion.js").motionViewSchema._type,
+ *   account: import("../schema/target-account.js").targetAccountSchema._type,
+ *   prospect: import("../schema/target-account.js").prospectSchema._type
+ * }>}
+ */
+export function listPlannerProspectBranches(input) {
+  const now = input.now ?? new Date().toISOString();
+  const limit = Number.isInteger(input.limit) && input.limit && input.limit > 0
+    ? `LIMIT ${Math.floor(input.limit)}`
+    : "";
+  const rows = getLocalDatabase()
+    .prepare(`
+      SELECT
+        prospects.id AS prospect_id,
+        prospects.motion_id AS motion_id,
+        prospects.motion_account_id AS motion_account_id
+      FROM prospects
+      JOIN motion_accounts ON motion_accounts.id = prospects.motion_account_id
+      JOIN motions ON motions.id = prospects.motion_id
+      WHERE (
+          motion_accounts.execution_user_id = @executionUserId
+          OR motion_accounts.execution_user_id IS NULL
+        )
+        AND motions.status = 'active'
+        AND prospects.cadence_status = 'ready'
+        AND ${workableBranchPredicateSql}
+        AND (@motionId IS NULL OR prospects.motion_id = @motionId)
+        AND (@companyId IS NULL OR prospects.company_id = @companyId)
+        AND (@prospectId IS NULL OR prospects.id = @prospectId)
+        AND (
+          @dueOnly = 0
+          OR prospects.cadence_next_action_due_at IS NULL
+          OR prospects.cadence_next_action_due_at <= @now
+        )
+      ORDER BY
+        CASE WHEN @dueOnly = 1 THEN prospects.cadence_next_action_due_at END ASC,
+        CASE WHEN @dueOnly = 1 THEN prospects.updated_at END ASC,
+        motion_accounts.created_at ASC,
+        prospects.created_at ASC
+      ${limit}
+    `)
+    .all({
+      executionUserId: input.executionUserId,
+      motionId: input.motionId ?? null,
+      companyId: input.companyId ?? null,
+      prospectId: input.prospectId ?? null,
+      dueOnly: input.dueOnly === true ? 1 : 0,
+      now,
+    });
+
+  return rows
+    .map((row) => hydrateMotionProspectBranch(row))
+    .filter(Boolean);
+}
+
+/**
  * @param {string} id
  */
 export function deleteMotion(id) {
@@ -292,10 +477,10 @@ function buildHydratedTargetAccounts(motionId) {
  * @param {any} row
  * @returns {import("../schema/target-account.js").targetAccountSchema._type}
  */
-function hydrateTargetAccountRow(row) {
+function hydrateTargetAccountRow(row, options = {}) {
   const payload = parsePayload(row);
   const company = findNormalizedCompanyById(row.company_id);
-  const prospects = hydrateProspectsForAccount(row.id, row.company_id);
+  const prospects = hydrateProspectsForAccount(row.id, row.company_id, options);
   const signalMatches = hydrateSignalMatchesForAccount(row.id);
   const currentPacketState = buildPacketState(row, packetKindForAccountRow(row, payload.packetState), payload.packetState);
 
@@ -326,16 +511,114 @@ function hydrateTargetAccountRow(row) {
  * @param {string} motionAccountId
  * @param {string} companyId
  */
-function hydrateProspectsForAccount(motionAccountId, companyId) {
+function hydrateProspectsForAccount(motionAccountId, companyId, options = {}) {
   return getLocalDatabase()
     .prepare(`
       SELECT *
       FROM prospects
-      WHERE motion_account_id = ?
+      WHERE motion_account_id = @motionAccountId
+        AND (@prospectId IS NULL OR id = @prospectId)
+        AND (
+          @workableProspectsOnly = 0
+          OR ${workableProspectPredicateSql}
+        )
       ORDER BY created_at ASC
     `)
-    .all(motionAccountId)
+    .all({
+      motionAccountId,
+      prospectId: options.prospectId ?? null,
+      workableProspectsOnly: options.workableProspectsOnly === true ? 1 : 0,
+    })
     .map((row) => hydrateProspectRow(row, companyId));
+}
+
+/**
+ * @param {{ motion_id: string, motion_account_id: string }} row
+ * @param {{ prospectId?: string | null, workableProspectsOnly?: boolean }} [options]
+ * @returns {{
+ *   motion: import("../schema/motion.js").motionViewSchema._type,
+ *   account: import("../schema/target-account.js").targetAccountSchema._type
+ * } | null}
+ */
+function hydrateMotionAccountBranch(row, options = {}) {
+  const database = getLocalDatabase();
+  const motionRow = database.prepare("SELECT * FROM motions WHERE id = ?").get(row.motion_id);
+  const accountRow = database.prepare("SELECT * FROM motion_accounts WHERE id = ?").get(row.motion_account_id);
+  if (!motionRow || !accountRow) return null;
+
+  const source = JSON.parse(motionRow.payload_json);
+  const baseMotion = toMotionView({
+    ...source,
+    id: motionRow.id,
+    version: motionRow.version ?? source.version ?? 1,
+    name: motionRow.name,
+    status: motionRow.status,
+    updatedAt: source.updatedAt ?? motionRow.updated_at,
+    offer: {
+      ...(source.offer ?? {}),
+      sourceUrl: source.offer?.sourceUrl ?? motionRow.source_url,
+    },
+  });
+  const account = hydrateTargetAccountRow(accountRow, {
+    prospectId: options.prospectId ?? null,
+    workableProspectsOnly: options.workableProspectsOnly === true,
+  });
+
+  if (options.prospectId && !account.prospects.some((prospect) => prospect.id === options.prospectId)) {
+    return null;
+  }
+
+  const motion = toMotionView({
+    ...baseMotion,
+    targetMap: {
+      status: "ready",
+      accounts: [account],
+      segments: baseMotion.targetMap?.segments ?? baseMotion.targetingProfile.segmentVariants,
+    },
+  });
+  return { motion, account };
+}
+
+/**
+ * @param {{ motion_id: string, motion_account_id: string, prospect_id: string }} row
+ * @returns {{
+ *   motion: import("../schema/motion.js").motionViewSchema._type,
+ *   account: import("../schema/target-account.js").targetAccountSchema._type,
+ *   prospect: import("../schema/target-account.js").prospectSchema._type
+ * } | null}
+ */
+function hydrateMotionProspectBranch(row) {
+  const database = getLocalDatabase();
+  const motionRow = database.prepare("SELECT * FROM motions WHERE id = ?").get(row.motion_id);
+  const accountRow = database.prepare("SELECT * FROM motion_accounts WHERE id = ?").get(row.motion_account_id);
+  if (!motionRow || !accountRow) return null;
+
+  const source = JSON.parse(motionRow.payload_json);
+  const baseMotion = toMotionView({
+    ...source,
+    id: motionRow.id,
+    version: motionRow.version ?? source.version ?? 1,
+    name: motionRow.name,
+    status: motionRow.status,
+    updatedAt: source.updatedAt ?? motionRow.updated_at,
+    offer: {
+      ...(source.offer ?? {}),
+      sourceUrl: source.offer?.sourceUrl ?? motionRow.source_url,
+    },
+  });
+  const account = hydrateTargetAccountRow(accountRow, { prospectId: row.prospect_id });
+  const prospect = account.prospects.find((item) => item.id === row.prospect_id) ?? null;
+  if (!prospect) return null;
+
+  const motion = toMotionView({
+    ...baseMotion,
+    targetMap: {
+      status: "ready",
+      accounts: [account],
+      segments: baseMotion.targetMap?.segments ?? baseMotion.targetingProfile.segmentVariants,
+    },
+  });
+  return { motion, account, prospect };
 }
 
 /**
@@ -797,6 +1080,11 @@ function moveProspectIdIntoMotion(prospectId, motionId) {
     `)
     .run({ prospectId, motionId });
 }
+
+const workableProspectPredicateSql = `
+  prospects.disposition = 'active'
+  AND prospects.queue_status NOT IN ('suppressed', 'exhausted', 'held_cross_motion')
+`;
 
 /**
  * @param {Record<string, any>} payload

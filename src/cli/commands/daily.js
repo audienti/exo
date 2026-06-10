@@ -4,7 +4,17 @@
 import { renderDaily } from "../../artifacts/render-daily.js";
 import { buildDailyView } from "../../core/build-daily-view.js";
 import { buildUserWorkspaceContext } from "../../core/workspace-context.js";
-import { findUserById, listBrowserProfiles, listCompanies, listInboundCues, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
+import {
+  findUserById,
+  listBrowserProfiles,
+  listCompanies,
+  listInboundCues,
+  listInboundObservations,
+  listMotions,
+  listOutboundCapacityAccounts,
+  listPlannerProspectBranches,
+  listUsers,
+} from "../../db/database.js";
 import { summarizeExecutionUsers } from "../../lib/execution-users.js";
 import { buildUserScopedBootstrapView } from "../../lib/user-scoped-bootstrap.js";
 import { runCliRepairableContract } from "../repairable-contracts.js";
@@ -44,6 +54,7 @@ Rules:
         return;
       }
       const user = resolution.user;
+      const now = new Date().toISOString();
 
       const observations = listInboundObservations({
         userId: user.id,
@@ -65,11 +76,25 @@ Rules:
         rawProfiles: listBrowserProfiles(),
         rawObservations: workspaceContext.observations,
         options: {
+          now,
           rawUsers: listUsers(),
           rawCues: workspaceContext.cues,
           motionId: options.motion ?? null,
           companyId: options.company ?? null,
           prospectId: options.prospect ?? null,
+          capacityAccounts: listOutboundCapacityAccounts({
+            executionUserId: user.id,
+            motionId: options.motion ?? null,
+            companyId: options.company ?? null,
+            prospectId: options.prospect ?? null,
+          }),
+          prospectBranches: listPlannerProspectBranches({
+            executionUserId: user.id,
+            now,
+            motionId: options.motion ?? null,
+            companyId: options.company ?? null,
+            prospectId: options.prospect ?? null,
+          }),
           limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null
         }
       };

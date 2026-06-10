@@ -12,7 +12,10 @@ import {
   findOrCreateCompany,
   getLocalDatabase,
   insertMotion,
+  insertUser,
   listActivityEvents,
+  listDueProspectBranches,
+  listOutboundCapacityAccounts,
   MotionVersionConflictError,
   resolvePersonIdentity,
   updateMotion,
@@ -324,6 +327,141 @@ test("packet completion writes terminal dispositions and system events to normal
   });
 });
 
+test("due prospect branch scan uses normalized active dispositions and hydrates the selected branch", () => {
+  withIsolatedExoState(() => {
+    const motion = insertMotion(buildMotionView());
+    const userId = "user-due-branch";
+    insertUser(buildExecutionUser(userId));
+    const active = seedDueProspectBranch({
+      motionId: motion.id,
+      companyId: "company-due-active",
+      companyName: "Due Active Co",
+      personId: "person-due-active",
+      prospectId: "prospect-due-active",
+      name: "Avery Active",
+      title: "VP Revenue",
+      executionUserId: userId,
+      accountDisposition: "active",
+      prospectDisposition: "active",
+      dueAt: "2026-06-10T11:00:00.000Z",
+    });
+    seedDueProspectBranch({
+      motionId: motion.id,
+      companyId: "company-due-account-terminal",
+      companyName: "Terminal Account Co",
+      personId: "person-due-account-terminal",
+      prospectId: "prospect-due-account-terminal",
+      name: "Terry Terminal",
+      title: "COO",
+      executionUserId: userId,
+      accountDisposition: "no_longer_target",
+      prospectDisposition: "active",
+      dueAt: "2026-06-10T10:00:00.000Z",
+    });
+    seedDueProspectBranch({
+      motionId: motion.id,
+      companyId: "company-due-prospect-nurture",
+      companyName: "Prospect Nurture Co",
+      personId: "person-due-prospect-nurture",
+      prospectId: "prospect-due-prospect-nurture",
+      name: "Nora Nurture",
+      title: "CRO",
+      executionUserId: userId,
+      accountDisposition: "active",
+      prospectDisposition: "nurture",
+      dueAt: "2026-06-10T09:00:00.000Z",
+    });
+
+    const branches = listDueProspectBranches({
+      executionUserId: userId,
+      now: "2026-06-10T12:00:00.000Z",
+      limit: 5,
+    });
+
+    assert.equal(branches.length, 1);
+    assert.equal(branches[0].motion.id, motion.id);
+    assert.equal(branches[0].account.companyId, active.company.id);
+    assert.equal(branches[0].account.prospects.length, 1);
+    assert.equal(branches[0].prospect.id, active.prospect.id);
+    assert.equal(branches[0].prospect.name, "Avery Active");
+    assert.equal(branches[0].prospect.title, "VP Revenue");
+    assert.equal(branches[0].prospect.cadenceState.status, "ready");
+  });
+});
+
+test("outbound capacity account scan includes scoped empty accounts and excludes terminal branches", () => {
+  withIsolatedExoState(() => {
+    const motion = insertMotion(buildMotionView());
+    const userId = "user-capacity-scan";
+    insertUser(buildExecutionUser(userId));
+    const emptyCompany = findOrCreateCompany({
+      id: "company-capacity-empty",
+      name: "Capacity Empty Co",
+      domain: "capacity-empty.example",
+    });
+    upsertMotionAccount({
+      id: "motion-account-capacity-empty",
+      motionId: motion.id,
+      companyId: emptyCompany.id,
+      executionUserId: userId,
+      queueStatus: "discovered",
+      disposition: "active",
+    });
+    const active = seedDueProspectBranch({
+      motionId: motion.id,
+      companyId: "company-capacity-active",
+      companyName: "Capacity Active Co",
+      personId: "person-capacity-active",
+      prospectId: "prospect-capacity-active",
+      name: "Casey Capacity",
+      title: "VP Sales",
+      executionUserId: userId,
+      accountDisposition: "active",
+      prospectDisposition: "active",
+      dueAt: "2026-06-10T11:00:00.000Z",
+    });
+    seedDueProspectBranch({
+      motionId: motion.id,
+      companyId: "company-capacity-terminal-account",
+      companyName: "Capacity Terminal Account Co",
+      personId: "person-capacity-terminal-account",
+      prospectId: "prospect-capacity-terminal-account",
+      name: "Tara Terminal",
+      title: "COO",
+      executionUserId: userId,
+      accountDisposition: "no_longer_target",
+      prospectDisposition: "active",
+      dueAt: "2026-06-10T11:00:00.000Z",
+    });
+    seedDueProspectBranch({
+      motionId: motion.id,
+      companyId: "company-capacity-terminal-prospect",
+      companyName: "Capacity Terminal Prospect Co",
+      personId: "person-capacity-terminal-prospect",
+      prospectId: "prospect-capacity-terminal-prospect",
+      name: "Nina Nurture",
+      title: "CRO",
+      executionUserId: userId,
+      accountDisposition: "active",
+      prospectDisposition: "nurture",
+      dueAt: "2026-06-10T11:00:00.000Z",
+    });
+
+    const branches = listOutboundCapacityAccounts({
+      executionUserId: userId,
+    });
+
+    assert.deepEqual(
+      branches.map((branch) => branch.account.companyId),
+      [emptyCompany.id, active.company.id, "company-capacity-terminal-prospect"]
+    );
+    assert.equal(branches[0].account.prospects.length, 0);
+    assert.equal(branches[1].account.prospects.length, 1);
+    assert.equal(branches[1].account.prospects[0].id, active.prospect.id);
+    assert.equal(branches[2].account.prospects.length, 0);
+  });
+});
+
 function buildMotionView() {
   const now = "2026-06-10T12:00:00.000Z";
   return motionViewSchema.parse({
@@ -390,6 +528,93 @@ function buildFullCompany(company, motionId) {
     motionIds: company.motionIds ?? [motionId],
     engagementProfileAssignment: company.engagementProfileAssignment ?? null,
     engagementUserAssignment: company.engagementUserAssignment ?? null,
+  };
+}
+
+/**
+ * @param {{
+ *   motionId: string,
+ *   companyId: string,
+ *   companyName: string,
+ *   personId: string,
+ *   prospectId: string,
+ *   name: string,
+ *   title: string,
+ *   executionUserId: string,
+ *   accountDisposition: string,
+ *   prospectDisposition: string,
+ *   dueAt: string
+ * }} input
+ */
+function seedDueProspectBranch(input) {
+  const company = findOrCreateCompany({
+    id: input.companyId,
+    name: input.companyName,
+    domain: `${input.companyId}.example`,
+  });
+  const motionAccount = upsertMotionAccount({
+    id: `motion-account-${input.companyId}`,
+    motionId: input.motionId,
+    companyId: company.id,
+    executionUserId: input.executionUserId,
+    queueStatus: "researched",
+    disposition: input.accountDisposition,
+  });
+  const person = resolvePersonIdentity({
+    id: input.personId,
+    name: input.name,
+    contactPoints: [{ kind: "linkedin_public_id", value: input.personId.replace(/^person-/, "") }],
+  }).person;
+  upsertEmployment({
+    personId: person.id,
+    companyId: company.id,
+    title: input.title,
+    source: "test",
+    observedAt: "2026-06-10T08:00:00.000Z",
+  });
+  const prospect = upsertProspect({
+    id: input.prospectId,
+    motionId: input.motionId,
+    companyId: company.id,
+    motionAccountId: motionAccount.id,
+    personId: person.id,
+    queueStatus: "selected",
+    disposition: input.prospectDisposition,
+    cadenceStatus: "ready",
+    cadenceCurrentStep: "connection-request",
+    cadenceNextActionDueAt: input.dueAt,
+    payload: {
+      name: input.name,
+      whyRelevant: "Due branch test.",
+      cadenceState: {
+        nextAction: `Send ${input.name} a connection request.`,
+      },
+    },
+  });
+
+  return { company, motionAccount, person, prospect };
+}
+
+/**
+ * @param {string} id
+ */
+function buildExecutionUser(id) {
+  return {
+    id,
+    createdAt: "2026-06-10T08:00:00.000Z",
+    updatedAt: "2026-06-10T08:00:00.000Z",
+    label: "Due Branch User",
+    owner: "operator",
+    notes: null,
+    workingHours: {
+      mode: "always",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "09:00",
+      endLocalTime: "17:00",
+    },
+    accounts: [],
+    harnessConnections: [],
   };
 }
 

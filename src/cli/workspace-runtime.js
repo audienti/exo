@@ -17,11 +17,14 @@ import {
   findInboundObservationById,
   findMotionById,
   findUserById,
+  listAgentQueueProspectBranches,
   listBrowserProfiles,
   listCompanies,
   listInboundCues,
   listInboundObservations,
   listMotions,
+  listOutboundCapacityAccounts,
+  listPlannerProspectBranches,
   listUsers,
   updateCompany,
   updateMotion,
@@ -59,6 +62,7 @@ export function buildWorkspaceProjection(input) {
     rawObservations: observations,
     rawCues: cues,
   });
+  const now = new Date().toISOString();
   const filteredAllObservations = filterWorkspaceObservationsForUser(
     allObservations,
     user,
@@ -68,8 +72,16 @@ export function buildWorkspaceProjection(input) {
   const inboundReview = buildInboundReviewView(workspaceContext.user, workspaceContext.observations, motions, companies);
   const inbox = buildInboxView(workspaceContext.user, workspaceContext.observations, motions, companies);
   const daily = buildDailyView(workspaceContext.user, motions, companies, browserProfiles, workspaceContext.observations, {
+    now,
     rawUsers: users,
     rawCues: workspaceContext.cues,
+    capacityAccounts: listOutboundCapacityAccounts({
+      executionUserId: user.id,
+    }),
+    prospectBranches: listPlannerProspectBranches({
+      executionUserId: user.id,
+      now,
+    }),
   });
   const reports = motions.map((motion) =>
     buildMotionReport(motion, companies, browserProfiles, users, {
@@ -83,6 +95,7 @@ export function buildWorkspaceProjection(input) {
     users,
     observations: filteredAllObservations,
     cues: workspaceContext.cues,
+    prospectBranches: listAgentQueueProspectBranches(),
   });
 
   return buildWorkspaceModel({
