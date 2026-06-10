@@ -24,8 +24,11 @@ export function claimMotionProspectPacket(rawMotion, rawCompany, input) {
     throw new Error(`Prospect not found on target account: ${input.prospectId}`);
   }
 
-  claimProspectPacket(input.prospectId, {
+  const claimed = claimProspectPacket(input.prospectId, {
     workerLabel: input.workerLabel,
   });
+  if (!claimed) {
+    throw new Error(`Prospect packet is already claimed by ${existingProspect.packetState?.workerLabel ?? "another worker"}.`);
+  }
   return findMotionById(motion.id) ?? motion;
 }

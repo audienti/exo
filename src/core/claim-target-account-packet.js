@@ -23,14 +23,38 @@ export function claimMotionTargetAccountPacket(rawMotion, rawCompany, input) {
   const nextQueueStatus = queueStatusForClaim(queueStatus);
   const now = new Date().toISOString();
   const packetKind = nextQueueStatus === "researched" ? "prospect_selection" : "company_research";
-  const motionAccount = upsertMotionAccount({
+  const motionAccount = existingMotionAccount ?? upsertMotionAccount({
     id: existingMotionAccount?.id,
     motionId: motion.id,
     companyId: baseAccount.companyId,
     executionUserId: motion.engagementUserAssignment?.userId ?? existingMotionAccount?.executionUserId ?? null,
     queueStatus: nextQueueStatus,
     disposition: baseAccount.disposition,
-    packetStatus: existingMotionAccount?.packetStatus ?? packetStatusFromPacketState(baseAccount.packetState),
+    packetStatus: packetStatusFromPacketState(baseAccount.packetState),
+    lastResearchAt: baseAccount.lastResearchAt,
+    payload: {
+      ...baseAccount,
+      prospects: undefined,
+      signalMatches: undefined,
+    },
+    now,
+  });
+  const claimed = claimMotionAccountPacket(motionAccount.id, {
+    workerLabel: input.workerLabel,
+    claimedAt: now,
+  });
+  if (!claimed) {
+    throw new Error(`Motion account packet is already claimed by ${existingMotionAccount?.packetClaimedBy ?? "another worker"}.`);
+  }
+
+  upsertMotionAccount({
+    id: motionAccount.id,
+    motionId: motion.id,
+    companyId: baseAccount.companyId,
+    executionUserId: motion.engagementUserAssignment?.userId ?? motionAccount.executionUserId ?? null,
+    queueStatus: nextQueueStatus,
+    disposition: baseAccount.disposition,
+    packetStatus: "claimed",
     lastResearchAt: baseAccount.lastResearchAt,
     payload: {
       ...baseAccount,
@@ -46,10 +70,6 @@ export function claimMotionTargetAccountPacket(rawMotion, rawCompany, input) {
       signalMatches: undefined,
     },
     now,
-  });
-  claimMotionAccountPacket(motionAccount.id, {
-    workerLabel: input.workerLabel,
-    claimedAt: now,
   });
   return findMotionById(motion.id) ?? motion;
 }

@@ -2,16 +2,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 
 import {
   appendActivityEvent,
   findMotionById,
   findOrCreateCompany,
   getLocalDatabase,
-  insertMotion,
   insertUser,
   listActivityEvents,
   listDueProspectBranches,
@@ -36,6 +32,11 @@ import {
   motionSchema,
   motionViewSchema,
 } from "../src/schema/motion.js";
+import {
+  buildMotionView,
+  seedMotionView,
+  withIsolatedExoState,
+} from "./support/normalized-fixtures.js";
 
 test("motion schemas split stored core from hydrated legacy view", () => {
   const view = buildMotionView();
@@ -48,7 +49,7 @@ test("motion schemas split stored core from hydrated legacy view", () => {
 
 test("motion rows store core only and hydrate a legacy targetMap view from normalized rows", () => {
   withIsolatedExoState(() => {
-    const motion = insertMotion(buildMotionView());
+    const motion = seedMotionView();
     const storedPayload = JSON.parse(
       getLocalDatabase()
         .prepare("SELECT payload_json FROM motions WHERE id = ?")
@@ -196,7 +197,7 @@ test("motion rows store core only and hydrate a legacy targetMap view from norma
 
 test("motion core updates reject stale versions and preserve the winning update", () => {
   withIsolatedExoState(() => {
-    const motion = insertMotion(buildMotionView());
+    const motion = seedMotionView();
     const copyA = findMotionById(motion.id);
     const copyB = findMotionById(motion.id);
 
@@ -225,7 +226,7 @@ test("motion core updates reject stale versions and preserve the winning update"
 
 test("motion core retry helper reloads after a version conflict", () => {
   withIsolatedExoState(() => {
-    const motion = insertMotion(buildMotionView());
+    const motion = seedMotionView();
     let attempts = 0;
 
     const stored = updateMotionWithRetry(motion.id, (current) => {
@@ -252,7 +253,7 @@ test("motion core retry helper reloads after a version conflict", () => {
 
 test("packet completion writes terminal dispositions and system events to normalized rows", () => {
   withIsolatedExoState(() => {
-    const motion = insertMotion(buildMotionView());
+    const motion = seedMotionView();
     const accountCompany = buildFullCompany(findOrCreateCompany({
       id: "company-account-terminal",
       name: "Account Terminal Co",
@@ -329,7 +330,7 @@ test("packet completion writes terminal dispositions and system events to normal
 
 test("due prospect branch scan uses normalized active dispositions and hydrates the selected branch", () => {
   withIsolatedExoState(() => {
-    const motion = insertMotion(buildMotionView());
+    const motion = seedMotionView();
     const userId = "user-due-branch";
     insertUser(buildExecutionUser(userId));
     const active = seedDueProspectBranch({
@@ -391,7 +392,7 @@ test("due prospect branch scan uses normalized active dispositions and hydrates 
 
 test("outbound capacity account scan includes scoped empty accounts and excludes terminal branches", () => {
   withIsolatedExoState(() => {
-    const motion = insertMotion(buildMotionView());
+    const motion = seedMotionView();
     const userId = "user-capacity-scan";
     insertUser(buildExecutionUser(userId));
     const emptyCompany = findOrCreateCompany({
@@ -461,60 +462,6 @@ test("outbound capacity account scan includes scoped empty accounts and excludes
     assert.equal(branches[2].account.prospects.length, 0);
   });
 });
-
-function buildMotionView() {
-  const now = "2026-06-10T12:00:00.000Z";
-  return motionViewSchema.parse({
-    id: "motion-hydrate",
-    name: "Hydration Motion",
-    createdAt: now,
-    updatedAt: now,
-    status: "active",
-    offer: {
-      sourceUrl: "https://hydrate.example",
-      offerNotes: "Offer notes",
-    },
-    premise: {
-      statement: "Hydration matters when rows replace blobs.",
-      notes: null,
-      source: "operator",
-      status: "defined",
-    },
-    targetingProfile: {},
-    suppressionPolicy: {},
-    offerThesis: {
-      sourceUrl: "https://hydrate.example",
-      sourceTitle: "Hydrate",
-      sourceDescription: "Hydrated motion test",
-      sourceSummary: "Hydrated motion test",
-      offerNotes: "Offer notes",
-      problemThesis: null,
-      buyerImpactThesis: null,
-      likelyTriggerThesis: null,
-      likelyRoleThesis: null,
-      likelySegmentThesis: null,
-      status: "seeded",
-    },
-    audienceHypotheses: [],
-    signals: [],
-    targetMap: {
-      status: "pending",
-      accounts: [],
-      segments: [],
-    },
-    stakeholderMap: {
-      status: "pending",
-      stakeholders: [],
-    },
-    motionPlan: {
-      status: "pending",
-      variants: [],
-    },
-    nextSteps: [],
-    engagementProfileAssignment: null,
-    engagementUserAssignment: null,
-  });
-}
 
 /**
  * @param {any} company
@@ -616,33 +563,4 @@ function buildExecutionUser(id) {
     accounts: [],
     harnessConnections: [],
   };
-}
-
-/**
- * @template T
- * @param {() => T} callback
- * @returns {T}
- */
-function withIsolatedExoState(callback) {
-  const previousStateDir = process.env.EXO_STATE_DIR;
-  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-hydration-"));
-  process.env.EXO_STATE_DIR = stateDir;
-  delete process.env.EXO_HOME_STATE_DIR;
-
-  try {
-    return callback();
-  } finally {
-    if (previousStateDir === undefined) {
-      delete process.env.EXO_STATE_DIR;
-    } else {
-      process.env.EXO_STATE_DIR = previousStateDir;
-    }
-    if (previousHomeStateDir === undefined) {
-      delete process.env.EXO_HOME_STATE_DIR;
-    } else {
-      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
-    }
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
 }
