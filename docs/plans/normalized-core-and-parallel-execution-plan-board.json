@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T20:13:37Z"
+    "updatedAt": "2026-06-10T20:52:27Z"
   },
   "tasks": [
     {
@@ -64,6 +64,7 @@
       "priority": 1,
       "dependsOn": [],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "scripts/run-agent-host-pass.js",
         "test/agent-host-pass.test.js"
@@ -96,6 +97,7 @@
       "priority": 2,
       "dependsOn": [],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "src/core/build-next-view.js",
         "src/core/what-is-this.js",
@@ -133,6 +135,7 @@
         "T01"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "scripts/run-agent-host-pass.js",
         "src/cli/commands/agent.js",
@@ -171,6 +174,7 @@
         "T03"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "scripts/run-agent-host-pass.js",
         "src/cli/commands/agent.js",
@@ -213,6 +217,7 @@
         "T04"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "src/db/migrations.js",
         "src/db/database.js",
@@ -252,6 +257,7 @@
         "T05"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "src/db/database.js",
         "src/db/companies.js",
@@ -297,6 +303,7 @@
         "T06"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "src/schema/motion.js",
         "src/db/motions.js",
@@ -340,6 +347,7 @@
         "T07"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "src/db/migrations.js",
         "src/db/prospects.js",
@@ -385,6 +393,7 @@
         "T16"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "src/db/database.js",
         "src/core/record-action-result.js",
@@ -421,12 +430,13 @@
     {
       "id": "T09",
       "title": "Convert read paths and hot scans to SQL",
-      "status": "running",
+      "status": "done",
       "priority": 1,
       "dependsOn": [
         "T08"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "src/db/database.js",
         "src/core/build-agent-queue.js",
@@ -447,21 +457,28 @@
         "npm run check",
         "npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added normalized SQL branch helpers for due/planner/agent queue prospect scans and outbound capacity account scans with single-branch and single-account hydration.",
+        "Rewired daily, next, workspace runtime, CLI agent queue, host pass, and UI runtime snapshots to pass SQL-selected branches into existing view and queue builders.",
+        "Converted daily candidate/support-action selection and outbound capacity queue/packet counts to use scoped normalized branches while preserving company-only discovered placeholders.",
+        "Moved agent queue prospect work onto normalized branch scans while retaining hydrated motion context for discovery/account packet work and compatibility fallbacks.",
+        "Added a mid-branch concurrency tracer proving a due send writeback and sibling research draft write both persist."
+      ],
       "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Started 2026-06-10 after T08 row-backed write paths landed green."
+      "commit": "5e5e8011da83e4f58142d1bfdda34fe4aee12947",
+      "notes": "Started 2026-06-10 after T08 row-backed write paths landed green. Red/repair: focused CLI due-scan tests initially hit node:sqlite unknown named parameter binding; fixed with a stable @dueOnly predicate. Full npm test then exposed workspace queue regression from over-narrowed queue_status/cadence_status filters; fixed agent queue SQL scan to return all active/workable prospects and preserve legacy derived queue state. Green: npm run check passed; git diff --check passed; focused motion/next/profile/inbound tests passed 28/28; focused CLI daily/next tests passed 14/14; focused agent/action/hydration/concurrency/capacity tests passed 71/71; workspace-runtime passed 4/4; final npm test passed 693/693. Caveat: next still loads legacy-compatible motion context for precedence/fallback, and agent queue still uses hydrated targetMap for discovery/account packet work; T09 converted the hot prospect/capacity candidate scans without removing every broader compatibility read."
     },
     {
       "id": "T10",
       "title": "Repair fixtures and add race regressions",
-      "status": "backlog",
+      "status": "ready",
       "priority": 2,
       "dependsOn": [
         "T09"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "test/support",
         "test"
@@ -492,6 +509,7 @@
         "T10"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "src/core/export-config.js",
         "src/core/import-config.js",
@@ -527,6 +545,7 @@
         "T11"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "package.json",
         "package-lock.json",
@@ -565,6 +584,7 @@
         "T12"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "scripts/run-agent-host-pass.js",
         "src/core/build-agent-queue.js",
@@ -599,6 +619,7 @@
         "T13"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "src/cli/commands/agent.js",
         "src/lib/agent-routine.js",
@@ -632,6 +653,7 @@
         "T14"
       ],
       "ownerLane": "controller",
+      "modelTier": "default",
       "files": [
         "docs/plans/normalized-core-and-parallel-execution-plan-board.json"
       ],
