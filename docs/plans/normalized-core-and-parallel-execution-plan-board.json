@@ -1,0 +1,566 @@
+{
+  "plan": {
+    "slug": "normalized-core-and-parallel-execution-plan",
+    "source": "docs/wip/normalized-core-and-parallel-execution-plan.md",
+    "objective": "Ship Exo 0.3.0 with a clean-break normalized relational execution core, safe agent runtime coordination, and post-cutover parallel research scale-out.",
+    "acceptanceCriteria": [
+      "WS0 host pass starts as a real main module, touches host state on startup, releases expired task leases, and no longer crashes on HOST_STATE_LOCK_* temporal dead zone.",
+      "WS1 reduces exo next --json latency by at least 60 percent against the current dataset while keeping output JSON shape unchanged.",
+      "WS2 makes run-agent-host-pass.js the only lane-lock owner, shrinks the shell runner lock to a spawn guard, and writes fresh merged agent-last-pass.json from scheduled-style lane runs.",
+      "WS3 replaces motion payload execution state with normalized companies, people, employments, motion_accounts, prospects, prospect_drafts, signal_matches, and permanent activity_events tables.",
+      "WS3 keeps listMotions/findMotionById returning hydrated legacy-compatible motion views while deleting repair-on-read persistence for execution state.",
+      "WS3 relational write paths record touches, drafts, cadence, action results, claims, inbound transitions, config import, and motion removal transactionally with optimistic motion-core versioning where applicable.",
+      "WS3 person identity resolver passes LinkedIn member-id/public-id, URL-mining, alias, conflict-review, v10 normalization, employment, email-policy, and cross-motion ownership tests.",
+      "WS3 tracer gate proves a due send and concurrent sibling research draft both persist without clobbering.",
+      "WS3 cutover runbook preserves playbooks/config, wipes disposable execution state only after the approved gate, reimports config, reinstalls the routine, and verifies doctor/queue.",
+      "WS4 runs multiple research workers with disjoint task sets, keeps transport serial per identity, and surfaces per-lane status in doctor.",
+      "Full npm run check and npm test are green at every completed task commit and at final close-out.",
+      "No code path writes targetMap into motions.payload_json after WS3; config import strips legacy execution state."
+    ],
+    "verificationCommands": [
+      "npm run check",
+      "npm test"
+    ],
+    "constraints": [
+      "Local-only: no Supabase, no sync hub, no cloud backend, no async storage interface.",
+      "Clean break for WS3: no staged hybrid store, no blob-explosion migration, no dual-write period.",
+      "Do not delete or wipe .exo/exo.db* until the explicit WS3 cutover task; user has approved the wipe gate, but the task still records the gate and backup steps before deletion.",
+      "Use node:sqlite synchronously and enable PRAGMA foreign_keys = ON.",
+      "Reads return legacy-compatible hydrated motion views until hot paths are converted.",
+      "Events are permanent and must not cascade-delete with motions or assignments.",
+      "One active outbound owner per person across motions; selection and send gates both enforce it.",
+      "Approval means sendable; draft approval/authorship stays queryable in columns.",
+      "Queue items stay atomic; batching belongs inside execution internals.",
+      "Work happens in the ignored worktree .worktrees/normalized-core-and-parallel-execution-plan on branch plan/normalized-core-and-parallel-execution-plan.",
+      "The worktree uses an ignored local .exo copy seeded from the original workspace for baseline tests; live shared-state reads still pin /Users/williamflanagan/Projects/omalab/exo/.exo when required."
+    ],
+    "nonGoals": [
+      "Supabase, cloud hub, sync engine, event-log replication.",
+      "Async storage abstraction.",
+      "--json envelope standardization.",
+      "Broad command-handler thinning beyond write-path moves forced by normalization.",
+      "Multi-workspace or workspace_id columns.",
+      "Cross-motion person merge UI/tooling unless duplicates actually accumulate.",
+      "Email, phone, and social enricher executors/provider waterfalls beyond schema, resolver registry, provenance, and task-lane hooks."
+    ]
+  },
+  "board": {
+    "status": "active",
+    "controller": "codex",
+    "concurrencyCap": 3,
+    "worktreeRoot": ".worktrees",
+    "base": {
+      "branch": "plan/normalized-core-and-parallel-execution-plan",
+      "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
+      "verifiedGreen": true
+    },
+    "updatedAt": "2026-06-10T16:25:29Z"
+  },
+  "tasks": [
+    {
+      "id": "T01",
+      "title": "Fix host-pass main-module startup lock touch",
+      "status": "ready",
+      "priority": 1,
+      "dependsOn": [],
+      "ownerLane": "controller",
+      "files": [
+        "scripts/run-agent-host-pass.js",
+        "test/agent-host-pass.test.js"
+      ],
+      "context": "WS0. Fix the P0 worker crash. Hoist HOST_STATE_LOCK_* constants into the top-of-file constant block and move the isMainModule entry block to end-of-file. Add startup host-state hygiene that releases expired task leases and prunes expired backoffs through mutateHostState on every pass, including noop passes. Regression must spawn the script as a real main module with EXO_STATE_DIR and cwd in a temp workspace whose agent-host-state.json contains an expired task lease. Cover no lane and EXO_AGENT_LANE=transport. The test must fail on current main because seeded mutation reaches the TDZ path.",
+      "doneWhen": [
+        "Main-module spawned host pass exits 0 for no lane and transport lane with seeded expired task lease.",
+        "Expired lease is released and a pass summary is written.",
+        "Empty-workspace smoke still exits 0.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "node --test test/agent-host-pass.test.js",
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T02",
+      "title": "Make exo next reuse lazy description",
+      "status": "ready",
+      "priority": 2,
+      "dependsOn": [],
+      "ownerLane": "controller",
+      "files": [
+        "src/core/build-next-view.js",
+        "src/core/what-is-this.js",
+        "src/cli/commands/next.js",
+        "test/cli.test.js"
+      ],
+      "context": "WS1. buildNextView accepts an optional prebuilt description and computes it lazily only on fallback paths. next.js passes the description it already built. describeExo takes a lazy/lightweight recommendedPath path so fallback does not rebuild a full daily view it was handed. Preserve output JSON shape. Measure exo next --json before and after against the current dataset or a representative fixture; target at least 60 percent latency reduction, interim target around 700ms.",
+      "doneWhen": [
+        "Output JSON for exo next --json is unchanged in snapshot/contract coverage.",
+        "Latency measurement shows at least 60 percent reduction against the current dataset or documented fixture.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "npm run check",
+        "npm test",
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo node ./src/cli/index.js next --json"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T03",
+      "title": "Move lane-lock ownership into host pass",
+      "status": "backlog",
+      "priority": 1,
+      "dependsOn": [
+        "T01"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "scripts/run-agent-host-pass.js",
+        "src/cli/commands/agent.js",
+        "src/lib/agent-run-lock.js",
+        "test/agent-run.test.js",
+        "test/agent-host-pass.test.js"
+      ],
+      "context": "WS2 part 1-2. run-agent-host-pass.js acquires tryAcquireAgentRunLock({ stateDir, lane }) at startup and exits with a noop summary when held. Remove duplicate CLI acquisition from runWorkerLanePass in src/cli/commands/agent.js; it interprets the child noop summary. Lock path/format stays unchanged for doctor. Shell runner lock becomes a spawn guard released after spawning lanes, not held through wait.",
+      "doneWhen": [
+        "Two concurrent invocations of the same lane make the second exit noop with holder detail.",
+        "Transport lane can start while research lane lock is held.",
+        "Doctor still reports lock holders using the same lock path/format.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "node --test test/agent-run.test.js test/agent-host-pass.test.js",
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T04",
+      "title": "Share merged lane summary writer",
+      "status": "backlog",
+      "priority": 2,
+      "dependsOn": [
+        "T03"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "scripts/run-agent-host-pass.js",
+        "src/cli/commands/agent.js",
+        "src/lib/agent-pass-summary.js",
+        "test/agent-run.test.js",
+        "test/agent-host-pass.test.js",
+        "docs/wip/normalized-core-and-parallel-execution-plan.md"
+      ],
+      "context": "WS2 part 3-4. Move mergeLanePassSummaries from src/cli/commands/agent.js into a shared lib module. Each lane pass, at exit, regenerates agent-last-pass.json from lane files under the host-state lock. Scheduled-style lane run must leave a fresh merged agent-last-pass.json. Update routine artifact version/reinstall instructions in runbook/docs if artifacts encode version.",
+      "doneWhen": [
+        "Scheduled-style lane run writes fresh merged agent-last-pass.json.",
+        "CLI and host pass use the shared merge implementation.",
+        "Routine artifact version and reinstall instruction are updated if required.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "node --test test/agent-run.test.js test/agent-host-pass.test.js",
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T05",
+      "title": "Add consolidated normalized schema baseline",
+      "status": "backlog",
+      "priority": 1,
+      "dependsOn": [
+        "T01",
+        "T02",
+        "T04"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "src/db/migrations.js",
+        "src/db/database.js",
+        "test/cli.test.js",
+        "test/support"
+      ],
+      "context": "WS3 step 1. Rewrite migrations.js as consolidated version 1 full schema from the plan: final-form companies, motions core with version, motion_accounts, signal_matches, people, contact_points, employments, prospects, activity_events, prospect_drafts, plus nullable person_id on inbound_observations if kept. Add pre-0.3.0 ledger guard that exits with reinitialize required instead of repair. Enable PRAGMA foreign_keys = ON. Update existing insertMotion/updateMotion/insertCompany/updateCompany in the same commit so new NOT NULL columns are written. New tables can be additive with no writers yet.",
+      "doneWhen": [
+        "Fresh DB creates all normalized baseline tables and indexes.",
+        "Pre-0.3.0 ledger guard fails closed with reinitialize required.",
+        "Existing motion/company writers work against the new columns.",
+        "Foreign key enforcement is enabled.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "node --test test/cli.test.js",
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T06",
+      "title": "Implement normalized entity DB modules",
+      "status": "backlog",
+      "priority": 1,
+      "dependsOn": [
+        "T05"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "src/db/database.js",
+        "src/db/companies.js",
+        "src/db/people.js",
+        "src/db/prospects.js",
+        "src/db/motion-accounts.js",
+        "src/db/activity-events.js",
+        "src/db/drafts.js",
+        "src/db/signal-matches.js",
+        "test/*identity*.test.js",
+        "test/*database*.test.js"
+      ],
+      "context": "WS3 step 2. Split database modules by entity while database.js keeps connection management and re-exports. Implement companies find-or-create by domain then LinkedIn URL; per-kind person resolver registry; LinkedIn member/public id extraction and URL mining; email policy; contact point alias/review handling; employment upsert/job-change/primary selection; activity event append with dedupe conflict handling; atomic claim/release; draft transitions; due-prospect scan joined to motion_accounts.execution_user_id; account relationship-map query; cross-motion ownership query. Tests must cover the full v10 normalization table and email policy in the plan.",
+      "doneWhen": [
+        "Entity modules export stable CRUD/query functions used by later tasks.",
+        "Identity resolver tests cover LinkedIn, email, alias, conflict-review, and v10 edge cases.",
+        "Employment, event, atomic claim, draft, due-scan, relationship-map, and ownership tests pass.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T07",
+      "title": "Split motion core and hydrated view schemas",
+      "status": "backlog",
+      "priority": 1,
+      "dependsOn": [
+        "T06"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "src/schema/motion.js",
+        "src/db/motions.js",
+        "src/db/database.js",
+        "test/*motion*.test.js",
+        "test/support"
+      ],
+      "context": "WS3 step 3. Split motionSchema into motionCoreSchema for stored payload and motionViewSchema for hydrated legacy-compatible shape including targetMap. Implement hydrateMotionViews() assembling targetMap.accounts[].prospects[] with touches, drafts, timelineNotes, signal matches, derived contacts. prospect.title resolves from employment, prospect.name from people. Add contract test: seeded normalized rows hydrate and parse under existing motionSchema unchanged.",
+      "doneWhen": [
+        "Stored motion payload excludes targetMap execution state.",
+        "Hydrated views are field-compatible with existing motionSchema consumers.",
+        "Contract fixture round-trips normalized rows through hydration and parses under legacy motionSchema.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T08",
+      "title": "Flip execution write paths to rows and events",
+      "status": "backlog",
+      "priority": 1,
+      "dependsOn": [
+        "T07"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "src/db/database.js",
+        "src/core/record-action-result.js",
+        "src/core",
+        "src/cli/commands",
+        "test/action-result.test.js",
+        "test/cli.test.js"
+      ],
+      "context": "WS3 step 4. Rewrite mutators transactionally over rows/events: record-prospect-touch, set-prospect-draft, markMotionProspectDraftSent, set-prospect-cadence, update-prospect, record-prospect add, claim target/prospect packet, record-action-result, transition-inbound-observation, reconcile-connection-degrees, remove-motion, import-config. updateMotion narrows to motion core with optimistic version check and retry helper for operator-facing callers. Add cross-motion selection and send gates plus terminal release under cooldown.",
+      "doneWhen": [
+        "Touch, draft, cadence, action result, claim, inbound transition, remove, and import paths write relational rows transactionally.",
+        "Optimistic motion-core version conflict throws and callers retry where appropriate.",
+        "Selection gate holds second active branch for owned person and send gate blocks stale ownership race.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "node --test test/action-result.test.js test/cli.test.js",
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T09",
+      "title": "Convert read paths and hot scans to SQL",
+      "status": "backlog",
+      "priority": 1,
+      "dependsOn": [
+        "T08"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "src/db/database.js",
+        "src/core/build-agent-queue.js",
+        "src/core/build-daily-view.js",
+        "src/core/build-next-view.js",
+        "src/cli/exo-ui-server.js",
+        "test"
+      ],
+      "context": "WS3 step 5. listMotions/findMotionById return hydrated views, and repair-on-read persistence is deleted. Convert hot scans to SQL: build-agent-queue due scan, outbound capacity counts, daily candidate selection, and slim next-candidate happy path as indexed due-prospect query plus single-branch hydration. Run the mid-branch tracer gate before moving on: in temp workspace, one due send executes end-to-end while concurrent research lane writes draft to sibling prospect of same motion; both persist.",
+      "doneWhen": [
+        "Reads are pure and no longer persist repair while listing/finding motions.",
+        "Agent queue, daily capacity/candidate selection, and next happy path use indexed normalized scans.",
+        "Tracer gate passes under concurrent send and research draft writes.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T10",
+      "title": "Repair fixtures and add race regressions",
+      "status": "backlog",
+      "priority": 2,
+      "dependsOn": [
+        "T09"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "test/support",
+        "test"
+      ],
+      "context": "WS3 steps 6-7. Add seedMotionView(view) helper that writes legacy-shaped motion literals into normalized rows. Port fixture-heavy tests mechanically. Add race tests: concurrent draft write and touch record on same motion from two processes both persist; optimistic-version conflict on motion core; two-process atomic claim contention. Complete identity, employment, email-policy, and cross-motion tests listed in the plan if not already covered by T06/T08.",
+      "doneWhen": [
+        "Fixture helper supports old motion literals through normalized rows.",
+        "Race tests fail against main blob writes and pass on branch, or their bug demonstration is documented if not practical to run inside the suite.",
+        "All affected fixture-heavy tests are ported.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T11",
+      "title": "Update config portability and shrink repair scope",
+      "status": "backlog",
+      "priority": 2,
+      "dependsOn": [
+        "T10"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "src/core/export-config.js",
+        "src/core/import-config.js",
+        "src/schema/contract-repair.js",
+        "src/db/database.js",
+        "test/cli.test.js"
+      ],
+      "context": "WS3 steps 8-9. exo config export emits motion-core playbooks only with no execution state. Import accepts legacy bundles by stripping embedded targetMap/execution state through zod transform so current exports re-seed the new DB. Browser profiles/users/companies import unchanged. Delete prospect-level repair from rehydrateMotion and keep CLI-boundary LLM contract repair.",
+      "doneWhen": [
+        "Config export contains playbooks/config but no prospects, touches, drafts, or targetMap execution state.",
+        "Legacy import strips targetMap/execution state and succeeds.",
+        "Prospect/touch repair paths are removed from rehydrateMotion.",
+        "Grep gate finds no targetMap writes into motions.payload_json.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "npm run check",
+        "npm test",
+        "rg -n \"targetMap\" src/db src/core src/cli"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T12",
+      "title": "Run WS3 cutover and release bookkeeping",
+      "status": "backlog",
+      "priority": 1,
+      "dependsOn": [
+        "T11"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "package.json",
+        "package-lock.json",
+        ".codex-plugin/plugin.json",
+        "CHANGELOG.md",
+        "docs/wip/normalized-core-and-parallel-execution-plan.md"
+      ],
+      "context": "End of WS3. User approved the wipe, but still record the operator gate and backup facts. Run exo agent queue --json against the real original state dir, export config to backup path, snapshot .exo, stop scheduler if present, remove .exo/exo.db .exo/exo.db-wal .exo/exo.db-shm and agent host summaries, import config, reinstall routine in verify mode, and verify doctor/queue. Bump target release to 0.3.0 across package.json, package-lock.json if applicable, .codex-plugin/plugin.json, and CHANGELOG.md per repo rule.",
+      "doneWhen": [
+        "Operator gate and queue discard facts are recorded.",
+        "Config backup and state snapshot are created before deletion.",
+        "Disposable state is wiped and playbooks/config are reimported.",
+        "Routine is reinstalled in verify mode.",
+        "Version surfaces and CHANGELOG are aligned to 0.3.0.",
+        "exo agent doctor --json and exo agent queue --json run after cutover.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent queue --json",
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent doctor --json",
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "User said yes to wipe it and start over on 2026-06-10; still perform backup and record gate before destructive cutover."
+    },
+    {
+      "id": "T13",
+      "title": "Enable research-lane concurrency",
+      "status": "backlog",
+      "priority": 2,
+      "dependsOn": [
+        "T12"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "scripts/run-agent-host-pass.js",
+        "src/core/build-agent-queue.js",
+        "src/lib/agent-task-lanes.js",
+        "test/agent-host-pass.test.js",
+        "test/agent-run.test.js"
+      ],
+      "context": "WS4 part 1-2. Add EXO_AGENT_RESEARCH_CONCURRENCY default 2, research workers per pass. Safe because normalized row/event writes and atomic claims exist. Verify chooseNextQueueTask skips actively leased tasks. Add two-worker race test: both pick same task, one wins lease and the other advances. Transport stays serial per identity; document future sharding key transport:<connector-account> without building it.",
+      "doneWhen": [
+        "A pass with 2+ research workers completes with disjoint task sets.",
+        "Two-worker same-task race advances only one worker per lease.",
+        "Transport lane remains serial per identity.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "node --test test/agent-host-pass.test.js test/agent-run.test.js",
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T14",
+      "title": "Surface per-lane scheduler and doctor status",
+      "status": "backlog",
+      "priority": 3,
+      "dependsOn": [
+        "T13"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "src/cli/commands/agent.js",
+        "src/lib/agent-routine.js",
+        "test/agent-run.test.js",
+        "docs/wip/normalized-core-and-parallel-execution-plan.md"
+      ],
+      "context": "WS4 part 3-4. Optional but recommended per plan: per-lane scheduler cadence with transport every 5m and research every 15m if routine artifacts support it. Doctor surfaces last pass per lane, lock holders, and research concurrency setting. Verify transport cadence unaffected by a long research pass using doctor/log evidence or deterministic tests.",
+      "doneWhen": [
+        "Doctor reports last pass per lane, lock holders, and concurrency setting.",
+        "Per-lane cadence is implemented or explicitly deferred with reason.",
+        "Merged summary stays coherent across lane fires.",
+        "npm run check and npm test are green."
+      ],
+      "verification": [
+        "node --test test/agent-run.test.js",
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T15",
+      "title": "Final acceptance and board close-out",
+      "status": "backlog",
+      "priority": 4,
+      "dependsOn": [
+        "T14"
+      ],
+      "ownerLane": "controller",
+      "files": [
+        "docs/plans/normalized-core-and-parallel-execution-plan-board.json"
+      ],
+      "context": "Final integration gate. Run all plan-level verification commands, run any post-cutover live read checks from T12, confirm acceptance criteria one by one, record deferred items and residual risks, and mark board complete only if all acceptance criteria pass.",
+      "doneWhen": [
+        "npm run check green.",
+        "npm test green.",
+        "Post-cutover Exo doctor and queue reads complete.",
+        "All acceptance criteria are marked satisfied or explicitly deferred with reason.",
+        "Board status is complete."
+      ],
+      "verification": [
+        "npm run check",
+        "npm test",
+        "python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.1.2/skills/plan-loop-executor/scripts/validate_board.py docs/plans/normalized-core-and-parallel-execution-plan-board.json"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    }
+  ]
+}
