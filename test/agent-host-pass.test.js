@@ -188,6 +188,44 @@ test("main-module host pass can start a transport lane while the research lane l
   }
 });
 
+test("scheduled-style lane pass refreshes the merged legacy summary from lane summaries", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-merged-summary-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "agent-last-pass.json"), JSON.stringify({
+    status: "failed",
+    reason: "stale merged summary",
+    lanes: [],
+    results: [],
+    finalQueueCounts: { dueTaskCount: 99, waitingTaskCount: 99, blockerCount: 99 },
+  }, null, 2));
+  fs.writeFileSync(path.join(stateDir, "agent-last-pass.research.json"), JSON.stringify({
+    status: "noop",
+    reason: "research lane already idle",
+    startedAt: "2026-06-10T16:00:00.000Z",
+    endedAt: "2026-06-10T16:00:02.000Z",
+    lane: "research",
+    results: [],
+    finalQueueCounts: { dueTaskCount: 0, waitingTaskCount: 1, blockerCount: 0 },
+  }, null, 2));
+
+  try {
+    const result = runSpawnedHostPass({ stateDir, cwd: tempRoot, lane: "transport" });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const laneSummary = JSON.parse(result.stdout);
+    assert.equal(laneSummary.lane, "transport");
+
+    const merged = readJsonFile(path.join(stateDir, "agent-last-pass.json"));
+    assert.notEqual(merged.reason, "stale merged summary");
+    assert.deepEqual(merged.lanes.map((lane) => lane.lane).sort(), ["research", "transport"]);
+    assert.equal(merged.lanes.find((lane) => lane.lane === "transport").reason, laneSummary.reason);
+    assert.equal(merged.lanes.find((lane) => lane.lane === "research").reason, "research lane already idle");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("chooseNextQueueTask prefers connector-native send work before retrieval and draft work even when browser preflight is down", () => {
   const queue = {
     tasks: [

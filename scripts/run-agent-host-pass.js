@@ -64,6 +64,8 @@ import { runLinkedinMaintenanceWithUnipile } from "../src/lib/linkedin-unipile-m
 import { extractUsableDraftBody } from "../src/lib/draft-policy.js";
 import { extractLinkedinPublicId } from "../src/lib/prospect-contacts.js";
 import { readUnipileConfig } from "../src/lib/unipile-config.js";
+import { withAgentHostStateLock } from "../src/lib/agent-host-state-lock.js";
+import { writeAgentPassSummary } from "../src/lib/agent-pass-summary.js";
 
 const CODEX_BIN = process.env.EXO_CODEX_BIN || "/Applications/Codex.app/Contents/Resources/codex";
 const ROOT = process.cwd();
@@ -74,18 +76,8 @@ const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
 // (sync/sends through the connector identity) and a research pass (native
 // compute) can run concurrently on the same host.
 const EXECUTION_LANE = normalizeAgentExecutionLane(process.env.EXO_AGENT_LANE);
-// Lane passes write lane-scoped summaries; the worker that launches both
-// lanes merges them into the legacy agent-last-pass.json for existing readers.
-const PASS_SUMMARY_PATH = path.join(
-  STATE_DIR,
-  EXECUTION_LANE ? `agent-last-pass.${EXECUTION_LANE}.json` : "agent-last-pass.json",
-);
 const PREFLIGHT_PATH = path.join(STATE_DIR, "agent-preflight.json");
 const HOST_STATE_PATH = path.join(STATE_DIR, "agent-host-state.json");
-const HOST_STATE_LOCK_DIR = `${HOST_STATE_PATH}.lock`;
-const HOST_STATE_LOCK_STALE_MS = 30_000;
-const HOST_STATE_LOCK_ACQUIRE_TIMEOUT_MS = 5_000;
-const HOST_STATE_LOCK_RETRY_DELAY_MS = 25;
 const TEMP_ROOT = path.join(STATE_DIR, "automation-tmp");
 const MAX_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_TASKS, 1000);
 const MAX_MAINTENANCE_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_MAINTENANCE_TASKS, 25);
@@ -2905,64 +2897,6 @@ function saveHostState(state) {
   fs.writeFileSync(HOST_STATE_PATH, JSON.stringify(state, null, 2));
 }
 
-// Host state is a plain JSON file mutated read-modify-write. With two lane
-// workers (transport + research) running concurrently, unguarded writes would
-// clobber each other's leases, backoffs, and motion run records. Every
-// mutation goes through mutateHostState(): take a cross-process mkdir lock,
-// reload the file fresh, apply the mutator, persist, release.
-/** @param {number} ms */
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-/**
- * @template T
- * @param {() => T} fn
- * @returns {T}
- */
-function withHostStateLock(fn) {
-  const deadline = Date.now() + HOST_STATE_LOCK_ACQUIRE_TIMEOUT_MS;
-  let acquired = false;
-  while (!acquired) {
-    try {
-      fs.mkdirSync(path.dirname(HOST_STATE_LOCK_DIR), { recursive: true });
-      fs.mkdirSync(HOST_STATE_LOCK_DIR);
-      acquired = true;
-      break;
-    } catch (error) {
-      if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) {
-        throw error;
-      }
-    }
-
-    try {
-      const lockAgeMs = Date.now() - fs.statSync(HOST_STATE_LOCK_DIR).mtimeMs;
-      if (lockAgeMs > HOST_STATE_LOCK_STALE_MS) {
-        fs.rmSync(HOST_STATE_LOCK_DIR, { recursive: true, force: true });
-        continue;
-      }
-    } catch {
-      // Lock vanished between mkdir and stat; retry immediately.
-      continue;
-    }
-
-    if (Date.now() >= deadline) {
-      // Proceed without the lock rather than deadlocking the pass; the worst
-      // case is the pre-lock behavior (a lost concurrent update).
-      break;
-    }
-    sleepSync(HOST_STATE_LOCK_RETRY_DELAY_MS);
-  }
-
-  try {
-    return fn();
-  } finally {
-    if (acquired) {
-      fs.rmSync(HOST_STATE_LOCK_DIR, { recursive: true, force: true });
-    }
-  }
-}
-
 /**
  * Apply a host-state mutation against a freshly loaded copy under the
  * cross-process lock, persisting only when the mutator returns a new object.
@@ -2971,7 +2905,7 @@ function withHostStateLock(fn) {
  * @returns {any} the latest host state (mutated or fresh-loaded)
  */
 export function mutateHostState(mutator) {
-  return withHostStateLock(() => {
+  return withAgentHostStateLock(STATE_DIR, () => {
     const fresh = loadHostState();
     const next = mutator(fresh) ?? fresh;
     if (next !== fresh) {
@@ -3942,8 +3876,7 @@ function normalizeIsoDatetime(value) {
 if (isMainModule(import.meta.url)) {
   try {
     const summary = runAgentHostPass();
-    fs.mkdirSync(path.dirname(PASS_SUMMARY_PATH), { recursive: true });
-    fs.writeFileSync(PASS_SUMMARY_PATH, JSON.stringify(summary, null, 2));
+    writeAgentPassSummary({ stateDir: STATE_DIR, lane: EXECUTION_LANE, summary });
     console.log(JSON.stringify(summary, null, 2));
   } catch (error) {
     console.error(error instanceof Error ? error.stack ?? error.message : String(error));
