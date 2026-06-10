@@ -2031,7 +2031,7 @@ test("buildAgentQueue preserves email sends as send_email instead of collapsing 
   assert.equal(sends[0].action, "send_email");
   assert.equal(sends[0].recipientUrl, "https://mail.google.com/mail/#all/thread-1");
   assert.equal(sends[0].recipientEmail, "lpark@govpointeoffice.us");
-  assert.match(sends[0].writeback, /--action send_email --result sent --company company-1 --prospect prospect-1 --surface email/);
+  assert.match(sends[0].writeback, /--action send_email --result sent --company company-1 --prospect prospect-1 --motion motion-1 --surface email/);
   assert.equal(queue.blockers.length, 0);
 });
 

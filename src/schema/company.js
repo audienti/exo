@@ -39,7 +39,7 @@ export const companySchema = z.object({
   linkedinCompanyUrl: z.string().url().nullable(),
   logoSourceUrl: z.string().url().nullable().default(null),
   logoUrl: z.string().url().nullable().default(null),
-  notes: z.string().nullable(),
+  notes: z.string().nullable().default(null),
   tags: stringArray,
   motionIds: stringArray,
   engagementProfileAssignment: companyEngagementProfileAssignmentSchema.nullable().default(null),

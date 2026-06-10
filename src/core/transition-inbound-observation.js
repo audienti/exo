@@ -9,7 +9,6 @@ import {
   findMotionById,
   findUserById,
   listMotions,
-  updateMotion,
   upsertInboundObservation,
 } from "../db/database.js";
 
@@ -97,8 +96,7 @@ export function transitionInboundObservation(args) {
           prospectId: existing.prospectId,
           linkedinProfileSnapshot: { connectionDegree: 1 },
         });
-        updateMotion(updated);
-        connectionDegreeMarked = true;
+        connectionDegreeMarked = Boolean(updated);
       } catch {
         connectionDegreeMarked = false;
       }

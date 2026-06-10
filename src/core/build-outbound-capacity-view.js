@@ -32,7 +32,8 @@ const BUSINESS_DAYS_PER_WEEK = 5;
  *   companyId?: string | null | undefined,
  *   prospectId?: string | null | undefined,
  *   rawObservations?: unknown[] | undefined,
- *   workspaceSettings?: ReturnType<typeof readWorkspaceSettings> | undefined
+ *   workspaceSettings?: ReturnType<typeof readWorkspaceSettings> | undefined,
+ *   capacityAccounts?: Array<{ motion: any, account: any }> | undefined
  * }} [options]
  */
 export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, rawProfiles, options = {}) {
@@ -74,53 +75,49 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     .find((account) => account.accountId === linkedinAccount.id) ?? null;
   const sentInvitationsSurface = linkedinSyncAccount?.surfaces.find((surface) => surface.key === "linkedin-sent-invitations") ?? null;
 
-  const scopedAccounts = motions.flatMap((motion) =>
-    motion.targetMap.accounts
-      .filter((account) => !options.motionId || motion.id === options.motionId)
-      .filter((account) => !options.companyId || account.companyId === options.companyId)
-      .map((account) => {
-        const company = companyById.get(account.companyId);
-        if (!company) {
-          return null;
-        }
-
-        return {
-          motion,
-          account,
-          company,
-          executionScope: classifyUserExecutionScope(user, motion, company, {
-            singletonReadyUserId
-          })
-        };
+  const scannedScopedAccounts = Array.isArray(options.capacityAccounts)
+    ? normalizeCapacityAccountBranches(options.capacityAccounts, {
+        motionId: options.motionId ?? null,
+        companyId: options.companyId ?? null,
+        companyById,
+        user,
+        singletonReadyUserId,
       })
-      .filter(Boolean)
-  );
+    : buildCapacityAccountBranchesFromMotions(motions, {
+        motionId: options.motionId ?? null,
+        companyId: options.companyId ?? null,
+        companyById,
+        user,
+        singletonReadyUserId,
+      });
+  const scopedAccounts = addDiscoveredCompanyPlaceholders(scannedScopedAccounts, motions, companies, {
+    motionId: options.motionId ?? null,
+    companyId: options.companyId ?? null,
+    user,
+    singletonReadyUserId,
+  });
   const executableScopedAccounts = scopedAccounts.filter(({ executionScope }) => executionScope.assignedToUser);
 
-  const queueSummaries = motions
-    .filter((motion) => assignedMotionIds.has(motion.id))
-    .map((motion) => buildMotionQueueSummary(
+  const scopedMotionBranches = buildCapacityMotionBranches(scopedAccounts)
+    .filter(({ motion }) => assignedMotionIds.has(motion.id));
+  const queueSummaries = scopedMotionBranches.map(({ motion, companies: branchCompanies }) =>
+    buildMotionQueueSummary(
       motion,
-      companies.filter((company) =>
-        company.motionIds.includes(motion.id)
-        && (!options.companyId || company.id === options.companyId)
-      ),
+      branchCompanies,
       {
         companyId: options.companyId ?? null
       }
-    ));
-  const packetSummaries = motions
-    .filter((motion) => assignedMotionIds.has(motion.id))
-    .map((motion) => buildMotionPacketSummary(
+    )
+  );
+  const packetSummaries = scopedMotionBranches.map(({ motion, companies: branchCompanies }) =>
+    buildMotionPacketSummary(
       motion,
-      companies.filter((company) =>
-        company.motionIds.includes(motion.id)
-        && (!options.companyId || company.id === options.companyId)
-      ),
+      branchCompanies,
       {
         companyId: options.companyId ?? null
       }
-    ));
+    )
+  );
   const scopedProspects = scopedAccounts.flatMap(({ motion, account, company, executionScope }) =>
     account.prospects
       .filter((prospect) => !options.prospectId || prospect.id === options.prospectId)
@@ -521,6 +518,189 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       }
     }
   };
+}
+
+/**
+ * @param {Array<{ motion: any, account: any }>} branches
+ * @param {{
+ *   motionId: string | null,
+ *   companyId: string | null,
+ *   companyById: Map<string, import("../schema/company.js").companySchema._type>,
+ *   user: import("../schema/user.js").userSchema._type,
+ *   singletonReadyUserId: string | null
+ * }} input
+ */
+function normalizeCapacityAccountBranches(branches, input) {
+  return branches
+    .map((branch) => {
+      const motion = motionSchema.parse(branch.motion);
+      const account = branch.account;
+      if (input.motionId && motion.id !== input.motionId) return null;
+      if (input.companyId && account.companyId !== input.companyId) return null;
+      if (!isPlannerEligibleMotionStatus(motion.status)) return null;
+      const company = input.companyById.get(account.companyId);
+      if (!company) return null;
+      return buildScopedCapacityAccount({
+        motion,
+        account,
+        company,
+        user: input.user,
+        singletonReadyUserId: input.singletonReadyUserId,
+      });
+    })
+    .filter(Boolean);
+}
+
+/**
+ * @param {import("../schema/motion.js").motionSchema._type[]} motions
+ * @param {{
+ *   motionId: string | null,
+ *   companyId: string | null,
+ *   companyById: Map<string, import("../schema/company.js").companySchema._type>,
+ *   user: import("../schema/user.js").userSchema._type,
+ *   singletonReadyUserId: string | null
+ * }} input
+ */
+function buildCapacityAccountBranchesFromMotions(motions, input) {
+  return motions.flatMap((motion) =>
+    motion.targetMap.accounts
+      .filter((account) => !input.motionId || motion.id === input.motionId)
+      .filter((account) => !input.companyId || account.companyId === input.companyId)
+      .map((account) => {
+        const company = input.companyById.get(account.companyId);
+        if (!company) return null;
+        return buildScopedCapacityAccount({
+          motion,
+          account,
+          company,
+          user: input.user,
+          singletonReadyUserId: input.singletonReadyUserId,
+        });
+      })
+      .filter(Boolean)
+  );
+}
+
+/**
+ * @param {{
+ *   motion: import("../schema/motion.js").motionSchema._type,
+ *   account: any,
+ *   company: import("../schema/company.js").companySchema._type,
+ *   user: import("../schema/user.js").userSchema._type,
+ *   singletonReadyUserId: string | null
+ * }} input
+ */
+function buildScopedCapacityAccount(input) {
+  return {
+    motion: input.motion,
+    account: input.account,
+    company: input.company,
+    executionScope: classifyUserExecutionScope(input.user, input.motion, input.company, {
+      singletonReadyUserId: input.singletonReadyUserId
+    })
+  };
+}
+
+/**
+ * @param {Array<{
+ *   motion: import("../schema/motion.js").motionSchema._type,
+ *   account: any,
+ *   company: import("../schema/company.js").companySchema._type,
+ *   executionScope: ReturnType<typeof classifyUserExecutionScope>
+ * }>} scopedAccounts
+ * @param {import("../schema/motion.js").motionSchema._type[]} motions
+ * @param {import("../schema/company.js").companySchema._type[]} companies
+ * @param {{
+ *   motionId: string | null,
+ *   companyId: string | null,
+ *   user: import("../schema/user.js").userSchema._type,
+ *   singletonReadyUserId: string | null
+ * }} input
+ */
+function addDiscoveredCompanyPlaceholders(scopedAccounts, motions, companies, input) {
+  const result = [...scopedAccounts];
+  const emittedKeys = new Set(result.map(({ motion, account }) => buildMotionCompanyScopeKey(motion.id, account.companyId)));
+  const knownAccountKeys = new Set(
+    motions.flatMap((motion) =>
+      (motion.targetMap?.accounts ?? []).map((account) => buildMotionCompanyScopeKey(motion.id, account.companyId))
+    )
+  );
+
+  for (const motion of motions) {
+    if (input.motionId && motion.id !== input.motionId) continue;
+    for (const company of companies) {
+      if (input.companyId && company.id !== input.companyId) continue;
+      if (!company.motionIds.includes(motion.id)) continue;
+      const key = buildMotionCompanyScopeKey(motion.id, company.id);
+      if (emittedKeys.has(key) || knownAccountKeys.has(key)) continue;
+      const account = buildDiscoveredPlaceholderAccount(company);
+      result.push(buildScopedCapacityAccount({
+        motion,
+        account,
+        company,
+        user: input.user,
+        singletonReadyUserId: input.singletonReadyUserId,
+      }));
+      emittedKeys.add(key);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * @param {import("../schema/company.js").companySchema._type} company
+ */
+function buildDiscoveredPlaceholderAccount(company) {
+  return {
+    companyId: company.id,
+    companyName: company.name,
+    domain: company.domain,
+    websiteUrl: company.websiteUrl,
+    linkedinCompanyUrl: company.linkedinCompanyUrl,
+    companyLogoSourceUrl: company.logoSourceUrl ?? null,
+    companyLogoUrl: company.logoUrl ?? null,
+    signalMatches: [],
+    prospects: [],
+    queueState: {
+      status: "discovered",
+      source: "derived",
+      updatedAt: company.updatedAt,
+      notes: null,
+    },
+    disposition: "active",
+    packetStatus: null,
+    packetState: null,
+    lastResearchAt: null,
+    notes: company.notes ?? null,
+  };
+}
+
+/**
+ * @param {Array<{
+ *   motion: import("../schema/motion.js").motionSchema._type,
+ *   account: any,
+ *   company: import("../schema/company.js").companySchema._type
+ * }>} scopedAccounts
+ */
+function buildCapacityMotionBranches(scopedAccounts) {
+  const byMotionId = new Map();
+  for (const { motion, account, company } of scopedAccounts) {
+    const existing = byMotionId.get(motion.id) ?? {
+      motion: {
+        ...motion,
+        targetMap: {
+          ...(motion.targetMap ?? {}),
+          accounts: []
+        }
+      },
+      companies: []
+    };
+    existing.motion.targetMap.accounts.push(account);
+    existing.companies.push(company);
+    byMotionId.set(motion.id, existing);
+  }
+  return [...byMotionId.values()];
 }
 
 /**

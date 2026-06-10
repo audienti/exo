@@ -35,15 +35,18 @@ import {
 } from "../lib/workspace-settings.js";
 import {
   findCompanyById,
+  deleteSignalMatchesForSignal,
   findMotionById,
   findUserById,
   listBrowserProfiles,
   listCompanies,
   listInboundObservations,
   listMotions,
+  moveProspectToMotionRows,
   updateUser,
   updateCompany,
   updateMotion,
+  updateMotionWithRetry,
   upsertInboundObservation,
 } from "../db/database.js";
 
@@ -122,13 +125,12 @@ export async function executeActionIntent(intent) {
       // 2 — approve (queue) their first message on the resolved prospect.
       const rawMotion = findMotionById(promoted.motion.id);
       const rawCompany = findCompanyById(promoted.company.id);
-      const updated = approveMotionProspectDraft(rawMotion, rawCompany, {
+      approveMotionProspectDraft(rawMotion, rawCompany, {
         prospectId: promoted.prospectId,
         surface: args.surface,
         body: args.body ?? "",
         subject: args.subject ?? null,
       });
-      updateMotion(updated);
       return {
         ok: true,
         writer: "promoteAndApproveDraft",
@@ -187,13 +189,12 @@ function loadMotionAndCompany(args) {
 /** @param {Record<string, any>} args */
 function runCadence(args) {
   const { rawMotion, rawCompany } = loadMotionAndCompany(args);
-  const updated = setMotionProspectCadence(rawMotion, rawCompany, {
+  const stored = setMotionProspectCadence(rawMotion, rawCompany, {
     prospectId: args.prospectId,
     currentStep: args.currentStep ?? undefined,
     nextAction: args.nextAction ?? undefined,
     nextActionDueAt: args.nextActionDueAt ?? undefined,
   });
-  const stored = updateMotion(updated);
   const account = stored.targetMap.accounts.find((item) => item.companyId === args.companyId) ?? null;
   const prospect = account?.prospects.find((item) => item.id === args.prospectId) ?? null;
   return {
@@ -238,7 +239,7 @@ function runTouch(args) {
   }
 
   const { rawMotion, rawCompany } = loadMotionAndCompany(args);
-  const updated = recordMotionProspectTouch(rawMotion, rawCompany, {
+  const stored = recordMotionProspectTouch(rawMotion, rawCompany, {
     prospectId: args.prospectId,
     surface: args.surface,
     direction: args.direction ?? "outbound",
@@ -246,7 +247,6 @@ function runTouch(args) {
     occurredAt: args.occurredAt ?? new Date().toISOString(),
     summary: args.summary ?? "Recorded from the operator surface.",
   });
-  const stored = updateMotion(updated);
   return {
     ok: true,
     writer: "recordMotionProspectTouch",
@@ -366,15 +366,14 @@ function runAssignMotionUser(args) {
   if (!rawMotion) throw new Error(`Motion not found: ${args.motionId}`);
   const rawUser = findUserById(args.userId);
   if (!rawUser) throw new Error(`User not found: ${args.userId}`);
-  const updated = assignMotionUser(rawMotion, rawUser, listBrowserProfiles(), {
+  const stored = updateMotionWithRetry(args.motionId, (motion) => assignMotionUser(motion, rawUser, listBrowserProfiles(), {
     assignedBy: "exo-ui",
     reason: args.reason ?? "Keep one execution identity for this motion",
-  });
-  updateMotion(updated);
+  }));
   return {
     ok: true,
     writer: "assignMotionUser",
-    message: `Assigned ${updated.name} to ${updated.engagementUserAssignment?.label ?? "the selected user"}.`,
+    message: `Assigned ${stored.name} to ${stored.engagementUserAssignment?.label ?? "the selected user"}.`,
   };
 }
 
@@ -439,9 +438,12 @@ function runAddMotionSignals(args) {
   const rawMotion = findMotionById(args.motionId);
   if (!rawMotion) throw new Error(`Motion not found: ${args.motionId}`);
 
-  const result = addMotionSignals(rawMotion, { signal: args.signal });
-  const stored = updateMotion(result.motion);
-  const count = result.addedSignals.length;
+  let count = 0;
+  const stored = updateMotionWithRetry(args.motionId, (motion) => {
+    const result = addMotionSignals(motion, { signal: args.signal });
+    count = result.addedSignals.length;
+    return result.motion;
+  });
   return {
     ok: true,
     writer: "addMotionSignals",
@@ -457,12 +459,20 @@ function runRemoveMotionSignal(args) {
   const rawMotion = findMotionById(args.motionId);
   if (!rawMotion) throw new Error(`Motion not found: ${args.motionId}`);
 
-  const result = removeMotionSignal(rawMotion, { signalId: args.signalId });
-  const stored = updateMotion(result.motion);
+  let removedSignal = null;
+  const stored = updateMotionWithRetry(args.motionId, (motion) => {
+    const result = removeMotionSignal(motion, { signalId: args.signalId });
+    removedSignal = result.removedSignal;
+    return result.motion;
+  });
+  deleteSignalMatchesForSignal({
+    motionId: args.motionId,
+    signalId: args.signalId,
+  });
   return {
     ok: true,
     writer: "removeMotionSignal",
-    message: `Removed signal "${result.removedSignal.name}" from ${stored.name}.`,
+    message: `Removed signal "${removedSignal?.name ?? args.signalId}" from ${stored.name}.`,
   };
 }
 
@@ -490,15 +500,14 @@ function runClaimTargetAccountPacket(args) {
     };
   }
 
-  const updated = claimMotionTargetAccountPacket(rawMotion, rawCompany, {
+  const stored = claimMotionTargetAccountPacket(rawMotion, rawCompany, {
     workerLabel,
     notes: args.notes ?? null,
   });
-  updateMotion(updated);
   return {
     ok: true,
     writer: "claimTargetAccountPacket",
-    message: `Queued ${rawCompany.name} for agent research on ${updated.name}.`,
+    message: `Queued ${rawCompany.name} for agent research on ${stored.name}.`,
   };
 }
 
@@ -538,13 +547,12 @@ function runAddTimelineNote(args) {
     throw new Error("addProspectTimelineNote requires prospectId and body.");
   }
   const { rawMotion, rawCompany } = loadMotionAndCompany(args);
-  const { motion, note } = addMotionProspectTimelineNote(rawMotion, rawCompany, {
+  const { note } = addMotionProspectTimelineNote(rawMotion, rawCompany, {
     prospectId: args.prospectId,
     kind: args.kind === "steer" ? "steer" : "note",
     body: String(args.body).trim(),
     author: args.author ?? null,
   });
-  updateMotion(motion);
   return {
     ok: true,
     writer: "addProspectTimelineNote",
@@ -578,8 +586,10 @@ function runRehome(args) {
     relatedObservations: related,
   });
   updateCompany(result.company);
-  updateMotion(result.fromMotion);
-  updateMotion(result.toMotion);
+  moveProspectToMotionRows({
+    prospectId: result.prospectId,
+    toMotionId: result.toMotion.id,
+  });
   for (const observation of result.observations) {
     upsertInboundObservation(observation);
   }
@@ -592,13 +602,12 @@ function runApproveDraft(args) {
     throw new Error("approveProspectDraft requires prospectId and surface.");
   }
   const { rawMotion, rawCompany } = loadMotionAndCompany(args);
-  const updated = approveMotionProspectDraft(rawMotion, rawCompany, {
+  const stored = approveMotionProspectDraft(rawMotion, rawCompany, {
     prospectId: args.prospectId,
     surface: args.surface,
     body: args.body ?? "",
     subject: args.subject ?? null,
   });
-  const stored = updateMotion(updated);
   const account = stored.targetMap.accounts.find((a) => a.companyId === args.companyId) ?? null;
   const prospect = account?.prospects.find((p) => p.id === args.prospectId) ?? null;
   return {

@@ -100,7 +100,10 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   assert.match(runner, /if mkdir "\$LOCK_DIR" 2>\/dev\/null; then/);
   assert.match(runner, /Detected stale Exo queue drainer lock; reclaiming \$LOCK_DIR\./);
   assert.match(runner, /printf '%s\\n' "\$\$" > "\$LOCK_PID_FILE"/);
-  assert.match(runner, /rm -f "\$LOCK_PID_FILE"; rmdir "\$LOCK_DIR"/);
+  assert.match(runner, /release_lock\(\) \{/);
+  assert.match(runner, /rm -f "\$LOCK_PID_FILE"/);
+  assert.match(runner, /rmdir "\$LOCK_DIR" 2>\/dev\/null \|\| true/);
+  assert.match(runner, /trap 'release_lock' EXIT/);
   assert.match(runner, /PREFLIGHT_SCRIPT="\$ROOT\/scripts\/preflight-agent-runtime\.js"/);
   assert.match(runner, /PASS_RUNNER_SCRIPT="\$ROOT\/scripts\/run-agent-host-pass\.js"/);
   assert.match(runner, /node "\$PREFLIGHT_SCRIPT" --json --write "\$PREFLIGHT_JSON"/);
@@ -109,6 +112,9 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   assert.match(runner, /EXO_AGENT_LANE=research \/usr\/bin\/caffeinate -dimsu -t 7200 \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
   assert.match(runner, /wait "\$transport_pid"/);
   assert.match(runner, /wait "\$research_pid"/);
+  const postSpawnReleaseIndex = runner.indexOf("release_lock", runner.indexOf("research_pid=$!"));
+  assert.ok(postSpawnReleaseIndex > runner.indexOf("research_pid=$!"));
+  assert.ok(postSpawnReleaseIndex < runner.indexOf("wait \"$transport_pid\""));
 
   assert.match(prompt, /Read \/tmp\/exo\/\.exo\/agent-preflight\.json first if it exists/);
   assert.match(prompt, /skip every browser-backed task in this pass/);
@@ -165,6 +171,9 @@ test("buildRoutinePlan falls back to cron and still emits the shared host runner
   assert.match(runner, /PASS_RUNNER_SCRIPT="\$ROOT\/scripts\/run-agent-host-pass\.js"/);
   assert.match(runner, /EXO_AGENT_LANE=transport \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
   assert.match(runner, /EXO_AGENT_LANE=research \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
+  const postSpawnReleaseIndex = runner.indexOf("release_lock", runner.indexOf("research_pid=$!"));
+  assert.ok(postSpawnReleaseIndex > runner.indexOf("research_pid=$!"));
+  assert.ok(postSpawnReleaseIndex < runner.indexOf("wait \"$transport_pid\""));
   assert.doesNotMatch(runner, /claude -p|codex exec/);
 });
 

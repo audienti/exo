@@ -140,6 +140,7 @@ export const inboundObservationSchema = z.object({
   motionId: z.string().min(1).nullable().default(null),
   companyId: z.string().min(1).nullable().default(null),
   prospectId: z.string().min(1).nullable().default(null),
+  personId: z.string().min(1).nullable().default(null),
   providerSharedSecret: z.string().trim().min(1).nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null),
   messages: z.array(inboundThreadMessageSchema).default([])

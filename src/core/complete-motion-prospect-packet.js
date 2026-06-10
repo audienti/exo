@@ -2,6 +2,11 @@
 
 import { applyCompleteMotionProspectPacket } from "../lib/motion-packets.js";
 import {
+  findMotionById,
+  setProspectDisposition,
+} from "../db/database.js";
+import { persistProspectRows } from "./record-prospect.js";
+import {
   finalizeTargetAccountUpdate,
   prepareTargetAccountContext
 } from "./target-account-state.js";
@@ -17,7 +22,7 @@ import {
  * }} input
  */
 export function completeMotionProspectPacket(rawMotion, rawCompany, input) {
-  const { motion, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
+  const { motion, company, now, accounts, baseAccount } = prepareTargetAccountContext(rawMotion, rawCompany);
   const existingProspect = baseAccount.prospects.find((prospect) => prospect.id === input.prospectId);
 
   if (!existingProspect) {
@@ -30,8 +35,40 @@ export function completeMotionProspectPacket(rawMotion, rawCompany, input) {
       : prospect
   ));
 
-  return finalizeTargetAccountUpdate(motion, accounts, {
+  const updatedAccount = {
     ...baseAccount,
     prospects: updatedProspects
-  }, now);
+  };
+  const updatedMotion = finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  const updatedProspect = updatedProspects.find((prospect) => prospect.id === input.prospectId);
+  if (updatedProspect) {
+    persistProspectRows({
+      motion: updatedMotion,
+      company,
+      account: updatedAccount,
+      prospect: updatedProspect,
+      now,
+    });
+
+    const terminalDisposition = prospectDispositionForPacketStatus(input.nextStatus);
+    if (terminalDisposition) {
+      setProspectDisposition(updatedProspect.id, {
+        disposition: terminalDisposition,
+        actor: "agent",
+        reason: input.notes ?? null,
+        at: now,
+      });
+    }
+  }
+
+  return findMotionById(motion.id) ?? updatedMotion;
+}
+
+/**
+ * @param {"suppressed" | "exhausted" | undefined} status
+ */
+function prospectDispositionForPacketStatus(status) {
+  if (status === "suppressed") return "not_a_fit";
+  if (status === "exhausted") return "exhausted";
+  return null;
 }

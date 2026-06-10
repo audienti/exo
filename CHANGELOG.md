@@ -6,6 +6,14 @@ All notable changes to Exo's public plugin surface land here.
 
 - No unreleased plugin-facing changes yet.
 
+## [0.3.0] - 2026-06-10
+
+- Rebuilt the local Exo state store around normalized rows for motions, companies, people, accounts, prospects, touches, drafts, signal matches, and activity events. The old motion `targetMap` blob is no longer stored in `motions.payload_json`; hydrated views keep the legacy shape for existing CLI, UI, and agent contracts.
+- Added optimistic motion-core versioning, row-backed prospect and account write paths, atomic packet claims, and pure read hydration so parallel research and transport work no longer race through whole-motion JSON rewrites.
+- Added the final-form disposition and packet-review columns for prospects and motion accounts. Due-work scans now gate on active account and prospect disposition, and cross-motion held prospects release only when the owning branch leaves active disposition.
+- Made config export/import a cutover-safe portability path: exports preserve motion playbooks, companies, browser profiles, and users only; imports strip legacy target maps, prospects, touches, drafts, and dynamic execution state before re-seeding a fresh 0.3.0 database.
+- Pre-0.3.0 local databases now fail closed with a reinitialize-required error instead of attempting a repair migration. Back up and export config before wiping `.exo/exo.db*`, then import the config into the new schema.
+
 ## [0.2.4] - 2026-06-10
 
 - The agent host now recognizes runtime usage-limit failures (out of Codex messages, usage/rate limit reached, HTTP 429) and pauses queue draining instead of failing every queued task one by one. The hold is recorded in `agent-host-state.json` with the reset time parsed from the error when present (30 minutes otherwise), passes skip while it is active, and draining resumes on its own once the limit resets. `EXO_AGENT_IGNORE_USAGE_LIMIT=1` forces a pass through the hold.

@@ -7,8 +7,8 @@ import {
   findMotionById,
   listCompanies,
   listInboundObservations,
+  moveProspectToMotionRows,
   updateCompany,
-  updateMotion,
   upsertInboundObservation,
 } from "../db/database.js";
 import { ensureTransitionMotion, isTransitionMotion } from "./ensure-transition-motion.js";
@@ -79,6 +79,10 @@ export async function removeMotionGoverned(input) {
 
       workingFromMotion = result.fromMotion;
       workingTransitionMotion = result.toMotion;
+      moveProspectToMotionRows({
+        prospectId: ref.prospectId,
+        toMotionId: workingTransitionMotion.id,
+      });
       companiesById.set(result.company.id, result.company);
       relatedCompanyIds.add(result.company.id);
       relinkedObservations.push(...result.observations);
@@ -108,7 +112,7 @@ export async function removeMotionGoverned(input) {
   }
 
   if (workingTransitionMotion) {
-    transitionMotion = updateMotion(workingTransitionMotion);
+    transitionMotion = findMotionById(workingTransitionMotion.id);
   }
 
   for (const observation of relinkedObservations) {

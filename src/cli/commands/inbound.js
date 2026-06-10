@@ -44,7 +44,6 @@ import {
   listInboundObservations,
   listMotions,
   updateCompany,
-  updateMotion,
   updateUser,
   upsertInboundCue,
   upsertInboundObservation
@@ -1321,7 +1320,7 @@ function applyInboundProspectEnrichment(observations) {
       continue;
     }
 
-    const updatedMotion = updateMotionProspect(rawMotion, rawCompany, {
+    updateMotionProspect(rawMotion, rawCompany, {
       prospectId: observation.prospectId,
       name: observation.actorName ?? undefined,
       title: observation.actorTitle ?? undefined,
@@ -1336,7 +1335,6 @@ function applyInboundProspectEnrichment(observations) {
         || observation.kind === "profile_view_received"
       ) ? observation.observedAt : undefined
     });
-    updateMotion(updatedMotion);
     enrichedCount += 1;
   }
 

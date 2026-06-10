@@ -7,11 +7,12 @@ const QUEUE_STATUSES = [
   "selected",
   "ready",
   "suppressed",
-  "exhausted"
+  "exhausted",
+  "held_cross_motion"
 ];
 
 const ACCOUNT_MANUAL_HOLD_STATUSES = new Set(["queued_for_research", "suppressed", "exhausted"]);
-const PROSPECT_MANUAL_HOLD_STATUSES = new Set(["suppressed", "exhausted"]);
+const PROSPECT_MANUAL_HOLD_STATUSES = new Set(["suppressed", "exhausted", "held_cross_motion"]);
 const TERMINAL_TOUCH_OUTCOMES = new Set(["blocked", "nurture"]);
 
 /**
@@ -218,7 +219,7 @@ function buildDerivedQueueState(existing, status, now) {
  * @param {Record<string, any>} prospect
  */
 function isAvailableProspect(prospect) {
-  return !["suppressed", "exhausted"].includes(prospect.queueState?.status);
+  return !["suppressed", "exhausted", "held_cross_motion"].includes(prospect.queueState?.status);
 }
 
 /**

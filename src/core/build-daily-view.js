@@ -26,6 +26,8 @@ import { buildMotionCompanyScopeKey, buildUserAssignedExecutionScopeIndex } from
  *   motionId?: string | null | undefined,
  *   companyId?: string | null | undefined,
  *   prospectId?: string | null | undefined,
+ *   capacityAccounts?: Array<{ motion: any, account: any }> | undefined,
+ *   prospectBranches?: Array<{ motion: any, account: any, prospect: any }> | undefined,
  *   limit?: number | null | undefined
  * }} [options]
  */
@@ -65,55 +67,37 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
     motionId: options.motionId ?? null,
     companyId: options.companyId ?? null,
     prospectId: options.prospectId ?? null,
-    rawObservations
+    rawObservations,
+    capacityAccounts: options.capacityAccounts
   });
+  const prospectBranches = Array.isArray(options.prospectBranches)
+    ? normalizeProspectBranches(options.prospectBranches, {
+        motionId: options.motionId ?? null,
+        companyId: options.companyId ?? null,
+        prospectId: options.prospectId ?? null,
+        assignedExecutionScopeKeys,
+      })
+    : buildProspectBranchesFromMotions(motions, {
+        motionId: options.motionId ?? null,
+        companyId: options.companyId ?? null,
+        prospectId: options.prospectId ?? null,
+        assignedExecutionScopeKeys,
+      });
+  const supportProspectsByMotionId = buildSupportProspectsByMotionId(prospectBranches);
   const items = dedupeDailyItems([
     buildOutboundCapacityPlannerItem(outboundCapacity, {
       motionId: options.motionId ?? null,
       motions
     }),
     ...buildInboundReviewPlannerItems(inboundReview),
-    ...motions
-    .flatMap((motion) =>
-      motion.targetMap.accounts.flatMap((account) =>
-        account.prospects.map((prospect) => {
-          if (options.motionId && motion.id !== options.motionId) {
-            return null;
-          }
-
-          if (options.companyId && account.companyId !== options.companyId) {
-            return null;
-          }
-
-          if (options.prospectId && prospect.id !== options.prospectId) {
-            return null;
-          }
-
-          if (!assignedExecutionScopeKeys.has(buildMotionCompanyScopeKey(motion.id, account.companyId))) {
-            return null;
-          }
-
-          if (prospect.cadenceState.status !== "ready") {
-            return null;
-          }
-
-          return buildDailyItem({
-            motion,
-            account,
-            prospect,
-            motionSupportProspects: motion.targetMap.accounts
-              .filter((candidateAccount) =>
-                assignedExecutionScopeKeys.has(buildMotionCompanyScopeKey(motion.id, candidateAccount.companyId))
-              )
-              .flatMap((candidateAccount) =>
-                candidateAccount.prospects.map((candidateProspect) => toSupportProspect(candidateAccount, candidateProspect))
-              ),
-            latestInboxItem: inboxByProspectId.get(prospect.id) ?? null,
-            now
-          });
-        })
-      )
-    )
+    ...prospectBranches.map(({ motion, account, prospect }) => buildDailyItem({
+      motion,
+      account,
+      prospect,
+      motionSupportProspects: supportProspectsByMotionId.get(motion.id) ?? [],
+      latestInboxItem: inboxByProspectId.get(prospect.id) ?? null,
+      now
+    }))
   ])
     .filter(Boolean)
     .sort(compareDailyItems);
@@ -142,6 +126,73 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
     },
     items: limitedItems
   };
+}
+
+/**
+ * @param {Array<{ motion: any, account: any, prospect: any }>} branches
+ * @param {{
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null,
+ *   assignedExecutionScopeKeys: Set<string>
+ * }} filters
+ */
+function normalizeProspectBranches(branches, filters) {
+  return branches
+    .map((branch) => ({
+      motion: motionSchema.parse(branch.motion),
+      account: branch.account,
+      prospect: branch.prospect,
+    }))
+    .filter((branch) => shouldUseProspectBranch(branch, filters));
+}
+
+/**
+ * @param {import("../schema/motion.js").motionSchema._type[]} motions
+ * @param {{
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null,
+ *   assignedExecutionScopeKeys: Set<string>
+ * }} filters
+ */
+function buildProspectBranchesFromMotions(motions, filters) {
+  return motions.flatMap((motion) =>
+    motion.targetMap.accounts.flatMap((account) =>
+      account.prospects.map((prospect) => ({ motion, account, prospect }))
+    )
+  )
+    .filter((branch) => shouldUseProspectBranch(branch, filters));
+}
+
+/**
+ * @param {{ motion: any, account: any, prospect: any }} branch
+ * @param {{
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null,
+ *   assignedExecutionScopeKeys: Set<string>
+ * }} filters
+ */
+function shouldUseProspectBranch({ motion, account, prospect }, filters) {
+  if (filters.motionId && motion.id !== filters.motionId) return false;
+  if (filters.companyId && account.companyId !== filters.companyId) return false;
+  if (filters.prospectId && prospect.id !== filters.prospectId) return false;
+  if (!filters.assignedExecutionScopeKeys.has(buildMotionCompanyScopeKey(motion.id, account.companyId))) return false;
+  return prospect.cadenceState.status === "ready";
+}
+
+/**
+ * @param {Array<{ motion: any, account: any, prospect: any }>} branches
+ */
+function buildSupportProspectsByMotionId(branches) {
+  const supportProspectsByMotionId = new Map();
+  for (const { motion, account, prospect } of branches) {
+    const prospects = supportProspectsByMotionId.get(motion.id) ?? [];
+    prospects.push(toSupportProspect(account, prospect));
+    supportProspectsByMotionId.set(motion.id, prospects);
+  }
+  return supportProspectsByMotionId;
 }
 
 /**

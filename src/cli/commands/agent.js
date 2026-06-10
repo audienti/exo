@@ -8,11 +8,22 @@ import { execFile, execFileSync } from "node:child_process";
 import { buildAgentQueue } from "../../core/build-agent-queue.js";
 import { buildSendHandoff } from "../../core/build-send-handoff.js";
 import { buildInboundAutomationHealthWarnings, buildInboundAutomationStatus, buildInboundAutomationWarnings } from "../../core/user-inbound-sync.js";
-import { findCompanyById, findMotionById, listBrowserProfiles, listCompanies, listInboundCues, listInboundObservations, listMotions, listUsers } from "../../db/database.js";
+import {
+  findCompanyById,
+  findMotionById,
+  listAgentQueueProspectBranches,
+  listBrowserProfiles,
+  listCompanies,
+  listInboundCues,
+  listInboundObservations,
+  listMotions,
+  listUsers,
+} from "../../db/database.js";
 import { getHomeStateDir } from "../../db/paths.js";
 import { createTaskVerificationFingerprint, getCanaryCooldown, getRecentTaskVerification, getSendCircuitBreaker, listActiveBrowserBackoffs, pruneExpiredBrowserBackoffs } from "../../lib/agent-host-state.js";
 import { releaseAgentRunLock, tryAcquireAgentRunLock } from "../../lib/agent-run-lock.js";
 import { AGENT_EXECUTION_LANES, normalizeAgentExecutionLane } from "../../lib/agent-task-lanes.js";
+import { mergeLanePassSummaries, writeAgentPassSummary } from "../../lib/agent-pass-summary.js";
 import { buildPreflightSummary } from "../../lib/agent-preflight.js";
 import { buildLaunchAgentLabel, buildRoutinePlan, ROUTINE_ARTIFACT_VERSION } from "../../lib/agent-routine.js";
 import { runCliRepairableContract } from "../repairable-contracts.js";
@@ -533,7 +544,7 @@ export async function runAgentWorkerPass(options = {}) {
   const resolvedSendMode = normalizeRoutineSendMode(options.sendMode, existingRoutine?.sendMode ?? "verify");
   const runnerScript = process.env.EXO_AGENT_RUNNER_SCRIPT || path.join(process.cwd(), "scripts", "run-agent-host-pass.js");
   const runnerNode = process.env.EXO_AGENT_RUNNER_NODE || process.execPath;
-  const runLock = tryAcquireAgentRunLock({ stateDir });
+  let runLock = tryAcquireAgentRunLock({ stateDir });
   if (!runLock.acquired) {
     const queue = loadAgentQueue();
     const summary = {
@@ -587,15 +598,16 @@ export async function runAgentWorkerPass(options = {}) {
     // EXO_AGENT_LANE narrows execution to that single lane.
     const pinnedLane = normalizeAgentExecutionLane(env.EXO_AGENT_LANE);
     const lanes = pinnedLane ? [pinnedLane] : [...AGENT_EXECUTION_LANES];
-    const laneSummaries = await Promise.all(lanes.map((lane) =>
-      runWorkerLanePass({ lane, stateDir, runnerNode, runnerScript, env })));
+    const lanePasses = lanes.map((lane) =>
+      runWorkerLanePass({ lane, runnerNode, runnerScript, env }));
+    releaseAgentRunLock(runLock);
+    runLock = null;
+    const laneSummaries = await Promise.all(lanePasses);
     const summary = mergeLanePassSummaries(laneSummaries);
 
     // Each lane runner writes its own agent-last-pass.<lane>.json; the merged
     // view keeps the legacy whole-host summary file current for its readers.
-    const summaryPath = path.join(stateDir, "agent-last-pass.json");
-    fs.mkdirSync(path.dirname(summaryPath), { recursive: true });
-    fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2));
+    writeAgentPassSummary({ stateDir, summary });
 
     if (!options.quiet) {
       if (options.json) {
@@ -609,39 +621,26 @@ export async function runAgentWorkerPass(options = {}) {
     }
     return summary;
   } finally {
-    releaseAgentRunLock(runLock);
+    if (runLock) {
+      releaseAgentRunLock(runLock);
+    }
   }
 }
 
 /**
- * Run one host-pass worker for a single execution lane, guarded by that
- * lane's run lock. A lane that cannot start (lock held) or that breaks must
- * not take down the sibling lane mid-flight, so failures are surfaced as a
- * failed lane summary instead of a thrown error.
+ * Run one host-pass worker for a single execution lane. The child owns the
+ * lane lock and reports a no-op summary when held; runner failures still must
+ * not take down the sibling lane mid-flight.
  *
  * @param {{
  *   lane: string,
- *   stateDir: string,
  *   runnerNode: string,
  *   runnerScript: string,
  *   env: Record<string, string | undefined>,
  * }} input
  * @returns {Promise<any>}
  */
-async function runWorkerLanePass({ lane, stateDir, runnerNode, runnerScript, env }) {
-  const laneLock = tryAcquireAgentRunLock({ stateDir, lane });
-  if (!laneLock.acquired) {
-    const now = new Date().toISOString();
-    return {
-      status: "noop",
-      reason: `Another ${lane} lane pass is already active${laneLock.pid ? ` (pid ${laneLock.pid})` : ""}.`,
-      startedAt: now,
-      endedAt: now,
-      lane,
-      results: [],
-    };
-  }
-
+async function runWorkerLanePass({ lane, runnerNode, runnerScript, env }) {
   try {
     const raw = await new Promise((resolve, reject) => {
       execFile(runnerNode, [runnerScript], {
@@ -675,53 +674,7 @@ async function runWorkerLanePass({ lane, stateDir, runnerNode, runnerScript, env
       lane,
       results: [],
     };
-  } finally {
-    releaseAgentRunLock(laneLock);
   }
-}
-
-// Worst lane status wins the merged pass status.
-const PASS_STATUS_SEVERITY = ["failed", "blocked", "mixed", "partial", "completed", "noop"];
-
-/**
- * Merge per-lane host-pass summaries into the legacy whole-host summary shape.
- * @param {any[]} laneSummaries
- */
-export function mergeLanePassSummaries(laneSummaries) {
-  const lanes = (laneSummaries ?? []).filter(Boolean);
-  if (lanes.length === 1) {
-    return { ...lanes[0], lanes };
-  }
-
-  const status = PASS_STATUS_SEVERITY.find((candidate) => lanes.some((lane) => lane?.status === candidate))
-    ?? "noop";
-  const distinctReasons = [...new Set(lanes.map((lane) => lane?.reason).filter(Boolean))];
-  const reason = distinctReasons.length <= 1
-    ? distinctReasons[0] ?? null
-    : lanes
-      .filter((lane) => lane?.reason)
-      .map((lane) => `${lane.lane ?? "lane"}: ${lane.reason}`)
-      .join(" | ");
-  const startedAt = lanes.map((lane) => lane?.startedAt).filter(Boolean).sort()[0] ?? null;
-  const endedAt = lanes.map((lane) => lane?.endedAt).filter(Boolean).sort().at(-1) ?? null;
-  // The lane that finished last saw the freshest queue.
-  const freshestQueueLane = lanes
-    .filter((lane) => lane?.finalQueueCounts)
-    .sort((left, right) => String(left?.endedAt ?? "").localeCompare(String(right?.endedAt ?? "")))
-    .at(-1);
-
-  return {
-    status,
-    reason,
-    startedAt,
-    endedAt,
-    lanes,
-    results: lanes.flatMap((lane) => (Array.isArray(lane?.results) ? lane.results : [])),
-    finalQueueCounts: freshestQueueLane?.finalQueueCounts
-      ?? { dueTaskCount: 0, waitingTaskCount: 0, blockerCount: 0 },
-    browserReady: lanes.find((lane) => lane?.browserReady !== undefined)?.browserReady,
-    preflightPath: lanes.find((lane) => lane?.preflightPath)?.preflightPath ?? null,
-  };
 }
 
 /**
@@ -815,6 +768,7 @@ function buildAgentQueueInput() {
     users: listUsers(),
     observations: listInboundObservations(),
     cues: listInboundCues(),
+    prospectBranches: listAgentQueueProspectBranches(),
     hostState,
   };
 }
@@ -936,7 +890,7 @@ export function formatAgentDoctorReport(report) {
       : `${prefix} ${report.cadence.nextExpectedRunAt}.`);
   }
   if (report.cadence?.activeRunOverCadence) {
-    lines.push(`Current launchd pass has exceeded its cadence by ${report.cadence.activeRunOverCadenceBySeconds}s. Future scheduled passes will stay queued behind the lock until it finishes.`);
+    lines.push(`Current launchd pass has exceeded its cadence by ${report.cadence.activeRunOverCadenceBySeconds}s. Lane workers now own their locks, so inspect lane summaries and active lane lock holders for the live blocker.`);
   }
   if (routine?.exists) {
     if (routine.sendMode === "verify") {

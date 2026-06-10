@@ -60,7 +60,7 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
   if (!action || !surface) {
     throw new Error(`No governed LinkedIn action is mapped for surface ${input.surface ?? "unknown"}.`);
   }
-  const writeback = `exo actions result --action ${action} --result sent --company ${company.id} --prospect ${prospect.id} --surface ${surface}`;
+  const writeback = `exo actions result --action ${action} --result sent --company ${company.id} --prospect ${prospect.id} --motion ${motion.id} --surface ${surface}`;
   const recipientUrl = prospect.linkedinProfileUrl ?? prospect.linkedinProfileSnapshot?.profileUrl ?? null;
   const publicTarget = resolveLinkedinPublicTarget(prospect, surface);
   const publicEngagementPlan = isAutonomousPublicSurface

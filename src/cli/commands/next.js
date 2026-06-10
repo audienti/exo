@@ -10,9 +10,11 @@ import {
   findUserById,
   listBrowserProfiles,
   listCompanies,
+  listDueProspectBranches,
   listInboundCues,
   listInboundObservations,
   listMotions,
+  listOutboundCapacityAccounts,
   listUsers
 } from "../../db/database.js";
 import { summarizeExecutionUsers } from "../../lib/execution-users.js";
@@ -50,6 +52,7 @@ Rules:
       const rawCompanies = listCompanies();
       const rawUsers = listUsers();
       const rawUser = resolveNextUser(options.user, rawUsers);
+      const now = new Date().toISOString();
 
       if (options.user && !rawUser) {
         process.exitCode = 1;
@@ -89,11 +92,31 @@ Rules:
         rawUsers,
         rawObservations: workspaceContext?.observations ?? rawObservations,
         rawCues: workspaceContext?.cues ?? [],
+        now,
+        description,
         filters: {
           motionId: options.motion ?? null,
           companyId: options.company ?? null,
           prospectId: options.prospect ?? null
-        }
+        },
+        capacityAccounts: rawUser
+          ? listOutboundCapacityAccounts({
+              executionUserId: rawUser.id,
+              motionId: options.motion ?? null,
+              companyId: options.company ?? null,
+              prospectId: options.prospect ?? null,
+            })
+          : [],
+        prospectBranches: rawUser
+          ? listDueProspectBranches({
+              executionUserId: rawUser.id,
+              now,
+              limit: 25,
+              motionId: options.motion ?? null,
+              companyId: options.company ?? null,
+              prospectId: options.prospect ?? null,
+            })
+          : [],
       };
       const { contract: result } = await runCliRepairableContract({
         contractKind: "next",

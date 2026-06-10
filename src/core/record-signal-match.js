@@ -1,8 +1,12 @@
 // @ts-check
 
 import crypto from "node:crypto";
-import { motionSchema } from "../schema/motion.js";
 import { signalMatchSchema, targetAccountSchema } from "../schema/target-account.js";
+import {
+  findMotionById,
+  upsertMotionAccount,
+  upsertSignalMatch as upsertSignalMatchRow,
+} from "../db/database.js";
 import {
   finalizeTargetAccountUpdate,
   normalizeNullableString,
@@ -50,7 +54,7 @@ export function recordMotionSignalMatch(rawMotion, rawCompany, input) {
     subject
   });
 
-  const signalMatches = upsertSignalMatch(baseAccount.signalMatches, nextMatch);
+  const signalMatches = upsertSignalMatchView(baseAccount.signalMatches, nextMatch);
   const updatedAccount = targetAccountSchema.parse({
     ...baseAccount,
     companyName: company.name,
@@ -62,14 +66,42 @@ export function recordMotionSignalMatch(rawMotion, rawCompany, input) {
     lastResearchAt: now,
     signalMatches
   });
-  return finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  const updatedMotion = finalizeTargetAccountUpdate(motion, accounts, updatedAccount, now);
+  const motionAccount = upsertMotionAccount({
+    id: buildMotionAccountId(motion.id, company.id),
+    motionId: motion.id,
+    companyId: company.id,
+    executionUserId: motion.engagementUserAssignment?.userId ?? null,
+    queueStatus: updatedAccount.queueState?.status ?? "researched",
+    disposition: updatedAccount.disposition,
+    packetStatus: updatedAccount.packetStatus,
+    lastResearchAt: updatedAccount.lastResearchAt,
+    payload: {
+      ...updatedAccount,
+      prospects: undefined,
+      signalMatches: undefined,
+    },
+    now,
+  });
+  const persistedMatch = signalMatches.find((match) => matchesReferToSameObservation(match, nextMatch)) ?? nextMatch;
+  upsertSignalMatchRow({
+    id: persistedMatch.id,
+    motionAccountId: motionAccount.id,
+    motionId: motion.id,
+    companyId: company.id,
+    observedAt: persistedMatch.observedAt,
+    payload: persistedMatch,
+    now,
+  });
+
+  return findMotionById(motion.id) ?? updatedMotion;
 }
 
 /**
  * @param {import("../schema/target-account.js").signalMatchSchema._type[]} matches
  * @param {import("../schema/target-account.js").signalMatchSchema._type} nextMatch
  */
-function upsertSignalMatch(matches, nextMatch) {
+function upsertSignalMatchView(matches, nextMatch) {
   const index = matches.findIndex((match) => matchesReferToSameObservation(match, nextMatch));
   if (index === -1) {
     return [...matches, nextMatch];
@@ -87,6 +119,14 @@ function upsertSignalMatch(matches, nextMatch) {
       recordedAt: nextMatch.recordedAt
     });
   });
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} companyId
+ */
+function buildMotionAccountId(motionId, companyId) {
+  return `motion-account-${motionId}-${companyId}`;
 }
 
 /**

@@ -1,18 +1,21 @@
 // @ts-check
 
-import { markMotionProspectDraftSent, setMotionProspectDraft } from "./set-prospect-draft.js";
-import { recordMotionProspectTouch } from "./record-prospect-touch.js";
-import { setMotionProspectCadence } from "./set-prospect-cadence.js";
 import { transitionInboundObservation } from "./transition-inbound-observation.js";
 import { findActionDefinition, normalizeActionKey } from "../lib/action-catalog.js";
 import { findSupportedActionResult, normalizeActionResultKey } from "../lib/action-result-catalog.js";
 import { isSendableDraftStatus } from "../lib/draft-policy.js";
 import {
+  appendActivityEvent,
   findCompanyById,
+  findActiveProspectDraftBySurface,
+  findCrossMotionOwner,
   findInboundObservationById,
   findMotionById,
+  findProspectById,
+  getLocalDatabase,
   listMotions,
-  updateMotion,
+  transitionProspectDraftStatus,
+  updateProspectCadence,
 } from "../db/database.js";
 
 const DM_SURFACES = new Set(["post_accept_message", "follow_up_direct_message", "inbound_reply"]);
@@ -97,62 +100,11 @@ export function recordActionResult(input) {
     };
   }
 
-  let { rawMotion, rawCompany, prospect } = loadTargetContext(ids);
+  let { rawMotion, prospect } = loadTargetContext(ids);
   const surface = resolveSurface({ action, result, explicitSurface: input.surface ?? null, prospect });
   const sentDraft = surface && result.markDraftSent
     ? findSendableDraftForSurface(prospect, surface)
     : null;
-
-  let touchRecorded = false;
-  if (surface && result.touchDirection && result.touchOutcome) {
-    const updated = recordMotionProspectTouch(rawMotion, rawCompany, {
-      prospectId: ids.prospectId,
-      surface,
-      direction: result.touchDirection,
-      outcome: result.touchOutcome,
-      occurredAt,
-      summary: input.summary ?? buildTouchSummary(action.label, result.label, prospect.name),
-      subject: normalizeOptionalMessageField(input.subject) ?? normalizeOptionalMessageField(sentDraft?.subject),
-      body: normalizeOptionalMessageField(input.body) ?? normalizeOptionalMessageField(sentDraft?.body),
-      sourceUrl: input.sourceUrl ?? null,
-      notes: input.notes ?? null,
-    });
-    rawMotion = updateMotion(updated);
-    prospect = requireProspect(rawMotion, ids.companyId, ids.prospectId);
-    touchRecorded = true;
-  }
-
-  let draftMarkedSent = false;
-  if (result.markDraftSent && surface) {
-    const beforeStatus = prospect.drafts.find((draft) => draft.surface === surface)?.status ?? null;
-    const updated = markMotionProspectDraftSent(rawMotion, rawCompany, {
-      prospectId: ids.prospectId,
-      surface,
-    });
-    rawMotion = updateMotion(updated);
-    prospect = requireProspect(rawMotion, ids.companyId, ids.prospectId);
-    const afterStatus = prospect.drafts.find((draft) => draft.surface === surface)?.status ?? null;
-    draftMarkedSent = isSendableDraftStatus(beforeStatus) && afterStatus === "sent";
-  }
-
-  let draftMarkedDiscarded = false;
-  if (result.markDraftDiscarded && surface) {
-    const activeDraft = prospect.drafts.find((draft) =>
-      draft.surface === surface && isSendableDraftStatus(draft.status)
-    ) ?? null;
-    if (activeDraft) {
-      const updated = markMotionProspectDraftDiscarded(rawMotion, rawCompany, {
-        prospectId: ids.prospectId,
-        surface,
-        notes: input.notes ?? activeDraft.notes ?? null,
-      });
-      rawMotion = updateMotion(updated);
-      prospect = requireProspect(rawMotion, ids.companyId, ids.prospectId);
-      draftMarkedDiscarded = prospect.drafts.some((draft) =>
-        draft.surface === surface && draft.id === activeDraft.id && draft.status === "discarded"
-      );
-    }
-  }
 
   const nextAction = input.nextAction !== undefined ? input.nextAction : result.defaultNextAction;
   const needsCadenceUpdate =
@@ -160,18 +112,90 @@ export function recordActionResult(input) {
     || nextAction !== undefined
     || input.nextActionDueAt !== undefined;
 
+  let touchRecorded = false;
+  let draftMarkedSent = false;
+  let draftMarkedDiscarded = false;
   let cadenceUpdated = false;
-  if (needsCadenceUpdate) {
-    const updated = setMotionProspectCadence(rawMotion, rawCompany, {
-      prospectId: ids.prospectId,
-      currentStep: result.cadenceStep ?? undefined,
-      nextAction,
-      nextActionDueAt: input.nextActionDueAt ?? undefined,
-    });
-    rawMotion = updateMotion(updated);
-    prospect = requireProspect(rawMotion, ids.companyId, ids.prospectId);
-    cadenceUpdated = true;
+
+  runLocalTransaction(() => {
+    const rowProspect = findProspectById(ids.prospectId);
+    if (!rowProspect) {
+      throw new Error(`Prospect not found: ${ids.prospectId}`);
+    }
+    if (isOutboundSendResult(result)) {
+      assertProspectStillOwnsOutboundSend(rowProspect, rawMotion.id);
+    }
+
+    if (surface && result.touchDirection && result.touchOutcome) {
+      const touch = {
+        surface,
+        direction: result.touchDirection,
+        outcome: result.touchOutcome,
+        occurredAt,
+        summary: input.summary ?? buildTouchSummary(action.label, result.label, prospect.name),
+        subject: normalizeOptionalMessageField(input.subject) ?? normalizeOptionalMessageField(sentDraft?.subject),
+        body: normalizeOptionalMessageField(input.body) ?? normalizeOptionalMessageField(sentDraft?.body),
+        sourceUrl: input.sourceUrl ?? null,
+        notes: input.notes ?? null,
+      };
+      appendActivityEvent({
+        dedupeKey: `touch:${rawMotion.id}:${rowProspect.id}:${surface}:${result.touchOutcome}:${occurredAt}`,
+        kind: "touch",
+        personId: rowProspect.personId,
+        prospectId: rowProspect.id,
+        motionId: rawMotion.id,
+        companyId: ids.companyId,
+        surface,
+        direction: result.touchDirection,
+        outcome: result.touchOutcome,
+        occurredAt,
+        payload: touch,
+      });
+      if (!prospect.cadenceState?.lastTouchAt || prospect.cadenceState.lastTouchAt <= occurredAt) {
+        updateProspectCadence(rowProspect.id, {
+          lastTouchChannel: deriveCadenceChannel(surface),
+          lastTouchOutcome: result.touchOutcome,
+          lastTouchAt: occurredAt,
+        });
+      }
+      touchRecorded = true;
+    }
+
+    if (result.markDraftSent && surface) {
+      const draft = findActiveProspectDraftBySurface(rowProspect.id, surface);
+      const beforeStatus = draft?.status ?? null;
+      const transitioned = draft
+        ? transitionProspectDraftStatus(draft.id, { status: "sent" })
+        : null;
+      draftMarkedSent = isSendableDraftStatus(beforeStatus) && transitioned?.status === "sent";
+    }
+
+    if (result.markDraftDiscarded && surface) {
+      const draft = findActiveProspectDraftBySurface(rowProspect.id, surface);
+      if (draft && isSendableDraftStatus(draft.status)) {
+        const transitioned = transitionProspectDraftStatus(draft.id, {
+          status: "discarded",
+          notes: input.notes ?? draft.notes ?? null,
+        });
+        draftMarkedDiscarded = transitioned?.status === "discarded";
+      }
+    }
+
+    if (needsCadenceUpdate) {
+      updateProspectCadence(rowProspect.id, {
+        currentStep: result.cadenceStep ?? undefined,
+        nextAction,
+        nextActionDueAt: input.nextActionDueAt ?? undefined,
+      });
+      cadenceUpdated = true;
+    }
+  });
+
+  rawMotion = findMotionById(rawMotion.id);
+  if (!rawMotion) {
+    throw new Error(`Motion not found after action result: ${ids.motionId ?? ""}`);
   }
+  prospect = requireProspect(rawMotion, ids.companyId, ids.prospectId);
 
   return {
     ok: true,
@@ -238,6 +262,28 @@ function findSendableDraftForSurface(prospect, surface) {
   return (prospect?.drafts ?? []).find((draft) =>
     draft.surface === surface && isSendableDraftStatus(draft.status)
   ) ?? null;
+}
+
+/**
+ * @param {NonNullable<ReturnType<typeof findSupportedActionResult>>} result
+ */
+function isOutboundSendResult(result) {
+  return result.touchDirection === "outbound" && result.touchOutcome === "sent";
+}
+
+/**
+ * @param {NonNullable<ReturnType<typeof findProspectById>>} prospect
+ * @param {string} motionId
+ */
+function assertProspectStillOwnsOutboundSend(prospect, motionId) {
+  const owner = findCrossMotionOwner({
+    personId: prospect.personId,
+    excludeMotionId: motionId,
+  });
+  if (!owner) return;
+  throw new Error(
+    `Cannot record outbound send for stale branch ${prospect.id}; person is active in motion ${owner.motionId}.`
+  );
 }
 
 /**
@@ -330,31 +376,6 @@ function requireProspect(rawMotion, companyId, prospectId) {
 }
 
 /**
- * @param {any} rawMotion
- * @param {any} rawCompany
- * @param {{ prospectId: string, surface: string, notes?: string | null | undefined }} input
- */
-function markMotionProspectDraftDiscarded(rawMotion, rawCompany, input) {
-  const before = requireProspect(rawMotion, rawCompany.id, input.prospectId);
-  const existing = before.drafts.find((draft) =>
-    draft.surface === input.surface && isSendableDraftStatus(draft.status)
-  ) ?? null;
-  if (!existing) {
-    return rawMotion;
-  }
-
-  return setMotionProspectDraft(rawMotion, rawCompany, {
-    prospectId: input.prospectId,
-    surface: input.surface,
-    subject: existing.subject ?? null,
-    body: existing.body ?? "",
-    status: "discarded",
-    authoredBy: existing.authoredBy ?? "agent",
-    notes: input.notes ?? existing.notes ?? null,
-  });
-}
-
-/**
  * @param {string} actionLabel
  * @param {string} resultLabel
  * @param {string} prospectName
@@ -370,4 +391,35 @@ function buildTouchSummary(actionLabel, resultLabel, prospectName) {
  */
 function buildResultMessage(actionLabel, resultLabel, prospectName) {
   return `${resultLabel} ${actionLabel.toLowerCase()} for ${prospectName}.`;
+}
+
+/**
+ * @param {string} surface
+ */
+function deriveCadenceChannel(surface) {
+  if (surface === "email") return "email";
+  if (surface === "connection_request") return "connection-request";
+  if (surface === "in_mail_message") return "inmail";
+  if (surface === "post_accept_message" || surface === "follow_up_direct_message" || surface === "inbound_reply") {
+    return "direct-message";
+  }
+  return null;
+}
+
+/**
+ * @template T
+ * @param {() => T} callback
+ * @returns {T}
+ */
+function runLocalTransaction(callback) {
+  const database = getLocalDatabase();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const result = callback();
+    database.exec("COMMIT");
+    return result;
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
 }

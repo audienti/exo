@@ -2,8 +2,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { recordMotionProspect, updateMotionProspect } from "../src/core/record-prospect.js";
+import { insertMotion } from "../src/db/database.js";
 
 function buildMotionFixture() {
   return {
@@ -97,52 +101,87 @@ function buildCompanyFixture() {
 }
 
 test("recordMotionProspect promotes a snapshot avatar into canonical prospect media fields", () => {
-  const motion = recordMotionProspect(buildMotionFixture(), buildCompanyFixture(), {
-    name: "Minh Le",
-    title: "Head of Risk",
-    whyRelevant: "Owns lending controls and credit instrumentation.",
-    linkedinProfileSnapshot: {
-      profileUrl: "https://www.linkedin.com/in/minh-le-risk/",
-      avatarSourceUrl: "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example"
-    }
-  });
+  withIsolatedExoState(() => {
+    const storedMotion = insertMotion(buildMotionFixture());
+    const motion = recordMotionProspect(storedMotion, buildCompanyFixture(), {
+      name: "Minh Le",
+      title: "Head of Risk",
+      whyRelevant: "Owns lending controls and credit instrumentation.",
+      linkedinProfileSnapshot: {
+        profileUrl: "https://www.linkedin.com/in/minh-le-risk/",
+        avatarSourceUrl: "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example"
+      }
+    });
 
-  const prospect = motion.targetMap.accounts[0].prospects[0];
-  assert.equal(prospect.avatarSourceUrl, "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
-  assert.equal(prospect.avatarUrl, "https://imageproxy.bizzbridge.com/200x200/https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
-  assert.equal(prospect.linkedinProfileSnapshot.avatarSourceUrl, "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
-  assert.equal(prospect.linkedinProfileSnapshot.avatarChecked, false);
+    const prospect = motion.targetMap.accounts[0].prospects[0];
+    assert.equal(prospect.avatarSourceUrl, "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
+    assert.equal(prospect.avatarUrl, "https://imageproxy.bizzbridge.com/200x200/https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
+    assert.equal(prospect.linkedinProfileSnapshot.avatarSourceUrl, "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
+    assert.equal(prospect.linkedinProfileSnapshot.avatarChecked, false);
+  });
 });
 
 test("updateMotionProspect promotes a snapshot avatar without clearing an existing canonical avatar on null snapshot input", () => {
-  const seededMotion = recordMotionProspect(buildMotionFixture(), buildCompanyFixture(), {
-    name: "Minh Le",
-    title: "Head of Risk",
-    whyRelevant: "Owns lending controls and credit instrumentation.",
-    avatarSourceUrl: "https://cdn.example.com/minh-initial.png"
-  });
-  const seededProspect = seededMotion.targetMap.accounts[0].prospects[0];
+  withIsolatedExoState(() => {
+    const storedMotion = insertMotion(buildMotionFixture());
+    const seededMotion = recordMotionProspect(storedMotion, buildCompanyFixture(), {
+      name: "Minh Le",
+      title: "Head of Risk",
+      whyRelevant: "Owns lending controls and credit instrumentation.",
+      avatarSourceUrl: "https://cdn.example.com/minh-initial.png"
+    });
+    const seededProspect = seededMotion.targetMap.accounts[0].prospects[0];
 
-  const enrichedMotion = updateMotionProspect(seededMotion, buildCompanyFixture(), {
-    prospectId: seededProspect.id,
-    linkedinProfileSnapshot: {
-      profileUrl: "https://www.linkedin.com/in/minh-le-risk/",
-      avatarSourceUrl: "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example"
-    }
-  });
-  const enrichedProspect = enrichedMotion.targetMap.accounts[0].prospects[0];
-  assert.equal(enrichedProspect.avatarSourceUrl, "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
-  assert.equal(enrichedProspect.linkedinProfileSnapshot.avatarChecked, false);
+    const enrichedMotion = updateMotionProspect(seededMotion, buildCompanyFixture(), {
+      prospectId: seededProspect.id,
+      linkedinProfileSnapshot: {
+        profileUrl: "https://www.linkedin.com/in/minh-le-risk/",
+        avatarSourceUrl: "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example"
+      }
+    });
+    const enrichedProspect = enrichedMotion.targetMap.accounts[0].prospects[0];
+    assert.equal(enrichedProspect.avatarSourceUrl, "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
+    assert.equal(enrichedProspect.linkedinProfileSnapshot.avatarChecked, false);
 
-  const unchangedMotion = updateMotionProspect(enrichedMotion, buildCompanyFixture(), {
-    prospectId: seededProspect.id,
-    linkedinProfileSnapshot: {
-      profileUrl: "https://www.linkedin.com/in/minh-le-risk/",
-      avatarSourceUrl: null
-    }
+    const unchangedMotion = updateMotionProspect(enrichedMotion, buildCompanyFixture(), {
+      prospectId: seededProspect.id,
+      linkedinProfileSnapshot: {
+        profileUrl: "https://www.linkedin.com/in/minh-le-risk/",
+        avatarSourceUrl: null
+      }
+    });
+    const unchangedProspect = unchangedMotion.targetMap.accounts[0].prospects[0];
+    assert.equal(unchangedProspect.avatarSourceUrl, "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
+    assert.equal(unchangedProspect.linkedinProfileSnapshot.avatarSourceUrl, null);
+    assert.equal(unchangedProspect.linkedinProfileSnapshot.avatarChecked, false);
   });
-  const unchangedProspect = unchangedMotion.targetMap.accounts[0].prospects[0];
-  assert.equal(unchangedProspect.avatarSourceUrl, "https://media.licdn.com/dms/image/v2/D5603AQFMinhExample/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1710000000000?e=1753920000&v=beta&t=example");
-  assert.equal(unchangedProspect.linkedinProfileSnapshot.avatarSourceUrl, null);
-  assert.equal(unchangedProspect.linkedinProfileSnapshot.avatarChecked, false);
 });
+
+/**
+ * @template T
+ * @param {() => T} callback
+ * @returns {T}
+ */
+function withIsolatedExoState(callback) {
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-record-prospect-avatar-"));
+  process.env.EXO_STATE_DIR = stateDir;
+  delete process.env.EXO_HOME_STATE_DIR;
+
+  try {
+    return callback();
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir === undefined) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+}

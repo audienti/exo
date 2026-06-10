@@ -1,6 +1,7 @@
 # Normalized Core & Parallel Execution Plan
 
-- **Status:** locked — Codex converged 2026-06-10; conditional-approval fixes folded in
+- **Status:** locked — Codex converged 2026-06-10; conditional-approval fixes folded in;
+  amended 2026-06-10 (A1: disposition axis & packet review states — see Amendment record)
 - **Date:** 2026-06-10
 - **Target release:** 0.3.0 (breaking schema change; database reinitialization required)
 - **Scope:** local-only. No Supabase, no sync, no cloud hub, no async storage interface.
@@ -48,6 +49,7 @@ This is the cheapest this change will ever be.
 | D6 | **Events are permanent.** `activity_events` has no cascade delete; history survives motion removal and keys to person identity. | The "permanent activity log" requirement |
 | D7 | **Out of scope:** Supabase/hub/sync, `--json` envelope standardization, handler thinning, multi-workspace columns. | Separate tracks; workspace boundary = the `.exo` directory itself |
 | D8 | The plan also closes the **agent-runtime coordination gaps** found in review: missing lane locks in the scheduled path, missing merged pass summary, and the P0 TDZ crash. | Same workstream family; parallelism is unsafe without them |
+| D9 | **Disposition axis & packet review states ship in the 0.3.0 schema** (Amendment A1): `prospects` and `motion_accounts` carry `disposition` (`active\|nurture\|not_a_fit\|no_longer_target\|exhausted`), `disposition_at`/`disposition_actor`, and `packet_status` (`claimed\|submitted\|returned`); the due scan gates on active disposition. Review/nurture/terminal **behavior** (workflow, CLI, reports) lands post-cutover per `docs/wip/prospect-lifecycle-and-packet-review-plan.md` (issue omalab/exo#12) | CHECK constraints freeze at the baseline (SQLite can't alter them without a table rebuild); the cross-motion release rule needs a queryable terminal predicate; D2 "final form" applies |
 
 ## Target data model
 
@@ -152,6 +154,13 @@ motion_accounts (
     ('discovered','queued_for_research','researched','selected','ready',
      'suppressed','exhausted')),
   packet_claimed_by TEXT, packet_claimed_at TEXT,      -- atomic claim columns
+  packet_status TEXT CHECK (packet_status IS NULL OR packet_status IN
+    ('claimed','submitted','returned')),               -- review workflow (D9)
+  disposition TEXT NOT NULL DEFAULT 'active' CHECK (disposition IN
+    ('active','nurture','not_a_fit','no_longer_target','exhausted')),
+  disposition_at TEXT,
+  disposition_actor TEXT CHECK (disposition_actor IS NULL OR
+    disposition_actor IN ('operator','agent','system')),
   last_research_at TEXT,
   schema_version INTEGER NOT NULL,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
@@ -159,6 +168,8 @@ motion_accounts (
   UNIQUE (motion_id, company_id)
 )
 CREATE INDEX motion_accounts_by_user ON motion_accounts(execution_user_id);
+CREATE INDEX motion_accounts_review ON motion_accounts(motion_id)
+  WHERE packet_status IN ('submitted','returned');
 
 -- Research evidence, append-mostly. Prospects soft-reference these by id.
 signal_matches (
@@ -276,13 +287,23 @@ prospects (
   cadence_last_touch_at TEXT,
   cadence_last_touch_outcome TEXT,
   packet_claimed_by TEXT, packet_claimed_at TEXT,
+  packet_status TEXT CHECK (packet_status IS NULL OR packet_status IN
+    ('claimed','submitted','returned')),               -- review workflow (D9)
+  disposition TEXT NOT NULL DEFAULT 'active' CHECK (disposition IN
+    ('active','nurture','not_a_fit','no_longer_target','exhausted')),
+  disposition_at TEXT,
+  disposition_actor TEXT CHECK (disposition_actor IS NULL OR
+    disposition_actor IN ('operator','agent','system')),
   schema_version INTEGER NOT NULL,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   payload_json TEXT NOT NULL,                           -- whyRelevant, roleTruth, fit,
                                                         -- snapshots, signalMatchIds, notes
   UNIQUE (motion_id, person_id)
 )
-CREATE INDEX prospects_due ON prospects(cadence_status, cadence_next_action_due_at);
+CREATE INDEX prospects_due ON prospects(cadence_status, cadence_next_action_due_at)
+  WHERE disposition = 'active';                        -- partial: due = alive only (D9)
+CREATE INDEX prospects_review ON prospects(motion_id)
+  WHERE packet_status IN ('submitted','returned');
 CREATE INDEX prospects_by_motion ON prospects(motion_id, queue_status);
 CREATE INDEX prospects_by_company ON prospects(company_id);
 CREATE INDEX prospects_by_person ON prospects(person_id);
@@ -347,7 +368,11 @@ Queries this model unlocks day one (all impossible or full-blob-scans today):
 - *Due-work scan* — the agent queue's hot loop becomes an indexed query on
   `prospects(cadence_status, cadence_next_action_due_at)` **joined to
   `motion_accounts.execution_user_id`** for execution scope — never selecting work
-  for the wrong user, never rehydrating a motion blob
+  for the wrong user, never rehydrating a motion blob — and gated on
+  `disposition = 'active'` at both prospect and account level (D9), so nurtured
+  and terminated branches can never re-enter the queue
+- *Review queue* — "which packets await operator review" is a partial-index scan
+  on `packet_status IN ('submitted','returned')` (D9; behavior post-cutover)
 
 ### Person identity resolution
 
@@ -486,11 +511,14 @@ and the policy governs engagement, not discovery:
     visible in planner views as "held behind <motion>", not silently dropped.
   - *Send gate:* the transport lane re-checks ownership immediately before executing
     a send (belt-and-suspenders against selection races under concurrent lanes).
-- **Release:** when the owning branch reaches a terminal outcome (`replied`,
-  `nurture`, `blocked`, exhausted, or its motion is archived), held assignments
-  become eligible under the cadence policy's cooldown rules (e.g., quarterly-retouch
-  windows) — the permanent `activity_events` log is what makes the cooldown
-  computable across motions.
+- **Release (authoritative predicate, per D9):** ownership releases when the owning
+  prospect's `disposition` leaves `'active'` — nurture or a terminal disposition
+  (`not_a_fit`, `no_longer_target`, `exhausted`) — or its motion is archived.
+  Held assignments then become eligible under the cadence policy's cooldown rules
+  (e.g., quarterly-retouch windows) — the permanent `activity_events` log is what
+  makes the cooldown computable across motions. (A `replied` outcome routes through
+  the operator/worker decision that sets the disposition — a reply pauses pursuit
+  via nurture or ends it, it doesn't silently free the person.)
 - **Companies don't need ownership.** Multiple motions targeting one company is
   normal (`motion_accounts` allows it); only person-level outreach collides.
 
@@ -513,6 +541,14 @@ and the policy governs engagement, not discovery:
 - **Transactions** wrap multi-row operations (`recordActionResult` = event insert +
   prospect cadence update + draft status flip, atomically — fixing today's non-atomic
   multi-step writes).
+- **Single disposition write path** (D9): `setProspectDisposition` /
+  `setAccountDisposition` are the only writers of the disposition columns — they
+  apply the legacy queue_status invariant (`not_a_fit`/`no_longer_target` ⇒
+  `suppressed`, `exhausted` ⇒ `exhausted`, `nurture` leaves queue_status untouched),
+  append the `kind='system'` activity event (payload: from, to, reason, actor), and
+  commit in one transaction. The reverse holds too: every path that suppresses or
+  exhausts routes through these functions, so disposition is always truthful.
+  No other code writes these columns (test gate, same style as the targetMap gate).
 - **Repair scope shrinks**: `rehydrateMotion` covers motion-core only. Prospect/touch
   repair paths are deleted — constraints make the malformed shapes unrepresentable.
   LLM-output contract repair (CLI boundary) stays.
@@ -709,6 +745,34 @@ sequence, each green:
 9. **Repair scope shrink** — delete prospect-level repair from `rehydrateMotion`;
    keep CLI-boundary contract repair.
 
+> **Amendment A1 (2026-06-10) — disposition axis & packet review states.** Folded in
+> from `docs/wip/prospect-lifecycle-and-packet-review-plan.md` (issue omalab/exo#12)
+> after the schema baseline and entity modules had already landed on the branch
+> (T05/T06). Ships as an additive branch commit **after T07 and before T08/T09**
+> (board task T16) — pre-cutover, so it is still a baseline edit, not a migration:
+>
+> 1. `migrations.js` baseline gains the D9 columns and indexes shown in the schema
+>    above (disposition + packet_status on `prospects` and `motion_accounts`;
+>    partial `prospects_due`; review indexes).
+> 2. Entity modules gain `setProspectDisposition` / `setAccountDisposition`
+>    (invariant + event + transaction; see Schema/code seams), packet
+>    `claim/submit/accept/return/clear` transitions on `packet_status`, and a
+>    shared workable-branch predicate (`disposition = 'active'` at prospect AND
+>    account level) every scan uses.
+> 3. Step 3's hydrated views carry `disposition` and `packetStatus` as **additive**
+>    fields; legacy `queueState.status` renders unchanged (D4 holds).
+> 4. Step 4's mutators route every suppress/exhaust write and packet completion
+>    through the disposition entry points; completion keeps today's observable
+>    auto-advance behavior (`review` policy behavior is post-cutover).
+> 5. Step 5's scans add the disposition gates; step 7 adds the kernel tests:
+>    invariant mapping, scan exclusion, release-on-disposition, and the
+>    no-non-kernel-writes gate.
+>
+> Review workflow behavior, CLI verbs, operator surfaces, and reports are
+> deliberately **not** in 0.3.0 — they are the post-cutover track in the lifecycle
+> plan. Only the data model and kernel land here, so the schema freezes in final
+> form.
+
 **Acceptance:**
 - Full test suite green on the branch.
 - The race tests fail against `main`'s blob writes (demonstrating the bug) and pass on
@@ -717,6 +781,10 @@ sequence, each green:
   shape-identical output against a seeded fixture workspace (snapshot comparison).
 - Fresh-init smoke: delete temp DB → run CLI init-path → tables exist, doctor clean.
 - No code path writes `targetMap` into `motions.payload_json` (grep gate in CI/test).
+- Disposition gates hold (A1): a prospect or account with a non-active disposition
+  never appears in the due scan or selection; every suppress/exhaust write leaves a
+  truthful disposition plus a `kind='system'` activity event; no code outside the
+  kernel entry points writes disposition or packet_status columns (test gate).
 
 ### WS4 — Parallel scale-out (post-cutover)
 
@@ -814,6 +882,7 @@ operator gate).
 | Worker runs mid-rebuild on old code | Scheduler paused at cutover step 2; branch work doesn't touch the live DB until merge |
 | WS3 branch blast radius (one cutover merge touches schema, writers, readers, tests) | Staged green commits; mid-branch tracer gate proves the send path on the new model before surface area grows; wipe-at-cutover removes data-drift risk entirely — remaining risk is code-merge only, in a single-developer repo. The rejected alternative (shipped hybrid stage) trades this bounded risk for dual-store writes on the send path |
 | FK enforcement surfaces latent bad refs in new writes | `PRAGMA foreign_keys = ON` from day one + constraint-violation tests per module |
+| Disposition/queue_status double bookkeeping drifts (A1) | Single kernel write path + grep/test gate on direct column writes; collapsing the duplication is tracked as post-0.3.x cleanup owned by the analytics track (#25) once builders consume disposition directly |
 
 ## Convergence record (questions resolved with Codex, 2026-06-10)
 
@@ -834,3 +903,17 @@ operator gate).
 5. Cross-motion ownership — **agreed: strict one-motion-active-per-person for 0.3.0**;
    surface-level sharing can be relaxed later if wanted (relaxing is easy,
    retro-tightening is not).
+
+## Amendment record
+
+- **A1 (2026-06-10):** disposition axis
+  (`active|nurture|not_a_fit|no_longer_target|exhausted`) with
+  `disposition_at`/`disposition_actor`, and packet review states
+  (`packet_status: claimed|submitted|returned`) added to `prospects` and
+  `motion_accounts`; `prospects_due` becomes a partial index on active disposition;
+  review partial indexes added; cross-motion release keyed on disposition; single
+  kernel write path with legacy queue_status invariant. Landed via board task T16
+  (after T07, before T08/T09). Source:
+  `docs/wip/prospect-lifecycle-and-packet-review-plan.md` (issue omalab/exo#12 —
+  prospect lifecycle, nurture, terminal outcomes, packet review). Behavior (review
+  workflow, CLI verbs, operator surfaces, reports) is post-cutover by design.

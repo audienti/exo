@@ -17,6 +17,89 @@ import {
 import { insertMotion, insertUser } from "../src/db/database.js";
 import { buildAgentRunLockDir } from "../src/lib/agent-run-lock.js";
 
+/**
+ * @param {() => Promise<void>} callback
+ */
+async function withSeededRouteUser(callback) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-route-user-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+
+  process.env.EXO_STATE_DIR = path.join(tempDir, ".exo");
+  process.env.EXO_HOME_STATE_DIR = process.env.EXO_STATE_DIR;
+
+  insertUser({
+    id: "user-1",
+    createdAt: "2026-06-07T10:00:00.000Z",
+    updatedAt: "2026-06-07T10:00:00.000Z",
+    label: "Route User",
+    owner: "William",
+    notes: null,
+    workingHours: {
+      mode: "scheduled",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "07:00",
+      endLocalTime: "18:00",
+    },
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-07T10:00:00.000Z",
+        updatedAt: "2026-06-07T10:00:00.000Z",
+        capability: "linkedin",
+        handle: "route-user",
+        label: "Route LinkedIn",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-1",
+        providerAccountId: "acct-route-user",
+        preferred: true,
+        automationControls: {
+          weeklyQuotas: {
+            profileVisits: null,
+            invitations: null,
+            messages: null,
+          },
+        },
+        metadata: null,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-1",
+        createdAt: "2026-06-07T10:00:00.000Z",
+        updatedAt: "2026-06-07T10:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+    managedAccountExclusions: [],
+    inboundIgnoreRules: [],
+  });
+
+  try {
+    await callback();
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (previousStateDir == null) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir == null) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+  }
+}
+
 test("ui state revision changes when agent runtime artifacts change without a DB write", async (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-rev-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -544,135 +627,141 @@ test("person route builds claim motion choices with offer, premise, and status d
 });
 
 test("cleanup route renders only stale global-intake claim backlog and exposes the sidebar route", async () => {
-  const html = await renderRoute("/cleanup", { userId: "user-1", capability: "linkedin" }, {
-    resolveWorkspaceProjectionForUi: async () => ({
-      data: {
-        user: { id: "user-1", label: "william-main", owner: "William" },
-        generatedAt: "2026-06-05T13:00:00.000Z",
-        reviewItems: [
-          {
-            id: "obs-stale",
-            observedAt: "2026-01-01T13:00:00.000Z",
-            ageDays: 155,
-            state: "needs_claim",
-            priority: "high",
-            actorName: "Mike Agron",
-            actorTitle: "Advisor",
-            actorCompanyName: "Legacy Co",
-            actorProfileUrl: "https://www.linkedin.com/in/mike-agron/",
-            actorAvatarUrl: null,
-            summary: "Mike Agron has unread LinkedIn message activity.",
-            recommendedAction: "Claim Mike Agron into this workspace's transition backlog if this thread belongs here.",
-            whyItMatters: "This inbound person is still global intake.",
-            surfaceKey: "linkedin-messaging-inbox",
-            previewLabel: "Latest message",
-            previewSubject: "Legacy follow-up",
-            previewText: "Checking whether this still belongs here.",
-            prospect: null,
-          },
-          {
-            id: "obs-fresh",
-            observedAt: "2026-06-01T13:00:00.000Z",
-            ageDays: 4,
-            state: "needs_claim",
-            priority: "high",
-            actorName: "Jordan Cipolla",
-            actorTitle: "Founder",
-            actorCompanyName: "Current Co",
-            actorProfileUrl: "https://www.linkedin.com/in/jordan-cipolla/",
-            actorAvatarUrl: null,
-            summary: "Jordan Cipolla has unread LinkedIn message activity.",
-            recommendedAction: "Claim Jordan Cipolla into this workspace's transition backlog if this thread belongs here.",
-            whyItMatters: "This inbound person is still global intake.",
-            surfaceKey: "linkedin-messaging-inbox",
-            previewLabel: null,
-            previewSubject: null,
-            previewText: null,
-            prospect: null,
-          },
-        ],
-      },
-      html: "",
-    }),
-  });
+  await withSeededRouteUser(async () => {
+    const html = await renderRoute("/cleanup", { userId: "user-1", capability: "linkedin" }, {
+      resolveWorkspaceProjectionForUi: async () => ({
+        data: {
+          user: { id: "user-1", label: "william-main", owner: "William" },
+          generatedAt: "2026-06-05T13:00:00.000Z",
+          reviewItems: [
+            {
+              id: "obs-stale",
+              observedAt: "2026-01-01T13:00:00.000Z",
+              ageDays: 155,
+              state: "needs_claim",
+              priority: "high",
+              actorName: "Mike Agron",
+              actorTitle: "Advisor",
+              actorCompanyName: "Legacy Co",
+              actorProfileUrl: "https://www.linkedin.com/in/mike-agron/",
+              actorAvatarUrl: null,
+              summary: "Mike Agron has unread LinkedIn message activity.",
+              recommendedAction: "Claim Mike Agron into this workspace's transition backlog if this thread belongs here.",
+              whyItMatters: "This inbound person is still global intake.",
+              surfaceKey: "linkedin-messaging-inbox",
+              previewLabel: "Latest message",
+              previewSubject: "Legacy follow-up",
+              previewText: "Checking whether this still belongs here.",
+              prospect: null,
+            },
+            {
+              id: "obs-fresh",
+              observedAt: "2026-06-01T13:00:00.000Z",
+              ageDays: 4,
+              state: "needs_claim",
+              priority: "high",
+              actorName: "Jordan Cipolla",
+              actorTitle: "Founder",
+              actorCompanyName: "Current Co",
+              actorProfileUrl: "https://www.linkedin.com/in/jordan-cipolla/",
+              actorAvatarUrl: null,
+              summary: "Jordan Cipolla has unread LinkedIn message activity.",
+              recommendedAction: "Claim Jordan Cipolla into this workspace's transition backlog if this thread belongs here.",
+              whyItMatters: "This inbound person is still global intake.",
+              surfaceKey: "linkedin-messaging-inbox",
+              previewLabel: null,
+              previewSubject: null,
+              previewText: null,
+              prospect: null,
+            },
+          ],
+        },
+        html: "",
+      }),
+    });
 
-  assert.match(html, /Clean up/i);
-  assert.match(html, /href="\/cleanup"/);
-  assert.match(html, /Mike Agron/);
-  assert.match(html, /older than 60 days/i);
-  assert.match(html, /Ignore sender/);
-  assert.match(html, /data-exo-writer="ignoreInboundObservation"/);
-  assert.doesNotMatch(html, /class="exo-action" data-exo-writer="ignoreInboundObservation"/);
-  assert.doesNotMatch(html, /Jordan Cipolla/);
+    assert.match(html, /Clean up/i);
+    assert.match(html, /href="\/cleanup"/);
+    assert.match(html, /Mike Agron/);
+    assert.match(html, /older than 60 days/i);
+    assert.match(html, /Ignore sender/);
+    assert.match(html, /data-exo-writer="ignoreInboundObservation"/);
+    assert.doesNotMatch(html, /class="exo-action" data-exo-writer="ignoreInboundObservation"/);
+    assert.doesNotMatch(html, /Jordan Cipolla/);
+  });
 });
 
 test("cleanup route hides the cleanup sidebar item when no stale cleanup work exists", async () => {
-  const html = await renderRoute("/cleanup", { userId: "user-1", capability: "linkedin" }, {
-    resolveWorkspaceProjectionForUi: async () => ({
-      data: {
-        user: { id: "user-1", label: "william-main", owner: "William" },
-        generatedAt: "2026-06-05T13:00:00.000Z",
-        reviewItems: [],
-      },
-      html: "",
-    }),
-  });
+  await withSeededRouteUser(async () => {
+    const html = await renderRoute("/cleanup", { userId: "user-1", capability: "linkedin" }, {
+      resolveWorkspaceProjectionForUi: async () => ({
+        data: {
+          user: { id: "user-1", label: "william-main", owner: "William" },
+          generatedAt: "2026-06-05T13:00:00.000Z",
+          reviewItems: [],
+        },
+        html: "",
+      }),
+    });
 
-  assert.match(html, /No stale global-intake cleanup is waiting\./i);
-  assert.doesNotMatch(html, /href="\/cleanup"/);
+    assert.match(html, /No stale global-intake cleanup is waiting\./i);
+    assert.doesNotMatch(html, /href="\/cleanup"/);
+  });
 });
 
 test("prospects route applies the q search filter and preserves it in rendered links", async () => {
-  const html = await renderRoute("/prospects?q=procurement", { userId: "user-1", capability: "linkedin" }, {
-    resolveWorkspaceProjectionForUi: async () => ({
-      data: {
-        user: { id: "user-1", label: "william-main", owner: "William" },
-        generatedAt: "2026-06-06T13:00:00.000Z",
-        prospectPrepLanes: [{
-          key: "selected",
-          items: [
-            {
-              prospectId: "prospect-1",
-              name: "Lina Park",
-              title: "Director of Procurement",
-              companyId: "company-1",
-              companyName: "ExampleCo",
-              motionId: "motion-1",
-              motionName: "motion-one",
-              whyRelevant: "Relevant now.",
-              contactPoints: [],
-              touches: [],
-              signalMatches: [{ summary: "Recent buying-committee change." }],
-              cadenceState: { status: "ready", currentStep: "done" },
-            },
-            {
-              prospectId: "prospect-2",
-              name: "Marco Diaz",
-              title: "VP Finance",
-              companyId: "company-2",
-              companyName: "Northstar",
-              motionId: "motion-1",
-              motionName: "motion-one",
-              whyRelevant: "Relevant later.",
-              contactPoints: [],
-              touches: [],
-              signalMatches: [{ summary: "Risk tooling review underway." }],
-              cadenceState: { status: "ready", currentStep: "done" },
-            },
-          ],
-        }],
-        engagementLanes: [],
-        motionDetails: [],
-        reviewItems: [],
-      },
-      html: "",
-    }),
-  });
+  await withSeededRouteUser(async () => {
+    const html = await renderRoute("/prospects?q=procurement", { userId: "user-1", capability: "linkedin" }, {
+      resolveWorkspaceProjectionForUi: async () => ({
+        data: {
+          user: { id: "user-1", label: "william-main", owner: "William" },
+          generatedAt: "2026-06-06T13:00:00.000Z",
+          prospectPrepLanes: [{
+            key: "selected",
+            items: [
+              {
+                prospectId: "prospect-1",
+                name: "Lina Park",
+                title: "Director of Procurement",
+                companyId: "company-1",
+                companyName: "ExampleCo",
+                motionId: "motion-1",
+                motionName: "motion-one",
+                whyRelevant: "Relevant now.",
+                contactPoints: [],
+                touches: [],
+                signalMatches: [{ summary: "Recent buying-committee change." }],
+                cadenceState: { status: "ready", currentStep: "done" },
+              },
+              {
+                prospectId: "prospect-2",
+                name: "Marco Diaz",
+                title: "VP Finance",
+                companyId: "company-2",
+                companyName: "Northstar",
+                motionId: "motion-1",
+                motionName: "motion-one",
+                whyRelevant: "Relevant later.",
+                contactPoints: [],
+                touches: [],
+                signalMatches: [{ summary: "Risk tooling review underway." }],
+                cadenceState: { status: "ready", currentStep: "done" },
+              },
+            ],
+          }],
+          engagementLanes: [],
+          motionDetails: [],
+          reviewItems: [],
+        },
+        html: "",
+      }),
+    });
 
-  assert.match(html, /value="procurement"/);
-  assert.match(html, /Lina Park/);
-  assert.match(html, /href="\/prospects\/prospect-1\?q=procurement"/);
-  assert.doesNotMatch(html, /Marco Diaz/);
+    assert.match(html, /value="procurement"/);
+    assert.match(html, /Lina Park/);
+    assert.match(html, /href="\/prospects\/prospect-1\?q=procurement"/);
+    assert.doesNotMatch(html, /Marco Diaz/);
+  });
 });
 
 test("motions route passes execution users into the new-motion intake form", async (t) => {

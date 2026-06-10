@@ -2,8 +2,6 @@
 
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { buildMotionName } from "../core/motion-support.js";
-import { rehydrateMotion } from "../core/rehydrate-motion.js";
 import { inboundCueSchema, inboundObservationSchema } from "../schema/inbound.js";
 import { applyMigrations } from "./migrations.js";
 import {
@@ -42,14 +40,14 @@ function getDatabase(scope = "local") {
 /**
  * @returns {DatabaseSync}
  */
-function getHomeDatabase() {
+export function getHomeDatabase() {
   return getDatabase("home");
 }
 
 /**
  * @returns {DatabaseSync}
  */
-function getLocalDatabase() {
+export function getLocalDatabase() {
   return getDatabase("local");
 }
 
@@ -64,107 +62,6 @@ function safelyEnableWal(database) {
       throw error;
     }
   }
-}
-
-/**
- * @param {import("../schema/motion.js").motionSchema._type} motion
- * @returns {import("../schema/motion.js").motionSchema._type}
- */
-export function insertMotion(motion) {
-  const database = getLocalDatabase();
-  const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
-  const statement = database.prepare(`
-    INSERT INTO motions (id, status, source_url, created_at, updated_at, payload_json)
-    VALUES (@id, @status, @sourceUrl, @createdAt, @updatedAt, @payloadJson)
-  `);
-
-  statement.run({
-    id: storedMotion.id,
-    status: storedMotion.status,
-    sourceUrl: storedMotion.offer.sourceUrl,
-    createdAt: storedMotion.createdAt,
-    updatedAt: storedMotion.updatedAt,
-    payloadJson: JSON.stringify(storedMotion, null, 2)
-  });
-
-  return storedMotion;
-}
-
-/**
- * @param {import("../schema/motion.js").motionSchema._type} motion
- * @returns {import("../schema/motion.js").motionSchema._type}
- */
-export function updateMotion(motion) {
-  const database = getLocalDatabase();
-  const storedMotion = ensureUniqueGeneratedMotionName(motion, database);
-  const statement = database.prepare(`
-    UPDATE motions
-    SET status = @status,
-        source_url = @sourceUrl,
-        updated_at = @updatedAt,
-        payload_json = @payloadJson
-    WHERE id = @id
-  `);
-
-  statement.run({
-    id: storedMotion.id,
-    status: storedMotion.status,
-    sourceUrl: storedMotion.offer.sourceUrl,
-    updatedAt: storedMotion.updatedAt,
-    payloadJson: JSON.stringify(storedMotion, null, 2)
-  });
-
-  return storedMotion;
-}
-
-/**
- * @param {string} id
- * @returns {unknown | null}
- */
-export function findMotionById(id) {
-  const row = getLocalDatabase()
-    .prepare(`SELECT payload_json FROM motions WHERE id = ?`)
-    .get(id);
-
-  if (!row) return null;
-
-  const { motion, repaired } = rehydrateMotion(JSON.parse(row.payload_json));
-  if (repaired) {
-    persistNormalizedMotion(motion);
-  }
-
-  return motion;
-}
-
-/**
- * @returns {unknown[]}
- */
-export function listMotions() {
-  const rows = getLocalDatabase()
-    .prepare(`
-      SELECT payload_json
-      FROM motions
-      ORDER BY created_at DESC
-    `)
-    .all();
-
-  return rows.map((row) => {
-    const { motion, repaired } = rehydrateMotion(JSON.parse(row.payload_json));
-    if (repaired) {
-      persistNormalizedMotion(motion);
-    }
-
-    return motion;
-  });
-}
-
-/**
- * @param {string} id
- */
-export function deleteMotion(id) {
-  getLocalDatabase()
-    .prepare(`DELETE FROM motions WHERE id = ?`)
-    .run(id);
 }
 
 /**
@@ -548,6 +445,7 @@ export function upsertInboundObservation(observation) {
       motion_id,
       company_id,
       prospect_id,
+      person_id,
       payload_json
     )
     VALUES (
@@ -563,6 +461,7 @@ export function upsertInboundObservation(observation) {
       @motionId,
       @companyId,
       @prospectId,
+      @personId,
       @payloadJson
     )
     ON CONFLICT(dedupe_key) DO UPDATE SET
@@ -577,6 +476,7 @@ export function upsertInboundObservation(observation) {
       motion_id = excluded.motion_id,
       company_id = excluded.company_id,
       prospect_id = excluded.prospect_id,
+      person_id = excluded.person_id,
       payload_json = excluded.payload_json
   `);
 
@@ -593,6 +493,7 @@ export function upsertInboundObservation(observation) {
     motionId: normalized.motionId,
     companyId: normalized.companyId,
     prospectId: normalized.prospectId,
+    personId: normalized.personId,
     payloadJson: JSON.stringify(normalized, null, 2)
   });
 
@@ -706,8 +607,30 @@ export function listInboundObservations(filters = {}) {
  */
 export function insertCompany(company) {
   const statement = getLocalDatabase().prepare(`
-    INSERT INTO companies (id, name, search_name, domain, created_at, updated_at, payload_json)
-    VALUES (@id, @name, @searchName, @domain, @createdAt, @updatedAt, @payloadJson)
+    INSERT INTO companies (
+      id,
+      name,
+      search_name,
+      domain,
+      linkedin_company_url,
+      website_url,
+      schema_version,
+      created_at,
+      updated_at,
+      payload_json
+    )
+    VALUES (
+      @id,
+      @name,
+      @searchName,
+      @domain,
+      @linkedinCompanyUrl,
+      @websiteUrl,
+      @schemaVersion,
+      @createdAt,
+      @updatedAt,
+      @payloadJson
+    )
   `);
 
   statement.run({
@@ -715,6 +638,9 @@ export function insertCompany(company) {
     name: company.name,
     searchName: company.name.trim().toLowerCase(),
     domain: company.domain ? company.domain.trim().toLowerCase() : null,
+    linkedinCompanyUrl: company.linkedinCompanyUrl ?? null,
+    websiteUrl: company.websiteUrl ?? null,
+    schemaVersion: 1,
     createdAt: company.createdAt,
     updatedAt: company.updatedAt,
     payloadJson: JSON.stringify(company, null, 2)
@@ -731,6 +657,9 @@ export function updateCompany(company) {
     SET name = @name,
         search_name = @searchName,
         domain = @domain,
+        linkedin_company_url = @linkedinCompanyUrl,
+        website_url = @websiteUrl,
+        schema_version = @schemaVersion,
         updated_at = @updatedAt,
         payload_json = @payloadJson
     WHERE id = @id
@@ -741,6 +670,9 @@ export function updateCompany(company) {
     name: company.name,
     searchName: company.name.trim().toLowerCase(),
     domain: company.domain ? company.domain.trim().toLowerCase() : null,
+    linkedinCompanyUrl: company.linkedinCompanyUrl ?? null,
+    websiteUrl: company.websiteUrl ?? null,
+    schemaVersion: 1,
     updatedAt: company.updatedAt,
     payloadJson: JSON.stringify(company, null, 2)
   });
@@ -805,84 +737,6 @@ export function listCompanies() {
 }
 
 /**
- * @param {import("../schema/motion.js").motionSchema._type} motion
- */
-function persistNormalizedMotion(motion) {
-  getLocalDatabase()
-    .prepare(`
-      UPDATE motions
-      SET status = @status,
-          source_url = @sourceUrl,
-          payload_json = @payloadJson
-      WHERE id = @id
-    `)
-    .run({
-      id: motion.id,
-      status: motion.status,
-      sourceUrl: motion.offer.sourceUrl,
-      payloadJson: JSON.stringify(motion, null, 2)
-    });
-}
-
-/**
- * @param {import("../schema/motion.js").motionSchema._type} motion
- * @param {DatabaseSync} database
- * @returns {import("../schema/motion.js").motionSchema._type}
- */
-function ensureUniqueGeneratedMotionName(motion, database) {
-  const generatedBaseName = buildMotionName({
-    seed: motion.id
-  });
-
-  if (motion.name !== generatedBaseName) {
-    return motion;
-  }
-
-  let attempt = 0;
-  let candidate = generatedBaseName;
-
-  while (motionNameExists(candidate, motion.id, database)) {
-    attempt += 1;
-    candidate = buildMotionName({
-      seed: motion.id,
-      attempt
-    });
-  }
-
-  if (candidate === motion.name) {
-    return motion;
-  }
-
-  return {
-    ...motion,
-    name: candidate
-  };
-}
-
-/**
- * @param {string} name
- * @param {string} motionId
- * @param {DatabaseSync} database
- * @returns {boolean}
- */
-function motionNameExists(name, motionId, database) {
-  const row = database
-    .prepare(`
-      SELECT id
-      FROM motions
-      WHERE id != @id
-        AND json_extract(payload_json, '$.name') = @name
-      LIMIT 1
-    `)
-    .get({
-      id: motionId,
-      name
-    });
-
-  return Boolean(row);
-}
-
-/**
  * @param {string} term
  * @returns {unknown[]}
  */
@@ -900,3 +754,12 @@ export function searchCompanies(term) {
 
   return rows.map((row) => JSON.parse(row.payload_json));
 }
+
+export * from "./activity-events.js";
+export * from "./companies.js";
+export * from "./drafts.js";
+export * from "./motions.js";
+export * from "./motion-accounts.js";
+export * from "./people.js";
+export * from "./prospects.js";
+export * from "./signal-matches.js";

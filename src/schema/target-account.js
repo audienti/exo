@@ -100,8 +100,11 @@ export const queueStatusSchema = z.enum([
   "selected",
   "ready",
   "suppressed",
-  "exhausted"
+  "exhausted",
+  "held_cross_motion"
 ]);
+export const dispositionSchema = z.enum(["active", "nurture", "not_a_fit", "no_longer_target", "exhausted"]);
+export const packetStatusSchema = z.enum(["claimed", "submitted", "returned"]);
 
 export const signalMatchSubjectSchema = z.object({
   type: z.enum(["company", "person"]),
@@ -414,6 +417,8 @@ export const prospectSchema = z.object({
   contactPoints: z.array(contactPointSchema).default([]),
   contactEnrichmentState: contactEnrichmentStateSchema.default({}),
   queueState: queueStateSchema.default({ status: "selected" }),
+  disposition: dispositionSchema.default("active"),
+  packetStatus: packetStatusSchema.nullable().default(null),
   packetState: packetStateSchema.nullable().default(null),
   notes: nullableString.default(null),
   signalMatchIds: stringArray,
@@ -434,6 +439,8 @@ export const targetAccountSchema = z.object({
   signalMatches: z.array(signalMatchSchema).default([]),
   prospects: z.array(prospectSchema).default([]),
   queueState: queueStateSchema.default({}),
+  disposition: dispositionSchema.default("active"),
+  packetStatus: packetStatusSchema.nullable().default(null),
   packetState: packetStateSchema.nullable().default(null),
   lastResearchAt: z.string().datetime().nullable(),
   notes: z.string().nullable().default(null)
@@ -465,6 +472,8 @@ export function rehydrateTargetAccount(rawAccount) {
     signalMatches,
     prospects,
     queueState: source.queueState ?? {},
+    disposition: source.disposition ?? "active",
+    packetStatus: source.packetStatus ?? null,
     packetState: source.packetState ?? null,
     lastResearchAt: source.lastResearchAt ?? null,
     notes: source.notes ?? null

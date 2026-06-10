@@ -48,7 +48,17 @@ import { resolveConnectionNoteCapability } from "../core/connection-note-capabil
 import { resolveScopedExecutionAssignment } from "../core/resolve-scoped-execution-assignment.js";
 import { removeUiLock, writeUiLock } from "./ui-lock.js";
 import { btn, card, countChip, escapeHtml, renderShell, sectionHead } from "../lib/exo-ui-components.js";
-import { findCompanyById, findMotionById, listBrowserProfiles, listCompanies, listInboundCues, listInboundObservations, listMotions, listUsers } from "../db/database.js";
+import {
+  findCompanyById,
+  findMotionById,
+  listAgentQueueProspectBranches,
+  listBrowserProfiles,
+  listCompanies,
+  listInboundCues,
+  listInboundObservations,
+  listMotions,
+  listUsers,
+} from "../db/database.js";
 import { summarizeExecutionUsers } from "../lib/execution-users.js";
 import { buildWorkspaceProjection } from "./workspace-runtime.js";
 import { buildSchedulerCadenceSummary, inspectAgentRoutineState, inspectAgentSchedulerState } from "./commands/agent.js";
@@ -919,6 +929,7 @@ function buildAgentRuntimeSnapshot(userId = null) {
     users,
     observations,
     cues,
+    prospectBranches: listAgentQueueProspectBranches(userId ? { executionUserId: userId } : {}),
     hostState,
   });
   const sendTasks = Array.isArray(queue?.tasks) ? queue.tasks.filter((task) => task?.kind === "send_message") : [];

@@ -82,7 +82,7 @@ function buildEmailSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, con
   const normalizedMessage = extractUsableDraftBody(draft.body) ?? (typeof draft.body === "string" ? draft.body : "");
   const recipientEmail = resolveRecipientEmail(prospect);
   const threadUrl = resolveGmailThreadUrl(prospect);
-  const writeback = `exo actions result --action ${EMAIL_ACTION} --result sent --company ${company.id} --prospect ${prospect.id} --surface ${draft.surface}`;
+  const writeback = `exo actions result --action ${EMAIL_ACTION} --result sent --company ${company.id} --prospect ${prospect.id} --motion ${motion.id} --surface ${draft.surface}`;
 
   const blocked = (reason) => ({
     status: "blocked",

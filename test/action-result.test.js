@@ -14,7 +14,13 @@ process.env.EXO_STATE_DIR = stateDir;
 
 const { recordActionResult } = await import("../src/core/record-action-result.js");
 const { buildAgentQueue } = await import("../src/core/build-agent-queue.js");
-const { findMotionById, listInboundObservations, listMotions } = await import("../src/db/database.js");
+const {
+  findMotionById,
+  getLocalDatabase,
+  listActivityEvents,
+  listInboundObservations,
+  listMotions,
+} = await import("../src/db/database.js");
 
 /**
  * @param {string[]} args
@@ -111,6 +117,192 @@ test("recordActionResult writes back outbound send and marks an approved draft s
   assert.equal(stored.cadenceState.currentStep, "connection-request");
   assert.equal(stored.cadenceState.lastTouchOutcome, "sent");
   assert.match(stored.cadenceState.nextAction ?? "", /accept|reply/i);
+});
+
+test("recordActionResult writes outbound send state to normalized rows", () => {
+  const motion = cliJson([
+    "motion", "add",
+    "--url", "https://example.com/result-row-backed",
+    "--premise", "This offer matters when action results need row-backed writes.",
+    "--audience", "Revenue operators",
+    "--signal", "company::Is send state still trapped in hydrated blobs?",
+  ]);
+  cli(["motion", "restart", motion.id]);
+
+  const company = cliJson([
+    "companies", "add",
+    "--name", "Row Result Systems",
+    "--domain", "row-results.example",
+    "--motion", motion.id,
+  ]);
+  const prospect = cliJson([
+    "companies", "prospects", "add", company.id,
+    "--motion", motion.id,
+    "--name", "Riley Rows",
+    "--title", "VP Revenue",
+    "--linkedin-profile-url", "https://www.linkedin.com/in/riley-rows",
+    "--buying-committee-role", "primary_business_owner",
+    "--decision-authority", "buys",
+    "--fit-confidence", "high",
+    "--why-relevant", "Owns row-backed action results.",
+  ]).prospects[0];
+
+  cli([
+    "companies", "cadence", "set", company.id,
+    "--motion", motion.id,
+    "--prospect", prospect.id,
+    "--current-step", "connection-request",
+    "--next-action", "Send the connection request.",
+  ]);
+
+  cli([
+    "companies", "prospects", "draft", "set", company.id,
+    "--motion", motion.id,
+    "--prospect", prospect.id,
+    "--surface", "connection_request",
+    "--status", "queued",
+    "--body", "Row-backed connection request.",
+  ]);
+
+  const beforeMotionRow = getLocalDatabase()
+    .prepare("SELECT updated_at FROM motions WHERE id = ?")
+    .get(motion.id);
+
+  const result = recordActionResult({
+    actionKey: "connection_request",
+    resultKey: "sent",
+    motionId: motion.id,
+    companyId: company.id,
+    prospectId: prospect.id,
+    occurredAt: "2026-06-02T12:45:00.000Z",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actionResult.touchRecorded, true);
+  assert.equal(result.actionResult.draftMarkedSent, true);
+  assert.equal(result.actionResult.cadenceUpdated, true);
+
+  const rowProspect = getLocalDatabase()
+    .prepare("SELECT * FROM prospects WHERE id = ?")
+    .get(prospect.id);
+  assert.equal(rowProspect.cadence_status, "ready");
+  assert.equal(rowProspect.cadence_current_step, "connection-request");
+  assert.equal(rowProspect.cadence_last_touch_outcome, "sent");
+  assert.equal(rowProspect.cadence_last_touch_at, "2026-06-02T12:45:00.000Z");
+  assert.equal(rowProspect.cadence_next_action_due_at, null);
+
+  const afterMotionRow = getLocalDatabase()
+    .prepare("SELECT updated_at FROM motions WHERE id = ?")
+    .get(motion.id);
+  assert.equal(afterMotionRow.updated_at, beforeMotionRow.updated_at);
+
+  const rowDraft = getLocalDatabase()
+    .prepare("SELECT status, sent_at FROM prospect_drafts WHERE prospect_id = ? AND surface = 'connection_request'")
+    .get(prospect.id);
+  assert.equal(rowDraft.status, "sent");
+  assert.ok(rowDraft.sent_at, "sent_at is set on row draft");
+
+  const rowTouch = listActivityEvents({ prospectId: prospect.id }).find((event) =>
+    event.surface === "connection_request" && event.outcome === "sent"
+  );
+  assert.ok(rowTouch, "touch event was written as an activity_events row");
+  assert.equal(rowTouch.occurredAt, "2026-06-02T12:45:00.000Z");
+});
+
+test("recordActionResult blocks stale outbound send when another motion owns the person", () => {
+  const motionA = cliJson([
+    "motion", "add",
+    "--url", "https://example.com/result-owner-a",
+    "--premise", "This offer matters when ownership has to be enforced at send time.",
+    "--audience", "Revenue operators",
+    "--signal", "company::Is stale send writeback possible?",
+  ]);
+  cli(["motion", "restart", motionA.id]);
+  const companyA = cliJson([
+    "companies", "add",
+    "--name", "Owner A Co",
+    "--domain", "owner-a.example",
+    "--motion", motionA.id,
+  ]);
+  const prospectA = cliJson([
+    "companies", "prospects", "add", companyA.id,
+    "--motion", motionA.id,
+    "--name", "Sam Sameperson",
+    "--title", "VP Revenue",
+    "--linkedin-profile-url", "https://www.linkedin.com/in/sam-sameperson",
+    "--why-relevant", "Owns the first active branch.",
+  ]).prospects[0];
+  cli([
+    "companies", "prospects", "draft", "approve", companyA.id,
+    "--motion", motionA.id,
+    "--prospect", prospectA.id,
+    "--surface", "connection_request",
+    "--body", "First motion connection request.",
+  ]);
+  recordActionResult({
+    actionKey: "connection_request",
+    resultKey: "sent",
+    motionId: motionA.id,
+    companyId: companyA.id,
+    prospectId: prospectA.id,
+    occurredAt: "2026-06-03T12:00:00.000Z",
+  });
+
+  const motionB = cliJson([
+    "motion", "add",
+    "--url", "https://example.com/result-owner-b",
+    "--premise", "This offer matters when stale branches must not send.",
+    "--audience", "Revenue operators",
+    "--signal", "company::Is the same person already active elsewhere?",
+  ]);
+  cli(["motion", "restart", motionB.id]);
+  const companyB = cliJson([
+    "companies", "add",
+    "--name", "Owner B Co",
+    "--domain", "owner-b.example",
+    "--motion", motionB.id,
+  ]);
+  const prospectB = cliJson([
+    "companies", "prospects", "add", companyB.id,
+    "--motion", motionB.id,
+    "--name", "Sam Sameperson",
+    "--title", "Chief Revenue Officer",
+    "--linkedin-profile-url", "https://www.linkedin.com/in/sam-sameperson",
+    "--why-relevant", "Same person in a stale second branch.",
+  ]).prospects[0];
+  cli([
+    "companies", "prospects", "draft", "approve", companyB.id,
+    "--motion", motionB.id,
+    "--prospect", prospectB.id,
+    "--surface", "connection_request",
+    "--body", "Second motion connection request.",
+  ]);
+
+  const held = getLocalDatabase()
+    .prepare("SELECT queue_status FROM prospects WHERE id = ?")
+    .get(prospectB.id);
+  assert.equal(held.queue_status, "held_cross_motion");
+
+  assert.throws(
+    () => recordActionResult({
+      actionKey: "connection_request",
+      resultKey: "sent",
+      motionId: motionB.id,
+      companyId: companyB.id,
+      prospectId: prospectB.id,
+      occurredAt: "2026-06-03T12:05:00.000Z",
+    }),
+    /stale branch/
+  );
+
+  const staleTouch = listActivityEvents({ prospectId: prospectB.id }).find((event) =>
+    event.surface === "connection_request" && event.outcome === "sent"
+  );
+  assert.equal(staleTouch, undefined);
+  const draft = getLocalDatabase()
+    .prepare("SELECT status FROM prospect_drafts WHERE prospect_id = ? AND surface = 'connection_request'")
+    .get(prospectB.id);
+  assert.equal(draft.status, "approved");
 });
 
 test("recordActionResult writes back outbound send and marks a queued draft sent", () => {

@@ -148,6 +148,7 @@ export function applyCompleteTargetAccountPacket(rawAccount, input, now) {
     return targetAccountSchema.parse({
       ...advancedAccount,
       lastResearchAt: now,
+      packetStatus: null,
       packetState: {
         ...account.packetState,
         status: "completed",
@@ -182,6 +183,7 @@ export function applyCompleteTargetAccountPacket(rawAccount, input, now) {
 
     return targetAccountSchema.parse({
       ...advancedAccount,
+      packetStatus: null,
       packetState: {
         ...account.packetState,
         status: "completed",
@@ -273,6 +275,7 @@ export function applyCompleteMotionProspectPacket(rawProspect, input, now) {
   return prospectSchema.parse({
     ...prospect,
     queueState: nextQueueState,
+    packetStatus: null,
     packetState: {
       ...prospect.packetState,
       status: "completed",

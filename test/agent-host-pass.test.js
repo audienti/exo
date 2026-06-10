@@ -2,6 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -50,6 +51,180 @@ import {
   checkoutTaskLease,
   createTaskLeaseFingerprint,
 } from "../src/lib/agent-host-state.js";
+import {
+  releaseAgentRunLock,
+  tryAcquireAgentRunLock,
+} from "../src/lib/agent-run-lock.js";
+
+const HOST_PASS_SCRIPT = path.resolve("scripts/run-agent-host-pass.js");
+
+function runSpawnedHostPass({ stateDir, cwd, lane = null }) {
+  return spawnSync(process.execPath, [HOST_PASS_SCRIPT], {
+    cwd,
+    env: {
+      ...process.env,
+      EXO_STATE_DIR: stateDir,
+      EXO_HOME_STATE_DIR: stateDir,
+      ...(lane ? { EXO_AGENT_LANE: lane } : {}),
+    },
+    encoding: "utf8",
+  });
+}
+
+function readJsonFile(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+test("main-module host pass exits cleanly on an empty workspace", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-empty-"));
+  const stateDir = path.join(tempRoot, ".exo");
+
+  const result = runSpawnedHostPass({ stateDir, cwd: tempRoot });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  const summary = readJsonFile(path.join(stateDir, "agent-last-pass.json"));
+  assert.equal(summary.status, "noop");
+  assert.equal(summary.lane, null);
+});
+
+test("main-module host pass persists expired host-state cleanup before default and lane passes", () => {
+  for (const lane of [null, "transport"]) {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-startup-state-"));
+    const stateDir = path.join(tempRoot, ".exo");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "agent-host-state.json"), JSON.stringify({
+      browserBackoff: {
+        retrieval: {
+          unavailableUntil: "2026-01-01T00:00:00.000Z",
+          reason: "expired retrieval backoff",
+        },
+        execution: {
+          unavailableUntil: "2026-01-01T00:00:00.000Z",
+          reason: "expired execution backoff",
+        },
+      },
+      taskLeases: [
+        {
+          taskKind: "write_draft",
+          fingerprint: `expired-${lane ?? "default"}`,
+          workerLabel: "worker-stale",
+          acquiredAt: "2026-01-01T00:00:00.000Z",
+          expiresAt: "2026-01-01T00:10:00.000Z",
+          motionId: "motion-1",
+          companyId: "company-1",
+          prospectId: "prospect-1",
+        },
+      ],
+      recentTaskVerifications: [
+        {
+          taskKind: "send_message",
+          fingerprint: `verification-${lane ?? "default"}`,
+          verifiedAt: "2026-01-01T00:00:00.000Z",
+          expiresAt: "2026-01-01T00:10:00.000Z",
+        },
+      ],
+    }, null, 2));
+
+    const result = runSpawnedHostPass({ stateDir, cwd: tempRoot, lane });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const summaryName = lane ? `agent-last-pass.${lane}.json` : "agent-last-pass.json";
+    const summary = readJsonFile(path.join(stateDir, summaryName));
+    assert.equal(summary.status, "noop");
+    assert.equal(summary.lane, lane);
+    const hostState = readJsonFile(path.join(stateDir, "agent-host-state.json"));
+    assert.deepEqual(hostState.taskLeases, []);
+    assert.deepEqual(hostState.recentTaskVerifications, []);
+    assert.equal(hostState.browserBackoff.retrieval.unavailableUntil, null);
+    assert.equal(hostState.browserBackoff.execution.unavailableUntil, null);
+  }
+});
+
+test("main-module host pass returns a persisted lane noop when that lane lock is held", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-lane-lock-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const heldLock = tryAcquireAgentRunLock({ stateDir, lane: "transport", pid: process.pid });
+  assert.equal(heldLock.acquired, true);
+
+  try {
+    const result = runSpawnedHostPass({ stateDir, cwd: tempRoot, lane: "transport" });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.status, "noop");
+    assert.equal(summary.lane, "transport");
+    assert.match(summary.reason, /Another transport lane pass is already active/i);
+    assert.match(summary.reason, new RegExp(`pid ${process.pid}`));
+
+    const persisted = readJsonFile(path.join(stateDir, "agent-last-pass.transport.json"));
+    assert.equal(persisted.status, "noop");
+    assert.equal(persisted.lane, "transport");
+    assert.equal(persisted.reason, summary.reason);
+  } finally {
+    releaseAgentRunLock(heldLock);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("main-module host pass can start a transport lane while the research lane lock is held", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-other-lane-lock-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const heldLock = tryAcquireAgentRunLock({ stateDir, lane: "research", pid: process.pid });
+  assert.equal(heldLock.acquired, true);
+
+  try {
+    const result = runSpawnedHostPass({ stateDir, cwd: tempRoot, lane: "transport" });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.status, "noop");
+    assert.equal(summary.lane, "transport");
+    assert.doesNotMatch(summary.reason, /already active/i);
+  } finally {
+    releaseAgentRunLock(heldLock);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("scheduled-style lane pass refreshes the merged legacy summary from lane summaries", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-merged-summary-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, "agent-last-pass.json"), JSON.stringify({
+    status: "failed",
+    reason: "stale merged summary",
+    lanes: [],
+    results: [],
+    finalQueueCounts: { dueTaskCount: 99, waitingTaskCount: 99, blockerCount: 99 },
+  }, null, 2));
+  fs.writeFileSync(path.join(stateDir, "agent-last-pass.research.json"), JSON.stringify({
+    status: "noop",
+    reason: "research lane already idle",
+    startedAt: "2026-06-10T16:00:00.000Z",
+    endedAt: "2026-06-10T16:00:02.000Z",
+    lane: "research",
+    results: [],
+    finalQueueCounts: { dueTaskCount: 0, waitingTaskCount: 1, blockerCount: 0 },
+  }, null, 2));
+
+  try {
+    const result = runSpawnedHostPass({ stateDir, cwd: tempRoot, lane: "transport" });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const laneSummary = JSON.parse(result.stdout);
+    assert.equal(laneSummary.lane, "transport");
+
+    const merged = readJsonFile(path.join(stateDir, "agent-last-pass.json"));
+    assert.notEqual(merged.reason, "stale merged summary");
+    assert.deepEqual(merged.lanes.map((lane) => lane.lane).sort(), ["research", "transport"]);
+    assert.equal(merged.lanes.find((lane) => lane.lane === "transport").reason, laneSummary.reason);
+    assert.equal(merged.lanes.find((lane) => lane.lane === "research").reason, "research lane already idle");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 test("chooseNextQueueTask prefers connector-native send work before retrieval and draft work even when browser preflight is down", () => {
   const queue = {

@@ -2,8 +2,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { promoteInboundPersonToProspect } from "../src/core/promote-inbound-person.js";
+import { insertMotion } from "../src/db/database.js";
 
 function buildMotion(overrides = {}) {
   return {
@@ -136,98 +140,104 @@ function buildObservation(overrides = {}) {
 }
 
 test("promoteInboundPersonToProspect honors a pre-resolved company id", () => {
-  const motion = buildMotion();
-  const company = buildCompany();
-  const result = promoteInboundPersonToProspect({
-    rawMotion: motion,
-    rawCompanies: [company],
-    seedObservation: buildObservation({
-      companyId: company.id,
-      motionId: motion.id,
-    }),
-    relatedObservations: [],
-    now: "2026-06-04T16:30:00.000Z",
-  });
+  withIsolatedExoState(() => {
+    const motion = insertMotion(buildMotion());
+    const company = buildCompany();
+    const result = promoteInboundPersonToProspect({
+      rawMotion: motion,
+      rawCompanies: [company],
+      seedObservation: buildObservation({
+        companyId: company.id,
+        motionId: motion.id,
+      }),
+      relatedObservations: [],
+      now: "2026-06-04T16:30:00.000Z",
+    });
 
-  const account = result.motion.targetMap.accounts.find((item) => item.companyId === company.id);
-  assert.ok(account);
-  assert.equal(account?.companyName, "Resolved Co");
-  assert.equal(account?.prospects.length, 1);
-  assert.equal(account?.prospects[0]?.name, "Rita Resolved");
+    const account = result.motion.targetMap.accounts.find((item) => item.companyId === company.id);
+    assert.ok(account);
+    assert.equal(account?.companyName, "Resolved Co");
+    assert.equal(account?.prospects.length, 1);
+    assert.equal(account?.prospects[0]?.name, "Rita Resolved");
+  });
 });
 
 test("promoteInboundPersonToProspect preserves the latest inbound reply body on the carried touch", () => {
-  const motion = buildMotion();
-  const company = buildCompany();
-  const result = promoteInboundPersonToProspect({
-    rawMotion: motion,
-    rawCompanies: [company],
-    seedObservation: buildObservation({
-      companyId: company.id,
-      motionId: motion.id,
-      messages: [
-        {
-          id: "msg-outbound",
-          direction: "outbound",
-          sentAt: "2026-06-04T16:05:59.952Z",
-          fromName: "You",
-          fromHandle: null,
-          body: "Is it alright if I reach out to your CTO directly?",
-        },
-        {
-          id: "msg-inbound",
-          direction: "inbound",
-          sentAt: "2026-06-04T16:19:00.000Z",
-          fromName: "Rita Resolved",
-          fromHandle: null,
-          body: "Yes, that's fine.",
-        },
-      ],
-    }),
-    relatedObservations: [],
-    now: "2026-06-04T16:30:00.000Z",
-  });
+  withIsolatedExoState(() => {
+    const motion = insertMotion(buildMotion());
+    const company = buildCompany();
+    const result = promoteInboundPersonToProspect({
+      rawMotion: motion,
+      rawCompanies: [company],
+      seedObservation: buildObservation({
+        companyId: company.id,
+        motionId: motion.id,
+        messages: [
+          {
+            id: "msg-outbound",
+            direction: "outbound",
+            sentAt: "2026-06-04T16:05:59.952Z",
+            fromName: "You",
+            fromHandle: null,
+            body: "Is it alright if I reach out to your CTO directly?",
+          },
+          {
+            id: "msg-inbound",
+            direction: "inbound",
+            sentAt: "2026-06-04T16:19:00.000Z",
+            fromName: "Rita Resolved",
+            fromHandle: null,
+            body: "Yes, that's fine.",
+          },
+        ],
+      }),
+      relatedObservations: [],
+      now: "2026-06-04T16:30:00.000Z",
+    });
 
-  const account = result.motion.targetMap.accounts.find((item) => item.companyId === company.id);
-  const touch = account?.prospects[0]?.touches?.[0] ?? null;
-  assert.ok(touch);
-  assert.equal(touch?.surface, "inbound_reply");
-  assert.equal(touch?.body, "Yes, that's fine.");
-  assert.equal(touch?.sourceUrl, "https://www.linkedin.com/messaging/thread/example/");
+    const account = result.motion.targetMap.accounts.find((item) => item.companyId === company.id);
+    const touch = account?.prospects[0]?.touches?.[0] ?? null;
+    assert.ok(touch);
+    assert.equal(touch?.surface, "inbound_reply");
+    assert.equal(touch?.body, "Yes, that's fine.");
+    assert.equal(touch?.sourceUrl, "https://www.linkedin.com/messaging/thread/example/");
+  });
 });
 
 test("promoteInboundPersonToProspect uses a resolved company profile hint when the inbound row has no company name", () => {
-  const motion = buildMotion();
+  withIsolatedExoState(() => {
+    const motion = insertMotion(buildMotion());
 
-  const result = promoteInboundPersonToProspect({
-    rawMotion: motion,
-    rawCompanies: [],
-    seedObservation: buildObservation({
-      actorName: "Ezra Fox",
-      actorTitle: "Founder, Creative Lead",
-      actorCompanyName: null,
-      actorProfileUrl: "https://www.linkedin.com/in/ezrafox/",
-      actorLinkedinPublicId: "ezrafox",
-      actorLinkedinMemberId: "member-ezra",
-    }),
-    relatedObservations: [],
-    resolvedCompanyProfile: {
-      name: "Chaotic Good Studios",
-      domain: "hellochaoticgood.com",
-      websiteUrl: "https://www.hellochaoticgood.com/",
-      linkedinCompanyUrl: "https://www.linkedin.com/company/chaotic-good-studios-llc/",
-      logoSourceUrl: null,
-    },
-    now: "2026-06-04T16:30:00.000Z",
+    const result = promoteInboundPersonToProspect({
+      rawMotion: motion,
+      rawCompanies: [],
+      seedObservation: buildObservation({
+        actorName: "Ezra Fox",
+        actorTitle: "Founder, Creative Lead",
+        actorCompanyName: null,
+        actorProfileUrl: "https://www.linkedin.com/in/ezrafox/",
+        actorLinkedinPublicId: "ezrafox",
+        actorLinkedinMemberId: "member-ezra",
+      }),
+      relatedObservations: [],
+      resolvedCompanyProfile: {
+        name: "Chaotic Good Studios",
+        domain: "hellochaoticgood.com",
+        websiteUrl: "https://www.hellochaoticgood.com/",
+        linkedinCompanyUrl: "https://www.linkedin.com/company/chaotic-good-studios-llc/",
+        logoSourceUrl: null,
+      },
+      now: "2026-06-04T16:30:00.000Z",
+    });
+
+    assert.equal(result.company.name, "Chaotic Good Studios");
+    assert.equal(result.company.domain, "hellochaoticgood.com");
+    assert.equal(result.company.websiteUrl, "https://www.hellochaoticgood.com/");
+    const account = result.motion.targetMap.accounts.find((item) => item.companyId === result.company.id);
+    assert.ok(account);
+    assert.equal(account?.companyName, "Chaotic Good Studios");
+    assert.equal(account?.prospects[0]?.name, "Ezra Fox");
   });
-
-  assert.equal(result.company.name, "Chaotic Good Studios");
-  assert.equal(result.company.domain, "hellochaoticgood.com");
-  assert.equal(result.company.websiteUrl, "https://www.hellochaoticgood.com/");
-  const account = result.motion.targetMap.accounts.find((item) => item.companyId === result.company.id);
-  assert.ok(account);
-  assert.equal(account?.companyName, "Chaotic Good Studios");
-  assert.equal(account?.prospects[0]?.name, "Ezra Fox");
 });
 
 test("promoteInboundPersonToProspect rejects unresolved people instead of merging them into a shared placeholder company", () => {
@@ -250,3 +260,32 @@ test("promoteInboundPersonToProspect rejects unresolved people instead of mergin
     /Cannot promote Second Unknown until a real company is resolved/i,
   );
 });
+
+/**
+ * @template T
+ * @param {() => T} callback
+ * @returns {T}
+ */
+function withIsolatedExoState(callback) {
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  const previousHomeStateDir = process.env.EXO_HOME_STATE_DIR;
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-promote-inbound-person-"));
+  process.env.EXO_STATE_DIR = stateDir;
+  delete process.env.EXO_HOME_STATE_DIR;
+
+  try {
+    return callback();
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    if (previousHomeStateDir === undefined) {
+      delete process.env.EXO_HOME_STATE_DIR;
+    } else {
+      process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
+    }
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+}
