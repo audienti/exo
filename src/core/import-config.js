@@ -19,8 +19,8 @@ import {
 } from "../db/database.js";
 import { browserProfileSchema } from "../schema/browser-profile.js";
 import { companySchema } from "../schema/company.js";
-import { configBundleSchema } from "../schema/config-bundle.js";
-import { motionSchema } from "../schema/motion.js";
+import { configBundleSchema, configMotionSchema } from "../schema/config-bundle.js";
+import { motionViewSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
 import { retestBrowserProfile } from "./retest-browser-profile.js";
 
@@ -40,7 +40,7 @@ export function importConfigBundle(rawConfigBundle) {
   let updatedUsers = 0;
 
   for (const rawMotion of bundle.motions) {
-    const motion = motionSchema.parse(rawMotion);
+    const motion = toImportableMotionView(rawMotion);
 
     if (findMotionById(motion.id)) {
       updateMotionWithRetry(motion.id, (currentMotion) => ({
@@ -161,4 +161,20 @@ export function importConfigBundle(rawConfigBundle) {
       }
     }
   };
+}
+
+/**
+ * @param {unknown} rawMotion
+ * @returns {import("../schema/motion.js").motionViewSchema._type}
+ */
+function toImportableMotionView(rawMotion) {
+  const motion = configMotionSchema.parse(rawMotion);
+  return motionViewSchema.parse({
+    ...motion,
+    targetMap: {
+      status: "pending",
+      accounts: [],
+      segments: motion.targetingProfile.segmentVariants
+    }
+  });
 }

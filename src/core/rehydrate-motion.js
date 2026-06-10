@@ -3,7 +3,7 @@
 import { motionSchema } from "../schema/motion.js";
 import { offerThesisSchema } from "../schema/offer-thesis.js";
 import { suppressionPolicySchema } from "../schema/suppression-policy.js";
-import { rehydrateTargetAccount } from "../schema/target-account.js";
+import { targetAccountSchema } from "../schema/target-account.js";
 import { targetingProfileSchema } from "../schema/targeting-profile.js";
 import {
   buildAudienceHypotheses,
@@ -26,7 +26,7 @@ export function rehydrateMotion(rawMotion) {
   const premise = buildPremise(source.premise);
   const audienceHypotheses = buildAudienceHypotheses(source.audienceHypotheses ?? []);
   const signals = buildSignals(source.signals ?? source.signalSet?.items ?? []);
-  const targetAccounts = buildTargetAccounts(source.targetMap?.accounts ?? []);
+  const targetAccounts = parseTargetAccountViews(source.targetMap?.accounts ?? []);
   const stakeholderSummaries = buildStakeholderSummaries(targetAccounts);
   const motionPlanVariants = buildMotionPlanVariants(targetAccounts);
   const readiness = summarizeTargetAccountReadiness(targetAccounts);
@@ -131,8 +131,8 @@ function normalizeNullableString(value) {
 /**
  * @param {unknown[]} rawAccounts
  */
-function buildTargetAccounts(rawAccounts) {
-  return rawAccounts.map((account) => rehydrateTargetAccount(account));
+function parseTargetAccountViews(rawAccounts) {
+  return rawAccounts.map((account) => targetAccountSchema.parse(account));
 }
 
 /**
