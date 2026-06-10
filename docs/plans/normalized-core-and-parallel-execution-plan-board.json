@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T20:54:08Z"
+    "updatedAt": "2026-06-10T21:09:51Z"
   },
   "tasks": [
     {
@@ -472,7 +472,7 @@
     {
       "id": "T10",
       "title": "Repair fixtures and add race regressions",
-      "status": "running",
+      "status": "done",
       "priority": 2,
       "dependsOn": [
         "T09"
@@ -494,16 +494,22 @@
         "npm run check",
         "npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added test/support/normalized-fixtures.js with withIsolatedExoState, buildMotionView, seedMotionView, buildTargetAccount, buildProspect, buildCompanyView, and buildExecutionUser helpers.",
+        "Ported motion-hydration tests onto seedMotionView so the shared legacy-view-to-normalized-row fixture path is covered.",
+        "Added two-process normalized race regressions for concurrent draft/touch writes, stale motion-core optimistic conflicts, low-level account packet claim contention, and high-level account packet wrapper contention.",
+        "Added a lifecycle regression proving a held cross-motion branch is released when the owning active branch moves to a non-active disposition and then re-enters due scans.",
+        "Hardened account and prospect packet claim wrappers so a losing atomic claim reports contention instead of returning success."
+      ],
       "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Started 2026-06-10 after T09 SQL read-path conversion landed and validated. Controller owns writes; subagents may map fixture and race-test surfaces read-only."
+      "commit": "24c3b9ed8c23fe5b767de38b4d53f56c1fb80820",
+      "notes": "Started 2026-06-10 after T09 SQL read-path conversion landed and validated. Subagents Arendt and Confucius mapped fixture and race-test surfaces read-only. Red/repair: the first race run exposed compact company fixtures failing companySchema parse and missing execution-user FK rows; fixed with buildCompanyView/buildExecutionUser helpers. Confucius flagged wrapper-level packet claim contention; claim wrappers now throw when the atomic row claim loses. Green: node --test test/motion-hydration.test.js test/normalized-race-regressions.test.js passed 11/11; affected focused suite passed 45/45; npm run check passed; git diff --check passed; final npm test passed 699/699."
     },
     {
       "id": "T11",
       "title": "Update config portability and shrink repair scope",
-      "status": "backlog",
+      "status": "ready",
       "priority": 2,
       "dependsOn": [
         "T10"
