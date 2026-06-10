@@ -6,6 +6,10 @@ All notable changes to Exo's public plugin surface land here.
 
 - No unreleased plugin-facing changes yet.
 
+## [0.2.3] - 2026-06-10
+
+- Fixed every live runtime call — Gmail and LinkedIn live sync, Gmail thread disposal, harness-connection probes, and the LLM repair generator — leaving the spawned `claude`/`codex` CLI's stdin open. Both CLIs read stdin when it is a pipe, and codex blocked on that read until its timeout, adding latency to or hanging capture, disposal, and probe passes. The prompt always travels as an argument, so stdin is now closed immediately after the process is spawned.
+
 ## [0.2.2] - 2026-06-10
 
 - Contract self-repair now documents every fix it makes: each generated repair appends an agent-authored repair note (shared tool repair-note shape) to `.exo/repair-notes.jsonl` with evidence references to the override and submission records; replays never duplicate notes, and notes are never garbage-collected.
