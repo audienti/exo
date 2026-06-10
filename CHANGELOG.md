@@ -6,6 +6,13 @@ All notable changes to Exo's public plugin surface land here.
 
 - No unreleased plugin-facing changes yet.
 
+## [0.2.2] - 2026-06-10
+
+- Contract self-repair now documents every fix it makes: each generated repair appends an agent-authored repair note (shared tool repair-note shape) to `.exo/repair-notes.jsonl` with evidence references to the override and submission records; replays never duplicate notes, and notes are never garbage-collected.
+- Added the LLM-backed repair generator: when a contract fails and no stored repair matches, exo asks the local `claude` CLI (falling back to `codex` on any claude failure, including an expired login) to propose a corrected contract, which is revalidated before it is ever used. Generator choice is controlled by `EXO_REPAIR_GENERATOR` (`claude`, `codex`, `off`), and `EXO_REPAIR_GENERATOR_TIMEOUT_MS` overrides the 180s timeout.
+- Hardened repairs to drop/reorder/bookkeeping-only: a repaired agent queue can never promote waiting work into the runnable lane, daily/inbox repairs may only drop or reorder byte-identical items, and next-view repairs must preserve operator guidance that was already valid.
+- The repair runtimes run with tool use disabled at the CLI level (claude: no built-in tools, no MCP servers; codex: read-only sandbox in an empty temp dir), so a prompt-injected string inside a failed contract has nothing to reach.
+
 ## [0.2.1] - 2026-06-09
 
 - Fixed the last two LinkedIn surfaces (received invitations and messaging inbox) dropping their pagination bounds and resume cursors during full-mode backfills, completing the bounded-slice fix across all six surfaces.
