@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T18:37:14Z"
+    "updatedAt": "2026-06-10T18:38:26Z"
   },
   "tasks": [
     {
@@ -333,7 +333,7 @@
     {
       "id": "T16",
       "title": "Add disposition axis and packet review states (Amendment A1)",
-      "status": "ready",
+      "status": "running",
       "priority": 1,
       "dependsOn": [
         "T06",
@@ -361,10 +361,10 @@
         "npm test"
       ],
       "outputs": [],
-      "attemptCount": 0,
+      "attemptCount": 1,
       "lastFailure": "",
       "commit": "",
-      "notes": "Inserted 2026-06-10 by Amendment A1 so the schema freezes in final form before T08/T09 encode write and scan semantics."
+      "notes": "Inserted 2026-06-10 by Amendment A1 so the schema freezes in final form before T08/T09 encode write and scan semantics. Started controller execution after T07 hydration landed."
     },
     {
       "id": "T08",
