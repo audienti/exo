@@ -378,7 +378,7 @@
     {
       "id": "T08",
       "title": "Flip execution write paths to rows and events",
-      "status": "backlog",
+      "status": "running",
       "priority": 1,
       "dependsOn": [
         "T07",
@@ -407,10 +407,10 @@
         "npm test"
       ],
       "outputs": [],
-      "attemptCount": 0,
+      "attemptCount": 1,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Started 2026-06-10 after T16 froze disposition and packet review columns."
     },
     {
       "id": "T09",
