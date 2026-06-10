@@ -51,6 +51,10 @@ import {
   setBrowserBackoffForTask,
 } from "../src/lib/agent-host-state.js";
 import {
+  releaseAgentRunLock,
+  tryAcquireAgentRunLock,
+} from "../src/lib/agent-run-lock.js";
+import {
   DEFAULT_RUNTIME_USAGE_LIMIT_BACKOFF_MS,
   classifyRuntimeUsageLimitFailure,
 } from "../src/lib/runtime-usage-limit.js";
@@ -183,6 +187,19 @@ function resolveCodexTaskHomeDir(codexHome, currentHome) {
 export function runAgentHostPass() {
   fs.mkdirSync(TEMP_ROOT, { recursive: true });
 
+  const runLock = tryAcquireAgentRunLock({ stateDir: STATE_DIR, lane: EXECUTION_LANE });
+  if (!runLock.acquired) {
+    return buildAgentHostPassLockNoop(runLock);
+  }
+
+  try {
+    return runUnlockedAgentHostPass();
+  } finally {
+    releaseAgentRunLock(runLock);
+  }
+}
+
+function runUnlockedAgentHostPass() {
   let hostState = cleanupHostStateOnStartup();
   const preflight = buildAndPersistPreflight();
   const executionContext = createAgentExecutionContext();
@@ -437,6 +454,27 @@ export function runAgentHostPass() {
     preflightPath: PREFLIGHT_PATH,
     results,
     finalQueueCounts: summarizeQueue(finalQueue),
+  };
+}
+
+/** @param {{ pid?: number | null }} lock */
+function buildAgentHostPassLockNoop(lock) {
+  const now = new Date().toISOString();
+  const laneLabel = EXECUTION_LANE ? `${EXECUTION_LANE} lane` : "agent";
+  return {
+    status: "noop",
+    reason: `Another ${laneLabel} pass is already active${lock.pid ? ` (pid ${lock.pid})` : ""}.`,
+    startedAt: now,
+    endedAt: now,
+    lane: EXECUTION_LANE,
+    maxTasksPerPass: MAX_TASKS_PER_PASS,
+    maxMaintenanceTasksPerPass: MAX_MAINTENANCE_TASKS_PER_PASS,
+    backfillInterleaveEvery: BACKFILL_INTERLEAVE_EVERY,
+    backfillTaskCount: 0,
+    browserReady: null,
+    preflightPath: null,
+    results: [],
+    finalQueueCounts: { dueTaskCount: 0, waitingTaskCount: 0, blockerCount: 0 },
   };
 }
 

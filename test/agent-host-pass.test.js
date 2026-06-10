@@ -51,6 +51,10 @@ import {
   checkoutTaskLease,
   createTaskLeaseFingerprint,
 } from "../src/lib/agent-host-state.js";
+import {
+  releaseAgentRunLock,
+  tryAcquireAgentRunLock,
+} from "../src/lib/agent-run-lock.js";
 
 const HOST_PASS_SCRIPT = path.resolve("scripts/run-agent-host-pass.js");
 
@@ -133,6 +137,54 @@ test("main-module host pass persists expired host-state cleanup before default a
     assert.deepEqual(hostState.recentTaskVerifications, []);
     assert.equal(hostState.browserBackoff.retrieval.unavailableUntil, null);
     assert.equal(hostState.browserBackoff.execution.unavailableUntil, null);
+  }
+});
+
+test("main-module host pass returns a persisted lane noop when that lane lock is held", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-lane-lock-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const heldLock = tryAcquireAgentRunLock({ stateDir, lane: "transport", pid: process.pid });
+  assert.equal(heldLock.acquired, true);
+
+  try {
+    const result = runSpawnedHostPass({ stateDir, cwd: tempRoot, lane: "transport" });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.status, "noop");
+    assert.equal(summary.lane, "transport");
+    assert.match(summary.reason, /Another transport lane pass is already active/i);
+    assert.match(summary.reason, new RegExp(`pid ${process.pid}`));
+
+    const persisted = readJsonFile(path.join(stateDir, "agent-last-pass.transport.json"));
+    assert.equal(persisted.status, "noop");
+    assert.equal(persisted.lane, "transport");
+    assert.equal(persisted.reason, summary.reason);
+  } finally {
+    releaseAgentRunLock(heldLock);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("main-module host pass can start a transport lane while the research lane lock is held", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-other-lane-lock-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const heldLock = tryAcquireAgentRunLock({ stateDir, lane: "research", pid: process.pid });
+  assert.equal(heldLock.acquired, true);
+
+  try {
+    const result = runSpawnedHostPass({ stateDir, cwd: tempRoot, lane: "transport" });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const summary = JSON.parse(result.stdout);
+    assert.equal(summary.status, "noop");
+    assert.equal(summary.lane, "transport");
+    assert.doesNotMatch(summary.reason, /already active/i);
+  } finally {
+    releaseAgentRunLock(heldLock);
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 

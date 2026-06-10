@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 import { buildNodeTestEnv } from "../scripts/node-test-runtime.js";
 import { buildAgentRunLockDir } from "../src/lib/agent-run-lock.js";
@@ -132,18 +133,42 @@ test("agent run still drains the research lane when the transport lane lock is h
   const stateDir = path.join(tempRoot, ".exo");
   const runnerScript = path.join(tempRoot, "fake-runner.js");
   const transportLockDir = buildAgentRunLockDir({ stateDir, lane: "transport" });
+  const lockModuleUrl = pathToFileURL(path.join(repoRoot, "src", "lib", "agent-run-lock.js")).href;
 
   fs.mkdirSync(stateDir, { recursive: true });
   fs.mkdirSync(transportLockDir, { recursive: true });
   fs.writeFileSync(path.join(transportLockDir, "pid"), `${process.pid}\n`, "utf8");
   fs.writeFileSync(runnerScript, [
     "#!/usr/bin/env node",
-    "console.log(JSON.stringify({",
-    "  status: 'noop',",
-    "  reason: `runner-called:${process.env.EXO_AGENT_LANE ?? 'none'}`,",
-    "  results: [],",
-    "  finalQueueCounts: { dueTaskCount: 0, waitingTaskCount: 0, blockerCount: 0 }",
-    "}));",
+    "(async () => {",
+    `  const { tryAcquireAgentRunLock, releaseAgentRunLock } = await import(${JSON.stringify(lockModuleUrl)});`,
+    "  const lane = process.env.EXO_AGENT_LANE ?? null;",
+    "  const laneLock = tryAcquireAgentRunLock({ stateDir: process.env.EXO_STATE_DIR, lane });",
+    "  if (!laneLock.acquired) {",
+    "    console.log(JSON.stringify({",
+    "      status: 'noop',",
+    "      reason: `Another ${lane} lane pass is already active${laneLock.pid ? ` (pid ${laneLock.pid})` : ''}.`,",
+    "      lane,",
+    "      results: [],",
+    "      finalQueueCounts: { dueTaskCount: 0, waitingTaskCount: 0, blockerCount: 0 }",
+    "    }));",
+    "    return;",
+    "  }",
+    "  try {",
+    "    console.log(JSON.stringify({",
+    "      status: 'noop',",
+    "      reason: `runner-called:${lane ?? 'none'}`,",
+    "      lane,",
+    "      results: [],",
+    "      finalQueueCounts: { dueTaskCount: 0, waitingTaskCount: 0, blockerCount: 0 }",
+    "    }));",
+    "  } finally {",
+    "    releaseAgentRunLock(laneLock);",
+    "  }",
+    "})().catch((error) => {",
+    "  console.error(error instanceof Error ? error.stack : String(error));",
+    "  process.exit(1);",
+    "});",
   ].join("\n"), "utf8");
 
   try {
@@ -171,6 +196,61 @@ test("agent run still drains the research lane when the transport lane lock is h
     assert.equal(fs.existsSync(path.join(transportLockDir, "pid")), true);
   } finally {
     fs.rmSync(transportLockDir, { recursive: true, force: true });
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("agent run releases the shared spawn guard after starting a pinned lane", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-agent-run-spawn-guard-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  const runnerScript = path.join(tempRoot, "fake-runner.js");
+  const lockModuleUrl = pathToFileURL(path.join(repoRoot, "src", "lib", "agent-run-lock.js")).href;
+
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(runnerScript, [
+    "#!/usr/bin/env node",
+    "(async () => {",
+    `  const { tryAcquireAgentRunLock, releaseAgentRunLock } = await import(${JSON.stringify(lockModuleUrl)});`,
+    "  await new Promise((resolve) => setTimeout(resolve, 100));",
+    "  const sharedLock = tryAcquireAgentRunLock({ stateDir: process.env.EXO_STATE_DIR });",
+    "  if (sharedLock.acquired) {",
+    "    releaseAgentRunLock(sharedLock);",
+    "  }",
+    "  console.log(JSON.stringify({",
+    "    status: 'noop',",
+    "    reason: 'spawn-guard-checked',",
+    "    lockAcquiredAfterSpawn: sharedLock.acquired,",
+    "    results: [],",
+    "    finalQueueCounts: { dueTaskCount: 0, waitingTaskCount: 0, blockerCount: 0 }",
+    "  }));",
+    "})().catch((error) => {",
+    "  console.error(error instanceof Error ? error.stack : String(error));",
+    "  process.exit(1);",
+    "});",
+  ].join("\n"), "utf8");
+
+  try {
+    const output = execFileSync("node", [
+      cliPath,
+      "agent",
+      "run",
+      "--json",
+    ], {
+      cwd: repoRoot,
+      env: buildNodeTestEnv({
+        ...process.env,
+        EXO_STATE_DIR: stateDir,
+        EXO_AGENT_LANE: "transport",
+        EXO_AGENT_RUNNER_SCRIPT: runnerScript,
+      }),
+      encoding: "utf8",
+    });
+
+    const report = JSON.parse(output);
+    assert.equal(report.reason, "spawn-guard-checked");
+    assert.equal(report.lockAcquiredAfterSpawn, true);
+    assert.deepEqual(report.lanes.map((lane) => lane.lane), ["transport"]);
+  } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });

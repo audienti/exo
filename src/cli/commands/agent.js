@@ -533,7 +533,7 @@ export async function runAgentWorkerPass(options = {}) {
   const resolvedSendMode = normalizeRoutineSendMode(options.sendMode, existingRoutine?.sendMode ?? "verify");
   const runnerScript = process.env.EXO_AGENT_RUNNER_SCRIPT || path.join(process.cwd(), "scripts", "run-agent-host-pass.js");
   const runnerNode = process.env.EXO_AGENT_RUNNER_NODE || process.execPath;
-  const runLock = tryAcquireAgentRunLock({ stateDir });
+  let runLock = tryAcquireAgentRunLock({ stateDir });
   if (!runLock.acquired) {
     const queue = loadAgentQueue();
     const summary = {
@@ -587,8 +587,11 @@ export async function runAgentWorkerPass(options = {}) {
     // EXO_AGENT_LANE narrows execution to that single lane.
     const pinnedLane = normalizeAgentExecutionLane(env.EXO_AGENT_LANE);
     const lanes = pinnedLane ? [pinnedLane] : [...AGENT_EXECUTION_LANES];
-    const laneSummaries = await Promise.all(lanes.map((lane) =>
-      runWorkerLanePass({ lane, stateDir, runnerNode, runnerScript, env })));
+    const lanePasses = lanes.map((lane) =>
+      runWorkerLanePass({ lane, runnerNode, runnerScript, env }));
+    releaseAgentRunLock(runLock);
+    runLock = null;
+    const laneSummaries = await Promise.all(lanePasses);
     const summary = mergeLanePassSummaries(laneSummaries);
 
     // Each lane runner writes its own agent-last-pass.<lane>.json; the merged
@@ -609,39 +612,26 @@ export async function runAgentWorkerPass(options = {}) {
     }
     return summary;
   } finally {
-    releaseAgentRunLock(runLock);
+    if (runLock) {
+      releaseAgentRunLock(runLock);
+    }
   }
 }
 
 /**
- * Run one host-pass worker for a single execution lane, guarded by that
- * lane's run lock. A lane that cannot start (lock held) or that breaks must
- * not take down the sibling lane mid-flight, so failures are surfaced as a
- * failed lane summary instead of a thrown error.
+ * Run one host-pass worker for a single execution lane. The child owns the
+ * lane lock and reports a no-op summary when held; runner failures still must
+ * not take down the sibling lane mid-flight.
  *
  * @param {{
  *   lane: string,
- *   stateDir: string,
  *   runnerNode: string,
  *   runnerScript: string,
  *   env: Record<string, string | undefined>,
  * }} input
  * @returns {Promise<any>}
  */
-async function runWorkerLanePass({ lane, stateDir, runnerNode, runnerScript, env }) {
-  const laneLock = tryAcquireAgentRunLock({ stateDir, lane });
-  if (!laneLock.acquired) {
-    const now = new Date().toISOString();
-    return {
-      status: "noop",
-      reason: `Another ${lane} lane pass is already active${laneLock.pid ? ` (pid ${laneLock.pid})` : ""}.`,
-      startedAt: now,
-      endedAt: now,
-      lane,
-      results: [],
-    };
-  }
-
+async function runWorkerLanePass({ lane, runnerNode, runnerScript, env }) {
   try {
     const raw = await new Promise((resolve, reject) => {
       execFile(runnerNode, [runnerScript], {
@@ -675,8 +665,6 @@ async function runWorkerLanePass({ lane, stateDir, runnerNode, runnerScript, env
       lane,
       results: [],
     };
-  } finally {
-    releaseAgentRunLock(laneLock);
   }
 }
 
