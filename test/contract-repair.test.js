@@ -12,6 +12,7 @@ import {
   findMatchingRepairRecord,
   gcContractRepairStore,
   loadActiveRepairRecords,
+  loadRepairNotes,
   loadRepairSubmissions,
   resolveRepairStorePaths,
   updateRepairSubmissionStatus,
@@ -269,6 +270,23 @@ test("a generated repair is applied once, persisted, and spooled with redaction"
     assert.ok(!submissionText.includes("Repair User"));
     assert.ok(submissions[0].redaction.redactedFieldPaths.length > 0);
 
+    // "When I fix it, I document what I did": one repair note in the shared
+    // toolRepairNoteSchema shape, linked to the override record by evidence.
+    const notes = loadRepairNotes({ stateDir });
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0].contractKind, "daily");
+    assert.equal(notes[0].fingerprint, result.contract.repair.fingerprint);
+    assert.equal(notes[0].recordId, records[0].id);
+    assert.equal(notes[0].note.author, "agent");
+    assert.equal(notes[0].note.phase, "escalation");
+    assert.equal(notes[0].note.outcome, "continued");
+    assert.match(notes[0].note.summary, /daily contract broke/);
+    assert.match(notes[0].note.summary, /daily_count_matches_items/);
+    assert.match(notes[0].note.summary, /Recomputed itemCount from the items array\./);
+    const evidenceRefs = notes[0].note.evidenceRefs.map((/** @type {{ ref: string }} */ evidence) => evidence.ref);
+    assert.ok(evidenceRefs.includes(`repair-overrides.jsonl#${records[0].id}`));
+    assert.ok(evidenceRefs.includes(`repair-submissions.jsonl#${submissions[0].submissionId}`));
+
     // Same failure + same input in a later invocation: the stored repair
     // applies without a generator.
     const replayed = await executeRepairableContract({
@@ -283,6 +301,7 @@ test("a generated repair is applied once, persisted, and spooled with redaction"
     assert.equal(replayed.repair?.applied, true);
     assert.equal(replayed.contract.counts.itemCount, 1);
     assert.equal(loadRepairSubmissions({ stateDir }).length, 1, "a replayed stored repair must not spool a duplicate submission");
+    assert.equal(loadRepairNotes({ stateDir }).length, 1, "a replayed stored repair must not write a duplicate note");
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }

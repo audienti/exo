@@ -9,6 +9,7 @@ import {
   repairFailureArtifactSchema
 } from "../schema/contract-repair.js";
 import {
+  appendRepairNote,
   appendRepairRecord,
   appendRepairSubmission,
   findMatchingRepairRecord,
@@ -410,6 +411,29 @@ export async function executeRepairableContract(input) {
         submissionStatus: config.submitUpstream ? "pending" : "disabled"
       }
     });
+
+    // "When I fix it, I document what I did": one durable note per fix, in
+    // the same shape the tool escalation surface uses for repair notes.
+    appendRepairNote({
+      stateDir,
+      noteRecord: {
+        id: `repair-note-${crypto.randomUUID()}`,
+        contractKind,
+        fingerprint,
+        recordId,
+        note: {
+          createdAt: now,
+          phase: "escalation",
+          author: "agent",
+          summary: buildRepairNoteSummary({ contractKind, failureArtifact, summary }),
+          evidenceRefs: [
+            { kind: "artifact", ref: `repair-overrides.jsonl#${recordId}`, surface: contractKind, capturedAt: now },
+            { kind: "artifact", ref: `repair-submissions.jsonl#${submissionId}`, surface: contractKind, capturedAt: now }
+          ],
+          outcome: "continued"
+        }
+      }
+    });
   } else {
     submissionId = stored?.submissionId ?? null;
   }
@@ -435,6 +459,28 @@ export async function executeRepairableContract(input) {
       submissionId
     }
   };
+}
+
+/**
+ * One sentence of problem + one sentence of fix, readable without opening the
+ * linked evidence artifacts.
+ *
+ * @param {{ contractKind: string, failureArtifact: any, summary: string }} input
+ */
+function buildRepairNoteSummary(input) {
+  const artifact = input.failureArtifact ?? {};
+  let failureDescription;
+  if (artifact.kind === "builder_threw") {
+    failureDescription = `the builder threw ${artifact.errorName ?? "an error"}`;
+  } else if (artifact.kind === "postcondition") {
+    failureDescription = `postcondition ${artifact.postconditionKey ?? "(unknown)"} failed`;
+  } else {
+    const paths = (artifact.issues ?? []).slice(0, 3).map((/** @type {{ path: string }} */ issue) => issue.path);
+    failureDescription = paths.length
+      ? `schema validation failed at ${paths.join(", ")}${(artifact.issues ?? []).length > 3 ? ", …" : ""}`
+      : "schema validation failed";
+  }
+  return `The ${input.contractKind} contract broke (${failureDescription}). ${input.summary}`;
 }
 
 /**

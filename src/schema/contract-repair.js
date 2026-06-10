@@ -1,6 +1,7 @@
 // @ts-check
 
 import { z } from "zod";
+import { toolRepairNoteSchema } from "./surfaces/shared.js";
 
 /**
  * Contract self-repair (V1).
@@ -131,6 +132,23 @@ export const repairSubmissionSchema = z.object({
   createdAt: z.string().datetime(),
   submittedAt: z.string().datetime().nullable().default(null),
   submissionStatus: repairSubmissionStatusSchema.default("pending")
+});
+
+/**
+ * "When I fix it, I document what I did" — every newly generated contract
+ * repair also appends one note in the same `toolRepairNoteSchema` shape the
+ * tool escalation surface uses, so all of Exo's repair documentation reads
+ * the same way regardless of which layer did the fixing. Stored as a line in
+ * `.exo/repair-notes.jsonl`. One note per fix; replaying a stored repair does
+ * not write another note.
+ */
+export const contractRepairNoteRecordSchema = z.object({
+  id: z.string().trim().min(1),
+  contractKind: repairableContractKindSchema,
+  fingerprint: z.string().trim().min(1),
+  /** The repair-overrides record this note documents. */
+  recordId: z.string().trim().min(1),
+  note: toolRepairNoteSchema
 });
 
 /**

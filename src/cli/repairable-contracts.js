@@ -7,6 +7,7 @@ import {
   resolveRepairRuntimeConfig
 } from "../core/execute-repairable-contract.js";
 import { flushRepairSubmissions } from "../core/repair-submission-sender.js";
+import { createLlmRepairGenerator } from "../core/llm-repair-generator.js";
 
 /**
  * CLI wiring for the V1 contract self-repair layer. Inert unless
@@ -35,7 +36,10 @@ export async function runCliRepairableContract(input) {
     build: input.build,
     normalizedInputs: input.normalizedInputs,
     stateDir,
-    repairConfig: config
+    repairConfig: config,
+    // "We see the problem, and we fix it": claude (or codex) generates the
+    // repair candidate; the executor revalidates it before it is ever used.
+    repairGenerator: createLlmRepairGenerator()
   });
 
   if (result.repair) {

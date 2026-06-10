@@ -2,10 +2,11 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { repairRecordSchema, repairSubmissionSchema } from "../schema/contract-repair.js";
+import { contractRepairNoteRecordSchema, repairRecordSchema, repairSubmissionSchema } from "../schema/contract-repair.js";
 
 const REPAIR_OVERRIDES_FILENAME = "repair-overrides.jsonl";
 const REPAIR_SUBMISSIONS_FILENAME = "repair-submissions.jsonl";
+const REPAIR_NOTES_FILENAME = "repair-notes.jsonl";
 const STORE_LOCK_DIRNAME = "repair-store.lock";
 const STORE_LOCK_STALE_MS = 30000;
 const STORE_LOCK_TIMEOUT_MS = 5000;
@@ -19,6 +20,7 @@ export function resolveRepairStorePaths(stateDir) {
   return {
     overridesPath: path.join(stateDir, REPAIR_OVERRIDES_FILENAME),
     submissionsPath: path.join(stateDir, REPAIR_SUBMISSIONS_FILENAME),
+    notesPath: path.join(stateDir, REPAIR_NOTES_FILENAME),
     lockDir: path.join(stateDir, STORE_LOCK_DIRNAME)
   };
 }
@@ -226,6 +228,30 @@ export function appendRepairSubmission(input) {
     fs.appendFileSync(submissionsPath, `${JSON.stringify(submission)}\n`);
   });
   return submission;
+}
+
+/**
+ * Repair notes are the durable "when I fix it, I document what I did" log in
+ * the shared toolRepairNoteSchema shape. They are an audit trail, not an
+ * operational cache, so gcContractRepairStore never touches them.
+ *
+ * @param {{ stateDir: string, noteRecord: unknown }} input
+ */
+export function appendRepairNote(input) {
+  const noteRecord = contractRepairNoteRecordSchema.parse(input.noteRecord);
+  const { notesPath } = resolveRepairStorePaths(input.stateDir);
+  withRepairStoreLock(input.stateDir, () => {
+    fs.appendFileSync(notesPath, `${JSON.stringify(noteRecord)}\n`);
+  });
+  return noteRecord;
+}
+
+/**
+ * @param {{ stateDir: string }} input
+ */
+export function loadRepairNotes(input) {
+  const { notesPath } = resolveRepairStorePaths(input.stateDir);
+  return readJsonlRecords(notesPath, contractRepairNoteRecordSchema);
 }
 
 /**
