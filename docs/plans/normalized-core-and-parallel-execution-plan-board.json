@@ -333,7 +333,7 @@
     {
       "id": "T16",
       "title": "Add disposition axis and packet review states (Amendment A1)",
-      "status": "running",
+      "status": "done",
       "priority": 1,
       "dependsOn": [
         "T06",
@@ -357,14 +357,23 @@
         "npm run check and npm test are green."
       ],
       "verification": [
+        "node --test test/database-schema.test.js test/normalized-entity-modules.test.js test/motion-hydration.test.js",
+        "node --test test/database-schema.test.js test/normalized-entity-modules.test.js test/motion-hydration.test.js test/cli.test.js test/execute-action-intent.test.js",
         "npm run check",
+        "git diff --check",
         "npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added disposition, disposition_at, disposition_actor, and packet_status columns to prospects and motion_accounts with CHECK constraints and review indexes.",
+        "Introduced a shared lifecycle-state helper for disposition values, packet statuses, queue-status invariants, and workable-branch SQL.",
+        "Added packet submit/accept/return/clear transitions and transactional setProspectDisposition/setAccountDisposition writers with system activity events.",
+        "Updated due/cross-motion scans to require active prospect and account dispositions.",
+        "Hydrated motion target-map views now expose additive disposition and packetStatus fields without changing legacy queueState.status behavior."
+      ],
       "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Inserted 2026-06-10 by Amendment A1 so the schema freezes in final form before T08/T09 encode write and scan semantics. Started controller execution after T07 hydration landed."
+      "commit": "1a8a2ecece2bd6ada75a32c52a81f621f4acfee2",
+      "notes": "Inserted 2026-06-10 by Amendment A1 so the schema freezes in final form before T08/T09 encode write and scan semantics. Started controller execution after T07 hydration landed. Red: focused T16 tests initially failed on missing schema columns, exports, and hydration fields. Green: focused schema/entity/hydration passed 12/12; focused integration passed 124/124; npm run check passed; git diff --check passed; npm test passed 685/685."
     },
     {
       "id": "T08",
