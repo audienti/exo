@@ -509,7 +509,7 @@
     {
       "id": "T11",
       "title": "Update config portability and shrink repair scope",
-      "status": "running",
+      "status": "done",
       "priority": 2,
       "dependsOn": [
         "T10"
@@ -519,9 +519,10 @@
       "files": [
         "src/core/export-config.js",
         "src/core/import-config.js",
-        "src/schema/contract-repair.js",
-        "src/db/database.js",
-        "test/cli.test.js"
+        "src/core/rehydrate-motion.js",
+        "src/schema/config-bundle.js",
+        "src/schema/company.js",
+        "test/config-portability.test.js"
       ],
       "context": "WS3 steps 8-9. exo config export emits motion-core playbooks only with no execution state. Import accepts legacy bundles by stripping embedded targetMap/execution state through zod transform so current exports re-seed the new DB. Browser profiles/users/companies import unchanged. Delete prospect-level repair from rehydrateMotion and keep CLI-boundary LLM contract repair.",
       "doneWhen": [
@@ -536,11 +537,17 @@
         "npm test",
         "rg -n \"targetMap\" src/db src/core src/cli"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added configMotionSchema so config bundles strip targetMap, derived stakeholderMap, derived motionPlan variants, and dynamic nextSteps before validation.",
+        "Updated config export to emit core-only motion playbooks and config import to seed an empty execution view while preserving existing local execution rows on updates.",
+        "Removed rehydrateMotion's dependency on rehydrateTargetAccount so legacy target-account stakeholder/outreach shapes are no longer repaired into prospects at motion rehydrate time.",
+        "Added config portability regressions covering export leaks, legacy import stripping, update preservation of local execution rows, and deleted prospect-level repair.",
+        "Defaulted company notes to null so config export can parse normalized company rows created from target account hydration."
+      ],
       "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Started 2026-06-10 after T10 race regressions and fixture support landed green. Scope is config export/import portability plus removing prospect/touch repair-on-read outside CLI-boundary LLM contract repair."
+      "commit": "49756a79df83a1d0afff16d68cceeb28d170fb82",
+      "notes": "Started 2026-06-10 after T10 race regressions and fixture support landed green. Scope is config export/import portability plus removing prospect/touch repair-on-read outside CLI-boundary LLM contract repair. Red/repair: focused config export initially exposed that derived stakeholderMap/motionPlan still leaked prospect ids after targetMap stripping; moved execution-state stripping into configMotionSchema. Config export then exposed normalized company rows without notes; defaulted company notes to null. Green: node --test test/config-portability.test.js test/motion-hydration.test.js passed 11/11; affected normalized suite passed 49/49; node --test test/cli.test.js --test-name-pattern \"config export/import round-trips motions, companies, and browser profiles\" passed the loaded CLI suite 87/87; npm run check passed; git diff --check passed; broad rg -n \"targetMap\" src/db src/core src/cli reviewed compatibility reads/hydration references; narrow payload-write grep for targetMap returned no matches; final npm test passed 703/703."
     },
     {
       "id": "T12",
