@@ -54,7 +54,7 @@
       "commit": "e99f8ec8be853230260af26c8b717ded176febd1",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-10T20:52:27Z"
+    "updatedAt": "2026-06-10T20:54:08Z"
   },
   "tasks": [
     {
@@ -472,7 +472,7 @@
     {
       "id": "T10",
       "title": "Repair fixtures and add race regressions",
-      "status": "ready",
+      "status": "running",
       "priority": 2,
       "dependsOn": [
         "T09"
@@ -495,10 +495,10 @@
         "npm test"
       ],
       "outputs": [],
-      "attemptCount": 0,
+      "attemptCount": 1,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Started 2026-06-10 after T09 SQL read-path conversion landed and validated. Controller owns writes; subagents may map fixture and race-test surfaces read-only."
     },
     {
       "id": "T11",
