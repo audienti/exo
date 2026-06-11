@@ -33,7 +33,7 @@
     ]
   },
   "board": {
-    "status": "active",
+    "status": "complete",
     "controller": "codex-gpt-5",
     "concurrencyCap": 1,
     "worktreeRoot": ".worktrees",
@@ -52,7 +52,7 @@
       ],
       "notes": "Baseline needed one preflight repair for a red cold-start onboarding UI test. Full suite then passed with Node v24.14.0: 704 pass, 0 fail."
     },
-    "updatedAt": "2026-06-11T12:55:38Z"
+    "updatedAt": "2026-06-11T13:16:33Z"
   },
   "tasks": [
     {
@@ -279,7 +279,7 @@
     {
       "id": "T06",
       "title": "Add governed UI actions and close acceptance",
-      "status": "backlog",
+      "status": "done",
       "priority": 6,
       "dependsOn": [
         "T05"
@@ -287,10 +287,19 @@
       "ownerLane": "controller",
       "modelTier": "default",
       "files": [
+        "src/core/build-action-intents.js",
         "src/core/execute-action-intent.js",
+        "src/core/build-daily-view.js",
+        "src/core/build-motions-view.js",
+        "src/core/build-operator-view.js",
+        "src/core/build-packet-review-view.js",
         "src/artifacts/render-prospects.js",
         "src/artifacts/render-motions.js",
         "src/artifacts/render-operator.js",
+        "src/cli/commands/report.js",
+        "src/cli/exo-ui-server.js",
+        "src/lib/exo-ui-components.js",
+        "test/execute-action-intent.test.js",
         "test/prospect-ui.test.js",
         "test/exo-ui-server.test.js",
         "docs/plans/prospect-lifecycle-and-packet-review-plan-board.json"
@@ -309,11 +318,18 @@
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test",
         "python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.2.0/skills/plan-loop-executor/scripts/validate_board.py docs/plans/prospect-lifecycle-and-packet-review-plan-board.json"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added shared action-intent builders for account disposition, prospect disposition, and packet review decisions with CLI command strings and typed writer arguments.",
+        "Extended action-intent execution so UI actions route through the same account/prospect disposition writers and packet review accept, amend, return operations as the CLI/tests.",
+        "Prospect detail now exposes governed lifecycle actions and packet review actions for accept, nurture, terminal, and return decisions.",
+        "Motion detail now exposes account lifecycle, prospect lifecycle, and flat packet review rows with accept, amend, nurture, terminal, exhausted, and return actions.",
+        "Operator packet review actions now render writer-backed buttons with scoped reason/notes inputs, preserving the compose/approve action pattern without nested cards.",
+        "Verified final acceptance with focused UI/dispatcher tests, syntax check, full npm test, and board validation."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "33aee8524fb56325e5e6db0db7cc10a361c7feaa",
+      "notes": "Focused T06 verification passed with 64 tests across prospect UI, UI server, and action dispatcher coverage. npm run check passed. Full npm test passed with Node v24.14.0: 720 pass, 0 fail. Board validation passed. Residual risk: no live browser click-through was run; coverage is routed rendering plus action dispatcher tests."
     }
   ]
 }
