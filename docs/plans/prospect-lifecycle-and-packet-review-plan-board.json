@@ -52,7 +52,7 @@
       ],
       "notes": "Baseline needed one preflight repair for a red cold-start onboarding UI test. Full suite then passed with Node v24.14.0: 704 pass, 0 fail."
     },
-    "updatedAt": "2026-06-11T11:17:15Z"
+    "updatedAt": "2026-06-11T11:37:34Z"
   },
   "tasks": [
     {
@@ -145,7 +145,7 @@
     {
       "id": "T03",
       "title": "Add disposition and packet review CLI actions",
-      "status": "backlog",
+      "status": "done",
       "priority": 3,
       "dependsOn": [
         "T01",
@@ -173,11 +173,17 @@
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added company account disposition CLI commands for set and reactivate with required reasons for nurture and terminal states.",
+        "Added prospect disposition CLI commands for set and reactivate, with terminal branches removed from agent queue work until reactivated.",
+        "Added expert packet review commands under exo agent packets review, accept, amend, and return.",
+        "Reactivation now restores account and prospect work eligibility from normalized row state instead of leaving stale terminal queue status.",
+        "Verified terminal reason validation, review listing, packet return, packet accept, packet amend, and reactivation queue restoration through focused CLI coverage."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Focused CLI and agent-run verification passed with 95 tests. Syntax check passed. Full npm test passed with Node v24.14.0: 711 pass, 0 fail."
     },
     {
       "id": "T04",

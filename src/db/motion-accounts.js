@@ -228,7 +228,7 @@ export function setAccountDisposition(id, input) {
   return runTransaction(() => {
     const existing = database.prepare("SELECT * FROM motion_accounts WHERE id = ?").get(id);
     if (!existing) return null;
-    const nextQueueStatus = queueStatusForDisposition(input.disposition, existing.queue_status);
+    const nextQueueStatus = queueStatusForAccountDisposition(input.disposition, existing);
     const row = database.prepare(`
       UPDATE motion_accounts
       SET disposition = @disposition,
@@ -264,6 +264,33 @@ export function setAccountDisposition(id, input) {
     });
     return row ? motionAccountFromRow(row) : null;
   });
+}
+
+/**
+ * @param {string} disposition
+ * @param {any} existing
+ */
+function queueStatusForAccountDisposition(disposition, existing) {
+  if (disposition === "active" && isTerminalQueueStatus(existing.queue_status)) {
+    const restored = parsePayload(existing).queueState?.status;
+    return isRestorableAccountQueueStatus(restored) ? restored : "queued_for_research";
+  }
+  return queueStatusForDisposition(disposition, existing.queue_status);
+}
+
+/**
+ * @param {unknown} status
+ */
+function isRestorableAccountQueueStatus(status) {
+  return typeof status === "string"
+    && !["suppressed", "exhausted", "held_cross_motion"].includes(status);
+}
+
+/**
+ * @param {unknown} status
+ */
+function isTerminalQueueStatus(status) {
+  return status === "suppressed" || status === "exhausted";
 }
 
 /**

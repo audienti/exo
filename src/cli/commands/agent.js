@@ -7,6 +7,8 @@ import path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { buildAgentQueue } from "../../core/build-agent-queue.js";
 import { buildSendHandoff } from "../../core/build-send-handoff.js";
+import { acceptMotionProspectPacket, returnMotionProspectPacket } from "../../core/review-motion-prospect-packet.js";
+import { acceptMotionTargetAccountPacket, returnMotionTargetAccountPacket } from "../../core/review-target-account-packet.js";
 import { buildInboundAutomationHealthWarnings, buildInboundAutomationStatus, buildInboundAutomationWarnings } from "../../core/user-inbound-sync.js";
 import {
   findCompanyById,
@@ -26,6 +28,7 @@ import { AGENT_EXECUTION_LANES, normalizeAgentExecutionLane } from "../../lib/ag
 import { mergeLanePassSummaries, writeAgentPassSummary } from "../../lib/agent-pass-summary.js";
 import { buildPreflightSummary } from "../../lib/agent-preflight.js";
 import { buildLaunchAgentLabel, buildRoutinePlan, ROUTINE_ARTIFACT_VERSION } from "../../lib/agent-routine.js";
+import { buildMotionPacketSummary } from "../../lib/motion-packets.js";
 import { runCliRepairableContract } from "../repairable-contracts.js";
 
 /**
@@ -225,6 +228,96 @@ needs operator input.
         return;
       }
       console.log(formatAgentDoctorReport(report));
+    });
+
+  const packets = agent
+    .command("packets")
+    .description("Review packet submissions that require operator input.");
+
+  packets
+    .command("review")
+    .description("List packets submitted for operator review.")
+    .option("--motion <motion-id>", "Filter to one motion")
+    .option("--json", "Emit machine-readable JSON")
+    .action((options) => {
+      try {
+        const result = buildPacketReviewQueue(options.motion ?? null);
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        renderPacketReviewQueue(result);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  packets
+    .command("accept <motion-id>")
+    .description("Accept a submitted packet proposal without changing its stored outcome.")
+    .requiredOption("--packet <packet-id>", "Packet identifier from exo agent packets review")
+    .option("--reviewer <label>", "Reviewer label")
+    .option("--notes <notes>", "Acceptance notes")
+    .option("--json", "Emit machine-readable JSON")
+    .action((motionId, options) => {
+      try {
+        const result = resolvePacketReviewDecision(motionId, options.packet, {
+          action: "accepted",
+          reviewer: options.reviewer ?? null,
+          notes: options.notes ?? null
+        });
+        emitPacketReviewDecision(result, options.json);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  packets
+    .command("amend <motion-id>")
+    .description("Accept a submitted packet with an amended outcome.")
+    .requiredOption("--packet <packet-id>", "Packet identifier from exo agent packets review")
+    .requiredOption("--outcome <outcome>", "Outcome: advance, nurture, not_a_fit, no_longer_target, or exhausted")
+    .requiredOption("--reason <reason>", "Reason for the amended decision")
+    .option("--next-status <status>", "Optional queue status override: researched, suppressed, or exhausted")
+    .option("--reviewer <label>", "Reviewer label")
+    .option("--json", "Emit machine-readable JSON")
+    .action((motionId, options) => {
+      try {
+        const result = resolvePacketReviewDecision(motionId, options.packet, {
+          action: "amended",
+          outcome: normalizePacketReviewOutcome(options.outcome),
+          nextStatus: normalizePacketReviewNextStatus(options.nextStatus),
+          reason: normalizeRequiredPacketText(options.reason, "Amendment reason"),
+          reviewer: options.reviewer ?? null
+        });
+        emitPacketReviewDecision(result, options.json);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  packets
+    .command("return <motion-id>")
+    .description("Return a submitted packet to worker redo with review notes.")
+    .requiredOption("--packet <packet-id>", "Packet identifier from exo agent packets review")
+    .requiredOption("--notes <notes>", "Return notes for the next worker")
+    .option("--reviewer <label>", "Reviewer label")
+    .option("--json", "Emit machine-readable JSON")
+    .action((motionId, options) => {
+      try {
+        const result = resolvePacketReviewDecision(motionId, options.packet, {
+          action: "returned",
+          notes: normalizeRequiredPacketText(options.notes, "Return notes"),
+          reviewer: options.reviewer ?? null
+        });
+        emitPacketReviewDecision(result, options.json);
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
     });
 
   agent
@@ -1067,6 +1160,275 @@ export function formatAgentDoctorReport(report) {
     lines.push(`- host runner: ${routine.path}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * @param {string | null} motionId
+ */
+function buildPacketReviewQueue(motionId) {
+  const companies = listCompanies();
+  const motions = motionId
+    ? [requireMotion(motionId)]
+    : listMotions();
+  const items = motions.flatMap((motion) =>
+    buildMotionPacketSummary(motion, companies, { status: "submitted" }).items.map((packet) => ({
+      motionId: motion.id,
+      motionName: motion.name,
+      packetId: packet.packetId,
+      packetKind: packet.packetKind,
+      companyId: packet.companyId,
+      companyName: packet.companyName,
+      prospectId: packet.prospectId ?? null,
+      prospectName: packet.prospectName ?? null,
+      claimState: packet.claimState,
+      reviewState: packet.reviewState ?? null,
+      completedAt: packet.completedAt ?? null,
+      proposal: packet.proposal ?? null,
+      notes: packet.notes ?? null,
+      briefCommand: `exo motion packet-brief ${motion.id} --packet ${packet.packetId} --json`,
+      acceptCommand: `exo agent packets accept ${motion.id} --packet ${packet.packetId} --json`,
+      amendCommand: `exo agent packets amend ${motion.id} --packet ${packet.packetId} --outcome <outcome> --reason "Why this outcome is correct" --json`,
+      returnCommand: `exo agent packets return ${motion.id} --packet ${packet.packetId} --notes "What the worker must fix" --json`,
+    }))
+  );
+
+  return {
+    count: items.length,
+    motionCount: motions.length,
+    items
+  };
+}
+
+function renderPacketReviewQueue(result) {
+  if (!result.count) {
+    console.log("No packets are awaiting review.");
+    return;
+  }
+
+  console.log(`${result.count} packet(s) awaiting review:\n`);
+  for (const item of result.items) {
+    const subject = item.prospectName
+      ? `${item.prospectName} at ${item.companyName}`
+      : item.companyName;
+    console.log(`- ${item.packetId}  ${subject}`);
+    console.log(`  motion: ${item.motionName}`);
+    console.log(`  kind: ${item.packetKind}`);
+    if (item.proposal?.action) console.log(`  proposal: ${item.proposal.action}`);
+    if (item.proposal?.reason) console.log(`  reason: ${item.proposal.reason}`);
+    console.log(`  brief: ${item.briefCommand}`);
+    console.log(`  accept: ${item.acceptCommand}`);
+    console.log(`  return: ${item.returnCommand}`);
+  }
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} packetId
+ * @param {{
+ *   action: "accepted" | "amended" | "returned",
+ *   outcome?: "advance" | "nurture" | "not_a_fit" | "no_longer_target" | "exhausted",
+ *   nextStatus?: "researched" | "suppressed" | "exhausted" | undefined,
+ *   reason?: string | null,
+ *   notes?: string | null,
+ *   reviewer?: string | null
+ * }} input
+ */
+function resolvePacketReviewDecision(motionId, packetId, input) {
+  const context = loadPacketReviewContext(motionId, packetId);
+  const decisionInput = {
+    outcome: input.outcome,
+    nextStatus: input.nextStatus,
+    reason: input.reason ?? input.notes ?? null,
+    notes: input.notes ?? input.reason ?? null,
+    reviewer: input.reviewer ?? null,
+  };
+  const updatedMotion = context.packet.packetKind === "prospect_research"
+    ? resolveProspectPacketReviewDecision(context, input.action, decisionInput)
+    : resolveAccountPacketReviewDecision(context, input.action, decisionInput);
+  return buildPacketReviewDecisionResult(context, updatedMotion, input.action);
+}
+
+/**
+ * @param {ReturnType<typeof loadPacketReviewContext>} context
+ * @param {"accepted" | "amended" | "returned"} action
+ * @param {Record<string, any>} input
+ */
+function resolveAccountPacketReviewDecision(context, action, input) {
+  if (action === "returned") {
+    return returnMotionTargetAccountPacket(context.motion, context.company, {
+      notes: input.notes,
+      reviewer: input.reviewer,
+    });
+  }
+  return acceptMotionTargetAccountPacket(context.motion, context.company, input);
+}
+
+/**
+ * @param {ReturnType<typeof loadPacketReviewContext>} context
+ * @param {"accepted" | "amended" | "returned"} action
+ * @param {Record<string, any>} input
+ */
+function resolveProspectPacketReviewDecision(context, action, input) {
+  if (!context.packet.prospectId) {
+    throw new Error(`Prospect packet ${context.packet.id} is missing a prospect id.`);
+  }
+  if (action === "returned") {
+    return returnMotionProspectPacket(context.motion, context.company, {
+      prospectId: context.packet.prospectId,
+      notes: input.notes,
+      reviewer: input.reviewer,
+    });
+  }
+  return acceptMotionProspectPacket(context.motion, context.company, {
+    ...input,
+    prospectId: context.packet.prospectId,
+  });
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} packetId
+ */
+function loadPacketReviewContext(motionId, packetId) {
+  const motion = requireMotion(motionId);
+  const packet = parsePacketId(packetId);
+  const company = findCompanyById(packet.companyId);
+  if (!company) {
+    throw new Error(`Company not found: ${packet.companyId}`);
+  }
+  return {
+    motion,
+    company,
+    packet
+  };
+}
+
+/**
+ * @param {ReturnType<typeof loadPacketReviewContext>} context
+ * @param {any} updatedMotion
+ * @param {"accepted" | "amended" | "returned"} action
+ */
+function buildPacketReviewDecisionResult(context, updatedMotion, action) {
+  const account = updatedMotion.targetMap.accounts.find((item) => item.companyId === context.company.id) ?? null;
+  const prospect = context.packet.prospectId
+    ? account?.prospects.find((item) => item.id === context.packet.prospectId) ?? null
+    : null;
+  return {
+    action,
+    motion: {
+      id: updatedMotion.id,
+      name: updatedMotion.name
+    },
+    company: {
+      id: context.company.id,
+      name: context.company.name
+    },
+    packet: context.packet,
+    account,
+    prospect
+  };
+}
+
+function emitPacketReviewDecision(result, json) {
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  const subject = result.prospect
+    ? `${result.prospect.name} at ${result.company.name}`
+    : result.company.name;
+  console.log(
+    [
+      `Packet ${result.action}: ${result.packet.id}`,
+      `Subject: ${subject}`,
+      `Motion: ${result.motion.name}`,
+      `Account Queue: ${result.account?.queueState?.status ?? "unknown"}`,
+      `Account Disposition: ${result.account?.disposition ?? "unknown"}`,
+      ...(result.prospect
+        ? [
+          `Prospect Queue: ${result.prospect.queueState?.status ?? "unknown"}`,
+          `Prospect Disposition: ${result.prospect.disposition ?? "unknown"}`
+        ]
+        : [])
+    ].join("\n")
+  );
+}
+
+/**
+ * @param {string} motionId
+ */
+function requireMotion(motionId) {
+  const motion = findMotionById(motionId);
+  if (!motion) {
+    throw new Error(`Motion not found: ${motionId}`);
+  }
+  return motion;
+}
+
+/**
+ * @param {string} packetId
+ */
+function parsePacketId(packetId) {
+  const [packetKind, companyId, prospectId = null] = packetId.split(":");
+  if (packetKind !== "company_research" && packetKind !== "prospect_selection" && packetKind !== "prospect_research") {
+    throw new Error(`Invalid packet kind in packet id: ${packetId}`);
+  }
+  if (!companyId) {
+    throw new Error(`Invalid packet id: ${packetId}`);
+  }
+  if (packetKind === "prospect_research" && !prospectId) {
+    throw new Error(`Prospect research packet id must include a prospect id: ${packetId}`);
+  }
+  return {
+    id: packetId,
+    packetKind,
+    companyId,
+    prospectId
+  };
+}
+
+/**
+ * @param {string} value
+ * @returns {"advance" | "nurture" | "not_a_fit" | "no_longer_target" | "exhausted"}
+ */
+function normalizePacketReviewOutcome(value) {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "advance"
+    || normalized === "nurture"
+    || normalized === "not_a_fit"
+    || normalized === "no_longer_target"
+    || normalized === "exhausted"
+  ) {
+    return normalized;
+  }
+  throw new Error(`Invalid packet review outcome: ${value}`);
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"researched" | "suppressed" | "exhausted" | undefined}
+ */
+function normalizePacketReviewNextStatus(value) {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "researched" || normalized === "suppressed" || normalized === "exhausted") {
+    return normalized;
+  }
+  throw new Error(`Invalid packet review next status: ${value}`);
+}
+
+/**
+ * @param {string | undefined} value
+ * @param {string} label
+ */
+function normalizeRequiredPacketText(value, label) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  if (!normalized) {
+    throw new Error(`${label} is required.`);
+  }
+  return normalized;
 }
 
 /** @param {string} text @param {number} max */

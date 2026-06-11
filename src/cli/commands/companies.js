@@ -37,6 +37,7 @@ import {
   findBrowserProfileById,
   findCompanyById,
   findCompanyByIdentity,
+  findMotionAccountByMotionAndCompany,
   findMotionById,
   findUserById,
   insertCompany,
@@ -45,9 +46,12 @@ import {
   listMotions,
   listUsers,
   searchCompanies,
+  setAccountDisposition,
+  setProspectDisposition,
   updateCompany,
   updateMotion
 } from "../../db/database.js";
+import { dispositionValues } from "../../db/lifecycle-state.js";
 import { browserProfileCapabilitySchema, browserProfileSchema } from "../../schema/browser-profile.js";
 import { normalizeRepeatedStringList, normalizeStringList } from "../../lib/collections.js";
 import { buildMotionQueueSummary, isMotionQueueStatus, withDerivedTargetAccountQueueState } from "../../lib/motion-queue.js";
@@ -709,6 +713,51 @@ Rules:
       }
     });
 
+  const disposition = companies
+    .command("disposition")
+    .description("Set or reactivate a motion-account lifecycle disposition.");
+
+  disposition
+    .command("set")
+    .description("Set the lifecycle disposition for one motion-linked account.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--motion <motion-id>", "Motion identifier for the account")
+    .requiredOption("--disposition <disposition>", "Disposition: nurture, not_a_fit, no_longer_target, exhausted, or active")
+    .requiredOption("--reason <reason>", "Reason for the disposition change")
+    .option("--actor <actor>", "Disposition actor: operator, agent, or system", "operator")
+    .option("--json", "Emit machine-readable JSON")
+    .action((companyId, options) => {
+      try {
+        const result = setCompanyDispositionFromOptions(companyId, options);
+        emitCompanyDispositionResult(result, options.json, "Updated Account Disposition");
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  disposition
+    .command("reactivate")
+    .description("Return one motion-linked account to active disposition.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--motion <motion-id>", "Motion identifier for the account")
+    .option("--reason <reason>", "Reason for reactivation")
+    .option("--actor <actor>", "Disposition actor: operator, agent, or system", "operator")
+    .option("--json", "Emit machine-readable JSON")
+    .action((companyId, options) => {
+      try {
+        const result = setCompanyDispositionFromOptions(companyId, {
+          ...options,
+          disposition: "active",
+          reason: options.reason ?? "Reactivated by operator."
+        });
+        emitCompanyDispositionResult(result, options.json, "Reactivated Account");
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
   const prospects = companies
     .command("prospects")
     .description("Inspect or add motion-specific prospects for one company.");
@@ -769,6 +818,53 @@ Use this when the agent needs the chosen people of record before writing or brow
       }
 
       console.log(renderProspectList(company.name, motion.name, motion.targetingProfile.stakeholderTargetCount, account.prospects));
+    });
+
+  const prospectDisposition = prospects
+    .command("disposition")
+    .description("Set or reactivate one motion prospect lifecycle disposition.");
+
+  prospectDisposition
+    .command("set")
+    .description("Set the lifecycle disposition for one motion prospect.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--motion <motion-id>", "Motion identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
+    .requiredOption("--disposition <disposition>", "Disposition: nurture, not_a_fit, no_longer_target, exhausted, or active")
+    .requiredOption("--reason <reason>", "Reason for the disposition change")
+    .option("--actor <actor>", "Disposition actor: operator, agent, or system", "operator")
+    .option("--json", "Emit machine-readable JSON")
+    .action((companyId, options) => {
+      try {
+        const result = setProspectDispositionFromOptions(companyId, options);
+        emitProspectDispositionResult(result, options.json, "Updated Prospect Disposition");
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
+    });
+
+  prospectDisposition
+    .command("reactivate")
+    .description("Return one motion prospect to active disposition.")
+    .argument("<company-id>", "Company identifier")
+    .requiredOption("--motion <motion-id>", "Motion identifier")
+    .requiredOption("--prospect <prospect-id>", "Prospect identifier")
+    .option("--reason <reason>", "Reason for reactivation")
+    .option("--actor <actor>", "Disposition actor: operator, agent, or system", "operator")
+    .option("--json", "Emit machine-readable JSON")
+    .action((companyId, options) => {
+      try {
+        const result = setProspectDispositionFromOptions(companyId, {
+          ...options,
+          disposition: "active",
+          reason: options.reason ?? "Reactivated by operator."
+        });
+        emitProspectDispositionResult(result, options.json, "Reactivated Prospect");
+      } catch (error) {
+        console.error(error instanceof Error ? error.message : String(error));
+        process.exitCode = 1;
+      }
     });
 
   prospects
@@ -2622,6 +2718,68 @@ function normalizeMotionQueueStatus(value) {
 
 /**
  * @param {string | undefined} value
+ */
+function normalizeDispositionOption(value) {
+  const normalized = normalizeRequiredText(value, "Disposition").toLowerCase();
+  if (dispositionValues.includes(normalized)) {
+    return normalized;
+  }
+
+  throw new Error(`Invalid disposition: ${value}`);
+}
+
+/**
+ * @param {string | undefined} value
+ * @returns {"operator" | "agent" | "system"}
+ */
+function normalizeDispositionActor(value) {
+  const normalized = (value ?? "operator").trim().toLowerCase();
+  if (normalized === "operator" || normalized === "agent" || normalized === "system") {
+    return normalized;
+  }
+
+  throw new Error(`Invalid disposition actor: ${value}`);
+}
+
+/**
+ * @param {string} disposition
+ * @param {string | undefined} value
+ */
+function normalizeDispositionReason(disposition, value) {
+  const reason = normalizeOptionalText(value);
+  if (disposition !== "active" && !reason) {
+    throw new Error("Disposition reason is required for nurture and terminal states.");
+  }
+
+  return reason ?? "Reactivated by operator.";
+}
+
+/**
+ * @param {string | undefined} value
+ * @param {string} label
+ */
+function normalizeRequiredText(value, label) {
+  const normalized = normalizeOptionalText(value);
+  if (!normalized) {
+    throw new Error(`${label} is required.`);
+  }
+  return normalized;
+}
+
+/**
+ * @param {string | undefined | null} value
+ */
+function normalizeOptionalText(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {string | undefined} value
  * @returns {"low" | "moderate" | "high" | "unknown" | undefined}
  */
 function normalizeConfidence(value) {
@@ -3010,6 +3168,139 @@ function emitDraft(storedMotion, companyId, prospectId, surface, json, label) {
   console.log(`${label} for ${prospect?.name ?? prospectId} · ${surface} [${draft?.status ?? "none"}]`);
   if (draft?.subject) console.log(`  Subject: ${draft.subject}`);
   if (draft?.body) console.log(`  Body: ${draft.body}`);
+}
+
+function setCompanyDispositionFromOptions(companyId, options) {
+  const context = loadCompanyMotionContext(companyId, options.motion);
+  if (!context) {
+    throw new Error("Could not resolve the motion-linked account.");
+  }
+  const disposition = normalizeDispositionOption(options.disposition);
+  const actor = normalizeDispositionActor(options.actor);
+  const reason = normalizeDispositionReason(disposition, options.reason);
+  const motionAccount = findMotionAccountByMotionAndCompany(context.motion.id, context.company.id);
+  if (!motionAccount) {
+    throw new Error(`Motion account not found for ${context.company.name} on ${context.motion.name}.`);
+  }
+
+  const updated = setAccountDisposition(motionAccount.id, {
+    disposition,
+    actor,
+    reason
+  });
+  if (!updated) {
+    throw new Error(`Motion account not found: ${motionAccount.id}`);
+  }
+
+  const storedMotion = findMotionById(context.motion.id) ?? context.motion;
+  const storedAccount = storedMotion.targetMap.accounts.find((item) => item.companyId === context.company.id) ?? null;
+  const account = mergeNormalizedAccountDisposition(storedAccount, updated);
+  return {
+    company: context.company,
+    motion: {
+      id: storedMotion.id,
+      name: storedMotion.name
+    },
+    account,
+    normalizedAccount: updated
+  };
+}
+
+function setProspectDispositionFromOptions(companyId, options) {
+  const context = loadCompanyMotionContext(companyId, options.motion);
+  if (!context) {
+    throw new Error("Could not resolve the motion-linked account.");
+  }
+  const disposition = normalizeDispositionOption(options.disposition);
+  const actor = normalizeDispositionActor(options.actor);
+  const reason = normalizeDispositionReason(disposition, options.reason);
+  const prospect = context.account?.prospects.find((item) => item.id === options.prospect) ?? null;
+  if (!prospect) {
+    throw new Error(`Prospect not found on target account: ${options.prospect}`);
+  }
+
+  const updated = setProspectDisposition(prospect.id, {
+    disposition,
+    actor,
+    reason
+  });
+  if (!updated) {
+    throw new Error(`Prospect not found: ${prospect.id}`);
+  }
+
+  const storedMotion = findMotionById(context.motion.id) ?? context.motion;
+  const account = storedMotion.targetMap.accounts.find((item) => item.companyId === context.company.id) ?? null;
+  const storedProspect = account?.prospects.find((item) => item.id === prospect.id) ?? null;
+  const prospectResult = mergeNormalizedProspectDisposition(storedProspect, updated);
+  return {
+    company: context.company,
+    motion: {
+      id: storedMotion.id,
+      name: storedMotion.name
+    },
+    account,
+    prospect: prospectResult,
+    normalizedProspect: updated
+  };
+}
+
+function mergeNormalizedAccountDisposition(account, normalizedAccount) {
+  if (!account) return null;
+  return {
+    ...account,
+    disposition: normalizedAccount.disposition,
+    queueState: {
+      ...account.queueState,
+      status: normalizedAccount.queueStatus,
+      updatedAt: normalizedAccount.updatedAt
+    }
+  };
+}
+
+function mergeNormalizedProspectDisposition(prospect, normalizedProspect) {
+  if (!prospect) return null;
+  return {
+    ...prospect,
+    disposition: normalizedProspect.disposition,
+    queueState: {
+      ...prospect.queueState,
+      status: normalizedProspect.queueStatus,
+      updatedAt: normalizedProspect.updatedAt
+    }
+  };
+}
+
+function emitCompanyDispositionResult(result, json, label) {
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(
+    [
+      `${label}: ${result.company.name}`,
+      `Motion: ${result.motion.name}`,
+      `Disposition: ${result.account?.disposition ?? result.normalizedAccount.disposition}`,
+      `Queue Status: ${result.account?.queueState?.status ?? result.normalizedAccount.queueStatus}`
+    ].join("\n")
+  );
+}
+
+function emitProspectDispositionResult(result, json, label) {
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  console.log(
+    [
+      `${label}: ${result.prospect?.name ?? result.normalizedProspect.id}`,
+      `Company: ${result.company.name}`,
+      `Motion: ${result.motion.name}`,
+      `Disposition: ${result.prospect?.disposition ?? result.normalizedProspect.disposition}`,
+      `Queue Status: ${result.prospect?.queueState?.status ?? result.normalizedProspect.queueStatus}`
+    ].join("\n")
+  );
 }
 
 function loadCompanyMotionContext(companyId, selectedMotionId) {

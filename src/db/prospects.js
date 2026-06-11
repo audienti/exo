@@ -350,7 +350,7 @@ export function setProspectDisposition(id, input) {
   return runTransaction(() => {
     const existing = database.prepare("SELECT * FROM prospects WHERE id = ?").get(id);
     if (!existing) return null;
-    const nextQueueStatus = queueStatusForDisposition(input.disposition, existing.queue_status);
+    const nextQueueStatus = queueStatusForProspectDisposition(input.disposition, existing);
     const row = database.prepare(`
       UPDATE prospects
       SET disposition = @disposition,
@@ -397,6 +397,32 @@ export function setProspectDisposition(id, input) {
     }
     return row ? prospectFromRow(row) : null;
   });
+}
+
+/**
+ * @param {string} disposition
+ * @param {any} existing
+ */
+function queueStatusForProspectDisposition(disposition, existing) {
+  if (disposition === "active" && isTerminalQueueStatus(existing.queue_status)) {
+    const restored = parsePayload(existing).queueState?.status;
+    return isRestorableProspectQueueStatus(restored) ? restored : "selected";
+  }
+  return queueStatusForDisposition(disposition, existing.queue_status);
+}
+
+/**
+ * @param {unknown} status
+ */
+function isRestorableProspectQueueStatus(status) {
+  return status === "selected" || status === "ready";
+}
+
+/**
+ * @param {unknown} status
+ */
+function isTerminalQueueStatus(status) {
+  return status === "suppressed" || status === "exhausted";
 }
 
 /**

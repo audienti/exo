@@ -8823,6 +8823,384 @@ test("motion packets and packet-brief surface submitted and returned packet revi
   }
 });
 
+test("company and prospect disposition CLI removes inactive work and reactivation restores eligibility", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-disposition-cli-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  process.env.EXO_STATE_DIR = tempDir;
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/disposition-cli",
+          "--premise",
+          "This offer matters when branch lifecycle state must stay explicit.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is this account actively showing a governed outbound execution gap?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    updateMotion({
+      ...motion,
+      status: "active"
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Disposition Co",
+          "--domain",
+          "disposition.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    const prospectAdded = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "add",
+          company.id,
+          "--motion",
+          motion.id,
+          "--name",
+          "Casey Lifecycle",
+          "--title",
+          "VP Revenue",
+          "--why-relevant",
+          "Owns the lifecycle work this motion is testing.",
+          "--buying-committee-role",
+          "primary_business_owner",
+          "--decision-authority",
+          "buys",
+          "--fit-confidence",
+          "high",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const prospectId = prospectAdded.prospects[0].id;
+
+    const initialQueue = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "queue", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(initialQueue.tasks.some((task) => task.kind === "prospect_research" && task.prospectId === prospectId), true);
+
+    const accountNurture = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "disposition",
+          "set",
+          company.id,
+          "--motion",
+          motion.id,
+          "--disposition",
+          "nurture",
+          "--reason",
+          "Wait for next budget cycle.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(accountNurture.account.disposition, "nurture");
+
+    const nurturedQueue = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "queue", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(nurturedQueue.tasks.some((task) => task.kind === "prospect_research" && task.prospectId === prospectId), false);
+
+    const accountReactivated = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "disposition",
+          "reactivate",
+          company.id,
+          "--motion",
+          motion.id,
+          "--reason",
+          "Budget window reopened.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(accountReactivated.account.disposition, "active");
+
+    assert.throws(() => {
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "disposition",
+          "set",
+          company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          prospectId,
+          "--disposition",
+          "not_a_fit",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir }, stdio: "pipe" }
+      );
+    });
+
+    const prospectTerminal = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "disposition",
+          "set",
+          company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          prospectId,
+          "--disposition",
+          "not_a_fit",
+          "--reason",
+          "No longer matches the ICP.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(prospectTerminal.prospect.disposition, "not_a_fit");
+    assert.equal(prospectTerminal.prospect.queueState.status, "suppressed");
+
+    const terminalQueue = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "queue", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(terminalQueue.tasks.some((task) => task.kind === "prospect_research" && task.prospectId === prospectId), false);
+
+    const prospectReactivated = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "prospects",
+          "disposition",
+          "reactivate",
+          company.id,
+          "--motion",
+          motion.id,
+          "--prospect",
+          prospectId,
+          "--reason",
+          "Confirmed fit after review.",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(prospectReactivated.prospect.disposition, "active");
+    assert.equal(prospectReactivated.prospect.queueState.status, "selected");
+
+    const reactivatedQueue = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "queue", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(reactivatedQueue.tasks.some((task) => task.kind === "prospect_research" && task.prospectId === prospectId), true);
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("agent packet review CLI lists, returns, accepts, and amends submitted packets", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-agent-packet-review-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  process.env.EXO_STATE_DIR = tempDir;
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/agent-packet-review",
+          "--premise",
+          "This offer matters when packet review needs explicit accept and amend actions.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there strong evidence this account needs governed packet review?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    updateMotion({
+      ...motion,
+      status: "active",
+      packetReviewPolicy: "review"
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Packet Review CLI Co",
+          "--domain",
+          "packet-review-cli.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    execFileSync("node", [cliPath, "companies", "queue", "claim", company.id, "--motion", motion.id, "--worker", "codex-review-1", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+    execFileSync("node", [cliPath, "companies", "queue", "complete", company.id, "--motion", motion.id, "--worker", "codex-review-1", "--next-status", "researched", "--notes", "Ready for review.", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const reviewList = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "packets", "review", "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(reviewList.count, 1);
+    assert.equal(reviewList.items[0].packetId, `company_research:${company.id}`);
+
+    const returned = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "packets", "return", motion.id, "--packet", reviewList.items[0].packetId, "--notes", "Find a primary source first.", "--reviewer", "operator-review", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(returned.action, "returned");
+    assert.equal(returned.account.packetState.status, "returned");
+    assert.equal(returned.account.packetState.returnNotes, "Find a primary source first.");
+
+    execFileSync("node", [cliPath, "companies", "queue", "claim", company.id, "--motion", motion.id, "--worker", "codex-review-2", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+    execFileSync("node", [cliPath, "companies", "queue", "complete", company.id, "--motion", motion.id, "--worker", "codex-review-2", "--next-status", "researched", "--notes", "Still not a fit.", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const amended = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "packets", "amend", motion.id, "--packet", `company_research:${company.id}`, "--outcome", "no_longer_target", "--reason", "The account is not targetable now.", "--reviewer", "operator-review", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(amended.action, "amended");
+    assert.equal(amended.account.disposition, "no_longer_target");
+    assert.equal(amended.account.queueState.status, "suppressed");
+
+    const acceptedCompany = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Packet Accept CLI Co",
+          "--domain",
+          "packet-accept-cli.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    execFileSync("node", [cliPath, "companies", "queue", "claim", acceptedCompany.id, "--motion", motion.id, "--worker", "codex-review-3", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+    execFileSync("node", [cliPath, "companies", "queue", "complete", acceptedCompany.id, "--motion", motion.id, "--worker", "codex-review-3", "--next-status", "researched", "--notes", "Enough evidence to advance.", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+    const accepted = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "packets", "accept", motion.id, "--packet", `company_research:${acceptedCompany.id}`, "--reviewer", "operator-review", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(accepted.action, "accepted");
+    assert.equal(accepted.account.queueState.status, "researched");
+    assert.equal(accepted.account.packetStatus, null);
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("motion discover links existing companies and creates new queued companies as packet-ready backlog", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-discover-"));
 
