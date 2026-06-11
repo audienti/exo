@@ -47,7 +47,7 @@
       "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-11T17:27:37Z"
+    "updatedAt": "2026-06-11T17:44:54Z"
   },
   "tasks": [
     {
@@ -237,7 +237,7 @@
     {
       "id": "T04",
       "title": "Wire dispatch gate into LinkedIn send transport",
-      "status": "ready",
+      "status": "done",
       "priority": 80,
       "dependsOn": [
         "T03"
@@ -245,11 +245,11 @@
       "ownerLane": "controller",
       "modelTier": "default",
       "files": [
+        "scripts/run-agent-host-pass.js",
         "src/cli/commands/agent.js",
-        "src/core/run-agent-queue-pass.js",
-        "src/core/execute-action-intent.js",
-        "test/agent-host-pass.test.js",
-        "test/execute-action-intent.test.js"
+        "src/core/build-linkedin-send.js",
+        "src/core/build-send-handoff.js",
+        "test/agent-host-pass.test.js"
       ],
       "context": "Use the gate from T03 immediately before physical LinkedIn dispatch, not only when tasks are queued. Preserve verify/canary safety. Deferred tasks must surface waitingReason pacing or blocked ownership/disposition details in queue and pass summaries.",
       "doneWhen": [
@@ -260,16 +260,25 @@
       "verification": [
         "npm test -- test/agent-host-pass.test.js test/execute-action-intent.test.js test/agent-queue.test.js"
       ],
-      "outputs": [],
+      "outputs": [
+        "LinkedIn send handoff now evaluates the outbound dispatch gate with live cross-motion branch context and returns a blocked handoff with gate reason fields before the send contract can be used.",
+        "Agent send passes branch context and current time into the handoff builder so CLI handoffs cannot bypass stale ownership, disposition, pacing, or send-window gate decisions.",
+        "Host-pass runSendTask re-checks gate-blocked handoffs before connector dispatch, surfaces reasonCode, blockReason, waitingReason, nextDueAt, and dispatchGate details, and avoids tripping the live-send circuit breaker for gate holds.",
+        "Tests cover stale cross-motion branch rejection at both exo agent send --json and runSendTask without connector execution.",
+        "Verified npm test -- test/agent-host-pass.test.js: 79/79 passed.",
+        "Verified npm test -- test/agent-host-pass.test.js test/execute-action-intent.test.js test/agent-queue.test.js: 165/165 passed.",
+        "Verified npm run check.",
+        "Verified full npm test: 738/738 passed."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "source-commit-pending",
+      "notes": "Left unrelated concurrent accepted-invite UX and maintenance wording changes unstaged."
     },
     {
       "id": "T05",
       "title": "Add retrieval scheduling and drain posture",
-      "status": "backlog",
+      "status": "ready",
       "priority": 75,
       "dependsOn": [
         "T03"

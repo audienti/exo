@@ -15,7 +15,7 @@ const AUTONOMOUS_LINKEDIN_PUBLIC_SURFACES = new Set(["like_post", "create_commen
  * @param {any} rawMotion
  * @param {any[]} rawProfiles
  * @param {any[]} rawUsers
- * @param {{ prospectId: string, surface?: string|null, runtime?: string|null }} input
+ * @param {{ prospectId: string, surface?: string|null, runtime?: string|null, branches?: Array<{ motion: any, account: any, prospect: any }>, now?: string | null }} input
  */
 export function buildSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, input) {
   if (AUTONOMOUS_LINKEDIN_PUBLIC_SURFACES.has(String(input.surface ?? ""))) {

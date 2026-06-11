@@ -332,7 +332,9 @@ function runUnlockedAgentHostPass() {
         ));
       }
 
-      if ((result.status === "blocked" || result.status === "failed") && liveSendAttempt) {
+      const dispatchGateHeld = result.detail?.dispatchGate?.status === "block"
+        || result.detail?.dispatchGate?.status === "wait";
+      if ((result.status === "blocked" || result.status === "failed") && liveSendAttempt && !dispatchGateHeld) {
         const failureAt = result.finishedAt ?? new Date().toISOString();
         hostState = mutateHostState((state) => {
           const breakerBefore = getSendCircuitBreaker(state, failureAt);
@@ -2072,7 +2074,7 @@ function ensureProspectResearchTaskClaimed(task) {
 }
 
 /** @param {any} task */
-function runSendTask(task) {
+export function runSendTask(task) {
   const selectedMode = typeof task?._selectedSendMode === "string" ? task._selectedSendMode : getSendMode();
   const dryRun = selectedMode === "verify" || selectedMode === "canary_verify";
   const handoff = runExoJsonArgs([
@@ -2090,8 +2092,13 @@ function runSendTask(task) {
   if (handoff.status !== "ready") {
     return {
       status: "blocked",
-      detail: { reason: handoff.reason ?? "Send contract is blocked." }
+      detail: buildBlockedSendHandoffDetail(handoff),
     };
+  }
+
+  const dispatchGateBlock = buildDispatchGateBlockedSendResult(handoff);
+  if (dispatchGateBlock) {
+    return dispatchGateBlock;
   }
 
   if (!usesConnectorNativeSend(handoff)) {
@@ -2143,6 +2150,29 @@ function runSendTask(task) {
   return {
     status: "completed",
     detail: { action: handoff.action, recipient: describeHandoffRecipient(handoff) }
+  };
+}
+
+/** @param {any} handoff */
+function buildDispatchGateBlockedSendResult(handoff) {
+  const gate = handoff?.dispatchGate ?? null;
+  if (!gate || gate.status === "allow") return null;
+  return {
+    status: "blocked",
+    detail: buildBlockedSendHandoffDetail(handoff),
+  };
+}
+
+/** @param {any} handoff */
+function buildBlockedSendHandoffDetail(handoff) {
+  const gate = handoff?.dispatchGate ?? null;
+  return {
+    reason: handoff?.reason ?? gate?.reason ?? "Send contract is blocked.",
+    reasonCode: handoff?.reasonCode ?? gate?.reasonCode ?? null,
+    blockReason: handoff?.blockReason ?? gate?.blockReason ?? null,
+    waitingReason: handoff?.waitingReason ?? gate?.waitingReason ?? null,
+    nextDueAt: handoff?.nextDueAt ?? gate?.nextDueAt ?? null,
+    dispatchGate: gate,
   };
 }
 

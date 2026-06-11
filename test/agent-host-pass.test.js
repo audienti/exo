@@ -6,6 +6,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   buildInboundContractArgs,
@@ -46,6 +47,7 @@ import {
   shouldAbortPassAfterTaskProblem,
   shouldIgnoreCodexUserConfig,
   shouldPreferBackfillSlice,
+  runSendTask,
 } from "../scripts/run-agent-host-pass.js";
 import {
   checkoutTaskLease,
@@ -55,7 +57,12 @@ import {
   releaseAgentRunLock,
   tryAcquireAgentRunLock,
 } from "../src/lib/agent-run-lock.js";
-import { getLocalDatabase, updateMotion } from "../src/db/database.js";
+import {
+  findUserById,
+  getLocalDatabase,
+  updateMotion,
+  updateUser,
+} from "../src/db/database.js";
 
 const HOST_PASS_SCRIPT = path.resolve("scripts/run-agent-host-pass.js");
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -77,6 +84,341 @@ function runSpawnedHostPass({ stateDir, cwd, lane = null }) {
 function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
+
+function runCliJson(stateDir, args, extraEnv = {}) {
+  return JSON.parse(
+    execFileSync("node", [cliPath, ...args], {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        ...extraEnv,
+        EXO_STATE_DIR: stateDir,
+        EXO_HOME_STATE_DIR: stateDir,
+      },
+      encoding: "utf8",
+    }),
+  );
+}
+
+function installManagedLinkedinAccount(userId, now = "2026-06-04T12:00:00.000Z") {
+  const rawUser = findUserById(userId);
+  assert.ok(rawUser);
+  updateUser({
+    ...rawUser,
+    accounts: [
+      ...(rawUser.accounts ?? []),
+      {
+        id: "account-linkedin-1",
+        createdAt: now,
+        updatedAt: now,
+        capability: "linkedin",
+        handle: "operator-linkedin",
+        label: "Operator LinkedIn",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-unipile-1",
+        providerAccountId: "provider-linkedin-1",
+        preferred: true,
+        automationControls: {
+          weeklyQuotas: {
+            profileVisits: null,
+            invitations: null,
+            messages: null,
+          },
+        },
+        metadata: null,
+        notes: null,
+        inboundSync: {
+          surfaces: [],
+        },
+      },
+    ],
+    harnessConnections: [
+      ...(rawUser.harnessConnections ?? []),
+      {
+        id: "harness-unipile-1",
+        createdAt: now,
+        updatedAt: now,
+        runtime: "codex",
+        connector: "unipile",
+        label: "Codex Unipile",
+        status: "available",
+        notes: null,
+      },
+    ],
+  });
+}
+
+function setupStaleCrossMotionSendState(stateDir) {
+  const user = runCliJson(stateDir, ["users", "add", "--label", "dispatch-user", "--owner", "Operator", "--json"]);
+  installManagedLinkedinAccount(user.id);
+  const ownerMotion = runCliJson(stateDir, [
+    "motion",
+    "add",
+    "--url",
+    "https://example.com/owner-motion",
+    "--premise",
+    "This offer matters when one motion already owns the person.",
+    "--audience",
+    "Revenue operators",
+    "--signal",
+    "company::Is this the owning branch?",
+    "--json",
+  ]);
+  const staleMotion = runCliJson(stateDir, [
+    "motion",
+    "add",
+    "--url",
+    "https://example.com/stale-motion",
+    "--premise",
+    "This offer matters when stale branches must fail closed.",
+    "--audience",
+    "Revenue operators",
+    "--signal",
+    "company::Is this stale branch still sendable?",
+    "--json",
+  ]);
+  const activeOwnerMotion = runCliJson(stateDir, ["motion", "restart", ownerMotion.id, "--json"]).motion;
+  const activeStaleMotion = runCliJson(stateDir, ["motion", "restart", staleMotion.id, "--json"]).motion;
+
+  for (const motion of [activeOwnerMotion, activeStaleMotion]) {
+    runCliJson(stateDir, [
+      "motion",
+      "user",
+      "assign",
+      motion.id,
+      "--user",
+      user.id,
+      "--account",
+      "linkedin:operator-linkedin",
+      "--json",
+    ]);
+  }
+
+  const ownerCompany = runCliJson(stateDir, [
+    "companies",
+    "add",
+    "--name",
+    "Owner Co",
+    "--domain",
+    "owner.example",
+    "--motion",
+    activeOwnerMotion.id,
+    "--json",
+  ]);
+  const staleCompany = runCliJson(stateDir, [
+    "companies",
+    "add",
+    "--name",
+    "Stale Co",
+    "--domain",
+    "stale.example",
+    "--motion",
+    activeStaleMotion.id,
+    "--json",
+  ]);
+  const ownerProspects = runCliJson(stateDir, [
+    "companies",
+    "prospects",
+    "add",
+    ownerCompany.id,
+    "--motion",
+    activeOwnerMotion.id,
+    "--name",
+    "Sam Sameperson",
+    "--title",
+    "Head of Revenue",
+    "--why-relevant",
+    "Owns the active branch.",
+    "--linkedin-profile-url",
+    "https://www.linkedin.com/in/sam-sameperson/",
+    "--json",
+  ]);
+  const staleProspects = runCliJson(stateDir, [
+    "companies",
+    "prospects",
+    "add",
+    staleCompany.id,
+    "--motion",
+    activeStaleMotion.id,
+    "--name",
+    "Sam Sameperson",
+    "--title",
+    "Head of Revenue",
+    "--why-relevant",
+    "This duplicate branch should not dispatch.",
+    "--linkedin-profile-url",
+    "https://www.linkedin.com/in/sam-sameperson/",
+    "--json",
+  ]);
+  const ownerProspect = ownerProspects.prospects[0];
+  const staleProspect = staleProspects.prospects[0];
+
+  runCliJson(stateDir, [
+    "companies",
+    "touches",
+    "add",
+    ownerCompany.id,
+    "--motion",
+    activeOwnerMotion.id,
+    "--prospect",
+    ownerProspect.id,
+    "--surface",
+    "connection_request",
+    "--direction",
+    "outbound",
+    "--outcome",
+    "pending",
+    "--occurred-at",
+    "2026-06-04T12:00:00.000Z",
+    "--summary",
+    "Connection request already sent from the owning branch.",
+    "--json",
+  ]);
+  runCliJson(stateDir, [
+    "companies",
+    "prospects",
+    "draft",
+    "set",
+    staleCompany.id,
+    "--motion",
+    activeStaleMotion.id,
+    "--prospect",
+    staleProspect.id,
+    "--surface",
+    "connection_request",
+    "--body",
+    "Stale branch note that must not send.",
+    "--status",
+    "ready",
+    "--json",
+  ]);
+  runCliJson(stateDir, [
+    "companies",
+    "prospects",
+    "draft",
+    "approve",
+    staleCompany.id,
+    "--motion",
+    activeStaleMotion.id,
+    "--prospect",
+    staleProspect.id,
+    "--surface",
+    "connection_request",
+    "--body",
+    "Stale branch note that must not send.",
+    "--json",
+  ]);
+
+  return {
+    user,
+    ownerMotion: activeOwnerMotion,
+    staleMotion: activeStaleMotion,
+    ownerCompany,
+    staleCompany,
+    ownerProspect,
+    staleProspect,
+  };
+}
+
+test("agent send handoff blocks when the dispatch gate rejects a stale cross-motion branch", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-send-handoff-gate-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  process.env.EXO_STATE_DIR = stateDir;
+
+  try {
+    const fixture = setupStaleCrossMotionSendState(stateDir);
+    const handoff = runCliJson(stateDir, [
+      "agent",
+      "send",
+      fixture.staleCompany.id,
+      "--motion",
+      fixture.staleMotion.id,
+      "--prospect",
+      fixture.staleProspect.id,
+      "--surface",
+      "connection_request",
+      "--json",
+    ]);
+
+    assert.equal(handoff.status, "blocked");
+    assert.equal(handoff.reasonCode, "stale_cross_motion_owner");
+    assert.equal(handoff.blockReason, "stale_cross_motion_owner");
+    assert.equal(handoff.dispatchGate?.status, "block");
+    assert.equal(handoff.dispatchGate?.owner?.motionId, fixture.ownerMotion.id);
+    assert.match(handoff.reason, /already active/i);
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("runSendTask stops before connector execution when the dispatch gate rejects the handoff", () => {
+  assert.equal(typeof runSendTask, "function");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-send-task-gate-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  process.env.EXO_STATE_DIR = stateDir;
+
+  try {
+    const fixture = setupStaleCrossMotionSendState(stateDir);
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
+          import { runSendTask } from ${JSON.stringify(pathToFileURL(HOST_PASS_SCRIPT).href)};
+          const result = runSendTask(${JSON.stringify({
+            kind: "send_message",
+            id: "send-stale",
+            motionId: fixture.staleMotion.id,
+            companyId: fixture.staleCompany.id,
+            prospectId: fixture.staleProspect.id,
+            surface: "connection_request",
+            action: "send_connection_request",
+            recipientUrl: "https://www.linkedin.com/in/sam-sameperson/",
+            body: "Stale branch note that must not send.",
+            writeback: "exo actions result --action send_connection_request --result sent --company stale --prospect stale --motion stale --surface connection_request",
+            _selectedSendMode: "live",
+          })});
+          process.stdout.write(JSON.stringify(result));
+        `,
+      ],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          EXO_STATE_DIR: stateDir,
+          EXO_HOME_STATE_DIR: stateDir,
+          EXO_CODEX_BIN: "/bin/false",
+          EXO_AGENT_BROWSER_TIMEOUT_MS: "1000",
+        },
+        encoding: "utf8",
+      },
+    );
+
+    assert.equal(child.status, 0, child.stderr || child.stdout);
+    const result = JSON.parse(child.stdout);
+    assert.equal(result.status, "blocked");
+    assert.equal(result.detail?.reasonCode, "stale_cross_motion_owner");
+    assert.equal(result.detail?.dispatchGate?.status, "block");
+    assert.equal(result.detail?.dispatchGate?.owner?.motionId, fixture.ownerMotion.id);
+    assert.doesNotMatch(result.detail?.reason ?? "", /Codex task failed|false|spawnSync/i);
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
 
 function ageSubmittedAccountPacket(motionId, companyId, completedAt) {
   const database = getLocalDatabase();

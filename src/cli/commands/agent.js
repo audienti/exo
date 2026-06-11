@@ -339,6 +339,8 @@ needs operator input.
         prospectId: options.prospect,
         surface: options.surface ?? null,
         runtime: options.runtime ?? "codex",
+        branches: listAgentQueueProspectBranches(),
+        now: new Date().toISOString(),
       });
       if (options.json) {
         console.log(JSON.stringify(handoff, null, 2));

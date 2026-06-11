@@ -9,6 +9,7 @@
 
 import { buildCompanyExecutionView } from "./build-company-execution-view.js";
 import { extractUsableDraftBody, isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
+import { evaluateOutboundDispatchGate } from "./outbound-dispatch-gate.js";
 import {
   buildLinkedinPublicEngagementPlan,
   latestReactiveCommentSourceUrl,
@@ -29,7 +30,7 @@ const AUTONOMOUS_PUBLIC_SURFACES = new Set(["like_post", "create_comment_reactio
  * @param {any} rawMotion
  * @param {any[]} rawProfiles
  * @param {any[]} rawUsers
- * @param {{ prospectId: string, surface?: string|null, runtime?: string|null }} input
+ * @param {{ prospectId: string, surface?: string|null, runtime?: string|null, branches?: Array<{ motion: any, account: any, prospect: any }>, now?: string | null }} input
  * @returns {Record<string, any>}
  */
 export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, input) {
@@ -75,7 +76,14 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
       }
     : null;
 
-  const blocked = (reason) => ({ status: "blocked", action, prospectName: prospect.name, reason, writeback: null });
+  const blocked = (reason, extra = {}) => ({
+    status: "blocked",
+    action,
+    prospectName: prospect.name,
+    reason,
+    writeback: null,
+    ...extra,
+  });
   if (!recipientUrl && !publicTarget?.url) return blocked(`${prospect.name} has no LinkedIn profile URL to message.`);
   if ((action === DM_ACTION || action === POST_COMMENT_ACTION || action === COMMENT_REPLY_ACTION) && !normalizedMessage.trim().length) {
     return blocked(`${prospect.name} has no sendable LinkedIn draft body for ${surface}.`);
@@ -103,6 +111,25 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
   }
   if (connectorKey !== "unipile") {
     return blocked(`LinkedIn send requires a governed Unipile account. Resolved connector ${connector} is not supported.`);
+  }
+  const dispatchGate = evaluateOutboundDispatchGate({
+    now: input.now ?? null,
+    motion,
+    account,
+    prospect,
+    draft: draft ?? { surface, channel: "linkedin" },
+    action,
+    senderAccount: execution.resolvedAccount,
+    branches: input.branches ?? [],
+  });
+  if (dispatchGate.status !== "allow") {
+    return blocked(dispatchGate.reason, {
+      reasonCode: dispatchGate.reasonCode,
+      blockReason: dispatchGate.blockReason,
+      waitingReason: dispatchGate.waitingReason,
+      nextDueAt: dispatchGate.nextDueAt,
+      dispatchGate,
+    });
   }
   // Runtime-agnostic: the same contract is executable by either a Codex agent
   // or a Claude agent (or any runtime with native browser tools). --runtime is
@@ -133,6 +160,7 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
     recipient: { name: prospect.name, profileUrl: recipientUrl ?? publicTarget?.url ?? null },
     publicTarget,
     fallbackTarget,
+    dispatchGate,
     channel: draft?.channel ?? "linkedin",
     surface,
     subject: draft?.subject ?? null,
