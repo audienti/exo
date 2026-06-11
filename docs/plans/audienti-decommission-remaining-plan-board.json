@@ -47,7 +47,7 @@
       "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-11T18:04:11Z"
+    "updatedAt": "2026-06-11T18:21:25Z"
   },
   "tasks": [
     {
@@ -326,7 +326,7 @@
     {
       "id": "T06",
       "title": "Add agent status CLI surface",
-      "status": "ready",
+      "status": "done",
       "priority": 70,
       "dependsOn": [
         "T01"
@@ -348,11 +348,19 @@
       "verification": [
         "npm test -- test/agent-routine.test.js test/cli.test.js"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added exo agent status with readable text, --json, and --watch support. Watch mode emits newline-delimited JSON snapshots when --json is set.",
+        "Added a reusable buildAgentStatusReport core surface covering active task leases, lane locks, due backlog by kind, waiting groups by reason and next due time, blockers, host holds, last-pass throughput, last-24h basis, explicit partial reason and next action, and inbound surface telemetry.",
+        "Status text shows lane/current task/subject/started/elapsed, resume/page-budget hints for active sync work, waiting reasons, last pass throughput, partial state, per-surface captured counts, resume cursor or offset, and last errors.",
+        "Verified live status against /Users/williamflanagan/Projects/omalab/exo/.exo: state running, 69 due, 0 waiting, 0 blockers, last pass blocked with 18 results, and 8 inbound surfaces.",
+        "Verified npm test -- test/agent-routine.test.js: 20/20 passed.",
+        "Verified npm test -- test/agent-routine.test.js test/cli.test.js: 112/112 passed.",
+        "Verified npm run check."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "bf7c99735dad2c9a0de80a29276e8c53b5a7ccd4",
+      "notes": "Exact pages-walked is not stored in durable inbound surface state yet; the status surface reports page-budget continuation, pagination-attempted state, resume cursor, and resume offset without fabricating a page count."
     },
     {
       "id": "T07",
