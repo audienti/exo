@@ -47,13 +47,13 @@
       "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-11T16:40:24Z"
+    "updatedAt": "2026-06-11T16:44:16Z"
   },
   "tasks": [
     {
       "id": "T01",
       "title": "Classify and commit current decommission fixes",
-      "status": "running",
+      "status": "done",
       "priority": 100,
       "dependsOn": [],
       "ownerLane": "controller",
@@ -84,16 +84,23 @@
         "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent doctor --json",
         "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent queue --json"
       ],
-      "outputs": [],
+      "outputs": [
+        "Classified the dirty tree as decommission-critical: lane-lock-aware queue action, UI state revision for lane locks, install-routine write-artifacts safety, sync-evidence wording, and regression tests.",
+        "Committed the plan source, execution board, and P0 code/test fixes on plan/audienti-decommission-remaining-plan.",
+        "Verified focused decommission suite: 165/165 passed.",
+        "Verified related targeted suite: 72/72 passed.",
+        "Verified npm run check and full npm test: 726/726 passed.",
+        "Verified live doctor and queue: scheduler installed/loaded, sendMode verify, 84 due, 0 waiting, 0 blockers."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Preflight focused suite passed 165/165; doctor and queue showed 84 due, 0 waiting, 0 blockers."
+      "commit": "08731002699f20c5e0886b7f365a65adc8176d24",
+      "notes": "No unrelated tracked changes were included. Left unrelated untracked docs/wip/motion-account-selection-plan.md untouched."
     },
     {
       "id": "T02",
       "title": "Run bounded research drain and record throughput",
-      "status": "backlog",
+      "status": "ready",
       "priority": 90,
       "dependsOn": [
         "T01"
@@ -127,7 +134,7 @@
     {
       "id": "T03",
       "title": "Define outbound dispatch gate contract",
-      "status": "backlog",
+      "status": "ready",
       "priority": 85,
       "dependsOn": [
         "T01"
@@ -226,7 +233,7 @@
     {
       "id": "T06",
       "title": "Add agent status CLI surface",
-      "status": "backlog",
+      "status": "ready",
       "priority": 70,
       "dependsOn": [
         "T01"
@@ -288,7 +295,7 @@
     {
       "id": "T08",
       "title": "Close Gmail variant identity and held-branch visibility follow-ups",
-      "status": "backlog",
+      "status": "ready",
       "priority": 55,
       "dependsOn": [
         "T01"
@@ -316,7 +323,7 @@
     {
       "id": "T09",
       "title": "Slim next path and add storage guardrails",
-      "status": "backlog",
+      "status": "ready",
       "priority": 50,
       "dependsOn": [
         "T01"
