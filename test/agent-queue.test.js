@@ -33,6 +33,7 @@ import {
  *   cadenceState?: any,
  *   accountQueueState?: any,
  *   accountPacketState?: any,
+ *   prospectPacketState?: any,
  *   motionStatus?: string,
  * }} prospectFields
  */
@@ -67,6 +68,7 @@ function fixture(prospectFields) {
                     updatedAt: "2026-06-01T00:00:00.000Z",
                     ...(prospectFields.cadenceState ?? {}),
                   },
+                  packetState: prospectFields.prospectPacketState ?? undefined,
                   ...(prospectFields.linkedinProfileUrl === null ? { linkedinProfileUrl: null } : {}),
                 },
               ],
@@ -481,6 +483,53 @@ test("buildAgentQueue emits a due company_research task for a claimable backlog 
   assert.equal(task.reason, "claimable_company_packet");
   assert.match(task.claimCommand, /exo companies queue claim company-1 --motion motion-1 --worker <worker-label> --json/);
   assert.match(task.briefCommand, /exo motion packet-brief motion-1 --packet company_research:company-1 --json/);
+});
+
+test("buildAgentQueue skips submitted account packets and requeues returned packets with review notes", () => {
+  const submitted = buildAgentQueue(
+    fixture({
+      accountQueueState: {
+        status: "queued_for_research",
+        source: "manual",
+        updatedAt: "2026-06-03T05:00:00.000Z",
+      },
+      accountPacketState: {
+        kind: "company_research",
+        status: "submitted",
+        workerLabel: "codex-research-1",
+        claimedAt: "2026-06-03T05:01:00.000Z",
+        completedAt: "2026-06-03T05:20:00.000Z",
+        notes: "Ready for review.",
+        proposal: { action: "advance", nextStatus: "researched" },
+      },
+    }),
+  );
+  assert.equal(submitted.tasks.some((item) => item.kind === "company_research"), false);
+
+  const returned = buildAgentQueue(
+    fixture({
+      accountQueueState: {
+        status: "queued_for_research",
+        source: "manual",
+        updatedAt: "2026-06-03T05:00:00.000Z",
+      },
+      accountPacketState: {
+        kind: "company_research",
+        status: "returned",
+        workerLabel: "codex-research-1",
+        claimedAt: "2026-06-03T05:01:00.000Z",
+        completedAt: "2026-06-03T05:20:00.000Z",
+        notes: "Ready for review.",
+        returnNotes: "Find a primary source before resubmitting.",
+        returnedAt: "2026-06-03T05:30:00.000Z",
+      },
+    }),
+  );
+  const task = returned.tasks.find((item) => item.kind === "company_research");
+  assert.ok(task);
+  assert.equal(task.claimState, "claimable");
+  assert.equal(task.reason, "returned_company_packet");
+  assert.equal(task.notes, "Find a primary source before resubmitting.");
 });
 
 /**
@@ -1303,6 +1352,51 @@ test("buildAgentQueue emits a due prospect_research task for a selected prospect
   assert.equal(task.reason, "claimable_prospect_research_packet");
   assert.match(task.claimCommand, /exo companies prospects claim company-1 --motion motion-1 --prospect prospect-1 --worker <worker-label> --json/);
   assert.match(task.briefCommand, /exo motion packet-brief motion-1 --packet prospect_research:company-1:prospect-1 --json/);
+});
+
+test("buildAgentQueue skips submitted prospect packets and requeues returned prospect packets", () => {
+  const submitted = buildAgentQueue(
+    fixture({
+      cadenceState: {
+        status: "pending",
+        currentStep: null,
+        updatedAt: "2026-06-03T05:00:00.000Z",
+      },
+      prospectPacketState: {
+        kind: "prospect_research",
+        status: "submitted",
+        workerLabel: "codex-prospect-1",
+        claimedAt: "2026-06-03T05:01:00.000Z",
+        completedAt: "2026-06-03T05:20:00.000Z",
+        proposal: { action: "nurture", reason: "Revisit later." },
+      },
+    }),
+  );
+  assert.equal(submitted.tasks.some((item) => item.kind === "prospect_research"), false);
+
+  const returned = buildAgentQueue(
+    fixture({
+      cadenceState: {
+        status: "pending",
+        currentStep: null,
+        updatedAt: "2026-06-03T05:00:00.000Z",
+      },
+      prospectPacketState: {
+        kind: "prospect_research",
+        status: "returned",
+        workerLabel: "codex-prospect-1",
+        claimedAt: "2026-06-03T05:01:00.000Z",
+        completedAt: "2026-06-03T05:20:00.000Z",
+        returnNotes: "Store the source-tried evidence before completion.",
+        returnedAt: "2026-06-03T05:30:00.000Z",
+      },
+    }),
+  );
+  const task = returned.tasks.find((item) => item.kind === "prospect_research");
+  assert.ok(task);
+  assert.equal(task.claimState, "claimable");
+  assert.equal(task.reason, "returned_prospect_research_packet");
+  assert.equal(task.notes, "Store the source-tried evidence before completion.");
 });
 
 test("buildAgentQueue can surface a waiting autonomous retrieval task when forced", () => {

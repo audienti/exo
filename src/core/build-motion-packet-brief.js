@@ -71,6 +71,7 @@ function buildCompanyResearchPacketBrief(motion, company, account, packet) {
   return {
     motion: buildMotionSummary(motion),
     packet: buildPacketIdentity(packet),
+    review: buildPacketReviewContext(packet),
     summary: `Research ${company.name} against the motion premise and persist only strong recent company-level signal evidence.`,
     scope: {
       kind: "company_research",
@@ -78,7 +79,8 @@ function buildCompanyResearchPacketBrief(motion, company, account, packet) {
       constraints: [
         "Stay at the company-signal layer in this packet.",
         "Do not manufacture stakeholders yet unless the account already has them stored.",
-        "Persist only concise, writer-usable signals."
+        "Persist only concise, writer-usable signals.",
+        ...buildReturnedPacketConstraints(packet)
       ]
     },
     inputs: {
@@ -114,7 +116,8 @@ function buildCompanyResearchPacketBrief(motion, company, account, packet) {
         `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --next-status researched --notes "Stored the strongest signal evidence and the account is ready for prospect selection." --json`,
         `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --next-status suppressed --notes "Explain why this account should stay out of the motion." --json`,
         `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --next-status exhausted --notes "Explain why the account is not worth more research." --json`
-      ]
+      ],
+      completionContracts: buildCompletionContracts("company_research")
     },
     reviewSignals: [
       "Strong first-party or recent public evidence tied directly to the motion signal questions.",
@@ -142,6 +145,7 @@ function buildProspectSelectionPacketBrief(motion, company, account, packet) {
   return {
     motion: buildMotionSummary(motion),
     packet: buildPacketIdentity(packet),
+    review: buildPacketReviewContext(packet),
     summary: `Choose the best-fit stakeholders at ${company.name} and persist them as selected prospects for downstream prospect research.`,
     scope: {
       kind: "prospect_selection",
@@ -149,7 +153,8 @@ function buildProspectSelectionPacketBrief(motion, company, account, packet) {
       constraints: [
         `Target ${motion.targetingProfile.stakeholderTargetCount} stakeholders or fewer.`,
         "Start with the most likely primary owner, then add only the strongest adjacent operators or sponsors.",
-        "Do not do full cadence planning in this packet."
+        "Do not do full cadence planning in this packet.",
+        ...buildReturnedPacketConstraints(packet)
       ]
     },
     inputs: {
@@ -192,7 +197,8 @@ function buildProspectSelectionPacketBrief(motion, company, account, packet) {
         `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --notes "Stored the chosen stakeholder set with the profile viewbacks already used to justify it and handed the account to prospect research." --json`,
         `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --next-status suppressed --notes "Explain why this researched account should not advance." --json`,
         `exo companies queue complete ${company.id} --motion ${motion.id} --worker <worker-label> --next-status exhausted --notes "Explain why no viable stakeholders exist here." --json`
-      ]
+      ],
+      completionContracts: buildCompletionContracts("prospect_selection")
     },
     reviewSignals: [
       "The primary owner is defensible from title, function, and signal fit.",
@@ -226,6 +232,7 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
   return {
     motion: buildMotionSummary(motion),
     packet: buildPacketIdentity(packet),
+    review: buildPacketReviewContext(packet),
     summary: `Complete the four-layer prospect research, runtime-aware contact enrichment, and cadence for ${brief.prospect.name}.`,
     scope: {
       kind: "prospect_research",
@@ -235,7 +242,8 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
         "Use only defensible signals and contact points.",
         "If LinkedIn identity is missing, search through the governed connected LinkedIn account path first before paid or provider LinkedIn identity lookup.",
         runtimeEnrichmentRule,
-        "The packet is not done until the branch is actually ready for a first-touch decision."
+        "The packet is not done until the branch is actually ready for a first-touch decision.",
+        ...buildReturnedPacketConstraints(packet)
       ]
     },
     inputs: {
@@ -301,7 +309,8 @@ function buildProspectResearchPacketBrief(motion, company, packet) {
         `exo companies prospects complete ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --worker <worker-label> --notes "Prospect research, planning, and cadence are ready for operator review." --json`,
         `exo companies prospects complete ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --worker <worker-label> --next-status suppressed --notes "Explain why this prospect should stay out of the queue." --json`,
         `exo companies prospects complete ${company.id} --motion ${motion.id} --prospect ${brief.prospect.prospectId} --worker <worker-label> --next-status exhausted --notes "Explain why this prospect does not merit more research." --json`
-      ]
+      ],
+      completionContracts: buildCompletionContracts("prospect_research")
     },
     reviewSignals: [
       "The prospect has a real why-now spine, not just generic ICP fit.",
@@ -347,6 +356,7 @@ function buildPacketIdentity(packet) {
     id: packet.packetId,
     kind: packet.packetKind,
     claimState: packet.claimState,
+    reviewState: packet.reviewState ?? null,
     companyId: packet.companyId,
     companyName: packet.companyName,
     prospectId: packet.prospectId ?? null,
@@ -355,6 +365,74 @@ function buildPacketIdentity(packet) {
     queueStatus: packet.queueStatus,
     workerLabel: packet.workerLabel,
     claimedAt: packet.claimedAt,
+    completedAt: packet.completedAt ?? null,
+    returnedAt: packet.returnedAt ?? null,
     notes: packet.notes
   };
+}
+
+/**
+ * @param {ReturnType<typeof buildMotionPacketSummary>["items"][number]} packet
+ */
+function buildPacketReviewContext(packet) {
+  return {
+    state: packet.reviewState ?? null,
+    proposal: packet.proposal ?? null,
+    returnNotes: packet.returnNotes ?? null,
+    reviewer: packet.reviewer ?? null,
+    completedAt: packet.completedAt ?? null,
+    returnedAt: packet.returnedAt ?? null
+  };
+}
+
+/**
+ * @param {ReturnType<typeof buildMotionPacketSummary>["items"][number]} packet
+ */
+function buildReturnedPacketConstraints(packet) {
+  return packet.reviewState === "returned" && packet.returnNotes
+    ? [`Returned review note: ${packet.returnNotes}. Address this before resubmitting the packet.`]
+    : [];
+}
+
+/**
+ * @param {"company_research" | "prospect_selection" | "prospect_research"} packetKind
+ */
+function buildCompletionContracts(packetKind) {
+  const advanceNextStatus = packetKind === "company_research"
+    ? "researched"
+    : null;
+  return [
+    {
+      outcome: "advance",
+      disposition: null,
+      nextStatus: advanceNextStatus,
+      meaning: packetKind === "company_research"
+        ? "The account has enough signal evidence to move into prospect selection."
+        : "The packet produced usable downstream prospect work.",
+    },
+    {
+      outcome: "nurture",
+      disposition: "nurture",
+      nextStatus: null,
+      meaning: "The subject is real but not active now. Keep it off active work until a future reason reopens it.",
+    },
+    {
+      outcome: "not_a_fit",
+      disposition: "not_a_fit",
+      nextStatus: "suppressed",
+      meaning: "The subject should not remain in active prospect work for this motion.",
+    },
+    {
+      outcome: "no_longer_target",
+      disposition: "no_longer_target",
+      nextStatus: "suppressed",
+      meaning: "The subject looked targetable before, but new evidence says it should leave active work now.",
+    },
+    {
+      outcome: "exhausted",
+      disposition: "exhausted",
+      nextStatus: "exhausted",
+      meaning: "The worker used the governed path and found no credible way to advance this packet.",
+    }
+  ];
 }

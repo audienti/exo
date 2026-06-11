@@ -213,6 +213,9 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
     summary.claimableCount += item.counts.claimableCount;
     summary.claimedCount += item.counts.claimedCount;
     for (const packet of item.items) {
+      if (packet.claimState !== "claimable" && packet.claimState !== "claimed") {
+        continue;
+      }
       const targetBucket = packet.claimState === "claimed" ? summary.claimedByKind : summary.claimableByKind;
       targetBucket[packet.packetKind] = (targetBucket[packet.packetKind] ?? 0) + 1;
       const previewBucket = packet.claimState === "claimed" ? summary.claimedItemsByKind : summary.claimableItemsByKind;

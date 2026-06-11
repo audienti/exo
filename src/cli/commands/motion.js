@@ -790,17 +790,17 @@ Examples:
 
   motion
     .command("packets")
-    .description("Show motion work packets that can be claimed or are currently claimed by a worker.")
+    .description("Show motion work packets and packet review states.")
     .argument("<motion-id>", "Motion identifier")
     .option("--company <company-id>", "Filter to one targeted company")
-    .option("--status <status>", "Packet claim state: claimable or claimed")
+    .option("--status <status>", "Packet state: claimable, claimed, submitted, or returned")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
       "after",
       `
 What this command does:
   - Shows the motion work packets the motion currently exposes, including company research, prospect selection, and prospect research.
-  - Tells you which packets are still claimable and which are already claimed.
+  - Tells you which packets are claimable, claimed, submitted for review, or returned for redo.
   - Makes parallel backlog work visible before you open a browser or start research.
 
 Examples:
@@ -1975,7 +1975,7 @@ function assignLaunchUserIfNeeded(rawMotion, rawUser, options = {}) {
 
 /**
  * @param {string | undefined} value
- * @returns {"claimable" | "claimed" | null}
+ * @returns {"claimable" | "claimed" | "submitted" | "returned" | null}
  */
 function normalizePacketClaimState(value) {
   if (!value) {
@@ -1983,7 +1983,12 @@ function normalizePacketClaimState(value) {
   }
 
   const normalized = value.trim().toLowerCase();
-  if (normalized === "claimable" || normalized === "claimed") {
+  if (
+    normalized === "claimable"
+    || normalized === "claimed"
+    || normalized === "submitted"
+    || normalized === "returned"
+  ) {
     return normalized;
   }
 

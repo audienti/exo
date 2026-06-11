@@ -719,15 +719,21 @@ function buildCompanyDiscoveryTask({ motion, companies }) {
  */
 function buildCompanyResearchTask({ motion, account }) {
   const packetId = `company_research:${account.companyId}`;
-  const claimState = account?.packetState?.kind === "company_research" && account.packetState?.status === "claimed"
+  const packetState = account?.packetState?.kind === "company_research" ? account.packetState : null;
+  const claimState = packetState?.status === "claimed"
     ? "claimed"
     : "claimable";
-  const queuedAt = account?.packetState?.claimedAt ?? account?.queueState?.updatedAt ?? null;
+  const returned = packetState?.status === "returned";
+  const queuedAt = packetState?.returnedAt ?? packetState?.claimedAt ?? account?.queueState?.updatedAt ?? null;
   return {
     kind: "company_research",
     action: "research_company",
     needsOperatorInput: false,
-    reason: claimState === "claimed" ? "claimed_company_packet" : "claimable_company_packet",
+    reason: claimState === "claimed"
+      ? "claimed_company_packet"
+      : returned
+        ? "returned_company_packet"
+        : "claimable_company_packet",
     motionId: motion.id,
     motionName: motion.name,
     companyId: account.companyId,
@@ -737,14 +743,12 @@ function buildCompanyResearchTask({ motion, account }) {
     packetKind: "company_research",
     claimState,
     surface: "company_research",
-    workerLabel: account?.packetState?.workerLabel ?? null,
+    workerLabel: claimState === "claimed" ? packetState?.workerLabel ?? null : null,
     queueStatus: account?.queueState?.status ?? null,
-    whyItMatters: claimState === "claimed"
-      ? `${account.companyName} was explicitly claimed for governed company research and is still blocking downstream prospect inventory.`
-      : `${account.companyName} is already in the motion backlog and can be claimed and researched now without operator input.`,
+    whyItMatters: companyResearchTaskReason(account, claimState, returned),
     claimCommand: `exo companies queue claim ${account.companyId} --motion ${motion.id} --worker <worker-label> --json`,
     briefCommand: `exo motion packet-brief ${motion.id} --packet ${packetId} --json`,
-    notes: account?.packetState?.notes ?? null,
+    notes: packetReviewNotes(packetState),
     queuedAt,
     dueAt: queuedAt,
     waitingReason: null,
@@ -757,7 +761,7 @@ function buildCompanyResearchTask({ motion, account }) {
 function isClaimableCompanyResearchAccount(account) {
   const queueStatus = account?.queueState?.status ?? "discovered";
   return ["discovered", "queued_for_research"].includes(queueStatus)
-    && !(account?.packetState?.status === "claimed");
+    && !isPacketUnavailableForWorker(account?.packetState);
 }
 
 /**
@@ -782,7 +786,7 @@ function normalizeAccountForAgentQueue(rawAccount, now) {
  */
 function isClaimableProspectSelectionAccount(account) {
   return account?.queueState?.status === "researched"
-    && !(account?.packetState?.status === "claimed");
+    && !isPacketUnavailableForWorker(account?.packetState);
 }
 
 /**
@@ -837,7 +841,7 @@ function buildQueueProspectBranches(input, activeMotions, activeMotionIds, now) 
  */
 function isClaimableProspectResearchProspect(prospect) {
   return prospect?.queueState?.status === "selected"
-    && !(prospect?.packetState?.status === "claimed");
+    && !isPacketUnavailableForWorker(prospect?.packetState);
 }
 
 /**
@@ -848,15 +852,21 @@ function isClaimableProspectResearchProspect(prospect) {
  */
 function buildProspectSelectionTask({ motion, account }) {
   const packetId = `prospect_selection:${account.companyId}`;
-  const claimState = account?.packetState?.kind === "prospect_selection" && account.packetState?.status === "claimed"
+  const packetState = account?.packetState?.kind === "prospect_selection" ? account.packetState : null;
+  const claimState = packetState?.status === "claimed"
     ? "claimed"
     : "claimable";
-  const queuedAt = account?.packetState?.claimedAt ?? account?.queueState?.updatedAt ?? null;
+  const returned = packetState?.status === "returned";
+  const queuedAt = packetState?.returnedAt ?? packetState?.claimedAt ?? account?.queueState?.updatedAt ?? null;
   return {
     kind: "prospect_selection",
     action: "select_prospects",
     needsOperatorInput: false,
-    reason: claimState === "claimed" ? "claimed_prospect_selection_packet" : "claimable_prospect_selection_packet",
+    reason: claimState === "claimed"
+      ? "claimed_prospect_selection_packet"
+      : returned
+        ? "returned_prospect_selection_packet"
+        : "claimable_prospect_selection_packet",
     motionId: motion.id,
     motionName: motion.name,
     companyId: account.companyId,
@@ -866,14 +876,12 @@ function buildProspectSelectionTask({ motion, account }) {
     packetKind: "prospect_selection",
     claimState,
     surface: "prospect_selection",
-    workerLabel: account?.packetState?.workerLabel ?? null,
+    workerLabel: claimState === "claimed" ? packetState?.workerLabel ?? null : null,
     queueStatus: account?.queueState?.status ?? null,
-    whyItMatters: claimState === "claimed"
-      ? `${account.companyName} already has a claimed stakeholder-selection packet and still needs the chosen prospect set landed before deeper research can start.`
-      : `${account.companyName} is already researched and can advance now by storing the smallest credible stakeholder set without operator input.`,
+    whyItMatters: prospectSelectionTaskReason(account, claimState, returned),
     claimCommand: `exo companies queue claim ${account.companyId} --motion ${motion.id} --worker <worker-label> --json`,
     briefCommand: `exo motion packet-brief ${motion.id} --packet ${packetId} --json`,
-    notes: account?.packetState?.notes ?? null,
+    notes: packetReviewNotes(packetState),
     queuedAt,
     dueAt: queuedAt,
     waitingReason: null,
@@ -889,15 +897,21 @@ function buildProspectSelectionTask({ motion, account }) {
  */
 function buildProspectResearchTask({ motion, account, prospect }) {
   const packetId = `prospect_research:${account.companyId}:${prospect.id}`;
-  const claimState = prospect?.packetState?.kind === "prospect_research" && prospect.packetState?.status === "claimed"
+  const packetState = prospect?.packetState?.kind === "prospect_research" ? prospect.packetState : null;
+  const claimState = packetState?.status === "claimed"
     ? "claimed"
     : "claimable";
-  const queuedAt = prospect?.packetState?.claimedAt ?? prospect?.queueState?.updatedAt ?? account?.queueState?.updatedAt ?? null;
+  const returned = packetState?.status === "returned";
+  const queuedAt = packetState?.returnedAt ?? packetState?.claimedAt ?? prospect?.queueState?.updatedAt ?? account?.queueState?.updatedAt ?? null;
   return {
     kind: "prospect_research",
     action: "research_prospect",
     needsOperatorInput: false,
-    reason: claimState === "claimed" ? "claimed_prospect_research_packet" : "claimable_prospect_research_packet",
+    reason: claimState === "claimed"
+      ? "claimed_prospect_research_packet"
+      : returned
+        ? "returned_prospect_research_packet"
+        : "claimable_prospect_research_packet",
     motionId: motion.id,
     motionName: motion.name,
     companyId: account.companyId,
@@ -908,18 +922,76 @@ function buildProspectResearchTask({ motion, account, prospect }) {
     packetKind: "prospect_research",
     claimState,
     surface: "prospect_research",
-    workerLabel: prospect?.packetState?.workerLabel ?? null,
+    workerLabel: claimState === "claimed" ? packetState?.workerLabel ?? null : null,
     queueStatus: prospect?.queueState?.status ?? null,
-    whyItMatters: claimState === "claimed"
-      ? `${prospect.name} already has a claimed prospect-research packet and still needs governed research, enrichment, and cadence before the branch can become usable inventory.`
-      : `${prospect.name} is already selected and can advance now through governed research, enrichment, and cadence planning without operator input.`,
+    whyItMatters: prospectResearchTaskReason(prospect, claimState, returned),
     claimCommand: `exo companies prospects claim ${account.companyId} --motion ${motion.id} --prospect ${prospect.id} --worker <worker-label> --json`,
     briefCommand: `exo motion packet-brief ${motion.id} --packet ${packetId} --json`,
-    notes: prospect?.packetState?.notes ?? null,
+    notes: packetReviewNotes(packetState),
     queuedAt,
     dueAt: queuedAt,
     waitingReason: null,
   };
+}
+
+/**
+ * @param {any} packetState
+ */
+function isPacketUnavailableForWorker(packetState) {
+  return packetState?.status === "claimed" || packetState?.status === "submitted";
+}
+
+/**
+ * @param {any} packetState
+ */
+function packetReviewNotes(packetState) {
+  if (!packetState) return null;
+  return packetState.returnNotes ?? packetState.notes ?? null;
+}
+
+/**
+ * @param {any} account
+ * @param {"claimed" | "claimable"} claimState
+ * @param {boolean} returned
+ */
+function companyResearchTaskReason(account, claimState, returned) {
+  if (claimState === "claimed") {
+    return `${account.companyName} was explicitly claimed for governed company research and is still blocking downstream prospect inventory.`;
+  }
+  if (returned) {
+    return `${account.companyName} has returned company-research review notes and can be claimed for redo now.`;
+  }
+  return `${account.companyName} is already in the motion backlog and can be claimed and researched now without operator input.`;
+}
+
+/**
+ * @param {any} account
+ * @param {"claimed" | "claimable"} claimState
+ * @param {boolean} returned
+ */
+function prospectSelectionTaskReason(account, claimState, returned) {
+  if (claimState === "claimed") {
+    return `${account.companyName} already has a claimed stakeholder-selection packet and still needs the chosen prospect set landed before deeper research can start.`;
+  }
+  if (returned) {
+    return `${account.companyName} has returned stakeholder-selection review notes and can be claimed for redo now.`;
+  }
+  return `${account.companyName} is already researched and can advance now by storing the smallest credible stakeholder set without operator input.`;
+}
+
+/**
+ * @param {any} prospect
+ * @param {"claimed" | "claimable"} claimState
+ * @param {boolean} returned
+ */
+function prospectResearchTaskReason(prospect, claimState, returned) {
+  if (claimState === "claimed") {
+    return `${prospect.name} already has a claimed prospect-research packet and still needs governed research, enrichment, and cadence before the branch can become usable inventory.`;
+  }
+  if (returned) {
+    return `${prospect.name} has returned prospect-research review notes and can be claimed for redo now.`;
+  }
+  return `${prospect.name} is already selected and can advance now through governed research, enrichment, and cadence planning without operator input.`;
 }
 
 /**

@@ -9,7 +9,7 @@ import { applyManualTargetAccountQueueState, withDerivedTargetAccountQueueState 
  * @param {unknown[]} rawCompanies
  * @param {{
  *   companyId?: string | null | undefined,
- *   status?: "claimable" | "claimed" | null | undefined
+ *   status?: "claimable" | "claimed" | "submitted" | "returned" | null | undefined
  * }} [options]
  */
 export function buildMotionPacketSummary(rawMotion, rawCompanies, options = {}) {
@@ -40,7 +40,7 @@ export function buildMotionPacketSummary(rawMotion, rawCompanies, options = {}) 
       packetId: buildMotionPacketId(item)
     }))
     .filter(Boolean)
-    .filter((item) => !options.status || item.claimState === options.status);
+    .filter((item) => matchesPacketStatus(item, options.status));
 
   return {
     motion: {
@@ -51,7 +51,9 @@ export function buildMotionPacketSummary(rawMotion, rawCompanies, options = {}) 
     counts: {
       packetCount: items.length,
       claimableCount: items.filter((item) => item.claimState === "claimable").length,
-      claimedCount: items.filter((item) => item.claimState === "claimed").length
+      claimedCount: items.filter((item) => item.claimState === "claimed").length,
+      submittedCount: items.filter((item) => item.reviewState === "submitted").length,
+      returnedCount: items.filter((item) => item.reviewState === "returned").length
     },
     items
   };
@@ -314,39 +316,21 @@ function hasAttemptedGovernedLinkedinSearch(prospect) {
  * @param {number} stakeholderTargetCount
  */
 function buildMotionPacket(company, account, stakeholderTargetCount) {
-  const claimedPacket = account?.packetState?.status === "claimed"
-    ? account.packetState
-    : null;
-  if (claimedPacket?.kind === "company_research") {
-    return {
+  const activeAccountPacket = activePacketState(account?.packetState);
+  if (activeAccountPacket?.kind === "company_research") {
+    return buildAccountPacketItem(company, account, stakeholderTargetCount, {
       packetKind: "company_research",
-      claimState: "claimed",
-      companyId: company.id,
-      companyName: company.name,
-      queueStatus: account?.queueState?.status ?? "discovered",
-      signalMatchCount: account?.signalMatches.length ?? 0,
-      prospectCount: account?.prospects.length ?? 0,
-      targetProspectCount: stakeholderTargetCount,
-      workerLabel: claimedPacket.workerLabel ?? null,
-      claimedAt: claimedPacket.claimedAt ?? null,
-      notes: claimedPacket.notes ?? null
-    };
+      packetState: activeAccountPacket,
+      fallbackQueueStatus: "discovered"
+    });
   }
 
-  if (claimedPacket?.kind === "prospect_selection") {
-    return {
+  if (activeAccountPacket?.kind === "prospect_selection") {
+    return buildAccountPacketItem(company, account, stakeholderTargetCount, {
       packetKind: "prospect_selection",
-      claimState: "claimed",
-      companyId: company.id,
-      companyName: company.name,
-      queueStatus: account?.queueState?.status ?? "researched",
-      signalMatchCount: account?.signalMatches.length ?? 0,
-      prospectCount: account?.prospects.length ?? 0,
-      targetProspectCount: stakeholderTargetCount,
-      workerLabel: claimedPacket.workerLabel ?? null,
-      claimedAt: claimedPacket.claimedAt ?? null,
-      notes: claimedPacket.notes ?? null
-    };
+      packetState: activeAccountPacket,
+      fallbackQueueStatus: "researched"
+    });
   }
 
   const queueStatus = account?.queueState?.status ?? "discovered";
@@ -356,6 +340,7 @@ function buildMotionPacket(company, account, stakeholderTargetCount) {
       return {
         packetKind: "prospect_selection",
         claimState: "claimable",
+        reviewState: null,
         companyId: company.id,
         companyName: company.name,
         queueStatus,
@@ -364,37 +349,18 @@ function buildMotionPacket(company, account, stakeholderTargetCount) {
         targetProspectCount: stakeholderTargetCount,
         workerLabel: null,
         claimedAt: null,
+        completedAt: null,
+        returnedAt: null,
+        reviewer: null,
+        proposal: null,
+        returnNotes: null,
         notes: null
       };
     }
 
     const prospectResearchPackets = (account?.prospects ?? [])
       .filter((prospect) => prospect.queueState?.status === "selected")
-      .map((prospect) => ({
-        packetKind: "prospect_research",
-        claimState:
-          prospect.packetState?.status === "claimed" && prospect.packetState?.kind === "prospect_research"
-            ? "claimed"
-            : "claimable",
-        companyId: company.id,
-        companyName: company.name,
-        prospectId: prospect.id,
-        prospectName: prospect.name,
-        prospectTitle: prospect.title,
-        queueStatus: prospect.queueState?.status ?? "selected",
-        signalMatchCount: account?.signalMatches.length ?? 0,
-        prospectCount: account?.prospects.length ?? 0,
-        targetProspectCount: stakeholderTargetCount,
-        workerLabel:
-          prospect.packetState?.status === "claimed" && prospect.packetState?.kind === "prospect_research"
-            ? prospect.packetState?.workerLabel ?? null
-            : null,
-        claimedAt:
-          prospect.packetState?.status === "claimed" && prospect.packetState?.kind === "prospect_research"
-            ? prospect.packetState?.claimedAt ?? null
-            : null,
-        notes: prospect.packetState?.notes ?? null
-      }));
+      .map((prospect) => buildProspectResearchPacketItem(company, account, prospect, stakeholderTargetCount));
     if (prospectResearchPackets.length) {
       return prospectResearchPackets;
     }
@@ -405,6 +371,7 @@ function buildMotionPacket(company, account, stakeholderTargetCount) {
   return {
     packetKind: "company_research",
     claimState: "claimable",
+    reviewState: null,
     companyId: company.id,
     companyName: company.name,
     queueStatus,
@@ -413,7 +380,118 @@ function buildMotionPacket(company, account, stakeholderTargetCount) {
     targetProspectCount: stakeholderTargetCount,
     workerLabel: null,
     claimedAt: null,
+    completedAt: null,
+    returnedAt: null,
+    reviewer: null,
+    proposal: null,
+    returnNotes: null,
     notes: null
+  };
+}
+
+/**
+ * @param {unknown} item
+ * @param {"claimable" | "claimed" | "submitted" | "returned" | null | undefined} status
+ */
+function matchesPacketStatus(item, status) {
+  if (!status) return true;
+  const packet = /** @type {Record<string, any>} */ (item);
+  if (status === "returned") return packet.reviewState === "returned";
+  if (status === "submitted") return packet.reviewState === "submitted";
+  return packet.claimState === status;
+}
+
+/**
+ * @param {unknown} packetState
+ */
+function activePacketState(packetState) {
+  if (!packetState || typeof packetState !== "object" || Array.isArray(packetState)) {
+    return null;
+  }
+  const state = /** @type {Record<string, any>} */ (packetState);
+  return ["claimed", "submitted", "returned"].includes(state.status) ? state : null;
+}
+
+/**
+ * @param {Record<string, any>} company
+ * @param {import("../schema/target-account.js").targetAccountSchema._type | null} account
+ * @param {number} stakeholderTargetCount
+ * @param {{
+ *   packetKind: "company_research" | "prospect_selection",
+ *   packetState: Record<string, any>,
+ *   fallbackQueueStatus: string
+ * }} input
+ */
+function buildAccountPacketItem(company, account, stakeholderTargetCount, input) {
+  return {
+    packetKind: input.packetKind,
+    ...packetStateSummaryFields(input.packetState),
+    companyId: company.id,
+    companyName: company.name,
+    queueStatus: account?.queueState?.status ?? input.fallbackQueueStatus,
+    signalMatchCount: account?.signalMatches.length ?? 0,
+    prospectCount: account?.prospects.length ?? 0,
+    targetProspectCount: stakeholderTargetCount
+  };
+}
+
+/**
+ * @param {Record<string, any>} company
+ * @param {import("../schema/target-account.js").targetAccountSchema._type | null} account
+ * @param {Record<string, any>} prospect
+ * @param {number} stakeholderTargetCount
+ */
+function buildProspectResearchPacketItem(company, account, prospect, stakeholderTargetCount) {
+  const packetState = prospect.packetState?.kind === "prospect_research"
+    ? activePacketState(prospect.packetState)
+    : null;
+  return {
+    packetKind: "prospect_research",
+    ...packetStateSummaryFields(packetState),
+    companyId: company.id,
+    companyName: company.name,
+    prospectId: prospect.id,
+    prospectName: prospect.name,
+    prospectTitle: prospect.title,
+    queueStatus: prospect.queueState?.status ?? "selected",
+    signalMatchCount: account?.signalMatches.length ?? 0,
+    prospectCount: account?.prospects.length ?? 0,
+    targetProspectCount: stakeholderTargetCount
+  };
+}
+
+/**
+ * @param {Record<string, any> | null} packetState
+ */
+function packetStateSummaryFields(packetState) {
+  if (!packetState) {
+    return {
+      claimState: "claimable",
+      reviewState: null,
+      workerLabel: null,
+      claimedAt: null,
+      completedAt: null,
+      returnedAt: null,
+      reviewer: null,
+      proposal: null,
+      returnNotes: null,
+      notes: null
+    };
+  }
+
+  const returned = packetState.status === "returned";
+  const submitted = packetState.status === "submitted";
+  return {
+    claimState: returned ? "claimable" : packetState.status,
+    reviewState: returned ? "returned" : submitted ? "submitted" : null,
+    workerLabel: packetState.workerLabel ?? null,
+    claimedAt: packetState.claimedAt ?? null,
+    completedAt: packetState.completedAt ?? null,
+    returnedAt: packetState.returnedAt ?? null,
+    reviewer: packetState.reviewer ?? null,
+    proposal: packetState.proposal ?? null,
+    returnNotes: packetState.returnNotes ?? null,
+    notes: returned ? packetState.returnNotes ?? packetState.notes ?? null : packetState.notes ?? null
   };
 }
 

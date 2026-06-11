@@ -11,6 +11,8 @@ import { execFile, execFileSync, spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { buildAgentQueue } from "../src/core/build-agent-queue.js";
 import { buildDailyView } from "../src/core/build-daily-view.js";
+import { returnMotionTargetAccountPacket } from "../src/core/review-target-account-packet.js";
+import { findMotionById, updateMotion } from "../src/db/database.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(repoRoot, "src", "cli", "index.js");
@@ -8670,6 +8672,153 @@ test("motion packet-brief turns packet state into a worker contract with stable 
       true
     );
   } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("motion packets and packet-brief surface submitted and returned packet review notes", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-packet-review-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  process.env.EXO_STATE_DIR = tempDir;
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/motion-packet-review",
+          "--premise",
+          "This offer matters when packetized targeting work needs operator review before advancing.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there clear evidence this account has a governed outbound execution problem?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    updateMotion({
+      ...motion,
+      packetReviewPolicy: "review"
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Packet Review Co",
+          "--domain",
+          "packet-review.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "claim",
+        company.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-review-1",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "companies",
+        "queue",
+        "complete",
+        company.id,
+        "--motion",
+        motion.id,
+        "--worker",
+        "codex-review-1",
+        "--next-status",
+        "researched",
+        "--notes",
+        "Ready for operator review.",
+        "--json"
+      ],
+      { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+    );
+
+    const submittedPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--status", "submitted", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(submittedPackets.counts.submittedCount, 1);
+    assert.equal(submittedPackets.items[0].claimState, "submitted");
+    assert.equal(submittedPackets.items[0].reviewState, "submitted");
+    assert.equal(submittedPackets.items[0].proposal.action, "advance");
+
+    const submittedMotion = findMotionById(motion.id);
+    assert.ok(submittedMotion);
+    returnMotionTargetAccountPacket(submittedMotion, company, {
+      notes: "Find a primary source before resubmitting.",
+      reviewer: "operator-review"
+    });
+
+    const returnedPackets = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "packets", motion.id, "--status", "returned", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(returnedPackets.counts.returnedCount, 1);
+    assert.equal(returnedPackets.items[0].claimState, "claimable");
+    assert.equal(returnedPackets.items[0].reviewState, "returned");
+    assert.equal(returnedPackets.items[0].returnNotes, "Find a primary source before resubmitting.");
+    assert.equal(returnedPackets.items[0].reviewer, "operator-review");
+
+    const returnedBrief = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "motion", "packet-brief", motion.id, "--packet", returnedPackets.items[0].packetId, "--json"],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    assert.equal(returnedBrief.packet.reviewState, "returned");
+    assert.equal(returnedBrief.review.returnNotes, "Find a primary source before resubmitting.");
+    assert.ok(
+      returnedBrief.scope.constraints.some((line) =>
+        line.includes("Returned review note: Find a primary source before resubmitting.")
+      )
+    );
+    assert.deepEqual(
+      returnedBrief.writeback.completionContracts.map((contract) => contract.outcome),
+      ["advance", "nurture", "not_a_fit", "no_longer_target", "exhausted"]
+    );
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });

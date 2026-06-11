@@ -52,7 +52,7 @@
       ],
       "notes": "Baseline needed one preflight repair for a red cold-start onboarding UI test. Full suite then passed with Node v24.14.0: 704 pass, 0 fail."
     },
-    "updatedAt": "2026-06-11T10:58:51Z"
+    "updatedAt": "2026-06-11T11:17:15Z"
   },
   "tasks": [
     {
@@ -102,7 +102,7 @@
     {
       "id": "T02",
       "title": "Update worker briefs and packet queue semantics",
-      "status": "ready",
+      "status": "done",
       "priority": 2,
       "dependsOn": [
         "T01"
@@ -130,11 +130,17 @@
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Packet summaries now expose submitted review packets and returned redo metadata, including proposal, return notes, reviewer, and timestamps.",
+        "Returned account and prospect packets re-enter the worker queue as claimable redo work with review notes carried into the task.",
+        "Submitted account and prospect packets are excluded from agent worker scheduling.",
+        "Packet briefs include returned review constraints and explicit completion contracts for advance, nurture, not_a_fit, no_longer_target, and exhausted outcomes.",
+        "Motion packet CLI filtering and rendering now understand submitted and returned packet states."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Focused queue and CLI verification passed, syntax check passed, and full npm test exited 0 with Node v24.14.0."
     },
     {
       "id": "T03",

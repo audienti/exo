@@ -848,12 +848,15 @@ export function renderMotionWritingBrief(result) {
  *   counts: {
  *     packetCount: number,
  *     claimableCount: number,
- *     claimedCount: number
+ *     claimedCount: number,
+ *     submittedCount?: number,
+ *     returnedCount?: number
  *   },
  *   items: Array<{
  *     packetId: string,
  *     packetKind: string,
- *     claimState: "claimable" | "claimed",
+ *     claimState: "claimable" | "claimed" | "submitted",
+ *     reviewState?: "submitted" | "returned" | null,
  *     companyId: string,
  *     companyName: string,
  *     prospectId?: string,
@@ -865,6 +868,9 @@ export function renderMotionWritingBrief(result) {
  *     targetProspectCount: number,
  *     workerLabel: string | null,
  *     claimedAt: string | null,
+ *     completedAt?: string | null,
+ *     returnedAt?: string | null,
+ *     returnNotes?: string | null,
  *     notes: string | null
  *   }>
  * }} result
@@ -877,6 +883,8 @@ export function renderMotionPacketSummary(result) {
     `Packets: ${result.counts.packetCount}`,
     `Claimable: ${result.counts.claimableCount}`,
     `Claimed: ${result.counts.claimedCount}`,
+    `Submitted: ${result.counts.submittedCount ?? 0}`,
+    `Returned: ${result.counts.returnedCount ?? 0}`,
     ""
   ];
 
@@ -886,7 +894,8 @@ export function renderMotionPacketSummary(result) {
   }
 
   for (const item of result.items) {
-    lines.push(`${item.companyName}  [${item.packetKind}]  [${item.claimState}]`);
+    const stateLabel = item.reviewState ?? item.claimState;
+    lines.push(`${item.companyName}  [${item.packetKind}]  [${stateLabel}]`);
     lines.push(`  Packet ID: ${item.packetId}`);
     lines.push(`  Company ID: ${item.companyId}`);
     if (item.prospectId) {
@@ -906,6 +915,15 @@ export function renderMotionPacketSummary(result) {
     }
     if (item.claimedAt) {
       lines.push(`  Claimed At: ${item.claimedAt}`);
+    }
+    if (item.completedAt) {
+      lines.push(`  Completed At: ${item.completedAt}`);
+    }
+    if (item.returnedAt) {
+      lines.push(`  Returned At: ${item.returnedAt}`);
+    }
+    if (item.returnNotes) {
+      lines.push(`  Return Notes: ${item.returnNotes}`);
     }
     if (item.notes) {
       lines.push(`  Notes: ${item.notes}`);
