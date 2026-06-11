@@ -44,10 +44,21 @@ export function runCliText(tempDir, args, extraEnv = {}) {
     delete mergedEnv.CODEX_SHELL;
   }
 
+  // buildNodeTestEnv strips inherited state-dir overrides; pin the child to the
+  // temp workspace explicitly instead of trusting cwd resolution, so a stray
+  // EXO_STATE_DIR in the parent shell can never reach the live database.
+  const env = buildNodeTestEnv(mergedEnv);
+  env.EXO_STATE_DIR = Object.prototype.hasOwnProperty.call(extraEnv, "EXO_STATE_DIR")
+    ? extraEnv.EXO_STATE_DIR
+    : path.join(tempDir, ".exo");
+  if (Object.prototype.hasOwnProperty.call(extraEnv, "EXO_HOME_STATE_DIR")) {
+    env.EXO_HOME_STATE_DIR = extraEnv.EXO_HOME_STATE_DIR;
+  }
+
   return execFileSync("node", [cliPath, ...args], {
     cwd: tempDir,
     encoding: "utf8",
-    env: buildNodeTestEnv(mergedEnv)
+    env
   });
 }
 
