@@ -139,7 +139,7 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
+      "commit": "ae86987c633a3bf5bbec4c8516e2f99f2b57e9d8",
       "notes": "Focused queue and CLI verification passed, syntax check passed, and full npm test exited 0 with Node v24.14.0."
     },
     {
