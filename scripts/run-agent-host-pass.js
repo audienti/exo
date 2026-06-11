@@ -204,6 +204,12 @@ function runUnlockedAgentHostPass() {
   const startedAt = new Date().toISOString();
   const startedAtMs = Date.now();
   const results = [];
+  // Tasks that failed or blocked in THIS pass are not re-selected within it.
+  // Without this, a deterministically failing task (e.g. a sync slice whose
+  // payload is rejected) hot-loops and burns the whole pass budget — observed
+  // live: one failing followers slice retried 26 times in 14 minutes while
+  // every other surface starved. Cross-pass backoff is separate policy work.
+  const failedTaskFingerprints = new Set();
   let standardTaskCount = 0;
   let maintenanceTaskCount = 0;
   let backfillTaskCount = 0;
@@ -242,6 +248,7 @@ function runUnlockedAgentHostPass() {
           standardTaskCount,
           maintenanceTaskCount,
           backfillTaskCount,
+          failedTaskFingerprints,
         },
       );
       if (!task) {
@@ -288,6 +295,9 @@ function runUnlockedAgentHostPass() {
         hostState = mutateHostState((state) => releaseCheckedOutTask(state, executableTask));
       }
       results.push(result);
+      if (result.status === "failed" || result.status === "blocked") {
+        failedTaskFingerprints.add(createTaskLeaseFingerprint(executableTask));
+      }
       if (shouldRecordMotionTaskRun(executableTask)) {
         hostState = mutateHostState((state) => recordMotionTaskRun(state, {
           taskKind: executableTask.kind,
@@ -812,7 +822,7 @@ function isOperatorControlledSendTask(task) {
  * @param {Array<Record<string, any>>} [automationWarnings]
  * @param {Array<Record<string, any>>} [automationHealthWarnings]
  * @param {boolean} [forceRetrieval]
- * @param {{ passLane?: "standard" | "maintenance" | null, standardTaskCount?: number, maintenanceTaskCount?: number, backfillTaskCount?: number }} [passState]
+ * @param {{ passLane?: "standard" | "maintenance" | null, standardTaskCount?: number, maintenanceTaskCount?: number, backfillTaskCount?: number, failedTaskFingerprints?: Set<string> }} [passState]
  */
 export function chooseNextQueueTask(
   queue,
@@ -837,6 +847,13 @@ export function chooseNextQueueTask(
     : orderedTasks;
   for (const task of candidateTasks) {
     if (!taskMatchesPassLane(task, passState)) {
+      continue;
+    }
+
+    // A task that already failed or blocked in this pass is excluded for the
+    // remainder of the pass; re-running it immediately would repeat the same
+    // failure and starve every other candidate.
+    if (passState.failedTaskFingerprints?.has(createTaskLeaseFingerprint(task))) {
       continue;
     }
 

@@ -2408,3 +2408,61 @@ test("explainNoopPass ignores an expired runtime usage-limit hold", () => {
   );
   assert.doesNotMatch(reason, /usage limit/i);
 });
+
+test("chooseNextQueueTask skips tasks that already failed in the current pass", () => {
+  const failingTask = {
+    kind: "run_inbound_sync",
+    id: "sync-followers",
+    userId: "user-1",
+    accountId: "account-1",
+    capability: "linkedin",
+    surfaceKeys: ["linkedin-followers-list"],
+    mode: "quick",
+  };
+  const nextTask = {
+    kind: "run_inbound_sync",
+    id: "sync-inbox",
+    userId: "user-1",
+    accountId: "account-1",
+    capability: "linkedin",
+    surfaceKeys: ["linkedin-messaging-inbox"],
+    mode: "quick",
+  };
+  const queue = { tasks: [failingTask, nextTask], waiting: [], blockers: [] };
+
+  const beforeFailure = chooseNextQueueTask(queue, true);
+  assert.equal(beforeFailure?.id, "sync-followers");
+
+  const afterFailure = chooseNextQueueTask(
+    queue,
+    true,
+    {},
+    new Date().toISOString(),
+    false,
+    "verify",
+    [],
+    [],
+    false,
+    { failedTaskFingerprints: new Set([createTaskLeaseFingerprint(failingTask)]) },
+  );
+  assert.equal(afterFailure?.id, "sync-inbox");
+
+  const allFailed = chooseNextQueueTask(
+    queue,
+    true,
+    {},
+    new Date().toISOString(),
+    false,
+    "verify",
+    [],
+    [],
+    false,
+    {
+      failedTaskFingerprints: new Set([
+        createTaskLeaseFingerprint(failingTask),
+        createTaskLeaseFingerprint(nextTask),
+      ]),
+    },
+  );
+  assert.equal(allFailed, null);
+});
