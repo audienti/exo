@@ -141,7 +141,18 @@ function renderScopeSection(onboarding) {
  */
 function renderUserSection(onboarding) {
   if (onboarding.status === "needs-scope") {
-    return "";
+    return (
+      `<section class="op-sec onboarding-sec">` +
+      sectionHead({ icon: "userPlus", title: "First outreach user", sub: "Choose install scope first." }) +
+      card({
+        className: "onboarding-option",
+        children:
+          `<div class="compose-label">User label</div>` +
+          `<p class="motion-intake-helper">Who is the first user we're managing in Exo?</p>` +
+          `<div class="onboarding-path"><span>Status</span><code>waiting for install scope</code></div>`,
+      }) +
+      `</section>`
+    );
   }
 
   if (onboarding.status === "needs-user") {
