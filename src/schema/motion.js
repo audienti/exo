@@ -14,6 +14,16 @@ import {
 } from "./company.js";
 
 const statusSchema = z.enum(["draft", "active", "paused", "archived"]);
+const packetReviewModeSchema = z.enum(["auto", "review"]);
+const packetReviewPolicySchema = z.union([
+  packetReviewModeSchema,
+  z.object({
+    default: packetReviewModeSchema.default("auto"),
+    company_research: packetReviewModeSchema.optional(),
+    prospect_selection: packetReviewModeSchema.optional(),
+    prospect_research: packetReviewModeSchema.optional()
+  })
+]).default("auto");
 const targetMapSchema = z.object({
   status: z.enum(["pending", "ready"]),
   accounts: z.array(targetAccountSchema).default([]),
@@ -46,6 +56,7 @@ export const motionCoreSchema = z.object({
     variants: z.array(z.unknown()).default([])
   }),
   nextSteps: z.array(z.string()).default([]),
+  packetReviewPolicy: packetReviewPolicySchema,
   engagementProfileAssignment: companyEngagementProfileAssignmentSchema.nullable().default(null),
   engagementUserAssignment: companyEngagementUserAssignmentSchema.nullable().default(null)
 });

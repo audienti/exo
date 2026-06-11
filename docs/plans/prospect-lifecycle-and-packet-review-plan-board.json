@@ -52,13 +52,13 @@
       ],
       "notes": "Baseline needed one preflight repair for a red cold-start onboarding UI test. Full suite then passed with Node v24.14.0: 704 pass, 0 fail."
     },
-    "updatedAt": "2026-06-11T10:46:10Z"
+    "updatedAt": "2026-06-11T10:58:51Z"
   },
   "tasks": [
     {
       "id": "T01",
       "title": "Add packet review policy and proposal transactions",
-      "status": "ready",
+      "status": "done",
       "priority": 1,
       "dependsOn": [],
       "ownerLane": "controller",
@@ -87,16 +87,22 @@
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added packetReviewPolicy schema support with auto default and per-kind review overrides.",
+        "Added review-aware packet completion that parks account and prospect packets as submitted without queue advancement.",
+        "Added core accept and return operations for reviewed account and prospect packets.",
+        "Preserved submitted and returned packet state through normalized hydration.",
+        "Verified T01 with focused lifecycle tests, npm run check, and full npm test."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "b2f85880ebf650551cb4cb1ec5ba8dfaeb718805",
+      "notes": "Full suite passed with Node v24.14.0: 706 pass, 0 fail."
     },
     {
       "id": "T02",
       "title": "Update worker briefs and packet queue semantics",
-      "status": "backlog",
+      "status": "ready",
       "priority": 2,
       "dependsOn": [
         "T01"

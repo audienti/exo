@@ -324,11 +324,15 @@ export const queueStateSchema = z.object({
 
 export const packetStateSchema = z.object({
   kind: z.enum(["company_research", "prospect_selection", "prospect_research"]),
-  status: z.enum(["claimed", "completed"]),
+  status: z.enum(["claimed", "completed", "submitted", "returned"]),
   workerLabel: nullableString.default(null),
   claimedAt: z.string().datetime().nullable().default(null),
   completedAt: z.string().datetime().nullable().default(null),
-  notes: nullableString.default(null)
+  notes: nullableString.default(null),
+  proposal: z.record(z.unknown()).nullable().default(null),
+  returnNotes: nullableString.default(null),
+  returnedAt: z.string().datetime().nullable().default(null),
+  reviewer: nullableString.default(null)
 });
 
 export const cadenceStateSchema = z.object({

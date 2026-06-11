@@ -1101,17 +1101,21 @@ function unwrapPayloadEnvelope(payload) {
  * @param {unknown} [payloadPacketState]
  */
 function buildPacketState(row, kind, payloadPacketState = null) {
-  if (row.packet_status !== "claimed" && !row.packet_claimed_by && !row.packet_claimed_at) return null;
+  if (!row.packet_status && !row.packet_claimed_by && !row.packet_claimed_at) return null;
   const payload = payloadPacketState && typeof payloadPacketState === "object" && !Array.isArray(payloadPacketState)
     ? payloadPacketState
     : {};
   return {
     kind,
-    status: "claimed",
+    status: row.packet_status ?? payload.status ?? "claimed",
     workerLabel: row.packet_claimed_by ?? payload.workerLabel ?? null,
     claimedAt: row.packet_claimed_at ?? payload.claimedAt ?? null,
-    completedAt: null,
+    completedAt: payload.completedAt ?? null,
     notes: payload.notes ?? null,
+    proposal: payload.proposal ?? null,
+    returnNotes: payload.returnNotes ?? null,
+    returnedAt: payload.returnedAt ?? null,
+    reviewer: payload.reviewer ?? null,
   };
 }
 
@@ -1122,7 +1126,7 @@ function buildPacketState(row, kind, payloadPacketState = null) {
  */
 function packetKindForAccountRow(row, payloadPacketState) {
   if (
-    row.packet_status === "claimed"
+    row.packet_status
     && payloadPacketState
     && typeof payloadPacketState === "object"
     && !Array.isArray(payloadPacketState)
@@ -1154,7 +1158,10 @@ function queueStateSourceForAccountRow(row, payloadQueueState) {
  */
 function packetStatusFromPacketState(packetState) {
   if (!packetState || typeof packetState !== "object" || Array.isArray(packetState)) return null;
-  return packetState.status === "claimed" ? "claimed" : null;
+  if (packetState.status === "claimed" || packetState.status === "submitted" || packetState.status === "returned") {
+    return packetState.status;
+  }
+  return null;
 }
 
 /**

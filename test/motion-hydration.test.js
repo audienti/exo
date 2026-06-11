@@ -24,6 +24,8 @@ import {
 } from "../src/db/database.js";
 import { claimMotionProspectPacket } from "../src/core/claim-motion-prospect-packet.js";
 import { claimMotionTargetAccountPacket } from "../src/core/claim-target-account-packet.js";
+import { acceptMotionProspectPacket, returnMotionProspectPacket } from "../src/core/review-motion-prospect-packet.js";
+import { acceptMotionTargetAccountPacket, returnMotionTargetAccountPacket } from "../src/core/review-target-account-packet.js";
 import { completeMotionProspectPacket } from "../src/core/complete-motion-prospect-packet.js";
 import { completeMotionTargetAccountPacket } from "../src/core/complete-target-account-packet.js";
 import { recordMotionProspect } from "../src/core/record-prospect.js";
@@ -43,6 +45,7 @@ test("motion schemas split stored core from hydrated legacy view", () => {
   const core = motionCoreSchema.parse(view);
 
   assert.equal("targetMap" in core, false);
+  assert.equal(core.packetReviewPolicy, "auto");
   assert.equal(motionSchema, motionViewSchema);
   assert.equal(motionViewSchema.parse(view).targetMap.status, "pending");
 });
@@ -319,6 +322,142 @@ test("packet completion writes terminal dispositions and system events to normal
     assert.equal(prospectRow.disposition, "exhausted");
     assert.equal(prospectRow.packet_status, null);
     assert.equal(prospectRow.packet_claimed_by, null);
+    assert.equal(
+      listActivityEvents({ prospectId: prospect.id })
+        .filter((event) => event.kind === "system" && event.payload?.subject === "prospect")
+        .length,
+      1
+    );
+  });
+});
+
+test("review policy parks account packets until accept, amend, or return", () => {
+  withIsolatedExoState(() => {
+    const motion = seedMotionView({ packetReviewPolicy: "review" });
+    const company = buildFullCompany(findOrCreateCompany({
+      id: "company-review-account",
+      name: "Review Account Co",
+      domain: "review-account.example",
+      websiteUrl: "https://review-account.example",
+    }), motion.id);
+    const claimedMotion = claimMotionTargetAccountPacket(motion, company, {
+      workerLabel: "account-worker",
+    });
+
+    completeMotionTargetAccountPacket(claimedMotion, company, {
+      workerLabel: "account-worker",
+      nextStatus: "researched",
+      notes: "Strong enough to review.",
+    });
+
+    let accountRow = getLocalDatabase()
+      .prepare("SELECT * FROM motion_accounts WHERE motion_id = ? AND company_id = ?")
+      .get(motion.id, company.id);
+    let accountPayload = JSON.parse(accountRow.payload_json);
+    assert.equal(accountRow.queue_status, "queued_for_research");
+    assert.equal(accountRow.packet_status, "submitted");
+    assert.equal(accountPayload.packetState.status, "submitted");
+    assert.equal(accountPayload.packetState.proposal.action, "advance");
+    assert.equal(accountPayload.packetState.proposal.nextStatus, "researched");
+
+    returnMotionTargetAccountPacket(findMotionById(motion.id), company, {
+      notes: "Need source quality checked.",
+      reviewer: "operator",
+    });
+    accountRow = getLocalDatabase()
+      .prepare("SELECT * FROM motion_accounts WHERE motion_id = ? AND company_id = ?")
+      .get(motion.id, company.id);
+    accountPayload = JSON.parse(accountRow.payload_json);
+    assert.equal(accountRow.packet_status, "returned");
+    assert.equal(accountPayload.packetState.status, "returned");
+    assert.equal(accountPayload.packetState.returnNotes, "Need source quality checked.");
+    assert.equal(accountRow.queue_status, "queued_for_research");
+
+    acceptMotionTargetAccountPacket(findMotionById(motion.id), company, {
+      outcome: "no_longer_target",
+      reason: "Account is outside the active ICP.",
+      reviewer: "operator",
+    });
+
+    accountRow = getLocalDatabase()
+      .prepare("SELECT * FROM motion_accounts WHERE motion_id = ? AND company_id = ?")
+      .get(motion.id, company.id);
+    assert.equal(accountRow.queue_status, "suppressed");
+    assert.equal(accountRow.disposition, "no_longer_target");
+    assert.equal(accountRow.packet_status, null);
+    assert.equal(
+      listActivityEvents({ motionId: motion.id, companyId: company.id })
+        .filter((event) => event.kind === "system" && event.payload?.subject === "account")
+        .length,
+      1
+    );
+  });
+});
+
+test("review policy parks prospect packets and accepts nurture without advancing queue status", () => {
+  withIsolatedExoState(() => {
+    const motion = seedMotionView({ packetReviewPolicy: { default: "auto", prospect_research: "review" } });
+    const company = buildFullCompany(findOrCreateCompany({
+      id: "company-review-prospect",
+      name: "Review Prospect Co",
+      domain: "review-prospect.example",
+      websiteUrl: "https://review-prospect.example",
+    }), motion.id);
+    const prospectMotion = recordMotionProspect(motion, company, {
+      id: "prospect-review-nurture",
+      name: "Nora Nurture",
+      title: "VP Marketing",
+      linkedinProfileUrl: "https://www.linkedin.com/in/nora-nurture",
+      whyRelevant: "Owns lifecycle review.",
+    });
+    const prospect = prospectMotion.targetMap.accounts
+      .find((account) => account.companyId === company.id)
+      ?.prospects[0];
+    assert.ok(prospect);
+    const claimedMotion = claimMotionProspectPacket(prospectMotion, company, {
+      prospectId: prospect.id,
+      workerLabel: "prospect-worker",
+    });
+
+    completeMotionProspectPacket(claimedMotion, company, {
+      prospectId: prospect.id,
+      workerLabel: "prospect-worker",
+      outcome: "nurture",
+      reason: "Worth revisiting after the next funding milestone.",
+    });
+
+    let prospectRow = getLocalDatabase()
+      .prepare("SELECT * FROM prospects WHERE id = ?")
+      .get(prospect.id);
+    let prospectPayload = JSON.parse(prospectRow.payload_json);
+    assert.equal(prospectRow.queue_status, "selected");
+    assert.equal(prospectRow.disposition, "active");
+    assert.equal(prospectRow.packet_status, "submitted");
+    assert.equal(prospectPayload.packetState.proposal.action, "nurture");
+
+    returnMotionProspectPacket(findMotionById(motion.id), company, {
+      prospectId: prospect.id,
+      notes: "Add a tighter revisit note.",
+      reviewer: "operator",
+    });
+    prospectRow = getLocalDatabase()
+      .prepare("SELECT * FROM prospects WHERE id = ?")
+      .get(prospect.id);
+    prospectPayload = JSON.parse(prospectRow.payload_json);
+    assert.equal(prospectRow.packet_status, "returned");
+    assert.equal(prospectPayload.packetState.returnNotes, "Add a tighter revisit note.");
+
+    acceptMotionProspectPacket(findMotionById(motion.id), company, {
+      prospectId: prospect.id,
+      reviewer: "operator",
+    });
+
+    prospectRow = getLocalDatabase()
+      .prepare("SELECT * FROM prospects WHERE id = ?")
+      .get(prospect.id);
+    assert.equal(prospectRow.queue_status, "selected");
+    assert.equal(prospectRow.disposition, "nurture");
+    assert.equal(prospectRow.packet_status, null);
     assert.equal(
       listActivityEvents({ prospectId: prospect.id })
         .filter((event) => event.kind === "system" && event.payload?.subject === "prospect")
