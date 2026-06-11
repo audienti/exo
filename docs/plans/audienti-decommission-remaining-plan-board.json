@@ -47,7 +47,7 @@
       "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-11T18:21:25Z"
+    "updatedAt": "2026-06-11T18:52:00Z"
   },
   "tasks": [
     {
@@ -365,7 +365,7 @@
     {
       "id": "T07",
       "title": "Add agent status UI panel",
-      "status": "backlog",
+      "status": "done",
       "priority": 65,
       "dependsOn": [
         "T06"
@@ -387,11 +387,21 @@
       "verification": [
         "npm test -- test/exo-ui-server.test.js test/workspace-projection.test.js"
       ],
-      "outputs": [],
+      "outputs": [
+        "Workspace projection now builds agentStatus from the same buildAgentStatusReport path used by exo agent status, including host-state leases, last-pass artifacts, queue backlog, throughput, partial state, and inbound surface telemetry.",
+        "Workspace projection passes pruned host state into buildAgentQueue so checkout annotations and status summaries use the same live host-state view.",
+        "Workspace model data now exposes agentStatus for report workspace --json and UI routes.",
+        "The /queue route renders an Agent status panel with current work, active lane/task, due/waiting/blocker groups, throughput, partial reasons, and captured inbound surface counts.",
+        "State revision coverage for status-relevant files and locks was already present from T06/T01 and remains covered by test/exo-ui-server.test.js.",
+        "Focused T07 tests passed: npm test -- test/exo-ui-server.test.js test/workspace-runtime.test.js, 21/21.",
+        "Verified npm run check.",
+        "Live projection probe with EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo showed agentStatus present: running, 69 due then 68 due after live queue movement, 1 waiting, 0 blockers, 8 inbound surfaces.",
+        "Opened http://127.0.0.1:4327/queue in the in-app browser and verified the live Agent status panel renders without the throughput pluralization typo."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "166649fd74c019cf8632158f950fb81f7eed4511",
+      "notes": "The plan task listed test/workspace-projection.test.js, but this repo's actual projection test file is test/workspace-runtime.test.js."
     },
     {
       "id": "T08",
