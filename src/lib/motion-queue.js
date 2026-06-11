@@ -239,7 +239,30 @@ function normalizeQueueState(rawState) {
     status: state.status,
     source: state.source === "manual" ? "manual" : "derived",
     updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : null,
-    notes: normalizeNullableString(state.notes)
+    notes: normalizeNullableString(state.notes),
+    crossMotionOwner: normalizeCrossMotionOwner(state.crossMotionOwner)
+  };
+}
+
+/**
+ * @param {unknown} rawOwner
+ */
+function normalizeCrossMotionOwner(rawOwner) {
+  if (!rawOwner || typeof rawOwner !== "object" || Array.isArray(rawOwner)) {
+    return null;
+  }
+  const owner = /** @type {Record<string, any>} */ (rawOwner);
+  if (
+    typeof owner.motionId !== "string" ||
+    typeof owner.prospectId !== "string" ||
+    typeof owner.companyId !== "string"
+  ) {
+    return null;
+  }
+  return {
+    motionId: owner.motionId,
+    prospectId: owner.prospectId,
+    companyId: owner.companyId,
   };
 }
 

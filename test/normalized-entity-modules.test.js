@@ -174,6 +174,34 @@ test("person resolver sends same-slug member-id conflicts and non-merge-grade em
   });
 });
 
+test("person resolver links Gmail dot and plus variants as same-person probable", () => {
+  withIsolatedExoState(() => {
+    const jane = resolvePersonIdentity({
+      name: "Jane Buyer",
+      contactPoints: [
+        { kind: "email", value: "janebuyer@gmail.com", verificationStatus: "verified" }
+      ]
+    });
+
+    const variant = resolvePersonIdentity({
+      name: "Jane Buyer",
+      contactPoints: [
+        { kind: "email", value: "Jane.Buyer+vendor@googlemail.com", verificationStatus: "observed" }
+      ]
+    });
+
+    assert.equal(variant.person.id, jane.person.id);
+    assert.equal(variant.person.primaryEmail, "janebuyer@gmail.com");
+    assert.equal(variant.matchedBy, "email");
+    assert.equal(variant.reviewRequired, true);
+
+    const points = listContactPointsForPerson(jane.person.id);
+    const variantPoint = points.find((point) => point.value === "jane.buyer+vendor@googlemail.com");
+    assert.ok(variantPoint);
+    assert.equal(variantPoint.matchStatus, "same_person_probable");
+  });
+});
+
 test("contact normalization ports the v10 LinkedIn and email edge conditions", () => {
   assert.equal(normalizeContactValue("linkedin_member_id", "🔎ACoAAAbCDeF%255c"), "ACoAAAbCDeF");
   assert.equal(normalizeContactValue("linkedin_sales_url", "https://www.linkedin.com/sales/lead/ACoCASE_Id-123,NAME_SEARCH"), "ACoCASE_Id-123");

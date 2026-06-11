@@ -1,6 +1,5 @@
 // @ts-check
 
-import { domainToASCII } from "node:url";
 import { getLocalDatabase } from "./database.js";
 import {
   NORMALIZED_SCHEMA_VERSION,
@@ -10,18 +9,7 @@ import {
   parsePayload,
   toPayloadJson,
 } from "./normalized-utils.js";
-
-const ROLE_MAILBOX_LOCAL_PARTS = new Set([
-  "admin",
-  "billing",
-  "contact",
-  "hello",
-  "info",
-  "office",
-  "sales",
-  "support",
-  "team",
-]);
+import { normalizeEmailAddress } from "../lib/email-identity.js";
 
 /**
  * @typedef {{
@@ -68,8 +56,9 @@ export function resolvePersonIdentity(input) {
   const memberId = firstValue(points, "linkedin_member_id");
   const publicId = firstValue(points, "linkedin_public_id");
   const mergeEmail = firstMergeGradeEmail(points);
+  const emailCandidate = mergeEmail?.value ?? firstCanonicalVariantEmail(points)?.emailCanonicalVariant ?? null;
 
-  const matched = findPersonCandidate({ memberId, publicId, email: mergeEmail?.value ?? null });
+  const matched = findPersonCandidate({ memberId, publicId, email: emailCandidate });
   if (!matched) {
     const person = insertPerson({
       id: input.id ?? createEntityId("person"),
@@ -81,6 +70,7 @@ export function resolvePersonIdentity(input) {
     });
     const storedPoints = storeContactPoints(person.id, points, {
       mergeEmail: mergeEmail?.value ?? null,
+      matchedEmail: null,
       reviewOnly: false,
       now,
     });
@@ -94,6 +84,9 @@ export function resolvePersonIdentity(input) {
   }
 
   const candidate = matched.person;
+  const matchedEmail = emailCandidate && findPersonByColumnOrContactPoint("primary_email", emailCandidate)?.id === candidate.id
+    ? emailCandidate
+    : null;
   const reviewPoints = [];
   const updates = {
     linkedinMemberId: candidate.linkedinMemberId,
@@ -156,6 +149,7 @@ export function resolvePersonIdentity(input) {
   const updated = updatePersonIdentity(candidate, updates, now);
   const storedPoints = storeContactPoints(updated.id, points, {
     mergeEmail: mergeEmail?.value ?? null,
+    matchedEmail,
     reviewOnly: false,
     now,
   });
@@ -382,6 +376,7 @@ function normalizedPoint(point, kind, value) {
     source: point.source ?? null,
     observedAt: point.observedAt ?? null,
     mergeGrade: kind === "email" ? isMergeGradeEmail(email, point) : true,
+    emailCanonicalVariant: email?.canonicalVariant ?? null,
     emailRole: email?.role ?? false,
   };
 }
@@ -399,6 +394,19 @@ function firstValue(points, kind) {
  */
 function firstMergeGradeEmail(points) {
   return points.find((point) => point.kind === "email" && point.mergeGrade) ?? null;
+}
+
+/**
+ * @param {ReturnType<typeof normalizeContactPoints>} points
+ */
+function firstCanonicalVariantEmail(points) {
+  return points.find((point) =>
+    point.kind === "email"
+      && !point.mergeGrade
+      && !point.emailRole
+      && point.emailCanonicalVariant
+      && point.emailCanonicalVariant !== point.value
+  ) ?? null;
 }
 
 /**
@@ -543,19 +551,33 @@ function updatePersonIdentity(person, updates, now) {
 /**
  * @param {string} personId
  * @param {ReturnType<typeof normalizeContactPoints>} points
- * @param {{ mergeEmail: string | null, reviewOnly: boolean, now: string }} options
+ * @param {{ mergeEmail: string | null, matchedEmail: string | null, reviewOnly: boolean, now: string }} options
  */
 function storeContactPoints(personId, points, options) {
   return points.map((point) => {
-    const matchStatus = point.kind === "email" && point.value !== options.mergeEmail
-      ? "same_person_possible"
-      : "same_person_verified";
     return storeContactPoint(personId, {
       ...point,
-      matchStatus,
+      matchStatus: contactPointMatchStatus(point, options),
       now: options.now,
     });
   });
+}
+
+/**
+ * @param {ReturnType<typeof normalizeContactPoints>[number]} point
+ * @param {{ mergeEmail: string | null, matchedEmail: string | null }} options
+ */
+function contactPointMatchStatus(point, options) {
+  if (point.kind !== "email") return "same_person_verified";
+  if (point.value === options.mergeEmail) return "same_person_verified";
+  if (
+    point.emailCanonicalVariant
+    && point.emailCanonicalVariant === options.matchedEmail
+    && point.value !== options.matchedEmail
+  ) {
+    return "same_person_probable";
+  }
+  return "same_person_possible";
 }
 
 /**
@@ -780,30 +802,7 @@ function looksLikeMemberId(value) {
  * @param {string} rawValue
  */
 function normalizeEmail(rawValue) {
-  let value = rawValue.trim().replace(/^mailto:/i, "");
-  const angle = value.match(/<([^>]+)>/);
-  if (angle) value = angle[1];
-  value = value.replace(/^["']|["']$/g, "").replace(/[>),.;\s]+$/g, "").trim().toLowerCase();
-  const at = value.lastIndexOf("@");
-  if (at <= 0 || at === value.length - 1) return null;
-  const local = value.slice(0, at);
-  const domain = domainToASCII(value.slice(at + 1));
-  if (!domain) return null;
-  const exact = `${local}@${domain}`;
-  return {
-    exact,
-    canonicalVariant: buildEmailVariant(local, domain),
-    role: ROLE_MAILBOX_LOCAL_PARTS.has(local),
-  };
-}
-
-/**
- * @param {string} local
- * @param {string} domain
- */
-function buildEmailVariant(local, domain) {
-  if (domain !== "gmail.com" && domain !== "googlemail.com") return `${local}@${domain}`;
-  return `${local.split("+")[0].replace(/\./g, "")}@gmail.com`;
+  return normalizeEmailAddress(rawValue);
 }
 
 /**

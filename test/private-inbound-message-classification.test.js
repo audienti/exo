@@ -470,6 +470,95 @@ test("claimed private inbound with a ready draft returns to operator review", ()
   assert.match(dailyItem.recommendedAction, /review the drafted response/i);
 });
 
+test("gmail canonical variants bind unscoped email observations to the existing prospect", () => {
+  const { observation, rawMotions, rawCompanies } = claimedPrivateInboundFixture({
+    observationOverrides: {
+      motionId: null,
+      companyId: null,
+      prospectId: null,
+      kind: "email_reply_received",
+      capability: "gmail",
+      platform: "gmail",
+      surfaceKey: "gmail-inbox-threads",
+      actorName: "Jane Buyer",
+      actorTitle: "VP Revenue",
+      actorHandle: "jane.buyer+reply@googlemail.com",
+      actorProfileUrl: null,
+      actorLinkedinPublicId: null,
+      actorLinkedinMemberId: null,
+      threadUrl: "https://mail.google.com/mail/u/0/#inbox/thread-jane",
+      sourceUrl: "https://mail.google.com/mail/u/0/#inbox/thread-jane",
+      subject: "Re: outbound follow-up",
+      summary: "Jane Buyer replied by email.",
+      messages: [
+        {
+          id: "msg-email-1",
+          direction: "inbound",
+          sentAt: "2026-06-04T16:18:00.000Z",
+          fromName: "Jane Buyer",
+          fromHandle: "jane.buyer+reply@googlemail.com",
+          body: "Yes, send over the details.",
+        },
+      ],
+    },
+    prospectOverrides: {
+      name: "Jane Buyer",
+      title: "VP Revenue",
+      linkedinProfileUrl: null,
+      email: "janebuyer@gmail.com",
+      contactPoints: [
+        {
+          id: "contact-email-jane",
+          kind: "email",
+          value: "janebuyer@gmail.com",
+          label: "Verified email",
+          matchStatus: "same_person_verified",
+          verificationStatus: "verified",
+          confidence: "high",
+          source: "provider",
+        },
+      ],
+      drafts: [
+        {
+          id: "draft-email-1",
+          surface: "email",
+          channel: "email",
+          subject: "Re: outbound follow-up",
+          body: "Drafted email reply.",
+          status: "ready",
+          authoredBy: "agent",
+          editedByOperator: false,
+          createdAt: "2026-06-04T16:21:00.000Z",
+          updatedAt: "2026-06-04T16:21:00.000Z",
+          approvedAt: null,
+          sentAt: null,
+          notes: null,
+        },
+      ],
+    },
+  });
+  const inbox = buildInboxView(rawUser, [observation], rawMotions, rawCompanies);
+  const review = buildInboundReviewView(rawUser, [observation], rawMotions, rawCompanies);
+  const daily = buildDailyView(rawUser, rawMotions, rawCompanies, [], [observation], { now: "2026-06-04T17:00:00.000Z" });
+
+  const item = inbox.items[0];
+  assert.equal(item.claimState, "claimed_here");
+  assert.equal(item.prospect?.id, "prospect-1");
+  assert.equal(item.status, "needs-triage");
+  assert.equal(item.reviewState, "ready_for_reply");
+
+  const reviewItem = review.reviewItems[0];
+  assert.equal(reviewItem.claimState, "claimed_here");
+  assert.equal(reviewItem.prospect?.id, "prospect-1");
+  assert.equal(reviewItem.state, "ready_for_reply");
+  assert.equal(reviewItem.previewLabel, "Draft message");
+
+  const dailyItem = daily.items.find((entry) => entry.prospect?.id === "prospect-1");
+  assert.ok(dailyItem);
+  assert.equal(dailyItem.priority, "reply");
+  assert.match(dailyItem.recommendedAction, /review the drafted response/i);
+});
+
 test("later outbound thread history suppresses stale reply drafts and marks the branch handled", () => {
   const { observation, rawMotions, rawCompanies } = claimedPrivateInboundFixture({
     observationOverrides: {

@@ -142,6 +142,7 @@ export function buildMotionReport(rawMotion, rawCompanies, rawProfiles, rawUsers
           avatarSourceUrl: prospect.avatarSourceUrl,
           avatarUrl: prospect.avatarUrl,
           queueStatus: prospect.queueStatus,
+          crossMotionOwner: prospect.crossMotionOwner ?? null,
           accountDisposition: prospect.accountDisposition,
           disposition: prospect.disposition,
           packetStatus: prospect.packetStatus,

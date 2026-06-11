@@ -5,6 +5,7 @@ import { browserProfileCapabilitySchema } from "../schema/browser-profile.js";
 import { inboundObservationKindSchema, inboundObservationSchema, inboundSurfaceKeySchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 import { findInboundSurfaceDefinition } from "../lib/inbound-surface-catalog.js";
+import { buildEmailIdentityValues } from "../lib/email-identity.js";
 import { normalizeImageProxyFields } from "../lib/image-proxy.js";
 import { listInboundObservations } from "../db/database.js";
 import {
@@ -279,7 +280,9 @@ function buildInboundIdentityKeys(observation, options) {
     if (normalizedHandle) {
       keys.add(`actor_handle:${normalizedHandle}`);
       if (normalizedHandle.includes("@")) {
-        keys.add(`email:${normalizeContactValue("email", normalizedHandle)}`);
+        for (const email of buildEmailIdentityValues(normalizedHandle)) {
+          keys.add(`email:${email}`);
+        }
       }
     }
   }

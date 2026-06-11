@@ -319,7 +319,12 @@ export const queueStateSchema = z.object({
   status: queueStatusSchema.default("discovered"),
   source: z.enum(["derived", "manual"]).default("derived"),
   updatedAt: z.string().datetime().nullable().default(null),
-  notes: nullableString.default(null)
+  notes: nullableString.default(null),
+  crossMotionOwner: z.object({
+    motionId: z.string().min(1),
+    prospectId: z.string().min(1),
+    companyId: z.string().min(1),
+  }).nullable().default(null)
 });
 
 export const packetStateSchema = z.object({

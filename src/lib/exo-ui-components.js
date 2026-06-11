@@ -140,6 +140,7 @@ const STATE_META = {
   archived: ["#52525b", "archived"],
   ready: ["#22c55e", "ready"],
   waiting: ["#94a3b8", "waiting"],
+  "held-cross-motion": ["#f59e0b", "held behind owner"],
   blocked: ["#ef4444", "blocked"],
   identified: ["#38bdf8", "identified"],
   "pre-connect": ["#a78bfa", "pre-connect"],

@@ -192,6 +192,8 @@ function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, k
     branch: mapBranchState(person.branchState?.key),
     branchLabel: person.branchState?.label ?? null,
     owner: person.ownerLabel ?? null,
+    queueStatus: person.queueStatus ?? null,
+    crossMotionOwner: person.crossMotionOwner ?? null,
   }));
   const reviewPackets = shapeReviewPackets(rawMotion, rawCompanies, detail);
 
@@ -498,6 +500,8 @@ function mapBranchState(key) {
       return "connection-requested";
     case "waiting":
       return "waiting";
+    case "held-cross-motion":
+      return "held-cross-motion";
     case "reply-accepted":
       return "connected";
     case "blocked":

@@ -14,6 +14,8 @@ process.env.EXO_STATE_DIR = stateDir;
 
 const { recordActionResult } = await import("../src/core/record-action-result.js");
 const { buildAgentQueue } = await import("../src/core/build-agent-queue.js");
+const { buildMotionsViewModel } = await import("../src/core/build-motions-view.js");
+const { renderMotionDetailPage } = await import("../src/artifacts/render-motions.js");
 const {
   findMotionById,
   getLocalDatabase,
@@ -303,6 +305,32 @@ test("recordActionResult blocks stale outbound send when another motion owns the
     .prepare("SELECT status FROM prospect_drafts WHERE prospect_id = ? AND surface = 'connection_request'")
     .get(prospectB.id);
   assert.equal(draft.status, "approved");
+
+  const user = cliJson(["users", "add", "--label", "Held Visibility User", "--owner", "Operator"]);
+  const workspaceJson = cliJson(["report", "workspace", "--user", user.id]);
+  const heldMotionDetail = workspaceJson.motionDetails.find((detail) => detail.motionId === motionB.id);
+  assert.ok(heldMotionDetail, "expected held motion to be visible in workspace detail data");
+  const heldPerson = heldMotionDetail.people.find((person) => person.prospectId === prospectB.id);
+  assert.ok(heldPerson, "expected held branch to be visible on its owning motion");
+  assert.equal(heldPerson.branchState.key, "held-cross-motion");
+  assert.equal(heldPerson.branchState.label, "Held behind owner");
+  assert.equal(heldPerson.queueStatus, "held_cross_motion");
+  assert.equal(heldPerson.crossMotionOwner?.motionId, motionA.id);
+
+  const motionModel = buildMotionsViewModel({
+    motionSummaries: workspaceJson.motionSummaries,
+    motionDetails: workspaceJson.motionDetails,
+    rawMotions: listMotions(),
+  });
+  const renderedHeldMotion = motionModel.details.find((detail) => detail.id === motionB.id);
+  assert.ok(renderedHeldMotion, "expected held motion detail page model");
+  const renderedHeldPerson = renderedHeldMotion.people.find((person) => person.id === prospectB.id);
+  assert.equal(renderedHeldPerson?.branch, "held-cross-motion");
+  assert.equal(renderedHeldPerson?.branchLabel, "Held behind owner");
+  assert.equal(renderedHeldPerson?.crossMotionOwner?.motionId, motionA.id);
+  const html = renderMotionDetailPage(renderedHeldMotion, { interactive: true });
+  assert.match(html, /Sam Sameperson/);
+  assert.match(html, /Held behind owner/);
 });
 
 test("recordActionResult writes back outbound send and marks a queued draft sent", () => {

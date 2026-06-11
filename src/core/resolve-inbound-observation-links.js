@@ -1,6 +1,7 @@
 // @ts-check
 
 import { motionSchema } from "../schema/motion.js";
+import { buildEmailIdentityValues } from "../lib/email-identity.js";
 import {
   buildLinkedinProfileUrlFromPublicId,
   extractLinkedinPublicId,
@@ -215,8 +216,7 @@ function buildInputIdentityKeys(input) {
  * @param {string | null | undefined} value
  */
 function addEmailKey(keys, value) {
-  const normalized = normalizeContactKeyValue("email", value);
-  if (normalized) {
+  for (const normalized of buildEmailIdentityValues(value)) {
     keys.add(`email:${normalized}`);
   }
 }

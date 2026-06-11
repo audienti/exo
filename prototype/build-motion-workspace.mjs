@@ -364,6 +364,7 @@ function renderMotionStateDot(state, label = null) {
     paused: { color: "#f59e0b", label: "paused" },
     ready: { color: "#22c55e", label: "ready" },
     waiting: { color: "#94a3b8", label: "waiting" },
+    "held-cross-motion": { color: "#f59e0b", label: "held behind owner" },
     blocked: { color: "#ef4444", label: "blocked" },
     "reply-accepted": { color: "#22c55e", label: "reply / accepted" },
     "sent-pending": { color: "#818cf8", label: "sent / pending" },
@@ -710,6 +711,18 @@ function deriveEngagementLane(prospect, dailyItem) {
   const lastOutcome = cadence.lastTouchOutcome ?? lastTouch?.outcome ?? null;
   const nextAction = (dailyItem?.recommendedAction ?? prospect.nextAction ?? cadence.nextAction ?? "").toLowerCase();
   const queueStatus = prospect.queueStatus ?? cadence.status;
+
+  if (queueStatus === "held_cross_motion") {
+    const owner = prospect.queueState?.crossMotionOwner ?? prospect.crossMotionOwner ?? null;
+    return {
+      key: "held-cross-motion",
+      label: "Held behind owner",
+      description: owner?.motionId
+        ? `This branch is held behind active outbound ownership in motion ${owner.motionId}.`
+        : "This branch is held because the same person is active in another motion.",
+      owner,
+    };
+  }
 
   if (queueStatus === "suppressed" || queueStatus === "exhausted" || cadence.status === "exhausted") {
     return {
@@ -1189,6 +1202,8 @@ function buildMotionDetailModels(reports, motionSummaries, daily, inboundReview)
           linkedinProfileUrl: prospect.linkedinProfileUrl,
           avatarUrl: prospect.avatarUrl,
           branchState,
+          queueStatus: prospect.queueStatus ?? null,
+          crossMotionOwner: prospect.queueState?.crossMotionOwner ?? prospect.crossMotionOwner ?? null,
           ownerLabel: executionIdentity?.user?.label ?? executionIdentity?.profile?.label ?? "Unassigned",
           signalLabel: primarySignal?.summary ?? primarySignal?.signalName ?? prospect.whyRelevant,
           signalQuestion: primarySignal?.question ?? primarySignal?.signalName ?? null,
@@ -3407,6 +3422,7 @@ function renderPage({
     { key: "ready", label: "Ready", description: "Prepared branches that still need their first governed move." },
     { key: "sent-pending", label: "Sent / pending", description: "Touches are in flight and waiting on the other side." },
     { key: "waiting", label: "Waiting", description: "Branches intentionally held in reserve or waiting on a checkpoint." },
+    { key: "held-cross-motion", label: "Held behind owner", description: "The same person is active in another motion, so this branch stays visible but cannot run." },
     { key: "blocked", label: "Blocked", description: "Primary path failed or the channel blocked." },
     { key: "reply-accepted", label: "Reply / accepted", description: "Cold-start phase is over; live response handling takes over." },
     { key: "exhausted", label: "Exhausted", description: "No further governed move is exposed here right now." },
@@ -7320,6 +7336,7 @@ export function buildWorkspaceModel(input) {
     { key: "ready", label: "Ready", description: "Prepared branches that still need their first governed move." },
     { key: "sent-pending", label: "Sent / pending", description: "Touches are in flight and waiting on the other side." },
     { key: "waiting", label: "Waiting", description: "Branches intentionally held in reserve or waiting on a checkpoint." },
+    { key: "held-cross-motion", label: "Held behind owner", description: "The same person is active in another motion, so this branch stays visible but cannot run." },
     { key: "blocked", label: "Blocked", description: "Primary path failed or the channel blocked." },
     { key: "reply-accepted", label: "Reply / accepted", description: "Cold-start phase is over; live response handling takes over." },
     { key: "exhausted", label: "Exhausted", description: "No further governed move is exposed here right now." },
