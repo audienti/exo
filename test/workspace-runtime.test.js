@@ -118,6 +118,42 @@ test("report workspace exposes the unified agent queue separately from blockers 
       "--json",
     ]);
 
+    const stateDir = path.join(tempDir, ".exo");
+    const nowMs = Date.now();
+    const startedAt = new Date(nowMs - 3 * 60 * 1000).toISOString();
+    const finishedAt = new Date(nowMs - 60 * 1000).toISOString();
+    const expiresAt = new Date(nowMs + 30 * 60 * 1000).toISOString();
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "agent-host-state.json"), JSON.stringify({
+      taskLeases: [
+        {
+          taskKind: "run_inbound_sync",
+          fingerprint: "workspace-status-lease",
+          workerLabel: "workspace-agent",
+          acquiredAt: startedAt,
+          expiresAt,
+          userId: user.id,
+          capability: "linkedin",
+          subject: "Workspace runtime surface",
+          action: "run_inbound_sync",
+        },
+      ],
+    }, null, 2));
+    fs.writeFileSync(path.join(stateDir, "agent-last-pass.json"), JSON.stringify({
+      status: "partial",
+      reason: null,
+      startedAt,
+      endedAt: finishedAt,
+      results: [
+        {
+          kind: "prospect_research",
+          status: "completed",
+          startedAt,
+          finishedAt,
+        },
+      ],
+    }, null, 2));
+
     const report = runCliJson(tempDir, [
       "report",
       "workspace",
@@ -127,8 +163,18 @@ test("report workspace exposes the unified agent queue separately from blockers 
     ]);
 
     assert.ok(report.agentQueue, "workspace report should expose the agent queue");
+    assert.ok(report.agentStatus, "workspace report should expose the agent status panel data");
     assert.ok(report.blockedQueue, "workspace report should expose operator blockers separately");
     assert.ok(report.executionBacklog, "workspace report should expose packet/backlog pressure separately");
+
+    assert.equal(report.agentStatus.state, "running");
+    assert.equal(report.agentStatus.current.activeTaskCount, 1);
+    assert.equal(report.agentStatus.current.tasks[0].lane, "transport");
+    assert.equal(report.agentStatus.current.tasks[0].subject, "Workspace runtime surface");
+    assert.equal(report.agentStatus.backlog.dueTaskCount, 2);
+    assert.equal(report.agentStatus.backlog.waitingTaskCount, 1);
+    assert.equal(report.agentStatus.partial.active, true);
+    assert.equal(report.agentStatus.throughput.lastPass.resultCount, 1);
 
     assert.equal(report.agentQueue.tasks.length, 2);
     assert.equal(report.agentQueue.waiting.length, 1);

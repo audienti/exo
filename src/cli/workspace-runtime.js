@@ -1,6 +1,9 @@
 // @ts-check
 
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { buildAgentStatusReport } from "../core/build-agent-status.js";
 import { buildAgentQueue } from "../core/build-agent-queue.js";
 import { buildDailyView } from "../core/build-daily-view.js";
 import { buildInboxView } from "../core/build-inbox-view.js";
@@ -30,6 +33,8 @@ import {
   updateMotion,
   upsertInboundObservation,
 } from "../db/database.js";
+import { getHomeStateDir } from "../db/paths.js";
+import { pruneExpiredBrowserBackoffs } from "../lib/agent-host-state.js";
 import { buildUserWorkspaceContext, filterWorkspaceObservationsForUser } from "../core/workspace-context.js";
 import { buildWorkspaceModel } from "../../prototype/build-motion-workspace.mjs";
 
@@ -68,6 +73,9 @@ export function buildWorkspaceProjection(input) {
     user,
     workspaceContext.effectivePolicy,
   );
+  const stateDir = getHomeStateDir();
+  const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")), now);
+  const lastPass = readJsonIfExists(path.join(stateDir, "agent-last-pass.json"));
 
   const inboundReview = buildInboundReviewView(workspaceContext.user, workspaceContext.observations, motions, companies);
   const inbox = buildInboxView(workspaceContext.user, workspaceContext.observations, motions, companies);
@@ -96,6 +104,15 @@ export function buildWorkspaceProjection(input) {
     observations: filteredAllObservations,
     cues: workspaceContext.cues,
     prospectBranches: listAgentQueueProspectBranches(),
+    hostState,
+  });
+  const agentStatus = buildAgentStatusReport({
+    stateDir,
+    queue: agentQueue,
+    hostState,
+    users,
+    lastPass,
+    now,
   });
 
   return buildWorkspaceModel({
@@ -105,10 +122,23 @@ export function buildWorkspaceProjection(input) {
     inbox,
     daily,
     agentQueue,
+    agentStatus,
     reports,
     regenerateCommand: input.regenerateCommand,
     interactive: input.interactive ?? null,
   });
+}
+
+/**
+ * @param {string} filePath
+ */
+function readJsonIfExists(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 /**

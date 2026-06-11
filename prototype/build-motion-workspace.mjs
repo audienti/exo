@@ -7247,6 +7247,7 @@ function renderPage({
  *   inbox: any,
  *   daily: any,
  *   agentQueue?: any,
+ *   agentStatus?: any,
  *   reports: any[],
  *   regenerateCommand?: string,
  *   interactive?: { enabled?: boolean, actionEndpoint?: string, workerLabel?: string } | null
@@ -7260,6 +7261,7 @@ export function buildWorkspaceModel(input) {
     inbox,
     daily,
     agentQueue: rawAgentQueue = null,
+    agentStatus: rawAgentStatus = null,
     reports,
     regenerateCommand = DEFAULT_REGENERATE_COMMAND,
     interactive = null,
@@ -7384,6 +7386,7 @@ export function buildWorkspaceModel(input) {
       operatorSummary,
       decisionQueue,
       agentQueue,
+      agentStatus: rawAgentStatus,
       blockedQueue,
       executionBacklog,
       interactive: interactive ? { enabled: Boolean(interactive.enabled), actionEndpoint: interactive.actionEndpoint ?? null } : null,

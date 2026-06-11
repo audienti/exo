@@ -325,6 +325,138 @@ test("ui projection cache invalidates when a second WAL-backed motion write chan
   assert.equal(buildCount, 2);
 });
 
+test("queue route renders the agent status panel from workspace projection data", async () => {
+  await withSeededRouteUser(async () => {
+    const html = await renderRoute("/queue", { userId: "user-1", capability: "linkedin" }, {
+      resolveWorkspaceProjectionForUi: async () => ({
+        data: {
+          user: { id: "user-1", label: "Route User", owner: "William" },
+          generatedAt: "2026-06-11T12:00:00.000Z",
+          operatorSummary: null,
+          decisionQueue: { items: [] },
+          agentQueue: {
+            items: [
+              {
+                id: "task-1",
+                subject: "Workspace runtime surface",
+                action: "Run inbound sync",
+                why: "Keep visible totals current.",
+                capability: "linkedin",
+                dueAt: "2026-06-11T11:55:00.000Z",
+              },
+            ],
+            blockers: [],
+          },
+          blockedQueue: { items: [] },
+          dueNowItems: [],
+          waitingItems: [],
+          truthAccounts: [],
+          reviewItems: [],
+          agentStatus: {
+            checkedAt: "2026-06-11T12:00:00.000Z",
+            state: "running",
+            current: {
+              active: true,
+              activeTaskCount: 1,
+              tasks: [
+                {
+                  lane: "research",
+                  kind: "prospect_research",
+                  subject: "Workspace runtime surface",
+                  workerLabel: "workspace-agent",
+                  elapsedSeconds: 185,
+                  surfaceLabels: ["Sales Navigator"],
+                  progress: {
+                    resumeCursor: "cursor-12",
+                    resumeStartOffset: 12,
+                    maxPages: 4,
+                  },
+                },
+              ],
+              locks: { active: true, lanes: [] },
+            },
+            backlog: {
+              dueTaskCount: 3,
+              waitingTaskCount: 2,
+              blockerCount: 1,
+              dueByKind: [{ kind: "prospect_research", count: 3 }],
+              waitingByReason: [
+                {
+                  waitingReason: "pacing_limit",
+                  count: 2,
+                  nextDueAt: "2026-06-11T12:30:00.000Z",
+                  taskKinds: [{ kind: "send_message", count: 2 }],
+                },
+              ],
+              blockersByReason: [{ reason: "ownership_mismatch", count: 1 }],
+            },
+            throughput: {
+              lastPass: {
+                status: "partial",
+                resultCount: 5,
+                completedCount: 4,
+                blockedCount: 1,
+                failedCount: 0,
+                durationSeconds: 120,
+                byKind: [{ kind: "prospect_research", count: 4 }],
+              },
+              last24Hours: {
+                resultCount: 5,
+                recentMotionRunCount: 1,
+              },
+            },
+            partial: {
+              active: true,
+              reason: "max task cap reached",
+              nextAction: "Continue the agent pass to drain 3 due tasks.",
+            },
+            inboundSurfaces: {
+              count: 2,
+              items: [
+                {
+                  capability: "linkedin",
+                  accountHandle: "route-user",
+                  surfaceLabel: "Following list",
+                  lastRunStatus: "success",
+                  capturedItemCount: 12,
+                  visibleTotalCount: 44,
+                  observationCount: 10,
+                  pageWalkStatus: "page budget stopped early",
+                  resumeStartOffset: 12,
+                  lastError: null,
+                },
+                {
+                  capability: "linkedin",
+                  accountHandle: "route-user",
+                  surfaceLabel: "Messaging inbox",
+                  lastRunStatus: "failed",
+                  capturedItemCount: 0,
+                  visibleTotalCount: null,
+                  observationCount: 0,
+                  pageWalkStatus: "pages not recorded",
+                  resumeStartOffset: null,
+                  lastError: "Connector timeout",
+                },
+              ],
+            },
+          },
+        },
+        html: "<html></html>",
+      }),
+    });
+
+    assert.match(html, /Agent status/);
+    assert.match(html, /Research: Prospect Research/);
+    assert.match(html, /Workspace runtime surface/);
+    assert.match(html, /Waiting: 2 Pacing Limit/);
+    assert.match(html, /Partial reason/);
+    assert.match(html, /max task cap reached/);
+    assert.match(html, /captured 12\/44/);
+    assert.match(html, /Connector timeout/);
+    assert.match(html, /24h: 5 results, 1 motion run/);
+  });
+});
+
 test("person route preserves the scaffold compose draft instead of overwriting it during render", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-person-route-user-"));
   const previousStateDir = process.env.EXO_STATE_DIR;

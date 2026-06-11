@@ -319,6 +319,7 @@ export async function renderRoute(route, ctx, hooks = {}) {
         reviewItems: data.reviewItems ?? [],
       }),
     },
+    agentStatus: data.agentStatus ?? null,
   };
 
   // Motion settings page.
