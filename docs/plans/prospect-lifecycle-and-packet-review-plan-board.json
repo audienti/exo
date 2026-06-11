@@ -227,7 +227,7 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
+      "commit": "e4ae56923657dfac31083dcf4bb45c8d6d1e529c",
       "notes": "Focused CLI and operator projection verification passed with 125 tests. Syntax check passed. Full npm test passed with Node v24.14.0: 713 pass, 0 fail."
     },
     {
