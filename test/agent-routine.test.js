@@ -707,3 +707,169 @@ test("agent install-routine --send-mode live --json becomes ready after a succes
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+test("agent status surfaces current work, partial reason, throughput, and inbound telemetry", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-agent-status-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  const databaseModuleUrl = pathToFileURL(path.join(repoRoot, "src", "db", "database.js")).href;
+  const now = new Date();
+  const startedAt = new Date(now.getTime() - 3 * 60 * 1000).toISOString();
+  const finishedAt = new Date(now.getTime() - 2 * 60 * 1000).toISOString();
+  const expiresAt = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+
+  try {
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, "agent-host-state.json"), JSON.stringify({
+      taskLeases: [
+        {
+          taskKind: "run_inbound_sync",
+          fingerprint: "lease-1",
+          workerLabel: "codex-queue-1",
+          acquiredAt: startedAt,
+          expiresAt,
+          userId: "user-1",
+          accountId: "account-1",
+          capability: "linkedin",
+          surface: "linkedin-following-list",
+          subject: "LinkedIn inbound truth",
+          action: "run_inbound_sync",
+        },
+      ],
+      recentMotionTaskRuns: [
+        {
+          taskKind: "prospect_research",
+          motionId: "motion-1",
+          recordedAt: finishedAt,
+          companyId: "company-1",
+          prospectId: "prospect-1",
+          status: "completed",
+        },
+      ],
+    }, null, 2));
+    fs.writeFileSync(path.join(stateDir, "agent-last-pass.json"), JSON.stringify({
+      status: "partial",
+      reason: null,
+      startedAt,
+      endedAt: finishedAt,
+      results: [
+        {
+          kind: "prospect_research",
+          status: "completed",
+          startedAt,
+          finishedAt,
+          detail: { summary: "Prospect research landed." },
+        },
+        {
+          kind: "write_draft",
+          status: "completed",
+          startedAt,
+          finishedAt,
+          detail: { bodyPreview: "Draft landed." },
+        },
+      ],
+      finalQueueCounts: {
+        dueTaskCount: 2,
+        waitingTaskCount: 1,
+        blockerCount: 0,
+      },
+    }, null, 2));
+
+    execFileSync("node", ["--input-type=module", "-e", `
+      import { insertUser } from ${JSON.stringify(databaseModuleUrl)};
+      insertUser(${JSON.stringify({
+        id: "user-1",
+        createdAt: startedAt,
+        updatedAt: startedAt,
+        label: "William",
+        owner: "William",
+        workingHours: {
+          mode: "always",
+          timezone: "America/New_York",
+          weekdays: ["mon", "tue", "wed", "thu", "fri"],
+          startLocalTime: "07:00",
+          endLocalTime: "18:00",
+        },
+        accounts: [
+          {
+            id: "account-1",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+            capability: "linkedin",
+            handle: "omalab-main",
+            label: "LinkedIn",
+            sourceType: "browser-profile",
+            browserProfileId: "profile-4",
+            preferred: true,
+            inboundSync: {
+              surfaces: [
+                {
+                  surfaceKey: "linkedin-following-list",
+                  enabled: true,
+                  lastRunStatus: "success",
+                  lastSyncedAt: finishedAt,
+                  lastObservedAt: finishedAt,
+                  lastItemCount: 12,
+                  lastVisibleTotalCount: 44,
+                  lastObservationCount: 10,
+                  lastItemizationGapCount: 2,
+                  lastExhaustionReason: "page_budget_stopped_early",
+                  lastPaginationAttempted: true,
+                  nextStartOffset: 10,
+                },
+                {
+                  surfaceKey: "linkedin-messaging-inbox",
+                  enabled: true,
+                  lastRunStatus: "failed",
+                  lastSyncedAt: finishedAt,
+                  lastObservedAt: null,
+                  lastItemCount: 0,
+                  lastError: "Connector timeout",
+                },
+              ],
+            },
+          },
+        ],
+      })});
+    `], {
+      cwd: repoRoot,
+      env: buildNodeTestEnv({ ...process.env, EXO_STATE_DIR: stateDir }),
+      encoding: "utf8",
+    });
+
+    const jsonOutput = execFileSync("node", [cliPath, "agent", "status", "--json"], {
+      cwd: repoRoot,
+      env: buildNodeTestEnv({ ...process.env, EXO_STATE_DIR: stateDir }),
+      encoding: "utf8",
+    });
+    const report = JSON.parse(jsonOutput);
+
+    assert.equal(report.state, "running");
+    assert.equal(report.current.activeTaskCount, 1);
+    assert.equal(report.current.tasks[0].lane, "transport");
+    assert.equal(report.current.tasks[0].subject, "LinkedIn inbound truth");
+    assert.equal(report.partial.active, true);
+    assert.match(report.partial.reason, /last pass completed available work/i);
+    assert.equal(report.throughput.lastPass.resultCount, 2);
+    assert.equal(report.throughput.last24Hours.recentMotionRunCount, 1);
+    const following = report.inboundSurfaces.items.find((surface) => surface.surfaceKey === "linkedin-following-list");
+    assert.equal(following.capturedItemCount, 12);
+    assert.equal(following.visibleTotalCount, 44);
+    assert.equal(following.resumeStartOffset, 10);
+    assert.equal(following.pageWalkStatus, "page budget stopped early");
+    const inbox = report.inboundSurfaces.items.find((surface) => surface.surfaceKey === "linkedin-messaging-inbox");
+    assert.equal(inbox.lastError, "Connector timeout");
+
+    const textOutput = execFileSync("node", [cliPath, "agent", "status"], {
+      cwd: repoRoot,
+      env: buildNodeTestEnv({ ...process.env, EXO_STATE_DIR: stateDir }),
+      encoding: "utf8",
+    });
+    assert.match(textOutput, /Current work:/);
+    assert.match(textOutput, /LinkedIn inbound truth/);
+    assert.match(textOutput, /Partial state:/);
+    assert.match(textOutput, /page budget stopped early/);
+    assert.match(textOutput, /Connector timeout/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});

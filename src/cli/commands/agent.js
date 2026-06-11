@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { buildAgentQueue } from "../../core/build-agent-queue.js";
+import { buildAgentStatusReport, formatAgentStatusReport } from "../../core/build-agent-status.js";
 import { buildSendHandoff } from "../../core/build-send-handoff.js";
 import { buildStalePacketReviewWarnings } from "../../core/build-stale-packet-review-warnings.js";
 import { acceptMotionProspectPacket, returnMotionProspectPacket } from "../../core/review-motion-prospect-packet.js";
@@ -45,6 +46,8 @@ export function registerAgent(program) {
 Autonomous loop:
   exo agent queue                 # what the agent can do right now without operator input
   exo agent queue --json          # machine-readable, for an agent loop to drain
+  exo agent status                # current worker activity, backlog, throughput, and partial state
+  exo agent status --watch        # refresh the status surface until stopped
   exo agent doctor                # why native autonomous work is or is not runnable here
   exo agent doctor --json         # machine-readable host/runtime diagnosis for the worker
 
@@ -170,6 +173,29 @@ needs operator input.
           console.log(`    resolve:   ${blocker.resolveHint}`);
           console.log("");
         }
+      }
+    });
+
+  agent
+    .command("status")
+    .description("Show current agent worker activity, waiting backlog, throughput, and partial state.")
+    .option("--watch", "Refresh until stopped")
+    .option("--interval <seconds>", "Seconds between --watch refreshes", "5")
+    .option("--json", "Emit machine-readable JSON")
+    .action(async (options) => {
+      const intervalMs = Math.max(1, Number(options.interval) || 5) * 1000;
+      let first = true;
+      while (true) {
+        const report = buildAgentStatusReport(buildAgentStatusInput());
+        if (options.json) {
+          console.log(options.watch ? JSON.stringify(report) : JSON.stringify(report, null, 2));
+        } else {
+          if (!first) console.log("");
+          console.log(formatAgentStatusReport(report));
+        }
+        if (!options.watch) return;
+        first = false;
+        await sleep(intervalMs);
       }
     });
 
@@ -881,6 +907,28 @@ function buildAgentQueueInput() {
     cues: listInboundCues(),
     prospectBranches: listAgentQueueProspectBranches(),
     hostState,
+  };
+}
+
+function buildAgentStatusInput() {
+  const stateDir = getHomeStateDir();
+  const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")));
+  const users = listUsers();
+  return {
+    stateDir,
+    queue: buildAgentQueue({
+      motions: listMotions(),
+      companies: listCompanies(),
+      profiles: listBrowserProfiles(),
+      users,
+      observations: listInboundObservations(),
+      cues: listInboundCues(),
+      prospectBranches: listAgentQueueProspectBranches(),
+      hostState,
+    }),
+    hostState,
+    users,
+    lastPass: readJsonIfExists(path.join(stateDir, "agent-last-pass.json")),
   };
 }
 
