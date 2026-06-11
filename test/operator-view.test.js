@@ -127,6 +127,102 @@ test("operator uses prospect avatars that already exist on due-now planner work"
   assert.match(html, /<img class="avatar" src="https:\/\/example\.com\/sue\.jpg"/i);
 });
 
+test("operator promotes packet review planner work with review actions", () => {
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-11T12:00:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: {
+      checklist: [],
+    },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    dueNowItems: [
+      {
+        state: "due_now",
+        priority: "action",
+        priorityRank: 0.2,
+        cadenceEffect: "packet_review_needed",
+        dueAt: "2026-06-11T11:45:00.000Z",
+        source: {
+          type: "packet_review",
+          kind: "company_research",
+          packetId: "company_research:company-1",
+        },
+        motion: { id: "17adf3ca-a6b3-4d26-9f93-bc60f28fe94d", name: "harsh-spare-mongoose" },
+        company: { id: "82b0baf7-f98d-4bb6-b12c-c913fcb998cf", name: "Packet Review Co" },
+        prospect: { id: "company_research:company-1", name: "Packet Review Co", title: "Company Research" },
+        recommendedAction: "Review company research packet company_research:company-1: accept, amend, or return it.",
+        whyItMatters: "Company Research packet for Packet Review Co is awaiting operator review.",
+        context: {
+          packetId: "company_research:company-1",
+          packetLabel: "Company Research",
+          actions: [
+            { href: "/companies/82b0baf7-f98d-4bb6-b12c-c913fcb998cf" },
+          ],
+        },
+        operatorActions: [
+          {
+            label: "Review packet",
+            mode: "detail",
+            href: "/companies/82b0baf7-f98d-4bb6-b12c-c913fcb998cf",
+            writer: null,
+            args: { command: "exo motion packet-brief motion-1 --packet company_research:company-1 --json" },
+            variant: "primary",
+            icon: "eye",
+          },
+          {
+            label: "Accept",
+            mode: "detail",
+            href: "/companies/82b0baf7-f98d-4bb6-b12c-c913fcb998cf",
+            writer: null,
+            args: { command: "exo agent packets accept motion-1 --packet company_research:company-1 --json" },
+            variant: "secondary",
+            icon: "check",
+          },
+          {
+            label: "Amend",
+            mode: "detail",
+            href: "/companies/82b0baf7-f98d-4bb6-b12c-c913fcb998cf",
+            writer: null,
+            args: { command: "exo agent packets amend motion-1 --packet company_research:company-1 --outcome <outcome> --reason \"Why this outcome is correct\" --json" },
+            variant: "secondary",
+            icon: "refresh",
+          },
+          {
+            label: "Return",
+            mode: "detail",
+            href: "/companies/82b0baf7-f98d-4bb6-b12c-c913fcb998cf",
+            writer: null,
+            args: { command: "exo agent packets return motion-1 --packet company_research:company-1 --notes \"What the worker must fix\" --json" },
+            variant: "danger",
+            icon: "x",
+          },
+        ],
+      },
+    ],
+    waitingItems: [],
+    truthAccounts: [],
+  });
+
+  assert.equal(model.nextMove?.subject, "Packet Review Co");
+  assert.equal(model.nextMove?.surface, "packet review");
+  assert.equal(model.nextMove?.action, "Review packet");
+  assert.deepEqual(model.nextMove?.actions.map((action) => action.label), [
+    "Review packet",
+    "Accept",
+    "Amend",
+    "Return",
+  ]);
+
+  const html = renderOperatorPage(model, { interactive: true });
+  assert.match(html, /Review packet/);
+  assert.match(html, /Accept/);
+  assert.match(html, /Amend/);
+  assert.match(html, /Return/);
+});
+
 test("operator does not surface outbound-capacity deficit as a human next move", () => {
   const model = buildOperatorViewModel({
     user: { id: "user-1", label: "william-main", owner: "William" },

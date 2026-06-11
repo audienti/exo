@@ -14,7 +14,8 @@ import { buildOperatorPromptFromDailyItem } from "../lib/operator-prompts.js";
  *     dueNowCount: number,
  *     waitingCount: number,
  *     overriddenByInboundCount: number,
- *     advancedByInboundCount: number
+ *     advancedByInboundCount: number,
+ *     packetReviewCount?: number
  *   },
  *   capacity?: {
  *     linkedin?: null | {
@@ -30,6 +31,12 @@ import { buildOperatorPromptFromDailyItem } from "../lib/operator-prompts.js";
  *         inventoryShortfall?: number | null
  *       }
  *     }
+ *   },
+ *   packetReview?: {
+ *     count: number,
+ *     oldestSubmittedAt: string | null,
+ *     oldestAgeSeconds: number | null,
+ *     items: Array<{ subject: string, packetId: string, packetLabel: string, ageLabel: string }>
  *   },
  *   items: Array<{
  *     motion: { name: string },
@@ -49,6 +56,9 @@ import { buildOperatorPromptFromDailyItem } from "../lib/operator-prompts.js";
  */
 export function renderDaily(result) {
   if (!result.items.length) {
+    if (result.packetReview?.count) {
+      return formatPacketReviewLine(result.packetReview);
+    }
     return "No due moves right now.";
   }
 
@@ -59,6 +69,10 @@ export function renderDaily(result) {
   const remainingDueNow = Math.max(result.counts.dueNowCount - 1, 0);
   if (remainingDueNow || result.counts.waitingCount) {
     lines.push(`After that: ${remainingDueNow} more due now, ${result.counts.waitingCount} waiting.`);
+  }
+
+  if (result.packetReview?.count) {
+    lines.push(formatPacketReviewLine(result.packetReview));
   }
 
   const linkedinCapacity = result.capacity?.linkedin ?? null;
@@ -73,4 +87,13 @@ export function renderDaily(result) {
   }
 
   return lines.join("\n");
+}
+
+/**
+ * @param {{ count: number, items: Array<{ subject: string, packetId: string, packetLabel: string, ageLabel: string }> }} review
+ */
+function formatPacketReviewLine(review) {
+  const first = review.items[0] ?? null;
+  if (!first) return "Packet review: no packets awaiting review.";
+  return `Packet review: ${review.count} awaiting review. Oldest is ${first.packetLabel.toLowerCase()} ${first.packetId} for ${first.subject}, submitted ${first.ageLabel} ago.`;
 }

@@ -9,13 +9,20 @@ import {
   classifyPrivateInboundMessage,
   describePrivateInboundResponse,
 } from "./private-inbound-message-classification.js";
+import { buildPacketReviewView } from "./build-packet-review-view.js";
 
 /**
  * @param {unknown} rawUser
  * @param {unknown[]} rawObservations
  * @param {unknown[]} rawMotions
  * @param {unknown[]} rawCompanies
- * @param {{ accountId?: string | null }} [options]
+ * @param {{
+ *   accountId?: string | null,
+ *   now?: string | null,
+ *   motionId?: string | null,
+ *   companyId?: string | null,
+ *   prospectId?: string | null,
+ * }} [options]
  */
 export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanies, options = {}) {
   const user = userSchema.parse(rawUser);
@@ -45,6 +52,12 @@ export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanie
   const items = observations
     .map((observation) => buildInboxItem(observation, motions, companiesById, prospectContextById))
     .sort(compareInboxItems);
+  const packetReview = buildPacketReviewView(motions, rawCompanies, {
+    now: options.now ?? null,
+    motionId: options.motionId ?? null,
+    companyId: options.companyId ?? null,
+    prospectId: options.prospectId ?? null
+  });
   const syncView = buildUserInboundSyncView(user);
   const accounts = syncView.accounts
     .filter((account) => !options.accountId || account.accountId === options.accountId)
@@ -83,7 +96,8 @@ export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanie
       itemCount: items.length,
       highPriorityCount: items.filter((item) => item.priority === "high").length,
       mediumPriorityCount: items.filter((item) => item.priority === "medium").length,
-      lowPriorityCount: items.filter((item) => item.priority === "low").length
+      lowPriorityCount: items.filter((item) => item.priority === "low").length,
+      packetReviewCount: packetReview.count
     },
     surfaces: {
       accountCount: accounts.length,
@@ -93,6 +107,7 @@ export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanie
       uncheckedSurfaceCount: accounts.reduce((sum, account) => sum + account.uncheckedSurfaceCount, 0),
       accounts
     },
+    packetReview,
     items
   };
 }

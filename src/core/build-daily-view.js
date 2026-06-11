@@ -10,6 +10,7 @@ import { selectParallelSupportAction } from "./planner-support-actions.js";
 import { isPlannerEligibleMotionStatus } from "../lib/motion-status.js";
 import { hasUsableEmailFallback } from "../lib/prospect-contacts.js";
 import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
+import { buildPacketReviewView } from "./build-packet-review-view.js";
 import { buildOutboundCapacityView } from "./build-outbound-capacity-view.js";
 import { buildMotionCompanyScopeKey, buildUserAssignedExecutionScopeIndex } from "./user-execution-scope.js";
 
@@ -70,6 +71,12 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
     rawObservations,
     capacityAccounts: options.capacityAccounts
   });
+  const packetReview = buildPacketReviewView(motions, companies, {
+    now,
+    motionId: options.motionId ?? null,
+    companyId: options.companyId ?? null,
+    prospectId: options.prospectId ?? null
+  });
   const prospectBranches = Array.isArray(options.prospectBranches)
     ? normalizeProspectBranches(options.prospectBranches, {
         motionId: options.motionId ?? null,
@@ -85,6 +92,7 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
       });
   const supportProspectsByMotionId = buildSupportProspectsByMotionId(prospectBranches);
   const items = dedupeDailyItems([
+    ...buildPacketReviewPlannerItems(packetReview),
     buildOutboundCapacityPlannerItem(outboundCapacity, {
       motionId: options.motionId ?? null,
       motions
@@ -119,11 +127,13 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
       dueNowCount: limitedItems.filter((item) => item.state === "due_now").length,
       waitingCount: limitedItems.filter((item) => item.state === "waiting_until").length,
       overriddenByInboundCount: limitedItems.filter((item) => item.cadenceEffect === "overridden_by_inbound").length,
-      advancedByInboundCount: limitedItems.filter((item) => item.cadenceEffect === "advanced_by_inbound").length
+      advancedByInboundCount: limitedItems.filter((item) => item.cadenceEffect === "advanced_by_inbound").length,
+      packetReviewCount: packetReview.count
     },
     capacity: {
       linkedin: outboundCapacity
     },
+    packetReview,
     items: limitedItems
   };
 }
@@ -366,6 +376,128 @@ function buildInboundReviewPlannerItems(review) {
         }
       };
     });
+}
+
+/**
+ * @param {ReturnType<typeof buildPacketReviewView>} review
+ */
+function buildPacketReviewPlannerItems(review) {
+  return review.items.map((item) => {
+    const proposal = item.proposal?.action ? ` Proposed outcome: ${item.proposal.action}.` : "";
+    const reason = item.proposal?.reason ? ` Reason: ${item.proposal.reason}` : "";
+    const whyItMatters = `${item.packetLabel} packet for ${item.subject} is awaiting operator review.${proposal}${reason}`;
+    const recommendedAction = `Review ${item.packetLabel.toLowerCase()} packet ${item.packetId}: accept, amend, or return it.`;
+    return {
+      motion: item.motion,
+      company: item.company,
+      prospect: item.prospect ?? {
+        id: item.packetId,
+        name: item.company.name,
+        title: item.packetLabel
+      },
+      cadence: {
+        currentStep: null,
+        nextAction: recommendedAction,
+        nextActionDueAt: item.submittedAt,
+        lastTouchOutcome: null
+      },
+      guidance: buildPlannerGuidance("review_packet", {
+        motionId: item.motion.id,
+        motionName: item.motion.name,
+        companyId: item.company.id,
+        companyName: item.company.name,
+        prospectId: item.prospect?.id ?? "",
+        prospectName: item.prospect?.name ?? item.company.name,
+        prospectTitle: item.prospect?.title ?? item.packetLabel,
+        packetId: item.packetId,
+        packetKind: item.packetKind,
+        packetLabel: item.packetLabel,
+        recommendedAction,
+        dueAt: item.submittedAt,
+        whyItMatters,
+        proposal: item.proposal?.action ?? "",
+        proposalReason: item.proposal?.reason ?? "",
+        acceptCommand: item.commands.accept,
+        amendCommand: item.commands.amend,
+        returnCommand: item.commands.return
+      }),
+      state: "due_now",
+      priority: "action",
+      priorityRank: 0.2,
+      cadenceEffect: "packet_review_needed",
+      dueAt: item.submittedAt,
+      whyItMatters,
+      recommendedAction,
+      context: {
+        packetId: item.packetId,
+        packetKind: item.packetKind,
+        packetLabel: item.packetLabel,
+        submittedAt: item.submittedAt,
+        ageSeconds: item.ageSeconds,
+        ageLabel: item.ageLabel,
+        proposal: item.proposal,
+        commands: item.commands,
+        actions: item.actions
+      },
+      operatorActions: buildPacketReviewOperatorActions(item),
+      source: {
+        type: "packet_review",
+        kind: item.packetKind,
+        packetId: item.packetId,
+        submittedAt: item.submittedAt
+      }
+    };
+  });
+}
+
+/**
+ * @param {ReturnType<typeof buildPacketReviewView>["items"][number]} item
+ */
+function buildPacketReviewOperatorActions(item) {
+  const actionMeta = {
+    motionId: item.motion.id,
+    packetId: item.packetId,
+    packetKind: item.packetKind,
+    commands: item.commands
+  };
+  return [
+    {
+      label: "Review packet",
+      mode: "detail",
+      href: item.reviewHref,
+      writer: null,
+      args: { ...actionMeta, command: item.commands.brief, action: "review" },
+      variant: "primary",
+      icon: "eye",
+    },
+    {
+      label: "Accept",
+      mode: "detail",
+      href: item.reviewHref,
+      writer: null,
+      args: { ...actionMeta, command: item.commands.accept, action: "accept" },
+      variant: "secondary",
+      icon: "check",
+    },
+    {
+      label: "Amend",
+      mode: "detail",
+      href: item.reviewHref,
+      writer: null,
+      args: { ...actionMeta, command: item.commands.amend, action: "amend" },
+      variant: "secondary",
+      icon: "refresh",
+    },
+    {
+      label: "Return",
+      mode: "detail",
+      href: item.reviewHref,
+      writer: null,
+      args: { ...actionMeta, command: item.commands.return, action: "return" },
+      variant: "danger",
+      icon: "x",
+    }
+  ];
 }
 
 /**

@@ -10,6 +10,14 @@
  * @returns {string | null}
  */
 export function buildOperatorPromptFromDailyItem(item) {
+  if (item.source.type === "packet_review") {
+    const packetLabel = item.context?.packetLabel ?? item.source.kind?.replaceAll("_", " ") ?? "packet";
+    const subject = item.prospect.id === item.source.packetId
+      ? item.company.name
+      : `${item.prospect.name} at ${item.company.name}`;
+    return `Review the ${packetLabel.toLowerCase()} packet for ${subject}: accept, amend, or return?`;
+  }
+
   if (item.source.type === "inbound_review") {
     switch (item.source.kind) {
       case "needs_claim":

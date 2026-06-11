@@ -52,7 +52,7 @@
       ],
       "notes": "Baseline needed one preflight repair for a red cold-start onboarding UI test. Full suite then passed with Node v24.14.0: 704 pass, 0 fail."
     },
-    "updatedAt": "2026-06-11T11:37:34Z"
+    "updatedAt": "2026-06-11T11:53:56Z"
   },
   "tasks": [
     {
@@ -188,7 +188,7 @@
     {
       "id": "T04",
       "title": "Surface packets awaiting review in the operator loop",
-      "status": "backlog",
+      "status": "done",
       "priority": 4,
       "dependsOn": [
         "T03"
@@ -217,11 +217,18 @@
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added a shared packet review view that reports submitted review packet count, oldest age, packet rows, proposal metadata, and review commands.",
+        "Daily now promotes submitted packet reviews as due-now planner items before idle outbound capacity and generic inventory work.",
+        "Inbox now includes a packet review section and CLI filters for motion, company, and prospect scoped packet reviews.",
+        "Next now inherits packet review priority through daily and returns packet review context as the governed next move.",
+        "Operator projection now preserves packet review action metadata for review, accept, amend, and return actions.",
+        "Regression coverage verifies packet review surfacing in inbox, daily, next, report operator, operator rendering, and terminal decision reason activity events."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Focused CLI and operator projection verification passed with 125 tests. Syntax check passed. Full npm test passed with Node v24.14.0: 713 pass, 0 fail."
     },
     {
       "id": "T05",

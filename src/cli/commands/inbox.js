@@ -63,7 +63,11 @@ Rules:
         rawMotions: listMotions(),
         rawCompanies: listCompanies(),
         options: {
-          accountId: options.account ?? null
+          accountId: options.account ?? null,
+          now: new Date().toISOString(),
+          motionId: options.motion ?? null,
+          companyId: options.company ?? null,
+          prospectId: options.prospect ?? null
         }
       };
       const { contract: result } = await runCliRepairableContract({

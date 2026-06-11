@@ -137,6 +137,8 @@ Rules:
         decisionQueue: data.decisionQueue,
         agentQueue: data.agentQueue,
         blockedQueue: data.blockedQueue,
+        dueNowItems: data.dueNowItems,
+        waitingItems: data.waitingItems,
         truthAccounts: data.truthAccounts,
       });
 

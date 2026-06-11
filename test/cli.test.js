@@ -12,7 +12,7 @@ import { DatabaseSync } from "node:sqlite";
 import { buildAgentQueue } from "../src/core/build-agent-queue.js";
 import { buildDailyView } from "../src/core/build-daily-view.js";
 import { returnMotionTargetAccountPacket } from "../src/core/review-target-account-packet.js";
-import { findMotionById, updateMotion } from "../src/db/database.js";
+import { findMotionById, listActivityEvents, updateMotion } from "../src/db/database.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(repoRoot, "src", "cli", "index.js");
@@ -9191,6 +9191,144 @@ test("agent packet review CLI lists, returns, accepts, and amends submitted pack
     assert.equal(accepted.action, "accepted");
     assert.equal(accepted.account.queueState.status, "researched");
     assert.equal(accepted.account.packetStatus, null);
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("daily, inbox, next, and operator report surface submitted packet reviews", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-packet-review-surfaces-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  process.env.EXO_STATE_DIR = tempDir;
+
+  try {
+    const user = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "add", "--label", "packet-reviewer", "--owner", "Operator", "--json"],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/packet-review-surfaces",
+          "--premise",
+          "This offer matters when packet review must be visible before more outbound work.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there current evidence that this account should stay active?",
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+    updateMotion({
+      ...motion,
+      status: "active",
+      packetReviewPolicy: "review"
+    });
+
+    const company = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "companies",
+          "add",
+          "--name",
+          "Packet Surface Co",
+          "--domain",
+          "packet-surface.example",
+          "--motion",
+          motion.id,
+          "--json"
+        ],
+        { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
+      ).toString()
+    );
+
+    execFileSync("node", [cliPath, "companies", "queue", "claim", company.id, "--motion", motion.id, "--worker", "packet-surface-worker", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+    execFileSync("node", [cliPath, "companies", "queue", "complete", company.id, "--motion", motion.id, "--worker", "packet-surface-worker", "--next-status", "researched", "--notes", "Submitted for operator review.", "--json"], {
+      cwd: repoRoot,
+      env: { ...process.env, EXO_STATE_DIR: tempDir }
+    });
+
+    const inbox = JSON.parse(
+      execFileSync("node", [cliPath, "inbox", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(inbox.counts.itemCount, 0);
+    assert.equal(inbox.counts.packetReviewCount, 1);
+    assert.equal(inbox.packetReview.count, 1);
+    assert.equal(inbox.packetReview.items[0].packetId, `company_research:${company.id}`);
+    assert.equal(inbox.packetReview.items[0].actions.some((action) => action.kind === "accept"), true);
+    assert.equal(inbox.packetReview.items[0].actions.some((action) => action.kind === "amend"), true);
+    assert.equal(inbox.packetReview.items[0].actions.some((action) => action.kind === "return"), true);
+
+    const daily = JSON.parse(
+      execFileSync("node", [cliPath, "daily", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(daily.counts.packetReviewCount, 1);
+    assert.equal(daily.packetReview.count, 1);
+    assert.equal(daily.items[0].source.type, "packet_review");
+    assert.equal(daily.items[0].source.packetId, `company_research:${company.id}`);
+    assert.match(daily.items[0].recommendedAction, /accept, amend, or return/i);
+    assert.equal(daily.items[0].operatorActions.map((action) => action.label).includes("Accept"), true);
+
+    const next = JSON.parse(
+      execFileSync("node", [cliPath, "next", "--user", user.id, "--motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(next.source, "daily");
+    assert.equal(next.context.source.type, "packet_review");
+    assert.equal(next.context.source.packetId, `company_research:${company.id}`);
+    assert.match(next.nextMove, /accept, amend, or return/i);
+
+    const operator = JSON.parse(
+      execFileSync("node", [cliPath, "report", "operator", "--user", user.id, "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(operator.nextMove.subject, "Packet Surface Co");
+    assert.equal(operator.nextMove.actions.map((action) => action.label).includes("Accept"), true);
+    assert.equal(operator.nextMove.actions.map((action) => action.label).includes("Amend"), true);
+    assert.equal(operator.nextMove.actions.map((action) => action.label).includes("Return"), true);
+
+    const amended = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "packets", "amend", motion.id, "--packet", `company_research:${company.id}`, "--outcome", "no_longer_target", "--reason", "Packet review found the account is off ICP.", "--json"], {
+        cwd: repoRoot,
+        env: { ...process.env, EXO_STATE_DIR: tempDir }
+      }).toString()
+    );
+    assert.equal(amended.account.disposition, "no_longer_target");
+
+    const events = listActivityEvents({ motionId: motion.id, companyId: company.id });
+    const dispositionEvent = events.find((event) => event.payload?.type === "disposition_changed");
+    assert.equal(dispositionEvent?.payload?.to, "no_longer_target");
+    assert.equal(dispositionEvent?.payload?.reason, "Packet review found the account is off ICP.");
   } finally {
     if (previousStateDir === undefined) {
       delete process.env.EXO_STATE_DIR;

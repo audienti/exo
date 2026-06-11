@@ -647,6 +647,16 @@ function normalizePlannerActionItem(item) {
   const composeReady = isPlannerComposeReady(item, prospectId);
   const recommendedAction = item?.recommendedAction ?? item?.cadence?.nextAction ?? plannerActionLabel(item);
   const person = item?.prospect?.name ?? item?.company?.name ?? item?.motion?.name ?? "General";
+  const operatorActions = Array.isArray(item?.operatorActions)
+    ? item.operatorActions.filter(Boolean)
+    : buildPlannerOperatorActions({
+        item,
+        prospectId,
+        companyId,
+        motionId,
+        href,
+        composeReady,
+      });
 
   return {
     id: plannerItemKey(item) ?? `planner-${motionId ?? "motion"}-${companyId ?? "company"}-${prospectId ?? "prospect"}`,
@@ -664,14 +674,7 @@ function normalizePlannerActionItem(item) {
     state: "due_now",
     priority: "medium",
     surfaceKey: String(item?.source?.type ?? "cadence").replaceAll("_", "-"),
-    operatorActions: buildPlannerOperatorActions({
-      item,
-      prospectId,
-      companyId,
-      motionId,
-      href,
-      composeReady,
-    }),
+    operatorActions,
   };
 }
 
@@ -777,6 +780,9 @@ function buildPlannerOperatorActions(input) {
 
 /** @param {any} item */
 function plannerItemKey(item) {
+  if (item?.source?.type === "packet_review" && item.source.packetId) {
+    return [item?.motion?.id, item.source.packetId].filter(Boolean).join("::");
+  }
   const parts = [item?.motion?.id, item?.company?.id, item?.prospect?.id].filter(Boolean);
   return parts.length > 0 ? parts.join("::") : null;
 }
@@ -787,6 +793,10 @@ function plannerItemHref(item) {
   const companyId = String(item?.company?.id ?? "");
   const motionId = String(item?.motion?.id ?? "");
 
+  if (item?.source?.type === "packet_review") {
+    const href = item?.context?.actions?.find?.((action) => action?.href)?.href ?? null;
+    if (href) return href;
+  }
   if (prospectId.startsWith("outbound-capacity:")) return "/workspace";
   if (isUuid(prospectId)) return `/prospects/${encodeURIComponent(prospectId)}`;
   if (isUuid(companyId)) return `/companies/${encodeURIComponent(companyId)}`;
