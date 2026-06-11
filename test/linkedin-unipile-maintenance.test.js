@@ -191,3 +191,134 @@ test("runLinkedinMaintenanceWithUnipile declines a received invite through Unipi
     action: "decline",
   });
 });
+
+test("runLinkedinMaintenanceWithUnipile restores a disappeared sent invite when the profile still shows pending", () => {
+  let seenUrl = null;
+  let storedObservation = null;
+  const result = runLinkedinMaintenanceWithUnipile(
+    {
+      kind: "reconcile_connection_request_status",
+      observationId: "observation-1",
+    },
+    {
+      findObservationById: () => buildObservation({
+        kind: "connection_request_no_longer_pending",
+      }),
+      findUserById: () => buildUser(),
+      findObservationByDedupeKey: () => buildObservation({
+        kind: "connection_request_no_longer_pending",
+      }),
+      listMotions: () => [],
+      upsertObservation: (observation) => {
+        storedObservation = observation;
+      },
+      httpGetImpl: (url) => {
+        seenUrl = new URL(url);
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            object: "UserProfile",
+            provider_id: "provider-jordan",
+            public_identifier: "jordan-example",
+            first_name: "Jordan",
+            last_name: "Example",
+            headline: "VP Revenue Operations",
+            network_distance: "THIRD_DEGREE",
+            is_relationship: false,
+            invitation: {
+              type: "SENT",
+              status: "PENDING",
+            },
+          }),
+        };
+      },
+    },
+  );
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.resolvedKind, "connection_request_pending");
+  assert.equal(storedObservation?.kind, "connection_request_pending");
+  assert.equal(storedObservation?.summary, "Jordan Example is still pending on LinkedIn.");
+  assert.equal(seenUrl?.pathname, "/api/v1/users/jordan-example");
+  assert.equal(seenUrl?.searchParams.get("account_id"), "provider-linkedin-1");
+});
+
+test("runLinkedinMaintenanceWithUnipile records accepted when profile state is first-degree", () => {
+  let storedObservation = null;
+  const result = runLinkedinMaintenanceWithUnipile(
+    {
+      kind: "reconcile_connection_request_status",
+      observationId: "observation-1",
+    },
+    {
+      findObservationById: () => buildObservation({
+        kind: "connection_request_no_longer_pending",
+      }),
+      findUserById: () => buildUser(),
+      findObservationByDedupeKey: () => buildObservation({
+        kind: "connection_request_no_longer_pending",
+      }),
+      listMotions: () => [],
+      upsertObservation: (observation) => {
+        storedObservation = observation;
+      },
+      httpGetImpl: () => ({
+        status: 200,
+        bodyText: JSON.stringify({
+          first_name: "Jordan",
+          last_name: "Example",
+          public_identifier: "jordan-example",
+          provider_id: "provider-jordan",
+          network_distance: "FIRST_DEGREE",
+          is_relationship: true,
+          invitation: null,
+        }),
+      }),
+    },
+  );
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.resolvedKind, "connection_request_accepted");
+  assert.equal(storedObservation?.kind, "connection_request_accepted");
+  assert.equal(storedObservation?.summary, "Jordan Example is now a LinkedIn connection.");
+});
+
+test("runLinkedinMaintenanceWithUnipile records not accepted when profile is not connected and no sent invite is pending", () => {
+  let storedObservation = null;
+  const result = runLinkedinMaintenanceWithUnipile(
+    {
+      kind: "reconcile_connection_request_status",
+      observationId: "observation-1",
+    },
+    {
+      findObservationById: () => buildObservation({
+        kind: "connection_request_no_longer_pending",
+      }),
+      findUserById: () => buildUser(),
+      findObservationByDedupeKey: () => buildObservation({
+        kind: "connection_request_no_longer_pending",
+      }),
+      listMotions: () => [],
+      upsertObservation: (observation) => {
+        storedObservation = observation;
+      },
+      httpGetImpl: () => ({
+        status: 200,
+        bodyText: JSON.stringify({
+          first_name: "Jordan",
+          last_name: "Example",
+          public_identifier: "jordan-example",
+          provider_id: "provider-jordan",
+          network_distance: "THIRD_DEGREE",
+          is_relationship: false,
+          invitation: null,
+        }),
+      }),
+    },
+  );
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.resolvedKind, "connection_request_not_accepted");
+  assert.equal(storedObservation?.kind, "connection_request_not_accepted");
+  assert.equal(storedObservation?.summary, "Jordan Example's connection request is not accepted on LinkedIn.");
+});

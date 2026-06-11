@@ -21,6 +21,7 @@ const PROSPECT_TIMELINE_OBSERVATION_KINDS = new Set([
   "connection_request_pending",
   "connection_request_received",
   "connection_request_accepted",
+  "connection_request_not_accepted",
   "connection_request_declined",
   "connection_request_withdraw_requested",
   "connection_request_withdrawn",

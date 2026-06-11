@@ -1269,9 +1269,11 @@ function applyInboundCompanyProfileEnrichment(rawCompany, companyProfile) {
 function listSupersededObservationKinds(kind) {
   switch (kind) {
     case "connection_request_pending":
-      return ["connection_request_no_longer_pending"];
+      return ["connection_request_no_longer_pending", "connection_request_not_accepted"];
     case "connection_request_no_longer_pending":
       return ["connection_request_pending"];
+    case "connection_request_not_accepted":
+      return ["connection_request_pending", "connection_request_no_longer_pending"];
     case "connection_request_received":
       return ["connection_request_received_no_longer_pending"];
     case "connection_request_received_no_longer_pending":

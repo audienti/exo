@@ -1,7 +1,15 @@
 // @ts-check
 
 import { execFileSync } from "node:child_process";
-import { findInboundObservationById, findUserById } from "../db/database.js";
+import {
+  findInboundObservationByDedupeKey,
+  findInboundObservationById,
+  findUserById,
+  listMotions,
+  upsertInboundObservation,
+} from "../db/database.js";
+import { mergeInboundObservation, recordInboundObservation } from "../core/inbound-observations.js";
+import { extractLinkedinPublicId } from "./prospect-contacts.js";
 import { readUnipileConfig } from "./unipile-config.js";
 import { inboundObservationSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
@@ -19,6 +27,10 @@ const UNIPILE_HTTP_MAX_TIME_SECONDS = Math.max(1, Math.ceil(UNIPILE_HTTP_TIMEOUT
  *   codexHome?: string | null,
  *   findObservationById?: ((id: string) => unknown | null) | null,
  *   findUserById?: ((id: string) => unknown | null) | null,
+ *   findObservationByDedupeKey?: ((dedupeKey: string) => unknown | null) | null,
+ *   listMotions?: (() => unknown[]) | null,
+ *   upsertObservation?: ((observation: any) => void) | null,
+ *   httpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpDeleteImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpPostImpl?: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null,
  * }} [options]
@@ -83,14 +95,6 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
     };
   }
 
-  const invitationId = normalizeNullableString(observation.externalId);
-  if (!invitationId) {
-    return {
-      status: "blocked",
-      reason: `${task.kind} requires a native invitation id on observation ${observation.id}.`,
-    };
-  }
-
   const providerAccountId = normalizeNullableString(account.providerAccountId);
   if (!providerAccountId) {
     return {
@@ -107,7 +111,72 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
     };
   }
 
+  if (task.kind === "reconcile_connection_request_status") {
+    const profileIdentity = resolveLinkedinProfileIdentity(observation);
+    if (!profileIdentity) {
+      return {
+        status: "blocked",
+        reason: `reconcile_connection_request_status requires a LinkedIn profile identity on observation ${observation.id}.`,
+      };
+    }
+
+    const url = new URL(`/api/v1/users/${encodeURIComponent(profileIdentity)}`, baseUrl);
+    url.searchParams.set("account_id", providerAccountId);
+    url.searchParams.append("linkedin_sections", "experience");
+    const response = requestUnipileJson({
+      method: "GET",
+      url: url.toString(),
+      apiKey,
+      httpGetImpl: options.httpGetImpl ?? null,
+    });
+    if (!response.ok) {
+      return {
+        status: "blocked",
+        reason: buildMaintenanceFailureReason("reconcile_connection_request_status", response),
+      };
+    }
+
+    const resolution = classifyProfileStatus(response.parsed);
+    if (!resolution.nextKind) {
+      return {
+        status: "blocked",
+        reason: `reconcile_connection_request_status could not classify LinkedIn profile state for ${observation.actorName ?? observation.id}.`,
+        provider: "unipile",
+        profileStatus: resolution.profileStatus,
+      };
+    }
+
+    const writeback = writeInboundObservationStatusResolution({
+      observation,
+      user,
+      nextKind: resolution.nextKind,
+      profile: response.parsed,
+      profileStatus: resolution.profileStatus,
+      findObservationByDedupeKeyImpl: options.findObservationByDedupeKey ?? null,
+      listMotionsImpl: options.listMotions ?? null,
+      upsertObservationImpl: options.upsertObservation ?? null,
+    });
+    return {
+      status: "completed",
+      provider: "unipile",
+      observationId: writeback.observation.id,
+      resolvedKind: writeback.observation.kind,
+      profileStatus: resolution.profileStatus,
+      result: {
+        profileIdentity,
+        observationId: writeback.observation.id,
+      },
+    };
+  }
+
   if (task.kind === "withdraw_connection") {
+    const invitationId = normalizeNullableString(observation.externalId);
+    if (!invitationId) {
+      return {
+        status: "blocked",
+        reason: `${task.kind} requires a native invitation id on observation ${observation.id}.`,
+      };
+    }
     const url = new URL(`/api/v1/users/invite/sent/${encodeURIComponent(invitationId)}`, baseUrl);
     url.searchParams.set("account_id", providerAccountId);
     const response = requestUnipileJson({
@@ -132,6 +201,13 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
   }
 
   if (task.kind === "reject_connection_request") {
+    const invitationId = normalizeNullableString(observation.externalId);
+    if (!invitationId) {
+      return {
+        status: "blocked",
+        reason: `${task.kind} requires a native invitation id on observation ${observation.id}.`,
+      };
+    }
     const sharedSecret = normalizeNullableString(observation.providerSharedSecret);
     if (!sharedSecret) {
       return {
@@ -191,17 +267,169 @@ function resolveUser(userId, findUser) {
 }
 
 /**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ */
+function resolveLinkedinProfileIdentity(observation) {
+  return normalizeNullableString(observation.actorLinkedinPublicId)
+    ?? normalizeNullableString(observation.actorHandle)
+    ?? extractLinkedinPublicId(observation.actorProfileUrl)
+    ?? normalizeNullableString(observation.actorLinkedinMemberId)
+    ?? null;
+}
+
+/**
+ * @param {any} profile
+ * @returns {{
+ *   nextKind: "connection_request_pending" | "connection_request_accepted" | "connection_request_not_accepted" | null,
+ *   profileStatus: {
+ *     networkDistance: string | null,
+ *     isRelationship: boolean | null,
+ *     invitationType: string | null,
+ *     invitationStatus: string | null,
+ *   }
+ * }}
+ */
+function classifyProfileStatus(profile) {
+  const networkDistance = normalizeNullableString(profile?.network_distance)?.toUpperCase() ?? null;
+  const isRelationship = typeof profile?.is_relationship === "boolean" ? profile.is_relationship : null;
+  const invitationType = normalizeNullableString(profile?.invitation?.type)?.toUpperCase() ?? null;
+  const invitationStatus = normalizeNullableString(profile?.invitation?.status)?.toUpperCase() ?? null;
+  const profileStatus = {
+    networkDistance,
+    isRelationship,
+    invitationType,
+    invitationStatus,
+  };
+
+  if (isRelationship === true || networkDistance === "FIRST_DEGREE" || invitationStatus === "ACCEPTED") {
+    return { nextKind: "connection_request_accepted", profileStatus };
+  }
+
+  if (invitationType === "SENT" && invitationStatus === "PENDING") {
+    return { nextKind: "connection_request_pending", profileStatus };
+  }
+
+  if (isRelationship === false && networkDistance && networkDistance !== "FIRST_DEGREE") {
+    return { nextKind: "connection_request_not_accepted", profileStatus };
+  }
+
+  if (invitationStatus && invitationStatus !== "PENDING") {
+    return { nextKind: "connection_request_not_accepted", profileStatus };
+  }
+
+  return { nextKind: null, profileStatus };
+}
+
+/**
  * @param {{
- *   method: "DELETE" | "POST",
+ *   observation: import("../schema/inbound.js").inboundObservationSchema._type,
+ *   user: import("../schema/user.js").userSchema._type,
+ *   nextKind: "connection_request_pending" | "connection_request_accepted" | "connection_request_not_accepted",
+ *   profile: any,
+ *   profileStatus: Record<string, any>,
+ *   findObservationByDedupeKeyImpl?: ((dedupeKey: string) => unknown | null) | null,
+ *   listMotionsImpl?: (() => unknown[]) | null,
+ *   upsertObservationImpl?: ((observation: any) => void) | null,
+ * }} input
+ */
+function writeInboundObservationStatusResolution(input) {
+  const observedAt = new Date().toISOString();
+  const actorName = buildProfileDisplayName(input.profile) ?? input.observation.actorName;
+  const nextObservation = recordInboundObservation(input.user, {
+    accountId: input.observation.accountId,
+    surfaceKey: input.observation.surfaceKey,
+    kind: input.nextKind,
+    observedAt,
+    eventAt: input.observation.eventAt,
+    summary: buildStatusResolutionSummary(actorName, input.nextKind),
+    externalId: input.observation.externalId,
+    actorName,
+    actorTitle: normalizeNullableString(input.profile?.headline) ?? input.observation.actorTitle,
+    actorCompanyName: input.observation.actorCompanyName,
+    actorHandle: normalizeNullableString(input.profile?.public_identifier) ?? input.observation.actorHandle,
+    actorProfileUrl: input.observation.actorProfileUrl,
+    actorLinkedinPublicId: normalizeNullableString(input.profile?.public_identifier) ?? input.observation.actorLinkedinPublicId,
+    actorLinkedinMemberId: normalizeNullableString(input.profile?.provider_id) ?? input.observation.actorLinkedinMemberId,
+    actorAvatarSourceUrl: normalizeNullableString(input.profile?.profile_picture_url_large)
+      ?? normalizeNullableString(input.profile?.profile_picture_url)
+      ?? input.observation.actorAvatarSourceUrl,
+    threadUrl: input.observation.threadUrl,
+    sourceUrl: input.observation.sourceUrl,
+    motionId: input.observation.motionId,
+    companyId: input.observation.companyId,
+    prospectId: input.observation.prospectId,
+    providerSharedSecret: input.observation.providerSharedSecret,
+    notes: buildProfileStatusNotes(input.profileStatus),
+  }, {
+    rawMotions: input.listMotionsImpl ? input.listMotionsImpl() : listMotions(),
+  });
+
+  const existingForDedupe = input.findObservationByDedupeKeyImpl
+    ? input.findObservationByDedupeKeyImpl(nextObservation.dedupeKey)
+    : findInboundObservationByDedupeKey(nextObservation.dedupeKey);
+  const merged = mergeInboundObservation(existingForDedupe ?? input.observation, nextObservation);
+  if (input.upsertObservationImpl) {
+    input.upsertObservationImpl(merged);
+  } else {
+    upsertInboundObservation(merged);
+  }
+  return { observation: merged };
+}
+
+/** @param {any} profile */
+function buildProfileDisplayName(profile) {
+  const first = normalizeNullableString(profile?.first_name);
+  const last = normalizeNullableString(profile?.last_name);
+  return [first, last].filter(Boolean).join(" ").trim() || null;
+}
+
+/**
+ * @param {string | null} actorName
+ * @param {string} nextKind
+ */
+function buildStatusResolutionSummary(actorName, nextKind) {
+  const subject = actorName || "This connection request";
+  if (nextKind === "connection_request_accepted") {
+    return `${subject} is now a LinkedIn connection.`;
+  }
+  if (nextKind === "connection_request_not_accepted") {
+    return `${subject}'s connection request is not accepted on LinkedIn.`;
+  }
+  return `${subject} is still pending on LinkedIn.`;
+}
+
+/** @param {Record<string, any>} profileStatus */
+function buildProfileStatusNotes(profileStatus) {
+  const fields = [
+    `network_distance=${profileStatus.networkDistance ?? "unknown"}`,
+    `is_relationship=${profileStatus.isRelationship === null ? "unknown" : String(profileStatus.isRelationship)}`,
+    `invitation.type=${profileStatus.invitationType ?? "unknown"}`,
+    `invitation.status=${profileStatus.invitationStatus ?? "unknown"}`,
+  ];
+  return `LinkedIn profile truth check through the resolved account returned ${fields.join(", ")}.`;
+}
+
+/**
+ * @param {{
+ *   method: "DELETE" | "GET" | "POST",
  *   url: string,
  *   apiKey: string,
  *   bodyText?: string | undefined,
+ *   httpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpDeleteImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpPostImpl?: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null,
  * }} input
  */
 function requestUnipileJson(input) {
   try {
+    if (input.method === "GET" && input.httpGetImpl) {
+      const response = input.httpGetImpl(input.url, {
+        accept: "application/json",
+        "X-API-KEY": input.apiKey,
+      });
+      return normalizeUnipileResponse(response);
+    }
+
     if (input.method === "DELETE" && input.httpDeleteImpl) {
       const response = input.httpDeleteImpl(input.url, {
         accept: "application/json",
@@ -294,7 +522,7 @@ function normalizeUnipileResponse(response) {
 }
 
 /**
- * @param {"withdraw_connection" | "reject_connection_request"} taskKind
+ * @param {"withdraw_connection" | "reject_connection_request" | "reconcile_connection_request_status"} taskKind
  * @param {{ status?: number | null, error?: string | null, parsed?: any }} response
  */
 function buildMaintenanceFailureReason(taskKind, response) {

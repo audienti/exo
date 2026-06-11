@@ -51,6 +51,7 @@ const catalog = [
       "connection_request_pending",
       "connection_request_no_longer_pending",
       "connection_request_accepted",
+      "connection_request_not_accepted",
       "connection_request_withdraw_requested",
       "connection_request_withdrawn"
     ]

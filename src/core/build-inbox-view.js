@@ -385,6 +385,12 @@ function classifyObservation(observation, messageContext) {
         status: "needs-triage",
         whyItMatters: "The connection state changed, which can unlock or require the next private move."
       };
+    case "connection_request_not_accepted":
+      return {
+        priority: "low",
+        status: "resolved",
+        whyItMatters: "LinkedIn profile state shows this sent invite is not pending and did not become a connection."
+      };
     case "connection_request_declined":
       return {
         priority: "low",
@@ -445,7 +451,9 @@ function recommendAction(observation, prospect, messageContext) {
     case "connection_request_pending":
       return `Keep the branch patient for now. If the pending invite crosses policy age, the agent should withdraw it automatically.`;
     case "connection_request_no_longer_pending":
-      return `Review whether the invite was accepted, rejected, or otherwise left the pending list before continuing the old waiting branch.`;
+      return `Agent should verify the LinkedIn profile state before Exo changes this waiting branch.`;
+    case "connection_request_not_accepted":
+      return `No connection gate opened here. Keep the branch closed unless new evidence appears.`;
     case "inbound_reply_received":
     case "email_reply_received":
     case "message_received":

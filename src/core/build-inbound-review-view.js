@@ -452,6 +452,8 @@ function shouldEscalateUnclaimedReviewItem(observation, triage) {
   return ![
     "waiting",
     "agent_withdraw_due",
+    "agent_status_reconciliation_due",
+    "resolved_not_accepted",
     "attention_signal",
     "visibility_signal",
     "public_engagement_review",
@@ -729,13 +731,32 @@ function classifyReviewObservation(observation, ageDays, observedAt, actorName) 
         decisionOptions: []
       };
     case "connection_request_no_longer_pending":
+      if (!hasLinkedinProfileIdentity(observation)) {
+        return {
+          category: "sent_invite",
+          priority: "low",
+          state: "informational",
+          whyItMatters: "The pending invitation row disappeared, but the stored row has no LinkedIn profile identity to verify relationship state.",
+          recommendedAction: `No operator action for ${actorName}; Exo cannot classify this further without a LinkedIn profile identity.`,
+          decisionOptions: []
+        };
+      }
       return {
         category: "sent_invite",
         priority: "high",
-        state: "needs_status_reconciliation",
-        whyItMatters: "A previously pending outbound invite disappeared from the full live pending list. The waiting assumption is broken, but the exact outcome still needs classification.",
-        recommendedAction: `Review whether ${actorName}'s connection request was accepted, rejected, or otherwise left the pending list, then update the governed branch accordingly.`,
-        decisionOptions: ["accepted", "rejected", "other"]
+        state: "agent_status_reconciliation_due",
+        whyItMatters: "A previously pending outbound invite disappeared from the full live pending list. Exo must verify the profile relationship and invitation state before changing the branch.",
+        recommendedAction: `Agent should verify ${actorName}'s LinkedIn profile state and write back whether the request is still pending, accepted, or not accepted.`,
+        decisionOptions: []
+      };
+    case "connection_request_not_accepted":
+      return {
+        category: "sent_invite",
+        priority: "low",
+        state: "resolved_not_accepted",
+        whyItMatters: "LinkedIn profile state shows the sent invite is not pending and this person is not a connection.",
+        recommendedAction: `No connection gate opened for ${actorName}; keep this branch closed unless new evidence appears.`,
+        decisionOptions: []
       };
     case "connection_request_pending":
       if (isStalePendingConnectionRequest({ kind, observedAt })) {
@@ -955,17 +976,19 @@ function compareReviewItems(left, right) {
     ready_for_reply: 1,
     needs_decision: 2,
     needs_status_reconciliation: 3,
-    agent_withdraw_due: 4,
-    ready_for_post_accept: 5,
-    agent_draft_due: 6,
-    thread_change_review: 7,
-    needs_claim: 8,
-    attention_signal: 9,
-    visibility_signal: 10,
-    public_engagement_review: 11,
-    claimed_elsewhere: 12,
-    waiting: 13,
-    informational: 14
+    agent_status_reconciliation_due: 4,
+    agent_withdraw_due: 5,
+    ready_for_post_accept: 6,
+    agent_draft_due: 7,
+    thread_change_review: 8,
+    needs_claim: 9,
+    attention_signal: 10,
+    visibility_signal: 11,
+    public_engagement_review: 12,
+    claimed_elsewhere: 13,
+    waiting: 14,
+    resolved_not_accepted: 15,
+    informational: 16
   };
 
   return (
@@ -1037,4 +1060,14 @@ function normalizeNullableString(value) {
   if (typeof value !== "string") return null;
   const normalized = value.trim();
   return normalized ? normalized : null;
+}
+
+/** @param {import("../schema/inbound.js").inboundObservationSchema._type} observation */
+function hasLinkedinProfileIdentity(observation) {
+  return Boolean(
+    normalizeNullableString(observation.actorLinkedinPublicId)
+      || normalizeNullableString(observation.actorHandle)
+      || normalizeNullableString(observation.actorLinkedinMemberId)
+      || normalizeNullableString(observation.actorProfileUrl)
+  );
 }

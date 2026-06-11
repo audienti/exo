@@ -2500,6 +2500,36 @@ test("buildAgentQueue queues an operator-requested withdraw from the sent-invita
   );
 });
 
+test("buildAgentQueue queues disappeared sent-invite status reconciliation as agent work", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      drafts: [],
+      touches: [],
+      observations: [
+        {
+          id: "obs-disappeared",
+          userId: "user-1",
+          accountId: "account-1",
+          capability: "linkedin",
+          kind: "connection_request_no_longer_pending",
+          observedAt: "2026-06-05T00:00:00.000Z",
+          actorName: "Dana Disappeared",
+          actorProfileUrl: "https://linkedin.com/in/dana-disappeared",
+          actorLinkedinPublicId: "dana-disappeared",
+        },
+      ],
+    }),
+  );
+
+  const task = queue.tasks.find((item) => item.kind === "reconcile_connection_request_status");
+  assert.ok(task);
+  assert.equal(task.needsOperatorInput, false);
+  assert.equal(task.action, "reconcile_connection_request_status");
+  assert.equal(task.observationId, "obs-disappeared");
+  assert.equal(task.prospectName, "Dana Disappeared");
+  assert.equal(task.reason, "sent_invite_status_reconciliation");
+});
+
 test("buildAgentQueue does not synthesize unfollow cleanup after a withdrawn branch", () => {
   const queue = buildAgentQueue(
     fixture({

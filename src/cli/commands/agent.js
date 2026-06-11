@@ -972,7 +972,7 @@ export function formatAgentDoctorReport(report) {
   const scheduler = report.scheduler ?? null;
   const routine = report.routine ?? null;
   const taskReadiness = browser.taskReadiness ?? {};
-  const taskKinds = ["run_inbound_sync", "send_message", "reject_connection_request", "withdraw_connection"];
+  const taskKinds = ["run_inbound_sync", "send_message", "reconcile_connection_request_status", "reject_connection_request", "withdraw_connection"];
   const shownKinds = taskKinds.filter((taskKind) => taskReadiness[taskKind]);
   const dueTaskKinds = [...new Set(Array.isArray(queue.browserTaskKinds) ? queue.browserTaskKinds : [])];
   const blockedDueTaskKinds = dueTaskKinds.filter((taskKind) => taskReadiness[taskKind]?.ready === false);

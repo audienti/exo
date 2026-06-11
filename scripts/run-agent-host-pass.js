@@ -529,7 +529,8 @@ export function shouldAbortPassAfterTaskProblem(task, result) {
 
 /** @param {string | null | undefined} taskKind */
 export function isBrowserMaintenanceTaskKind(taskKind) {
-  return taskKind === "withdraw_connection"
+  return taskKind === "reconcile_connection_request_status"
+    || taskKind === "withdraw_connection"
     || taskKind === "reject_connection_request";
 }
 
@@ -689,6 +690,7 @@ function supportsGenericTaskCheckout(taskKind) {
     || taskKind === "company_discovery"
     || taskKind === "write_draft"
     || taskKind === "send_message"
+    || taskKind === "reconcile_connection_request_status"
     || taskKind === "reject_connection_request"
     || taskKind === "withdraw_connection";
 }
@@ -769,6 +771,7 @@ function resolveTaskLeaseDurationMs(task) {
   let baseDurationMs = EXO_COMMAND_TIMEOUT_MS;
   switch (task?.kind) {
     case "send_message":
+    case "reconcile_connection_request_status":
     case "reject_connection_request":
     case "withdraw_connection":
       baseDurationMs = BROWSER_TIMEOUT_MS;
@@ -997,6 +1000,7 @@ function sortQueueTasksForExecution(tasks, options = {}) {
   const rank = {
     send_message: 0,
     write_draft: 1,
+    reconcile_connection_request_status: 2,
     reject_connection_request: 2,
     withdraw_connection: 2,
     run_inbound_sync_quick: forceRetrieval ? -1 : 3,
@@ -2390,13 +2394,17 @@ function runBrowserActionTask(task, executionContext = null) {
     };
   }
 
-  runShellText(task.writeback);
+  if (normalizeNullableString(task.writeback)) {
+    runShellText(task.writeback);
+  }
   return {
     status: "completed",
     detail: {
       action: task.kind,
       recipientUrl: task.recipientUrl ?? null,
       transport: "unipile",
+      resolvedKind: result.resolvedKind ?? null,
+      profileStatus: result.profileStatus ?? null,
     }
   };
 }

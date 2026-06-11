@@ -47,7 +47,7 @@
       "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-11T16:44:16Z"
+    "updatedAt": "2026-06-11T17:09:49Z"
   },
   "tasks": [
     {
@@ -100,7 +100,7 @@
     {
       "id": "T02",
       "title": "Run bounded research drain and record throughput",
-      "status": "ready",
+      "status": "done",
       "priority": 90,
       "dependsOn": [
         "T01"
@@ -125,11 +125,73 @@
         "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent run --max-tasks 5 --send-mode verify --json",
         "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent queue --json"
       ],
-      "outputs": [],
+      "outputs": [
+        "Observed an already-active scheduled pass instead of starting a competing runner. It completed research lane 15 results and transport lane 3 inbound syncs from 2026-06-11T16:42:48Z to 2026-06-11T16:58:39Z.",
+        "The active pass showed real throughput and downstream expansion: due work moved through 83, 82, 81, then expanded to 155 as selection work created prospect research and connection-status reconciliation work.",
+        "Ran explicit bounded verification pass: EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent run --max-tasks 5 --send-mode verify --json.",
+        "Bounded pass returned partial with finalQueueCounts 79 due, 0 waiting, 0 blockers, sendMode verify, dueSendCount 0.",
+        "Bounded pass completed 5 research-lane results and transport maintenance reconciliations through Unipile without physical outbound sends.",
+        "Post-pass queue shows 79 due: 1 run_inbound_sync, 16 prospect_selection, 61 prospect_research, 1 write_draft; 0 waiting and 0 blockers."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "state-only-live-pass",
+      "notes": "Manual --max-tasks 5 bounds standard research work, but transport maintenance still ran up to maxMaintenanceTasksPerPass 25. This is useful visibility input for T06/T07."
+    },
+    {
+      "id": "T02A",
+      "title": "Land sent-invite status reconciliation maintenance",
+      "status": "done",
+      "priority": 88,
+      "dependsOn": [
+        "T02"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "scripts/run-agent-host-pass.js",
+        "src/artifacts/render-prospects.js",
+        "src/cli/commands/agent.js",
+        "src/cli/commands/inbound.js",
+        "src/core/build-agent-queue.js",
+        "src/core/build-inbound-review-view.js",
+        "src/core/build-inbox-view.js",
+        "src/core/build-motion-prospect-view.js",
+        "src/lib/agent-preflight.js",
+        "src/lib/agent-task-lanes.js",
+        "src/lib/inbound-surface-catalog.js",
+        "src/lib/linkedin-unipile-maintenance.js",
+        "src/schema/inbound.js",
+        "test/agent-queue.test.js",
+        "test/inbound-reconciliation-contract.test.js",
+        "test/linkedin-unipile-maintenance.test.js"
+      ],
+      "context": "The T02 live drain surfaced many connection_request_no_longer_pending items. The safe next behavior is agent-owned status reconciliation, not operator guessing. Add a transport maintenance task that verifies the LinkedIn profile relationship and invitation state through the governed Unipile account, then writes back connection_request_pending, connection_request_accepted, or connection_request_not_accepted. This is adjacent to the throughput plan because it turns disappeared sent-invite deltas into durable Exo state without physical outbound sends.",
+      "doneWhen": [
+        "Agent queue emits reconcile_connection_request_status for disappeared sent invites with LinkedIn profile identity.",
+        "Host pass treats reconciliation as transport maintenance with checkout, readiness, lease, and result details.",
+        "Unipile maintenance can classify pending, accepted, and not-accepted profile states and write back a governed observation.",
+        "Inbox, inbound review, prospect timeline, and artifacts render connection_request_not_accepted and agent reconciliation due states without operator decision prompts.",
+        "Focused and repo-wide checks pass."
+      ],
+      "verification": [
+        "npm test -- test/agent-queue.test.js test/inbound-reconciliation-contract.test.js test/linkedin-unipile-maintenance.test.js",
+        "npm run check",
+        "npm test"
+      ],
+      "outputs": [
+        "Agent queue emits reconcile_connection_request_status for connection_request_no_longer_pending observations when LinkedIn profile identity is available.",
+        "Host pass and preflight classify reconcile_connection_request_status as transport maintenance, include checkout/readiness/lease handling, and report resolvedKind/profileStatus when writeback runs.",
+        "Unipile maintenance classifies sent-invite profile state into pending, accepted, or not accepted and writes back governed inbound observations.",
+        "Inbox, inbound review, prospect timeline, and prospect artifacts render connection_request_not_accepted and agent reconciliation due states without asking the operator to guess.",
+        "Focused reconciliation tests passed: 81/81.",
+        "Verified npm run check.",
+        "Verified full npm test: 730/730 passed."
+      ],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "source-commit-pending",
+      "notes": "Discovered during T02 after queue expanded to connection-status reconciliation work. This intentionally keeps disappeared sent-invite deltas in agent-owned transport maintenance rather than manual operator triage."
     },
     {
       "id": "T03",
@@ -137,7 +199,8 @@
       "status": "ready",
       "priority": 85,
       "dependsOn": [
-        "T01"
+        "T01",
+        "T02A"
       ],
       "ownerLane": "controller",
       "modelTier": "default",

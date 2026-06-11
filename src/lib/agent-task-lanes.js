@@ -20,6 +20,7 @@ export const AGENT_EXECUTION_LANES = /** @type {const} */ (["transport", "resear
 const TASK_LANE_BY_KIND = {
   run_inbound_sync: "transport",
   send_message: "transport",
+  reconcile_connection_request_status: "transport",
   reject_connection_request: "transport",
   withdraw_connection: "transport",
   company_discovery: "research",

@@ -27,6 +27,9 @@
 //   - write_draft               — write the next governed draft with no
 //                                 operator input.
 //   - send_message              — fire a send-ready outbound message.
+//   - reconcile_connection_request_status
+//                               — verify a disappeared sent invite against
+//                                 live profile relationship/invitation state.
 //   - reject_connection_request — decline an inbound invite the operator
 //                                 already rejected in Exo.
 //   - withdraw_connection       — clear a stale outbound invite automatically.
@@ -325,6 +328,32 @@ export function buildAgentQueue(input) {
         }), { now, tasks, waiting });
       }
     }
+  }
+
+  // Disappearance deltas from the sent-invitations list are not operator
+  // decisions. The agent checks the profile relationship/invitation state via
+  // the governed connector and writes back pending, accepted, or not accepted.
+  for (const observation of input.observations ?? []) {
+    if (observation?.kind !== "connection_request_no_longer_pending") continue;
+    if (!hasLinkedinProfileIdentity(observation)) continue;
+    placeTask({
+      kind: "reconcile_connection_request_status",
+      action: "reconcile_connection_request_status",
+      needsOperatorInput: false,
+      observationId: observation.id,
+      userId: observation.userId ?? null,
+      accountId: observation.accountId ?? null,
+      capability: observation.capability ?? "linkedin",
+      companyId: observation.companyId ?? null,
+      companyName: observation.actorCompanyName ?? null,
+      prospectId: observation.prospectId ?? null,
+      prospectName: observation.actorName ?? "pending invite",
+      recipientUrl: observation.actorProfileUrl ?? observation.sourceUrl ?? null,
+      surface: "connection_request",
+      reason: "sent_invite_status_reconciliation",
+      queuedAt: observation.observedAt ?? null,
+      dueAt: observation.observedAt ?? now,
+    }, { now, tasks, waiting });
   }
 
   // Reject tasks: inbound invites the operator queued for rejection. The agent
@@ -1575,11 +1604,12 @@ function taskOrder(a, b, hostState = null) {
     prospect_selection: 2,
     prospect_research: 3,
     company_discovery: 4,
-    reject_connection_request: 5,
-    withdraw_connection: 6,
-    send_message: 7,
-    write_draft: 8,
-    run_inbound_sync_full: 9,
+    reconcile_connection_request_status: 5,
+    reject_connection_request: 6,
+    withdraw_connection: 7,
+    send_message: 8,
+    write_draft: 9,
+    run_inbound_sync_full: 10,
   };
   if (isMotionRoundRobinTask(a) && isMotionRoundRobinTask(b)) {
     const motionComparison = compareMotionTaskOrderAcrossKinds(a, b, hostState);
@@ -1882,6 +1912,16 @@ function normalizeNullableString(value) {
   if (!value) return null;
   const normalized = String(value).trim();
   return normalized.length ? normalized : null;
+}
+
+/** @param {any} observation */
+function hasLinkedinProfileIdentity(observation) {
+  return Boolean(
+    normalizeNullableString(observation?.actorLinkedinPublicId)
+      || normalizeNullableString(observation?.actorHandle)
+      || normalizeNullableString(observation?.actorLinkedinMemberId)
+      || normalizeNullableString(observation?.actorProfileUrl)
+  );
 }
 
 /**

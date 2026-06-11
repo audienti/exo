@@ -1012,8 +1012,8 @@ test("full sent-invitation reconciliation writes back disappearance deltas inste
     const review = JSON.parse(runCli(tempDir, ["inbound", "review", user.id, "--json"]));
     const disappearedInvite = review.reviewItems.find((item) => item.kind === "connection_request_no_longer_pending");
     assert.ok(disappearedInvite);
-    assert.equal(disappearedInvite.state, "needs_claim");
-    assert.match(disappearedInvite.recommendedAction, /claim jordan cipolla/i);
+    assert.equal(disappearedInvite.state, "agent_status_reconciliation_due");
+    assert.match(disappearedInvite.recommendedAction, /verify jordan cipolla/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

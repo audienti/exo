@@ -1232,6 +1232,13 @@ function observationEventPresentation(prospect, observation) {
         tone: "bad",
         detail: observation.summary ?? null,
       };
+    case "connection_request_not_accepted":
+      return {
+        title: "Connection request not accepted",
+        icon: "x",
+        tone: "bad",
+        detail: observation.summary ?? null,
+      };
     case "connection_request_no_longer_pending":
       return {
         title: "Pending invite disappeared",
