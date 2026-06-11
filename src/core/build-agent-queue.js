@@ -448,6 +448,9 @@ export function buildAgentQueue(input) {
     }
 
     for (const account of (motion.targetMap?.accounts ?? []).map((item) => normalizeAccountForAgentQueue(item, now))) {
+      if (!isActiveDisposition(account?.disposition)) {
+        continue;
+      }
       const senderPremium = senderPremiumByScope.get(`${motion.id}:${account.companyId}`)
         ?? senderPremiumByCompany.get(account.companyId)
         ?? false;
@@ -472,6 +475,7 @@ export function buildAgentQueue(input) {
       const queueBranches = queueProspectBranchesByAccount.get(`${motion.id}:${account.companyId}`) ?? [];
       for (const branch of queueBranches) {
         const prospect = branch.prospect;
+        if (!isActiveDisposition(prospect?.disposition)) continue;
         // Honor operator steers FIRST. A "do not contact / works for us" steer
         // removes the prospect from the loop entirely — the unattended agent
         // must never draft for or message someone the operator excluded.
@@ -760,7 +764,8 @@ function buildCompanyResearchTask({ motion, account }) {
  */
 function isClaimableCompanyResearchAccount(account) {
   const queueStatus = account?.queueState?.status ?? "discovered";
-  return ["discovered", "queued_for_research"].includes(queueStatus)
+  return isActiveDisposition(account?.disposition)
+    && ["discovered", "queued_for_research"].includes(queueStatus)
     && !isPacketUnavailableForWorker(account?.packetState);
 }
 
@@ -785,7 +790,8 @@ function normalizeAccountForAgentQueue(rawAccount, now) {
  * @param {any} account
  */
 function isClaimableProspectSelectionAccount(account) {
-  return account?.queueState?.status === "researched"
+  return isActiveDisposition(account?.disposition)
+    && account?.queueState?.status === "researched"
     && !isPacketUnavailableForWorker(account?.packetState);
 }
 
@@ -840,8 +846,16 @@ function buildQueueProspectBranches(input, activeMotions, activeMotionIds, now) 
  * @param {any} prospect
  */
 function isClaimableProspectResearchProspect(prospect) {
-  return prospect?.queueState?.status === "selected"
+  return isActiveDisposition(prospect?.disposition)
+    && prospect?.queueState?.status === "selected"
     && !isPacketUnavailableForWorker(prospect?.packetState);
+}
+
+/**
+ * @param {unknown} disposition
+ */
+function isActiveDisposition(disposition) {
+  return disposition == null || disposition === "active";
 }
 
 /**

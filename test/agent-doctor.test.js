@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { formatAgentDoctorReport } from "../src/cli/commands/agent.js";
+import { getLocalDatabase, updateMotion } from "../src/db/database.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(repoRoot, "src", "cli", "index.js");
@@ -1378,3 +1379,126 @@ test("agent doctor --json returns the worker diagnosis contract", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("agent doctor warns on stale submitted packet reviews", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-agent-doctor-stale-review-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  process.env.EXO_STATE_DIR = tempDir;
+  const env = { ...process.env, EXO_STATE_DIR: tempDir };
+
+  try {
+    const motion = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "motion",
+        "add",
+        "--url",
+        "https://example.com/stale-review-doctor",
+        "--premise",
+        "This offer matters when stale review packets need a loud warning.",
+        "--audience",
+        "Revenue operators",
+        "--signal",
+        "company::Is a stale packet review visible?",
+        "--json"
+      ], {
+        cwd: repoRoot,
+        env,
+        encoding: "utf8",
+      })
+    );
+    updateMotion({
+      ...motion,
+      status: "active",
+      packetReviewPolicy: "review",
+    });
+    const company = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "companies",
+        "add",
+        "--name",
+        "Stale Review Co",
+        "--domain",
+        "stale-review.example",
+        "--motion",
+        motion.id,
+        "--json"
+      ], {
+        cwd: repoRoot,
+        env,
+        encoding: "utf8",
+      })
+    );
+    execFileSync("node", [cliPath, "companies", "queue", "claim", company.id, "--motion", motion.id, "--worker", "doctor-worker", "--json"], {
+      cwd: repoRoot,
+      env,
+    });
+    execFileSync("node", [cliPath, "companies", "queue", "complete", company.id, "--motion", motion.id, "--worker", "doctor-worker", "--next-status", "researched", "--notes", "Ready for review.", "--json"], {
+      cwd: repoRoot,
+      env,
+    });
+    ageSubmittedAccountPacket(motion.id, company.id, "2026-01-01T00:00:00.000Z");
+    updateMotion({
+      ...motion,
+      status: "draft",
+      packetReviewPolicy: "review",
+      version: motion.version + 1,
+    });
+
+    const report = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "doctor", "--json"], {
+        cwd: repoRoot,
+        env,
+        encoding: "utf8",
+      })
+    );
+
+    assert.equal(report.packetReviewWarnings.count, 1);
+    assert.equal(report.packetReviewWarnings.items[0].packetId, `company_research:${company.id}`);
+    assert.equal(report.packetReviewWarnings.items[0].subject, "Stale Review Co");
+    assert.equal(report.packetReviewWarnings.items[0].commands.brief, `exo motion packet-brief ${motion.id} --packet company_research:${company.id} --json`);
+
+    const text = execFileSync("node", [cliPath, "agent", "doctor"], {
+      cwd: repoRoot,
+      env,
+      encoding: "utf8",
+    });
+    assert.match(text, /Stale packet reviews:/);
+    assert.match(text, /Stale Review Co/);
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function ageSubmittedAccountPacket(motionId, companyId, completedAt) {
+  const database = getLocalDatabase();
+  const row = database
+    .prepare("SELECT payload_json FROM motion_accounts WHERE motion_id = ? AND company_id = ?")
+    .get(motionId, companyId);
+  assert.ok(row);
+  const payload = JSON.parse(row.payload_json);
+  payload.packetState = {
+    ...(payload.packetState ?? {}),
+    completedAt,
+  };
+  database
+    .prepare(`
+      UPDATE motion_accounts
+      SET payload_json = @payloadJson,
+          updated_at = @updatedAt
+      WHERE motion_id = @motionId
+        AND company_id = @companyId
+    `)
+    .run({
+      payloadJson: JSON.stringify(payload, null, 2),
+      updatedAt: completedAt,
+      motionId,
+      companyId,
+    });
+}

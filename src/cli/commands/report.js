@@ -20,6 +20,7 @@ import { buildWorkspaceRollup } from "../../core/build-workspace-rollup.js";
 import {
   findMotionById,
   findUserById,
+  listActivityEvents,
   listBrowserProfiles,
   listCompanies,
   listMotions,
@@ -79,7 +80,8 @@ Examples:
       }
 
       const result = buildMotionReport(raw, listCompanies(), listBrowserProfiles(), listUsers(), {
-        capability: options.capability
+        capability: options.capability,
+        rawActivityEvents: listActivityEvents({ motionId: raw.id }),
       });
 
       if (options.json) {

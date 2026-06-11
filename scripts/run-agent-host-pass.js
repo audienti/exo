@@ -8,6 +8,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { buildAgentQueue, isBackfillInboundSyncTask } from "../src/core/build-agent-queue.js";
+import { buildStalePacketReviewWarnings } from "../src/core/build-stale-packet-review-warnings.js";
 import { buildInboundAutomationHealthWarnings, buildInboundAutomationWarnings } from "../src/core/user-inbound-sync.js";
 import {
   findCompanyById,
@@ -457,6 +458,7 @@ function runUnlockedAgentHostPass() {
     preflightPath: PREFLIGHT_PATH,
     results,
     finalQueueCounts: summarizeQueue(finalQueue),
+    packetReviewWarnings: buildStalePacketReviewWarnings(listMotions(), listCompanies(), { now: endedAt }),
   };
 }
 
@@ -478,6 +480,7 @@ function buildAgentHostPassLockNoop(lock) {
     preflightPath: null,
     results: [],
     finalQueueCounts: { dueTaskCount: 0, waitingTaskCount: 0, blockerCount: 0 },
+    packetReviewWarnings: buildStalePacketReviewWarnings(listMotions(), listCompanies(), { now }),
   };
 }
 

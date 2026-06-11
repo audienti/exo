@@ -37,6 +37,7 @@ export function mergeLanePassSummaries(laneSummaries) {
     .filter((lane) => lane?.finalQueueCounts)
     .sort((left, right) => String(left?.endedAt ?? "").localeCompare(String(right?.endedAt ?? "")))
     .at(-1);
+  const packetReviewWarnings = mergePacketReviewWarnings(lanes);
 
   return {
     status,
@@ -49,6 +50,7 @@ export function mergeLanePassSummaries(laneSummaries) {
       ?? { dueTaskCount: 0, waitingTaskCount: 0, blockerCount: 0 },
     browserReady: lanes.find((lane) => lane?.browserReady !== undefined)?.browserReady,
     preflightPath: lanes.find((lane) => lane?.preflightPath)?.preflightPath ?? null,
+    ...(packetReviewWarnings ? { packetReviewWarnings } : {}),
   };
 }
 
@@ -121,6 +123,42 @@ function readJsonIfExists(filePath) {
   } catch {
     return null;
   }
+}
+
+/**
+ * @param {any[]} lanes
+ */
+function mergePacketReviewWarnings(lanes) {
+  const warningSets = lanes
+    .map((lane) => lane?.packetReviewWarnings)
+    .filter((warnings) => warnings && typeof warnings === "object");
+  if (!warningSets.length) return null;
+
+  const itemById = new Map();
+  for (const warningSet of warningSets) {
+    for (const item of Array.isArray(warningSet.items) ? warningSet.items : []) {
+      if (!item?.id) continue;
+      itemById.set(item.id, item);
+    }
+  }
+  const items = [...itemById.values()]
+    .sort((left, right) =>
+      String(left.submittedAt ?? "").localeCompare(String(right.submittedAt ?? ""))
+      || String(left.id ?? "").localeCompare(String(right.id ?? ""))
+    );
+  const first = warningSets[0];
+  const oldest = items[0] ?? null;
+
+  return {
+    kind: first.kind ?? "stale_packet_reviews",
+    thresholdHours: first.thresholdHours ?? null,
+    thresholdSeconds: first.thresholdSeconds ?? null,
+    count: items.length,
+    oldestSubmittedAt: oldest?.submittedAt ?? null,
+    oldestAgeSeconds: oldest?.ageSeconds ?? null,
+    oldestAgeLabel: oldest?.ageLabel ?? null,
+    items,
+  };
 }
 
 /** @param {unknown} lane */

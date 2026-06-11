@@ -9339,6 +9339,310 @@ test("daily, inbox, next, and operator report surface submitted packet reviews",
   }
 });
 
+test("report motion answers active, nurtured, terminal, and awaiting-review lifecycle state", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-lifecycle-report-"));
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  process.env.EXO_STATE_DIR = tempDir;
+  const env = { ...process.env, EXO_STATE_DIR: tempDir };
+
+  try {
+    const motion = JSON.parse(
+      execFileSync(
+        "node",
+        [
+          cliPath,
+          "motion",
+          "add",
+          "--url",
+          "https://example.com/lifecycle-report",
+          "--premise",
+          "This offer matters when operators must separate active prospects from parked or ended branches.",
+          "--audience",
+          "Revenue operators",
+          "--signal",
+          "company::Is there current evidence this account should stay active?",
+          "--json"
+        ],
+        { cwd: repoRoot, env }
+      ).toString()
+    );
+    updateMotion({
+      ...motion,
+      status: "active",
+      packetReviewPolicy: "review"
+    });
+
+    const peopleCompany = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "companies",
+        "add",
+        "--name",
+        "Lifecycle People Co",
+        "--domain",
+        "lifecycle-people.example",
+        "--motion",
+        motion.id,
+        "--json"
+      ], { cwd: repoRoot, env }).toString()
+    );
+    const nurtureAccount = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "companies",
+        "add",
+        "--name",
+        "Nurture Account Co",
+        "--domain",
+        "nurture-account.example",
+        "--motion",
+        motion.id,
+        "--json"
+      ], { cwd: repoRoot, env }).toString()
+    );
+    const terminalAccount = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "companies",
+        "add",
+        "--name",
+        "Terminal Account Co",
+        "--domain",
+        "terminal-account.example",
+        "--motion",
+        motion.id,
+        "--json"
+      ], { cwd: repoRoot, env }).toString()
+    );
+    const reviewCompany = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "companies",
+        "add",
+        "--name",
+        "Review Pending Co",
+        "--domain",
+        "review-pending.example",
+        "--motion",
+        motion.id,
+        "--json"
+      ], { cwd: repoRoot, env }).toString()
+    );
+
+    const activeProspectResult = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "companies",
+        "prospects",
+        "add",
+        peopleCompany.id,
+        "--motion",
+        motion.id,
+        "--name",
+        "Alex Active",
+        "--title",
+        "VP Revenue",
+        "--why-relevant",
+        "Owns active revenue execution.",
+        "--json"
+      ], { cwd: repoRoot, env }).toString()
+    );
+    const activeProspect = activeProspectResult.prospects.find((prospect) => prospect.name === "Alex Active");
+    const nurturedProspectResult = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "companies",
+        "prospects",
+        "add",
+        peopleCompany.id,
+        "--motion",
+        motion.id,
+        "--name",
+        "Nina Nurture",
+        "--title",
+        "Head of Growth",
+        "--why-relevant",
+        "Potential future fit after planning cycle.",
+        "--json"
+      ], { cwd: repoRoot, env }).toString()
+    );
+    const nurturedProspect = nurturedProspectResult.prospects.find((prospect) => prospect.name === "Nina Nurture");
+    const terminalProspectResult = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "companies",
+        "prospects",
+        "add",
+        peopleCompany.id,
+        "--motion",
+        motion.id,
+        "--name",
+        "Taylor Terminal",
+        "--title",
+        "Operations Lead",
+        "--why-relevant",
+        "Needs an explicit terminal disposition for reporting.",
+        "--json"
+      ], { cwd: repoRoot, env }).toString()
+    );
+    const terminalProspect = terminalProspectResult.prospects.find((prospect) => prospect.name === "Taylor Terminal");
+    assert.ok(activeProspect);
+    assert.ok(nurturedProspect);
+    assert.ok(terminalProspect);
+
+    execFileSync("node", [cliPath, "companies", "queue", "claim", nurtureAccount.id, "--motion", motion.id, "--worker", "nurture-worker", "--json"], {
+      cwd: repoRoot,
+      env
+    });
+    execFileSync("node", [cliPath, "companies", "queue", "complete", nurtureAccount.id, "--motion", motion.id, "--worker", "nurture-worker", "--next-status", "researched", "--notes", "Submitted for nurture review.", "--json"], {
+      cwd: repoRoot,
+      env
+    });
+    execFileSync("node", [
+      cliPath,
+      "agent",
+      "packets",
+      "amend",
+      motion.id,
+      "--packet",
+      `company_research:${nurtureAccount.id}`,
+      "--outcome",
+      "nurture",
+      "--reason",
+      "Revisit after the next budget cycle.",
+      "--json"
+    ], { cwd: repoRoot, env });
+    execFileSync("node", [cliPath, "companies", "queue", "claim", terminalAccount.id, "--motion", motion.id, "--worker", "terminal-worker", "--json"], {
+      cwd: repoRoot,
+      env
+    });
+    execFileSync("node", [cliPath, "companies", "queue", "complete", terminalAccount.id, "--motion", motion.id, "--worker", "terminal-worker", "--next-status", "researched", "--notes", "Submitted for terminal review.", "--json"], {
+      cwd: repoRoot,
+      env
+    });
+    execFileSync("node", [
+      cliPath,
+      "agent",
+      "packets",
+      "amend",
+      motion.id,
+      "--packet",
+      `company_research:${terminalAccount.id}`,
+      "--outcome",
+      "no_longer_target",
+      "--reason",
+      "Outside the target segment.",
+      "--json"
+    ], { cwd: repoRoot, env });
+    execFileSync("node", [
+      cliPath,
+      "companies",
+      "prospects",
+      "disposition",
+      "set",
+      peopleCompany.id,
+      "--motion",
+      motion.id,
+      "--prospect",
+      nurturedProspect.id,
+      "--disposition",
+      "nurture",
+      "--reason",
+      "Reconnect after the planning cycle.",
+      "--json"
+    ], { cwd: repoRoot, env });
+    execFileSync("node", [
+      cliPath,
+      "companies",
+      "prospects",
+      "disposition",
+      "set",
+      peopleCompany.id,
+      "--motion",
+      motion.id,
+      "--prospect",
+      terminalProspect.id,
+      "--disposition",
+      "not_a_fit",
+      "--reason",
+      "Role is not close enough to the buying problem.",
+      "--json"
+    ], { cwd: repoRoot, env });
+
+    execFileSync("node", [cliPath, "companies", "queue", "claim", reviewCompany.id, "--motion", motion.id, "--worker", "review-worker", "--json"], {
+      cwd: repoRoot,
+      env
+    });
+    execFileSync("node", [cliPath, "companies", "queue", "complete", reviewCompany.id, "--motion", motion.id, "--worker", "review-worker", "--next-status", "researched", "--notes", "Submitted for operator review.", "--json"], {
+      cwd: repoRoot,
+      env
+    });
+
+    const reportJson = JSON.parse(
+      execFileSync("node", [cliPath, "report", "motion", motion.id, "--json"], {
+        cwd: repoRoot,
+        env
+      }).toString()
+    );
+
+    assert.equal(reportJson.lifecycle.counts.accounts.nurture, 1);
+    assert.equal(reportJson.lifecycle.counts.accounts.terminal, 1);
+    assert.equal(reportJson.lifecycle.counts.prospects.active, 1);
+    assert.equal(reportJson.lifecycle.counts.prospects.nurture, 1);
+    assert.equal(reportJson.lifecycle.counts.prospects.terminal, 1);
+    assert.equal(reportJson.matches.people.find((prospect) => prospect.prospectId === activeProspect.id)?.disposition, "active");
+    assert.equal(reportJson.lifecycle.review.pendingCount, 1);
+    assert.equal(reportJson.lifecycle.review.items[0].packetId, `company_research:${reviewCompany.id}`);
+    assert.equal(reportJson.lifecycle.nurtureShelf.accounts[0].companyName, "Nurture Account Co");
+    assert.equal(reportJson.lifecycle.nurtureShelf.accounts[0].reason, "Revisit after the next budget cycle.");
+    assert.equal(reportJson.lifecycle.nurtureShelf.prospects[0].prospectName, "Nina Nurture");
+    assert.equal(reportJson.lifecycle.counts.prospects.terminalByReason["Role is not close enough to the buying problem."], 1);
+    assert.equal(
+      reportJson.lifecycle.branchEndedTimeline.some((event) =>
+        event.prospectId === terminalProspect.id
+        && event.to === "not_a_fit"
+        && event.reason === "Role is not close enough to the buying problem."
+      ),
+      true
+    );
+
+    const queue = JSON.parse(
+      execFileSync("node", [cliPath, "agent", "queue", "--json"], {
+        cwd: repoRoot,
+        env
+      }).toString()
+    );
+    const dueTasks = queue.tasks ?? [];
+    assert.equal(
+      dueTasks.some((task) => task.companyId === nurtureAccount.id),
+      false,
+      JSON.stringify(dueTasks.filter((task) => task.companyId === nurtureAccount.id), null, 2)
+    );
+    assert.equal(
+      dueTasks.some((task) => task.prospectId === nurturedProspect.id),
+      false,
+      JSON.stringify(dueTasks.filter((task) => task.prospectId === nurturedProspect.id), null, 2)
+    );
+
+    const reportText = execFileSync("node", [cliPath, "report", "motion", motion.id], {
+      cwd: repoRoot,
+      env,
+      encoding: "utf8"
+    });
+    assert.match(reportText, /Lifecycle/);
+    assert.match(reportText, /Review Pending: 1/);
+    assert.match(reportText, /Nurture Shelf/);
+    assert.match(reportText, /Branch-Ended Timeline/);
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("motion discover links existing companies and creates new queued companies as packet-ready backlog", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-discover-"));
 

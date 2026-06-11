@@ -2,7 +2,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -55,8 +55,11 @@ import {
   releaseAgentRunLock,
   tryAcquireAgentRunLock,
 } from "../src/lib/agent-run-lock.js";
+import { getLocalDatabase, updateMotion } from "../src/db/database.js";
 
 const HOST_PASS_SCRIPT = path.resolve("scripts/run-agent-host-pass.js");
+const repoRoot = path.resolve(import.meta.dirname, "..");
+const cliPath = path.join(repoRoot, "src", "cli", "index.js");
 
 function runSpawnedHostPass({ stateDir, cwd, lane = null }) {
   return spawnSync(process.execPath, [HOST_PASS_SCRIPT], {
@@ -75,6 +78,33 @@ function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function ageSubmittedAccountPacket(motionId, companyId, completedAt) {
+  const database = getLocalDatabase();
+  const row = database
+    .prepare("SELECT payload_json FROM motion_accounts WHERE motion_id = ? AND company_id = ?")
+    .get(motionId, companyId);
+  assert.ok(row);
+  const payload = JSON.parse(row.payload_json);
+  payload.packetState = {
+    ...(payload.packetState ?? {}),
+    completedAt,
+  };
+  database
+    .prepare(`
+      UPDATE motion_accounts
+      SET payload_json = @payloadJson,
+          updated_at = @updatedAt
+      WHERE motion_id = @motionId
+        AND company_id = @companyId
+    `)
+    .run({
+      payloadJson: JSON.stringify(payload, null, 2),
+      updatedAt: completedAt,
+      motionId,
+      companyId,
+    });
+}
+
 test("main-module host pass exits cleanly on an empty workspace", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-empty-"));
   const stateDir = path.join(tempRoot, ".exo");
@@ -85,6 +115,88 @@ test("main-module host pass exits cleanly on an empty workspace", () => {
   const summary = readJsonFile(path.join(stateDir, "agent-last-pass.json"));
   assert.equal(summary.status, "noop");
   assert.equal(summary.lane, null);
+});
+
+test("main-module host pass persists stale submitted packet review warnings", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-host-pass-stale-review-"));
+  const stateDir = path.join(tempRoot, ".exo");
+  const previousStateDir = process.env.EXO_STATE_DIR;
+  process.env.EXO_STATE_DIR = stateDir;
+  const env = { ...process.env, EXO_STATE_DIR: stateDir };
+
+  try {
+    const motion = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "motion",
+        "add",
+        "--url",
+        "https://example.com/host-pass-stale-review",
+        "--premise",
+        "This offer matters when host pass summaries must flag stale review packets.",
+        "--audience",
+        "Revenue operators",
+        "--signal",
+        "company::Is the host pass summary carrying stale review state?",
+        "--json"
+      ], {
+        cwd: repoRoot,
+        env,
+        encoding: "utf8",
+      })
+    );
+    const reviewMotion = updateMotion({
+      ...motion,
+      status: "active",
+      packetReviewPolicy: "review",
+    });
+    const company = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "companies",
+        "add",
+        "--name",
+        "Host Pass Review Co",
+        "--domain",
+        "host-pass-review.example",
+        "--motion",
+        motion.id,
+        "--json"
+      ], {
+        cwd: repoRoot,
+        env,
+        encoding: "utf8",
+      })
+    );
+    execFileSync("node", [cliPath, "companies", "queue", "claim", company.id, "--motion", motion.id, "--worker", "host-pass-worker", "--json"], {
+      cwd: repoRoot,
+      env,
+    });
+    execFileSync("node", [cliPath, "companies", "queue", "complete", company.id, "--motion", motion.id, "--worker", "host-pass-worker", "--next-status", "researched", "--notes", "Ready for review.", "--json"], {
+      cwd: repoRoot,
+      env,
+    });
+    ageSubmittedAccountPacket(motion.id, company.id, "2026-01-01T00:00:00.000Z");
+    updateMotion({
+      ...reviewMotion,
+      status: "draft",
+    });
+
+    const result = runSpawnedHostPass({ stateDir, cwd: repoRoot });
+
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const summary = readJsonFile(path.join(stateDir, "agent-last-pass.json"));
+    assert.equal(summary.packetReviewWarnings.count, 1);
+    assert.equal(summary.packetReviewWarnings.items[0].packetId, `company_research:${company.id}`);
+    assert.equal(summary.packetReviewWarnings.items[0].subject, "Host Pass Review Co");
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.EXO_STATE_DIR;
+    } else {
+      process.env.EXO_STATE_DIR = previousStateDir;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("main-module host pass persists expired host-state cleanup before default and lane passes", () => {

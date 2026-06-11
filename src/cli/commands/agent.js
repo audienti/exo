@@ -7,6 +7,7 @@ import path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { buildAgentQueue } from "../../core/build-agent-queue.js";
 import { buildSendHandoff } from "../../core/build-send-handoff.js";
+import { buildStalePacketReviewWarnings } from "../../core/build-stale-packet-review-warnings.js";
 import { acceptMotionProspectPacket, returnMotionProspectPacket } from "../../core/review-motion-prospect-packet.js";
 import { acceptMotionTargetAccountPacket, returnMotionTargetAccountPacket } from "../../core/review-target-account-packet.js";
 import { buildInboundAutomationHealthWarnings, buildInboundAutomationStatus, buildInboundAutomationWarnings } from "../../core/user-inbound-sync.js";
@@ -651,6 +652,7 @@ export async function runAgentWorkerPass(options = {}) {
         waitingTaskCount: queue.waiting.length,
         blockerCount: (queue.blockers ?? []).length,
       },
+      packetReviewWarnings: buildStalePacketReviewWarnings(listMotions(), listCompanies()),
     };
     if (!options.quiet) {
       if (options.json) {
@@ -696,7 +698,10 @@ export async function runAgentWorkerPass(options = {}) {
     releaseAgentRunLock(runLock);
     runLock = null;
     const laneSummaries = await Promise.all(lanePasses);
-    const summary = mergeLanePassSummaries(laneSummaries);
+    const summary = {
+      ...mergeLanePassSummaries(laneSummaries),
+      packetReviewWarnings: buildStalePacketReviewWarnings(listMotions(), listCompanies()),
+    };
 
     // Each lane runner writes its own agent-last-pass.<lane>.json; the merged
     // view keeps the legacy whole-host summary file current for its readers.
@@ -893,6 +898,9 @@ function buildAgentDoctorReport() {
   const automationWarnings = buildInboundAutomationWarnings(users);
   const automationHealthWarnings = buildInboundAutomationHealthWarnings(users, preflight.checkedAt);
   const automationStatus = buildInboundAutomationStatus(users, preflight.checkedAt);
+  const packetReviewWarnings = buildStalePacketReviewWarnings(listMotions(), listCompanies(), {
+    now: preflight.checkedAt,
+  });
   const rollout = buildAgentSendRolloutSummary(
     queueModel,
     hostState,
@@ -910,6 +918,7 @@ function buildAgentDoctorReport() {
     scheduler,
     routine: routineStatus,
     rollout,
+    packetReviewWarnings,
     automationWarnings,
     automationHealthWarnings,
     automationStatus,
@@ -1055,6 +1064,18 @@ export function formatAgentDoctorReport(report) {
     }
     if (status.nextDueSurface?.dueAt) {
       lines.push(`Next autonomous retrieval due around ${status.nextDueSurface.dueAt} for ${status.nextDueSurface.capability}:${status.nextDueSurface.handle} · ${status.nextDueSurface.surfaceLabel}.`);
+    }
+  }
+  if (report.packetReviewWarnings?.count > 0) {
+    lines.push("");
+    lines.push("Stale packet reviews:");
+    lines.push(`- ${report.packetReviewWarnings.count} submitted packet review${report.packetReviewWarnings.count === 1 ? "" : "s"} older than ${report.packetReviewWarnings.thresholdHours}h. Oldest: ${report.packetReviewWarnings.oldestAgeLabel ?? "unknown age"}.`);
+    for (const item of report.packetReviewWarnings.items.slice(0, 5)) {
+      const motion = item.motion?.name ? ` in ${item.motion.name}` : "";
+      lines.push(`- ${item.subject}${motion}: submitted ${item.submittedAt} (${item.ageLabel})`);
+      if (item.commands?.brief) {
+        lines.push(`  review: ${item.commands.brief}`);
+      }
     }
   }
   if (!browser.required) {

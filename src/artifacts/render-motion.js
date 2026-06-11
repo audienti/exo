@@ -413,6 +413,14 @@ function formatCountMap(counts) {
 }
 
 /**
+ * @param {{ active: number, nurture: number, terminal: number, byDisposition: Record<string, number> }} counts
+ */
+function formatLifecycleCounts(counts) {
+  const details = formatCountMap(counts.byDisposition);
+  return `active:${counts.active} nurture:${counts.nurture} terminal:${counts.terminal} [${details}]`;
+}
+
+/**
  * @param {{
  *   motion: { id: string, name: string, status: string },
  *   company: { id: string, name: string },
@@ -653,6 +661,57 @@ export function renderMotionReport(result) {
     lines.push("", "Motion Preflight Blockers");
     for (const blocker of result.targeting.motionPreflight.blockers) {
       lines.push(`  - ${blocker}`);
+    }
+  }
+
+  if (result.lifecycle) {
+    lines.push(
+      "",
+      "Lifecycle",
+      `  Accounts: ${formatLifecycleCounts(result.lifecycle.counts.accounts)}`,
+      `  Prospects: ${formatLifecycleCounts(result.lifecycle.counts.prospects)}`,
+      `  Review Pending: ${result.lifecycle.review.pendingCount}${result.lifecycle.review.oldestAgeLabel ? `  oldest:${result.lifecycle.review.oldestAgeLabel}` : ""}`
+    );
+
+    if (Object.keys(result.lifecycle.counts.accounts.nurtureByReason).length) {
+      lines.push(`  Account Nurture Reasons: ${formatCountMap(result.lifecycle.counts.accounts.nurtureByReason)}`);
+    }
+    if (Object.keys(result.lifecycle.counts.accounts.terminalByReason).length) {
+      lines.push(`  Account Terminal Reasons: ${formatCountMap(result.lifecycle.counts.accounts.terminalByReason)}`);
+    }
+    if (Object.keys(result.lifecycle.counts.prospects.nurtureByReason).length) {
+      lines.push(`  Prospect Nurture Reasons: ${formatCountMap(result.lifecycle.counts.prospects.nurtureByReason)}`);
+    }
+    if (Object.keys(result.lifecycle.counts.prospects.terminalByReason).length) {
+      lines.push(`  Prospect Terminal Reasons: ${formatCountMap(result.lifecycle.counts.prospects.terminalByReason)}`);
+    }
+
+    if (result.lifecycle.review.items.length) {
+      lines.push("  Packets Awaiting Review:");
+      for (const item of result.lifecycle.review.items.slice(0, 5)) {
+        const proposal = item.proposal?.action ? `  proposal:${item.proposal.action}` : "";
+        lines.push(`    - ${item.subject}  ${item.packetId}  age:${item.ageLabel}${proposal}`);
+      }
+    }
+
+    if (result.lifecycle.nurtureShelf.count) {
+      lines.push("  Nurture Shelf:");
+      for (const branch of [...result.lifecycle.nurtureShelf.accounts, ...result.lifecycle.nurtureShelf.prospects].slice(0, 8)) {
+        const subject = branch.prospectName
+          ? `${branch.prospectName} at ${branch.companyName}`
+          : branch.companyName;
+        lines.push(`    - ${subject}${branch.reason ? `  reason:${branch.reason}` : ""}`);
+      }
+    }
+
+    if (result.lifecycle.branchEndedTimeline.length) {
+      lines.push("  Branch-Ended Timeline:");
+      for (const event of result.lifecycle.branchEndedTimeline.slice(0, 8)) {
+        const subject = event.prospectName
+          ? `${event.prospectName} at ${event.companyName}`
+          : event.companyName ?? event.companyId ?? "unknown branch";
+        lines.push(`    - ${event.occurredAt}  ${subject}  ${event.from ?? "unknown"} -> ${event.to ?? "unknown"}${event.reason ? `  reason:${event.reason}` : ""}`);
+      }
     }
   }
 
