@@ -4096,8 +4096,8 @@ test("inbound sync run writes back one governed pass and refreshes inbox, daily,
     assert.equal(runResult.accounts[0].surfaces[1].surfaceKey, "linkedin-received-invitations");
     assert.equal(runResult.accounts[0].surfaces[1].itemCount, 1);
     assert.equal(runResult.refreshed.inbox.itemCount, 1);
-    assert.match(runResult.refreshed.daily.topItem.recommendedAction, /claim alicia buyer into this workspace's transition backlog/i);
-    assert.match(runResult.refreshed.next.nextMove, /claim alicia buyer into this workspace's transition backlog/i);
+    assert.match(runResult.refreshed.daily.topItem.recommendedAction, /review alicia buyer's inbound connection request and decide whether to accept or decline it/i);
+    assert.match(runResult.refreshed.next.nextMove, /review alicia buyer's inbound connection request and decide whether to accept or decline it/i);
     assert.equal(runResult.followUpCommands[2], `exo next --user ${user.id} --json`);
 
     const syncView = JSON.parse(
@@ -4957,12 +4957,12 @@ test("inbound review shows decision-ready items, stale sent invites, and itemiza
     );
 
     assert.equal(review.counts.reviewItemCount, 2);
-    assert.equal(review.counts.decisionItemCount, 0);
+    assert.equal(review.counts.decisionItemCount, 1);
     assert.equal(review.counts.itemizationGapCount, 1);
 
     const incomingInvite = review.reviewItems.find((item) => item.kind === "connection_request_received");
-    assert.equal(incomingInvite.state, "needs_claim");
-    assert.deepEqual(incomingInvite.decisionOptions, ["claim"]);
+    assert.equal(incomingInvite.state, "needs_decision");
+    assert.deepEqual(incomingInvite.decisionOptions, ["accept", "decline"]);
 
     const staleSentInvite = review.reviewItems.find((item) => item.kind === "connection_request_pending");
     assert.equal(staleSentInvite.state, "agent_withdraw_due");
@@ -5237,10 +5237,10 @@ test("daily and next surface inbound review decisions before idle outbound work"
     );
 
     assert.equal(daily.items[0].source.type, "inbound_review");
-    assert.equal(daily.items[0].source.kind, "needs_claim");
+    assert.equal(daily.items[0].source.kind, "needs_decision");
     assert.equal(daily.items[0].cadenceEffect, "inbound_review_needed");
     assert.equal(daily.items[0].guidance.key, "review_inbound_item");
-    assert.match(daily.items[0].recommendedAction, /claim alicia buyer into this workspace's transition backlog/i);
+    assert.match(daily.items[0].recommendedAction, /review alicia buyer's inbound connection request and decide whether to accept or decline it/i);
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--json"], {
@@ -5252,17 +5252,17 @@ test("daily and next surface inbound review decisions before idle outbound work"
     assert.equal(next.source, "daily");
     assert.equal(next.status.effect, "inbound_review_needed");
     assert.equal(next.guidance.key, "review_inbound_item");
-    assert.match(next.nextMove, /claim alicia buyer into this workspace's transition backlog/i);
+    assert.match(next.nextMove, /review alicia buyer's inbound connection request and decide whether to accept or decline it/i);
     assert.equal(
       next.operatorPrompt,
-      "Alicia Buyer sent you an inbound LinkedIn connection request. Claim them into transition backlog or leave them in global intake?"
+      "Alicia Buyer sent you an inbound LinkedIn connection request. Accept or decline?"
     );
 
     const plainDaily = execFileSync("node", [cliPath, "daily", "--user", user.id], {
       cwd: tempDir,
       encoding: "utf8"
     });
-    assert.match(plainDaily, /^Alicia Buyer sent you an inbound LinkedIn connection request\. Claim them into transition backlog or leave them in global intake\?/);
+    assert.match(plainDaily, /^Alicia Buyer sent you an inbound LinkedIn connection request\. Accept or decline\?/);
     assert.doesNotMatch(plainDaily, /Generated At:|Agent Prompt:|Cadence Effect:/);
 
     const plainInbox = execFileSync("node", [cliPath, "inbox", "--user", user.id], {
@@ -10941,10 +10941,10 @@ test("bare planner surfaces auto-select the sole execution-capable user and igno
     );
     assert.equal(next.source, "daily");
     assert.equal(next.guidance.key, "review_inbound_item");
-    assert.match(next.nextMove, /claim alicia buyer into this workspace's transition backlog/i);
+    assert.match(next.nextMove, /review alicia buyer's inbound connection request and decide whether to accept or decline it/i);
     assert.equal(
       next.operatorPrompt,
-      "Alicia Buyer sent you an inbound LinkedIn connection request. Claim them into transition backlog or leave them in global intake?"
+      "Alicia Buyer sent you an inbound LinkedIn connection request. Accept or decline?"
     );
 
     assert.equal(helperUser.accounts.length, 0);

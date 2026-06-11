@@ -74,7 +74,8 @@ export function transitionInboundObservation(args) {
       motionId: existing.motionId,
       companyId: existing.companyId,
       prospectId: existing.prospectId,
-      notes: args.notes ?? `Recorded as ${humanizeInboundObservationKind(args.nextKind)} from the action-result path.`,
+      notes: args.notes ?? existing.notes,
+      messages: existing.messages,
     },
     { rawMotions: listMotions() },
   );
@@ -115,8 +116,21 @@ export function transitionInboundObservation(args) {
  * @param {string} nextKind
  */
 function buildTransitionSummary(actorName, nextKind) {
-  const subject = actorName?.trim() || "Inbound invite";
-  return `${subject} was marked ${humanizeInboundObservationKind(nextKind)} from the action-result path.`;
+  const subject = actorName?.trim() || "This inbound invite";
+  switch (nextKind) {
+    case "connection_request_accepted":
+      return `${subject} is now a LinkedIn connection.`;
+    case "connection_request_decline_requested":
+      return `${subject} is queued for rejection on LinkedIn.`;
+    case "connection_request_declined":
+      return `${subject}'s inbound connection request was declined.`;
+    case "connection_request_withdraw_requested":
+      return `${subject}'s pending connection request is queued for withdrawal.`;
+    case "connection_request_withdrawn":
+      return `${subject}'s pending connection request was withdrawn.`;
+    default:
+      return `${subject} was marked ${humanizeInboundObservationKind(nextKind)}.`;
+  }
 }
 
 /**

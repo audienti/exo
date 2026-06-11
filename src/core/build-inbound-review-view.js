@@ -299,6 +299,9 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
   if (claimState === "unclaimed" && shouldEscalateUnclaimedReviewItem(observation, triage)) {
     triage = buildNeedsClaimReviewState(observation, triage, prospect?.name ?? observation.actorName ?? "this person");
   }
+  if (claimState === "unclaimed" && observation.kind === "connection_request_accepted") {
+    triage = buildAcceptedUnroutedReviewState(observation.actorName ?? "this person");
+  }
 
   const handledPrivateInbound = classifyHandledPrivateInboundStage(
     observation,
@@ -437,6 +440,20 @@ function buildNeedsClaimReviewState(observation, triage, actorName) {
 }
 
 /**
+ * @param {string} actorName
+ */
+function buildAcceptedUnroutedReviewState(actorName) {
+  return {
+    category: "accepted_invite",
+    priority: "low",
+    state: "accepted_unrouted",
+    whyItMatters: "LinkedIn shows the connection is accepted, but Exo has not resolved a company or motion route for this person yet.",
+    recommendedAction: `Resolve ${actorName}'s company or motion route before drafting the first post-accept message.`,
+    decisionOptions: [],
+  };
+}
+
+/**
  * Pending outbound invites are already in a governed waiting state even when
  * they have not been attached to a local workspace yet. Forcing them into
  * "needs claim" turns passive waiting into fake operator work and obscures the
@@ -447,6 +464,12 @@ function buildNeedsClaimReviewState(observation, triage, actorName) {
  */
 function shouldEscalateUnclaimedReviewItem(observation, triage) {
   if (observation.kind === "connection_request_pending") {
+    return false;
+  }
+  if (observation.kind === "connection_request_received") {
+    return false;
+  }
+  if (observation.kind === "connection_request_accepted") {
     return false;
   }
   return ![
@@ -891,7 +914,9 @@ function buildReviewPreview(observation, prospect, state) {
 
   const noteText = compactPreviewText(parsedNotes.body);
   if (noteText) {
-    const syncEvidence = buildSyncEvidencePreview(noteText);
+    const syncEvidence = isGenericOperatorSurfaceNote(noteText)
+      ? null
+      : buildSyncEvidencePreview(noteText);
     if (syncEvidence) {
       return {
         label: syncEvidence.label,
@@ -899,14 +924,16 @@ function buildReviewPreview(observation, prospect, state) {
         text: syncEvidence.text,
       };
     }
-    return {
-      label: observation.kind === "connection_request_received" ? "Invitation note" : "Thread context",
-      subject: previewSubject,
-      text: noteText,
-    };
+    if (!isGenericOperatorSurfaceNote(noteText)) {
+      return {
+        label: observation.kind === "connection_request_received" ? "Invitation note" : "Thread context",
+        subject: previewSubject,
+        text: noteText,
+      };
+    }
   }
 
-  const summaryText = compactPreviewText(observation.summary);
+  const summaryText = compactPreviewText(humanizeObservationSummary(observation));
   if (summaryText) {
     return {
       label: "Engagement",
@@ -916,6 +943,29 @@ function buildReviewPreview(observation, prospect, state) {
   }
 
   return { label: null, subject: previewSubject, text: null };
+}
+
+/**
+ * @param {string} noteText
+ */
+function isGenericOperatorSurfaceNote(noteText) {
+  return noteText.trim() === "Recorded from the operator surface.";
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ */
+function humanizeObservationSummary(observation) {
+  const summary = normalizeNullableString(observation.summary);
+  if (!summary) return null;
+  const actorName = observation.actorName ?? "This person";
+  if (
+    observation.kind === "connection_request_accepted"
+    && /was marked accepted from (the )?(action-result path|workspace)/i.test(summary)
+  ) {
+    return `${actorName} is now a LinkedIn connection.`;
+  }
+  return summary;
 }
 
 /**
@@ -945,7 +995,47 @@ function buildSyncEvidencePreview(noteText) {
   if (/^Exo (checked|compared) the full /.test(normalized)) {
     return { label: "Sync evidence", text: normalized };
   }
+  const profileTruth = buildProfileTruthPreview(normalized);
+  if (profileTruth) {
+    return profileTruth;
+  }
   return null;
+}
+
+/**
+ * @param {string} noteText
+ * @returns {{ label: string, text: string } | null}
+ */
+function buildProfileTruthPreview(noteText) {
+  if (!/^LinkedIn profile truth check through the resolved account returned /i.test(noteText)) {
+    return null;
+  }
+
+  if (/network_distance=FIRST_DEGREE/i.test(noteText) || /is_relationship=true/i.test(noteText)) {
+    return {
+      label: "LinkedIn status",
+      text: "LinkedIn shows you are connected now.",
+    };
+  }
+
+  if (/invitation\.type=SENT/i.test(noteText) && /invitation\.status=PENDING/i.test(noteText)) {
+    return {
+      label: "LinkedIn status",
+      text: "LinkedIn still shows the sent connection request as pending.",
+    };
+  }
+
+  if (/is_relationship=false/i.test(noteText)) {
+    return {
+      label: "LinkedIn status",
+      text: "LinkedIn shows this person is not a connection and has no pending sent request.",
+    };
+  }
+
+  return {
+    label: "LinkedIn status",
+    text: "Exo checked the LinkedIn profile relationship state.",
+  };
 }
 
 /**
@@ -982,13 +1072,14 @@ function compareReviewItems(left, right) {
     agent_draft_due: 7,
     thread_change_review: 8,
     needs_claim: 9,
-    attention_signal: 10,
-    visibility_signal: 11,
-    public_engagement_review: 12,
-    claimed_elsewhere: 13,
-    waiting: 14,
-    resolved_not_accepted: 15,
-    informational: 16
+    accepted_unrouted: 10,
+    attention_signal: 11,
+    visibility_signal: 12,
+    public_engagement_review: 13,
+    claimed_elsewhere: 14,
+    waiting: 15,
+    resolved_not_accepted: 16,
+    informational: 17
   };
 
   return (

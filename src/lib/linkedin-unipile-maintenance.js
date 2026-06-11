@@ -400,13 +400,19 @@ function buildStatusResolutionSummary(actorName, nextKind) {
 
 /** @param {Record<string, any>} profileStatus */
 function buildProfileStatusNotes(profileStatus) {
-  const fields = [
-    `network_distance=${profileStatus.networkDistance ?? "unknown"}`,
-    `is_relationship=${profileStatus.isRelationship === null ? "unknown" : String(profileStatus.isRelationship)}`,
-    `invitation.type=${profileStatus.invitationType ?? "unknown"}`,
-    `invitation.status=${profileStatus.invitationStatus ?? "unknown"}`,
-  ];
-  return `LinkedIn profile truth check through the resolved account returned ${fields.join(", ")}.`;
+  if (profileStatus.networkDistance === "FIRST_DEGREE" || profileStatus.isRelationship === true) {
+    return "LinkedIn shows this person is now a 1st-degree connection.";
+  }
+
+  if (profileStatus.invitationType === "SENT" && profileStatus.invitationStatus === "PENDING") {
+    return "LinkedIn still shows the sent connection request as pending.";
+  }
+
+  if (profileStatus.isRelationship === false) {
+    return "LinkedIn shows this person is not a connection and has no pending sent request.";
+  }
+
+  return "Exo checked the LinkedIn profile relationship state.";
 }
 
 /**

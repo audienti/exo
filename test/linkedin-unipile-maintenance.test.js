@@ -239,6 +239,7 @@ test("runLinkedinMaintenanceWithUnipile restores a disappeared sent invite when 
   assert.equal(result.resolvedKind, "connection_request_pending");
   assert.equal(storedObservation?.kind, "connection_request_pending");
   assert.equal(storedObservation?.summary, "Jordan Example is still pending on LinkedIn.");
+  assert.equal(storedObservation?.notes, "LinkedIn still shows the sent connection request as pending.");
   assert.equal(seenUrl?.pathname, "/api/v1/users/jordan-example");
   assert.equal(seenUrl?.searchParams.get("account_id"), "provider-linkedin-1");
 });
@@ -281,6 +282,7 @@ test("runLinkedinMaintenanceWithUnipile records accepted when profile state is f
   assert.equal(result.resolvedKind, "connection_request_accepted");
   assert.equal(storedObservation?.kind, "connection_request_accepted");
   assert.equal(storedObservation?.summary, "Jordan Example is now a LinkedIn connection.");
+  assert.equal(storedObservation?.notes, "LinkedIn shows this person is now a 1st-degree connection.");
 });
 
 test("runLinkedinMaintenanceWithUnipile records not accepted when profile is not connected and no sent invite is pending", () => {
@@ -321,4 +323,5 @@ test("runLinkedinMaintenanceWithUnipile records not accepted when profile is not
   assert.equal(result.resolvedKind, "connection_request_not_accepted");
   assert.equal(storedObservation?.kind, "connection_request_not_accepted");
   assert.equal(storedObservation?.summary, "Jordan Example's connection request is not accepted on LinkedIn.");
+  assert.equal(storedObservation?.notes, "LinkedIn shows this person is not a connection and has no pending sent request.");
 });

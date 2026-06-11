@@ -191,6 +191,7 @@ export function buildOperatorViewModel(input) {
     "agent_draft_due",
     "queued_for_send",
     "post_accept_sent",
+    "accepted_unrouted",
     "reply_sent",
     "reply_unavailable",
     "excluded_by_steer",
@@ -247,9 +248,12 @@ function shapeNextMove(summary, topDecision) {
   if (!topDecision) return null;
   const actions = shapeDecisionActions(topDecision);
   const primaryAction = actions[0] ?? null;
+  const useSummaryText = summaryDescribesDecision(summary, topDecision);
 
   return {
-    title: summary?.nextMove ?? topDecision.recommendedAction ?? topDecision.summary,
+    title: useSummaryText
+      ? summary.nextMove
+      : topDecision.recommendedAction ?? topDecision.summary,
     subject: topDecision.subject,
     prospectId: topDecision.prospectId ?? null,
     personId: resolveOperatorPersonId(topDecision),
@@ -266,7 +270,7 @@ function shapeNextMove(summary, topDecision) {
     actionWriter: primaryAction?.writer ?? null,
     actionArgs: primaryAction?.args ?? null,
     actionHref: primaryAction?.href ?? topDecision.actorProfileUrl ?? topDecision.sourceUrl ?? null,
-    why: summary?.why ?? topDecision.why ?? null,
+    why: useSummaryText ? (summary?.why ?? topDecision.why ?? null) : (topDecision.why ?? null),
     previewLabel: topDecision.previewLabel ?? null,
     previewSubject: topDecision.previewSubject ?? null,
     previewText: topDecision.previewText ?? null,
@@ -301,7 +305,9 @@ function pickPromotedDecision(summary, items) {
     .sort((left, right) => right.score - left.score || left.index - right.index);
 
   if (preferredAction || preferredSubject || preferredDueAt) {
-    return scored[0]?.score > 0 ? scored[0].item : null;
+    return scored[0]?.score > 0
+      ? scored[0].item
+      : decisionItems.find((item) => item.priority === "high") ?? decisionItems[0] ?? null;
   }
 
   return decisionItems.find((item) => item.priority === "high") ?? decisionItems[0] ?? null;
@@ -319,11 +325,30 @@ function scorePromotedDecision(item, preferred) {
   const subject = normalizeDecisionMatch(item?.subject ?? null);
   const dueAt = normalizeDecisionMatch(item?.observedAt ?? null);
 
-  if (preferred.preferredAction && action === preferred.preferredAction) score += 8;
-  if (preferred.preferredSubject && subject === preferred.preferredSubject) score += 4;
-  if (preferred.preferredDueAt && dueAt === preferred.preferredDueAt) score += 2;
+  let matchedIdentity = false;
+  if (preferred.preferredAction && action === preferred.preferredAction) {
+    score += 8;
+    matchedIdentity = true;
+  }
+  if (preferred.preferredSubject && subject === preferred.preferredSubject) {
+    score += 4;
+    matchedIdentity = true;
+  }
+  if (matchedIdentity && preferred.preferredDueAt && dueAt === preferred.preferredDueAt) score += 2;
 
   return score;
+}
+
+/**
+ * @param {any} summary
+ * @param {any} item
+ */
+function summaryDescribesDecision(summary, item) {
+  const summaryAction = normalizeDecisionMatch(summary?.nextMove ?? null);
+  if (!summaryAction) return false;
+  const action = normalizeDecisionMatch(item?.recommendedAction ?? null);
+  const itemSummary = normalizeDecisionMatch(item?.summary ?? null);
+  return summaryAction === action || summaryAction === itemSummary;
 }
 
 /**
@@ -817,6 +842,7 @@ function normalizeUuid(value) {
  */
 function isPlannerComposeReady(item, prospectId) {
   if (!prospectId) return false;
+  if (isKnownComposeCadenceStep(item?.cadence?.currentStep)) return true;
   const text = `${item?.recommendedAction ?? ""} ${item?.cadence?.nextAction ?? ""}`.toLowerCase();
   if (/\b(research|select|claim|assign|build|discover)\b/.test(text)) return false;
   if (/\b(reply|message|email|send|follow up|follow-up|connection request|invite|touch)\b/.test(text)) return true;
@@ -828,6 +854,9 @@ function isPlannerComposeReady(item, prospectId) {
  * @param {boolean} composeReady
  */
 function plannerPrimaryActionLabel(item, composeReady) {
+  const stepLabel = labelForCadenceStep(item?.cadence?.currentStep);
+  if (composeReady && stepLabel) return stepLabel;
+
   const text = `${item?.recommendedAction ?? ""} ${item?.cadence?.nextAction ?? ""}`.toLowerCase();
   if (composeReady) {
     if (/\bconnection request\b|\binvite\b/.test(text)) return "Compose request";
@@ -840,6 +869,29 @@ function plannerPrimaryActionLabel(item, composeReady) {
   if (normalizeUuid(item?.company?.id)) return "Open company";
   if (normalizeUuid(item?.motion?.id)) return "Open motion";
   return "Review";
+}
+
+/**
+ * @param {string | null | undefined} step
+ */
+function isKnownComposeCadenceStep(step) {
+  return labelForCadenceStep(step) !== null;
+}
+
+/**
+ * @param {string | null | undefined} step
+ */
+function labelForCadenceStep(step) {
+  switch (String(step ?? "").trim().toLowerCase()) {
+    case "connection-request":
+      return "Compose request";
+    case "value-add-email":
+      return "Compose email";
+    case "direct-message":
+      return "Compose message";
+    default:
+      return null;
+  }
 }
 
 /** @param {any} item */

@@ -919,7 +919,6 @@ async function runInboundObservation(args) {
     nextKind: args.nextKind,
     observedAt: new Date().toISOString(),
     summary: null,
-    notes: "Recorded from the operator surface.",
   });
   const degreeNote = transitioned.connectionDegreeMarked ? " Marked as a 1st-degree connection." : "";
 
@@ -932,6 +931,10 @@ async function runInboundObservation(args) {
     try {
       const result = await autoPromoteInboundAccepts({ userId: transitioned.existing?.userId ?? null });
       if (result.count > 0) promoteNote = " Brought into the transition backlog as a prospect.";
+      const blocked = result.blocked?.find((item) => item.observationId === transitioned.observation.id);
+      if (!promoteNote && blocked) {
+        promoteNote = ` Could not route automatically yet: ${blocked.reason}`;
+      }
     } catch {
       // Promotion is best-effort; recording the accept already succeeded.
     }

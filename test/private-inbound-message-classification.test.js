@@ -383,8 +383,48 @@ test("received invitation notes become operator preview content", () => {
   const review = buildInboundReviewView(rawUser, [observation], [], []);
   const reviewItem = review.reviewItems[0];
 
+  assert.equal(reviewItem.state, "needs_decision");
+  assert.deepEqual(reviewItem.decisionOptions, ["accept", "decline"]);
   assert.equal(reviewItem.previewLabel, "Invitation note");
   assert.equal(reviewItem.previewText, note);
+});
+
+test("old LinkedIn profile truth notes render as operator-readable status", () => {
+  const observation = rawObservation({
+    id: "obs-profile-truth",
+    dedupeKey: "obs-profile-truth",
+    kind: "connection_request_accepted",
+    surfaceKey: "linkedin-sent-invitations",
+    subject: null,
+    summary: "Raunak Raheja is now a LinkedIn connection.",
+    notes: "LinkedIn profile truth check through the resolved account returned network_distance=FIRST_DEGREE, is_relationship=true, invitation.type=unknown, invitation.status=unknown.",
+    messages: [],
+  });
+  const review = buildInboundReviewView(rawUser, [observation], [], []);
+  const reviewItem = review.reviewItems[0];
+
+  assert.equal(reviewItem.state, "accepted_unrouted");
+  assert.equal(reviewItem.previewLabel, "LinkedIn status");
+  assert.equal(reviewItem.previewText, "LinkedIn shows you are connected now.");
+});
+
+test("generic operator transition notes fall back to a human accepted summary", () => {
+  const observation = rawObservation({
+    id: "obs-generic-operator-note",
+    dedupeKey: "obs-generic-operator-note",
+    kind: "connection_request_accepted",
+    surfaceKey: "linkedin-received-invitations",
+    actorName: "D'Ana Guiloff",
+    subject: null,
+    summary: "D'Ana Guiloff was marked accepted from the action-result path.",
+    notes: "Recorded from the operator surface.",
+    messages: [],
+  });
+  const review = buildInboundReviewView(rawUser, [observation], [], []);
+  const reviewItem = review.reviewItems[0];
+
+  assert.equal(reviewItem.previewLabel, "Engagement");
+  assert.equal(reviewItem.previewText, "D'Ana Guiloff is now a LinkedIn connection.");
 });
 
 test("reconciliation notes become sync evidence instead of thread context", () => {

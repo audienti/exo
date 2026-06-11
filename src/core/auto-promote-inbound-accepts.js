@@ -24,7 +24,12 @@ const ACCEPT_KINDS = new Set(["connection_request_accepted"]);
 
 /**
  * @param {{ userId?: string | null, motionId?: string | null }} [input]
- * @returns {Promise<{ count: number, motionId: string, promoted: Array<{ observationId: string, prospectId: string, prospectName: string }> }>}
+ * @returns {Promise<{
+ *   count: number,
+ *   motionId: string,
+ *   promoted: Array<{ observationId: string, prospectId: string, prospectName: string }>,
+ *   blocked: Array<{ observationId: string, prospectName: string, reason: string }>
+ * }>}
  */
 export async function autoPromoteInboundAccepts(input = {}) {
   // Pin to the transition backlog unless the caller names a motion.
@@ -35,6 +40,7 @@ export async function autoPromoteInboundAccepts(input = {}) {
   );
 
   const promoted = [];
+  const blocked = [];
   const handled = new Set();
   for (const seed of seeds) {
     if (handled.has(seed.id)) continue;
@@ -45,15 +51,23 @@ export async function autoPromoteInboundAccepts(input = {}) {
       handled.add(seed.id);
       continue;
     }
-    const result = await runTransitionPromote({
-      observationId: seed.id,
-      userId: input.userId ?? undefined,
-      motionId,
-    });
-    for (const observation of result.observations ?? []) handled.add(observation.id);
+    try {
+      const result = await runTransitionPromote({
+        observationId: seed.id,
+        userId: input.userId ?? undefined,
+        motionId,
+      });
+      for (const observation of result.observations ?? []) handled.add(observation.id);
+      promoted.push({ observationId: seed.id, prospectId: result.prospectId, prospectName: result.prospectName });
+    } catch (error) {
+      blocked.push({
+        observationId: seed.id,
+        prospectName: seed.actorName ?? "this accepted connection",
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
     handled.add(seed.id);
-    promoted.push({ observationId: seed.id, prospectId: result.prospectId, prospectName: result.prospectName });
   }
 
-  return { count: promoted.length, motionId, promoted };
+  return { count: promoted.length, motionId, promoted, blocked };
 }

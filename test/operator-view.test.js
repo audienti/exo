@@ -260,6 +260,81 @@ test("operator does not surface outbound-capacity deficit as a human next move",
   assert.equal(model.counts.decisions, 0);
 });
 
+test("operator does not merge outbound-capacity summary into a person card with the same due time", () => {
+  const dueAt = "2026-06-11T17:55:42.509Z";
+  const capacityAction = "Send 18 ready LinkedIn connection requests now, then select prospects from 10 researched accounts so the motion can refill 7 ready branches for today's invitation target.";
+  const personAction = "Ready for first-touch decision: LinkedIn is the only verified usable channel; no direct email or mobile is verified.";
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: dueAt,
+    regenerateCommand: "exo ui",
+    operatorSummary: {
+      headline: "Next move for william-main",
+      nextMove: capacityAction,
+      why: "LinkedIn target is 25 invitations today.",
+      checklist: [
+        {
+          subject: "LinkedIn capacity deficit",
+          action: capacityAction,
+          dueAt,
+        },
+      ],
+    },
+    decisionQueue: { items: [] },
+    dueNowItems: [
+      {
+        motion: { id: "outbound-capacity:linkedin", name: "LinkedIn outbound capacity" },
+        company: { id: "outbound-capacity:linkedin", name: "William Flanagan" },
+        prospect: { id: "outbound-capacity:linkedin", name: "LinkedIn invitation target", title: "Daily deficit" },
+        state: "due_now",
+        priority: "action",
+        priorityRank: 0.95,
+        cadenceEffect: "capacity_deficit",
+        dueAt,
+        whyItMatters: "LinkedIn target is 25 invitations today.",
+        recommendedAction: capacityAction,
+        source: { type: "outbound_capacity", kind: "fill_connection_request_deficit", channel: "linkedin" },
+      },
+      {
+        motion: { id: "17adf3ca-a6b3-4d26-9f93-bc60f28fe94d", name: "harsh-spare-mongoose" },
+        company: { id: "82b0baf7-f98d-4bb6-b12c-c913fcb998cf", name: "Cornerstone OnDemand" },
+        prospect: {
+          id: "d149a3e4-6988-4ad7-b40b-000e231e1ac9",
+          name: "Amresh Munshi",
+          title: "Director, Procurement & Strategic Sourcing",
+        },
+        state: "due_now",
+        priority: "action",
+        priorityRank: 0.9,
+        dueAt,
+        cadence: {
+          currentStep: "connection-request",
+          nextAction: personAction,
+        },
+        whyItMatters: "The planned cadence branch is due and no stronger inbound event has displaced it.",
+        recommendedAction: personAction,
+        source: { type: "cadence", kind: "planned_next_action" },
+      },
+    ],
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+  });
+
+  assert.equal(model.nextMove?.subject, "Amresh Munshi");
+  assert.equal(model.nextMove?.title, personAction);
+  assert.equal(model.nextMove?.why, "The planned cadence branch is due and no stronger inbound event has displaced it.");
+  assert.equal(model.nextMove?.action, "Compose request");
+
+  const html = renderOperatorPage(model, { interactive: true });
+  assert.match(html, /Amresh Munshi/);
+  assert.match(html, /LinkedIn is the only verified usable channel/);
+  assert.match(html, />Compose request</);
+  assert.doesNotMatch(html, />Compose email</);
+  assert.doesNotMatch(html, /Send 18 ready LinkedIn connection requests now/);
+  assert.doesNotMatch(html, /LinkedIn target is 25 invitations today/);
+});
+
 test("operator queue links a company research task back to the research brief", () => {
   const model = buildOperatorViewModel({
     user: { id: "user-1", label: "william-main", owner: "William" },

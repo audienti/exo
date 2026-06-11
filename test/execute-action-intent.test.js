@@ -166,6 +166,7 @@ test("executeActionIntent drives every operator writer against governed state", 
     "--summary", "Pat Prospect sent a connection request",
     "--actor-name", "Pat Prospect",
     "--actor-profile-url", "https://www.linkedin.com/in/pat-prospect/",
+    "--notes", "Would love to connect about GTM operating systems.",
     "--motion", motion.id,
     "--company", company.id,
     "--prospect", prospect.id,
@@ -522,6 +523,10 @@ test("executeActionIntent drives every operator writer against governed state", 
     assert.match(res.message, /accepted/i);
     assert.match(res.message, /1st-degree/i);
     assert.equal(reProspect(prospect.id)?.prospect.linkedinProfileSnapshot?.connectionDegree, 1);
+    const acceptedObservation = listInboundObservations().find((item) =>
+      item.actorName === "Pat Prospect" && item.kind === "connection_request_accepted"
+    );
+    assert.equal(acceptedObservation?.notes, "Would love to connect about GTM operating systems.");
   });
 
   // --- 5b. reconcileConnectionDegreesFromAccepts backfills existing accepts ---
