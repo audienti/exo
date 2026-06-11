@@ -72,6 +72,7 @@ import {
 import { classifyUserWorkingHours } from "./working-hours.js";
 import { resolveScopedExecutionAssignment } from "./resolve-scoped-execution-assignment.js";
 import { resolveConnectionNoteCapability } from "./connection-note-capability.js";
+import { evaluateOutboundDispatchGate } from "./outbound-dispatch-gate.js";
 import {
   buildLinkedinPublicEngagementPlan,
   buildPublicEngagementMetadata,
@@ -134,6 +135,7 @@ export function buildAgentQueue(input) {
   // Premium→Premium messaging to non-connections.
   const senderPremiumByScope = new Map();
   const senderPremiumByCompany = new Map();
+  const senderLinkedinAccountByScope = new Map();
   for (const motion of activeMotions) {
     for (const account of motion.targetMap?.accounts ?? []) {
       const rawCompany = companiesById.get(account.companyId) ?? null;
@@ -153,15 +155,20 @@ export function buildAgentQueue(input) {
       } catch {
         resolution = null;
       }
-      const fallbackResolvedAccount = resolution?.resolvedAccount ?? resolveAssignedLinkedinAccount(
-        rawCompany.engagementUserAssignment,
-        input.users ?? [],
-      );
+      const fallbackResolvedAccount = resolveSenderLinkedinAccountForScope({
+        resolution,
+        rawCompany,
+        rawMotion: motion,
+        rawUsers: input.users ?? [],
+      });
       const premiumStatus = resolveConnectionNoteCapability({
         resolvedAccount: fallbackResolvedAccount,
         accountRefs: resolution?.userAssignmentRecord?.accountRefs ?? rawCompany.engagementUserAssignment?.accountRefs ?? [],
       }) === true;
       senderPremiumByScope.set(`${motion.id}:${account.companyId}`, premiumStatus);
+      if (fallbackResolvedAccount) {
+        senderLinkedinAccountByScope.set(`${motion.id}:${account.companyId}`, fallbackResolvedAccount);
+      }
       if (!senderPremiumByCompany.has(account.companyId)) {
         senderPremiumByCompany.set(account.companyId, premiumStatus);
       }
@@ -663,6 +670,47 @@ export function buildAgentQueue(input) {
           }
           const executionWindow = resolveCadenceExecutionWindow(prospect, draft.surface, now);
           const action = resolveSendTaskAction(draft);
+          const dispatchGate = evaluateOutboundDispatchGate({
+            now,
+            motion,
+            account,
+            prospect,
+            draft,
+            action,
+            senderAccount: senderLinkedinAccountByScope.get(`${motion.id}:${account.companyId}`) ?? null,
+            branches: queueProspectBranches,
+          });
+          if (dispatchGate.status === "block") {
+            blockers.push({
+              kind: "send_dispatch_blocked",
+              reason: dispatchGate.reasonCode,
+              blockReason: dispatchGate.blockReason,
+              motionId: motion.id,
+              motionName: motion.name,
+              companyId: account.companyId,
+              companyName: account.companyName,
+              prospectId: prospect.id,
+              prospectName: prospect.name,
+              sendReadySurface: draft.surface,
+              nextSurface,
+              queuedAt: draft.approvedAt ?? null,
+              draftStatus: draft.status,
+              dispatchGate,
+              resolveHint: dispatchGate.reason,
+            });
+            continue;
+          }
+          const gateWaiting = dispatchGate.status === "wait";
+          const dueAt = gateWaiting
+            ? (dispatchGate.nextDueAt ?? executionWindow.dueAt ?? draft.approvedAt ?? now)
+            : executionWindow.eligible === false
+              ? (executionWindow.dueAt ?? null)
+              : (executionWindow.dueAt ?? draft.approvedAt ?? now);
+          const waitingReason = gateWaiting
+            ? dispatchGate.waitingReason
+            : executionWindow.eligible === false
+              ? executionWindow.reason
+              : null;
           placeTask(buildSendMessageTask({
             motion,
             account,
@@ -670,8 +718,10 @@ export function buildAgentQueue(input) {
             draft,
             action,
             via: resolveSendTaskVia(draft, requiresConnection ? reach : "connection"),
-            dueAt: executionWindow.eligible === false ? (executionWindow.dueAt ?? null) : (executionWindow.dueAt ?? draft.approvedAt ?? now),
-            waitingReason: executionWindow.eligible === false ? executionWindow.reason : null,
+            dueAt,
+            waitingReason,
+            dispatchGate,
+            postSendDelayMs: dispatchGate.postDispatchDelayMs,
           }), { now, tasks, waiting });
         }
       }
@@ -1408,6 +1458,7 @@ function buildInboundSyncTask({
  *   unavailableWriteback?: string | null,
  *   postSendNextAction?: string | null,
  *   postSendDelayMs?: number | null,
+ *   dispatchGate?: Record<string, any> | null,
  * }} input
  */
 function buildSendMessageTask({
@@ -1430,6 +1481,7 @@ function buildSendMessageTask({
   unavailableWriteback = null,
   postSendNextAction = null,
   postSendDelayMs = null,
+  dispatchGate = null,
 }) {
   const authoredBy = draft?.authoredBy === "operator" ? "operator" : "agent";
   const editedByOperator = draft?.editedByOperator === true;
@@ -1466,6 +1518,7 @@ function buildSendMessageTask({
     unavailableWriteback,
     postSendNextAction,
     postSendDelayMs: Number.isFinite(postSendDelayMs) ? Number(postSendDelayMs) : null,
+    dispatchGate,
   };
 }
 
@@ -1939,6 +1992,31 @@ function resolveAutonomousInboundPaginationConfig(surfaceKey) {
 }
 
 /**
+ * @param {{
+ *   resolution: any,
+ *   rawCompany: any,
+ *   rawMotion: any,
+ *   rawUsers: any[],
+ * }} input
+ */
+function resolveSenderLinkedinAccountForScope(input) {
+  const resolvedAccountId = input.resolution?.resolvedAccount?.accountId ?? null;
+  const assignedUserId = input.resolution?.assignedUser?.id ?? null;
+  if (resolvedAccountId) {
+    for (const user of input.rawUsers) {
+      if (assignedUserId && user?.id !== assignedUserId) continue;
+      const account = user?.accounts?.find((candidate) => candidate?.id === resolvedAccountId) ?? null;
+      if (account) return account;
+    }
+  }
+
+  return input.resolution?.resolvedAccount
+    ?? resolveAssignedLinkedinAccount(input.rawCompany?.engagementUserAssignment, input.rawUsers)
+    ?? resolveAssignedLinkedinAccount(input.rawMotion?.engagementUserAssignment, input.rawUsers)
+    ?? resolveSingletonLinkedinAccount(input.rawUsers);
+}
+
+/**
  * @param {any} assignment
  * @param {any[]} rawUsers
  */
@@ -1971,6 +2049,19 @@ function resolveAssignedLinkedinAccount(assignment, rawUsers) {
   }
 
   return candidates.find((account) => account.preferred) ?? candidates[0] ?? null;
+}
+
+/** @param {any[]} rawUsers */
+function resolveSingletonLinkedinAccount(rawUsers) {
+  const candidates = rawUsers.flatMap((user) =>
+    (user?.accounts ?? [])
+      .filter((account) => account?.capability === "linkedin")
+      .map((account) => ({ user, account }))
+  );
+  if (candidates.length !== 1) {
+    return null;
+  }
+  return candidates[0].account;
 }
 
 /**

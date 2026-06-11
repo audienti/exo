@@ -47,7 +47,7 @@
       "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-11T17:10:30Z"
+    "updatedAt": "2026-06-11T17:25:39Z"
   },
   "tasks": [
     {
@@ -196,7 +196,7 @@
     {
       "id": "T03",
       "title": "Define outbound dispatch gate contract",
-      "status": "ready",
+      "status": "done",
       "priority": 85,
       "dependsOn": [
         "T01",
@@ -221,16 +221,23 @@
       "verification": [
         "npm test -- test/agent-queue.test.js test/execute-action-intent.test.js"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added a single evaluateOutboundDispatchGate API that returns allow, wait, or block with reasonCode, waitingReason or blockReason, nextDueAt, sender/account context, and optional owner/limit/spacing details.",
+        "Integrated the gate into send_message queue construction so blocked sends surface as send_dispatch_blocked blockers and wait decisions remain visible as waiting send tasks.",
+        "Gate coverage includes stale cross-motion ownership, inactive disposition, rolling hourly/daily/weekly caps, the 26th default daily connection request, warm-up daily ceilings, target-local send windows, deterministic LinkedIn spacing, and inbound-reply send-window exemption.",
+        "Verified npm test -- test/agent-queue.test.js test/execute-action-intent.test.js: 86/86 passed.",
+        "Verified npm run check.",
+        "Verified full npm test: 736/736 passed."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "source-commit-pending",
+      "notes": "Left unrelated concurrent accepted-invite UX and maintenance wording changes unstaged."
     },
     {
       "id": "T04",
       "title": "Wire dispatch gate into LinkedIn send transport",
-      "status": "backlog",
+      "status": "ready",
       "priority": 80,
       "dependsOn": [
         "T03"

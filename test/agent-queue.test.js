@@ -14,6 +14,7 @@ import {
   isDraftActive,
   selectNextDraftSurface,
 } from "../src/core/select-next-draft-surface.js";
+import { evaluateOutboundDispatchGate } from "../src/core/outbound-dispatch-gate.js";
 
 /**
  * Build a minimal motion → account → prospect tree the queue can read. Caller
@@ -34,6 +35,11 @@ import {
  *   accountQueueState?: any,
  *   accountPacketState?: any,
  *   prospectPacketState?: any,
+ *   accountDisposition?: string,
+ *   prospectDisposition?: string,
+ *   companyAssignment?: any,
+ *   personId?: string,
+ *   targetTimezone?: string,
  *   motionStatus?: string,
  * }} prospectFields
  */
@@ -51,14 +57,17 @@ function fixture(prospectFields) {
               companyName: "Acme",
               queueState: prospectFields.accountQueueState ?? undefined,
               packetState: prospectFields.accountPacketState ?? undefined,
+              disposition: prospectFields.accountDisposition ?? undefined,
               prospects: [
                 {
                   id: "prospect-1",
+                  personId: prospectFields.personId ?? undefined,
                   name: "Princess",
                   linkedinProfileUrl: "https://linkedin.com/in/princess",
                   email: prospectFields.email ?? undefined,
                   sourceUrl: prospectFields.sourceUrl ?? undefined,
                   linkedinProfileSnapshot: prospectFields.linkedinProfileSnapshot ?? { connectionDegree: null, isOpenProfile: null },
+                  targetTimezone: prospectFields.targetTimezone ?? undefined,
                   publicEngagementSelection: prospectFields.publicEngagementSelection ?? null,
                   drafts: prospectFields.drafts ?? [],
                   touches: prospectFields.touches ?? [],
@@ -68,6 +77,7 @@ function fixture(prospectFields) {
                     updatedAt: "2026-06-01T00:00:00.000Z",
                     ...(prospectFields.cadenceState ?? {}),
                   },
+                  disposition: prospectFields.prospectDisposition ?? undefined,
                   packetState: prospectFields.prospectPacketState ?? undefined,
                   ...(prospectFields.linkedinProfileUrl === null ? { linkedinProfileUrl: null } : {}),
                 },
@@ -77,11 +87,79 @@ function fixture(prospectFields) {
         },
       },
     ],
-    companies: [{ id: "company-1", motionIds: ["motion-1"], engagementUserAssignment: { accountRefs: [] } }],
+    companies: [{ id: "company-1", motionIds: ["motion-1"], engagementUserAssignment: prospectFields.companyAssignment ?? { accountRefs: [] } }],
     profiles: prospectFields.profiles,
     users: prospectFields.users ?? [],
     observations: prospectFields.observations ?? [],
     cues: prospectFields.cues ?? [],
+  };
+}
+
+const LINKEDIN_ASSIGNMENT = {
+  userId: "user-1",
+  label: "Operator",
+  owner: "operator",
+  accountRefs: ["linkedin:operator-linkedin"],
+  assignedAt: "2026-06-01T00:00:00.000Z",
+  assignedBy: "test",
+  reason: "Use the governed LinkedIn connector account.",
+  sticky: true,
+};
+
+function managedLinkedinUserFixture({ metadata = null, weeklyInvitations = null } = {}) {
+  return {
+    id: "user-1",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    label: "Operator",
+    owner: "operator",
+    notes: null,
+    workingHours: {
+      mode: "always",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "09:00",
+      endLocalTime: "17:00",
+    },
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "linkedin",
+        handle: "operator-linkedin",
+        label: null,
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-unipile",
+        providerAccountId: "provider-linkedin-1",
+        preferred: true,
+        notes: null,
+        automationControls: {
+          weeklyQuotas: {
+            profileVisits: null,
+            invitations: weeklyInvitations,
+            messages: null,
+          },
+        },
+        metadata,
+        inboundSync: {
+          surfaces: [],
+        },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-unipile",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
   };
 }
 
@@ -2130,6 +2208,208 @@ test("buildAgentQueue does not emit send_message for an agent-authored queued dr
 
   assert.equal(queue.tasks.filter((t) => t.kind === "send_message").length, 0);
   assert.equal(queue.waiting.filter((t) => t.kind === "send_message").length, 0);
+});
+
+test("evaluateOutboundDispatchGate blocks a stale cross-motion branch before dispatch", () => {
+  const senderAccount = managedLinkedinUserFixture().accounts[0];
+  const gate = evaluateOutboundDispatchGate({
+    now: "2026-06-04T16:00:00.000Z",
+    motion: { id: "motion-2", name: "Stale Motion" },
+    account: { companyId: "company-2", companyName: "Beta", disposition: "active" },
+    prospect: {
+      id: "prospect-2",
+      personId: "person-same",
+      name: "Sam Sameperson",
+      disposition: "active",
+      linkedinProfileUrl: "https://www.linkedin.com/in/sam-sameperson",
+    },
+    draft: {
+      surface: "connection_request",
+      status: "approved",
+      body: "Queued from the stale branch.",
+      approvedAt: "2026-06-04T15:55:00.000Z",
+      channel: "linkedin",
+    },
+    action: "send_connection_request",
+    senderAccount,
+    branches: [
+      {
+        motion: { id: "motion-1", name: "Owning Motion" },
+        account: { companyId: "company-1", companyName: "Acme", disposition: "active" },
+        prospect: {
+          id: "prospect-1",
+          personId: "person-same",
+          name: "Sam Sameperson",
+          disposition: "active",
+          linkedinProfileUrl: "https://www.linkedin.com/in/sam-sameperson",
+          touches: [
+            {
+              surface: "connection_request",
+              direction: "outbound",
+              outcome: "pending",
+              occurredAt: "2026-06-03T12:00:00.000Z",
+            },
+          ],
+        },
+      },
+    ],
+  });
+
+  assert.equal(gate.status, "block");
+  assert.equal(gate.reasonCode, "stale_cross_motion_owner");
+  assert.equal(gate.blockReason, "stale_cross_motion_owner");
+  assert.equal(gate.owner?.motionId, "motion-1");
+  assert.match(gate.reason, /active in Owning Motion/i);
+});
+
+test("evaluateOutboundDispatchGate defers the 26th default daily connection request", () => {
+  const now = "2026-06-04T16:00:00.000Z";
+  const senderAccount = managedLinkedinUserFixture().accounts[0];
+  const history = Array.from({ length: 25 }, (_, index) => ({
+    action: "send_connection_request",
+    surface: "connection_request",
+    accountId: "account-1",
+    providerAccountId: "provider-linkedin-1",
+    occurredAt: new Date(Date.parse(now) - (index + 1) * 30 * 60 * 1000).toISOString(),
+  }));
+
+  const gate = evaluateOutboundDispatchGate({
+    now,
+    motion: { id: "motion-1", name: "Motion One" },
+    account: { companyId: "company-1", companyName: "Acme", disposition: "active" },
+    prospect: {
+      id: "prospect-1",
+      name: "Princess",
+      disposition: "active",
+      linkedinProfileUrl: "https://linkedin.com/in/princess",
+    },
+    draft: {
+      surface: "connection_request",
+      status: "approved",
+      body: "Queued request.",
+      approvedAt: now,
+      channel: "linkedin",
+    },
+    action: "send_connection_request",
+    senderAccount,
+    history,
+  });
+
+  assert.equal(gate.status, "wait");
+  assert.equal(gate.reasonCode, "pacing_daily_cap");
+  assert.equal(gate.waitingReason, "pacing_daily_cap");
+  assert.equal(gate.limits?.period, "day");
+  assert.equal(gate.limits?.limit, 25);
+  assert.equal(gate.limits?.count, 25);
+  assert.ok(gate.nextDueAt > now);
+});
+
+test("evaluateOutboundDispatchGate defers connection requests above the warm-up ceiling", () => {
+  const now = "2026-06-04T16:00:00.000Z";
+  const senderAccount = managedLinkedinUserFixture({
+    metadata: {
+      dispatchPolicy: {
+        warmup: {
+          dailyConnectionRequests: 3,
+        },
+      },
+    },
+  }).accounts[0];
+  const history = Array.from({ length: 3 }, (_, index) => ({
+    action: "send_connection_request",
+    surface: "connection_request",
+    accountId: "account-1",
+    providerAccountId: "provider-linkedin-1",
+    occurredAt: new Date(Date.parse(now) - (index + 1) * 60 * 60 * 1000).toISOString(),
+  }));
+
+  const gate = evaluateOutboundDispatchGate({
+    now,
+    motion: { id: "motion-1", name: "Motion One" },
+    account: { companyId: "company-1", companyName: "Acme", disposition: "active" },
+    prospect: {
+      id: "prospect-1",
+      name: "Princess",
+      disposition: "active",
+      linkedinProfileUrl: "https://linkedin.com/in/princess",
+    },
+    draft: {
+      surface: "connection_request",
+      status: "approved",
+      body: "Queued request.",
+      approvedAt: now,
+      channel: "linkedin",
+    },
+    action: "send_connection_request",
+    senderAccount,
+    history,
+  });
+
+  assert.equal(gate.status, "wait");
+  assert.equal(gate.reasonCode, "warmup_daily_cap");
+  assert.equal(gate.waitingReason, "warmup_daily_cap");
+  assert.equal(gate.limits?.limit, 3);
+  assert.equal(gate.limits?.count, 3);
+});
+
+test("buildAgentQueue applies target-local send windows and exempts inbound replies", () => {
+  const outsideMoroccoWindow = "2026-06-04T06:30:00.000Z";
+  const queuedConnectionRequest = buildAgentQueue({
+    ...fixture({
+      targetTimezone: "Africa/Casablanca",
+      drafts: [
+        {
+          surface: "connection_request",
+          status: "approved",
+          body: "Queued request.",
+          approvedAt: "2026-06-04T06:00:00.000Z",
+          channel: "linkedin",
+          authoredBy: "operator",
+          editedByOperator: true,
+        },
+      ],
+    }),
+    now: outsideMoroccoWindow,
+  });
+
+  assert.equal(queuedConnectionRequest.tasks.filter((task) => task.kind === "send_message").length, 0);
+  const waitingSend = queuedConnectionRequest.waiting.find((task) => task.kind === "send_message");
+  assert.ok(waitingSend);
+  assert.equal(waitingSend.waitingReason, "outside_target_send_window");
+  assert.equal(waitingSend.dispatchGate?.status, "wait");
+  assert.equal(waitingSend.dispatchGate?.targetTimezone, "Africa/Casablanca");
+  assert.ok(waitingSend.dueAt > outsideMoroccoWindow);
+
+  const inboundReply = buildAgentQueue({
+    ...fixture({
+      targetTimezone: "Africa/Casablanca",
+      touches: [
+        { surface: "connection_request", direction: "outbound", outcome: "accepted", occurredAt: "2026-06-01T12:00:00.000Z" },
+        { surface: "post_accept_message", direction: "outbound", outcome: "sent", occurredAt: "2026-06-02T12:00:00.000Z" },
+        { surface: "inbound_reply", direction: "inbound", outcome: "received", occurredAt: "2026-06-04T06:10:00.000Z" },
+      ],
+      cadenceState: {
+        currentStep: "direct-message",
+      },
+      drafts: [
+        {
+          surface: "inbound_reply",
+          status: "approved",
+          body: "Replying now.",
+          approvedAt: "2026-06-04T06:15:00.000Z",
+          channel: "linkedin",
+          authoredBy: "operator",
+          editedByOperator: true,
+        },
+      ],
+    }),
+    now: outsideMoroccoWindow,
+  });
+
+  const dueReply = inboundReply.tasks.find((task) => task.kind === "send_message" && task.surface === "inbound_reply");
+  assert.ok(dueReply);
+  assert.equal(dueReply.dispatchGate?.status, "allow");
+  assert.equal(inboundReply.waiting.some((task) => task.kind === "send_message" && task.surface === "inbound_reply"), false);
 });
 
 test("buildAgentQueue preserves email sends as send_email instead of collapsing them into LinkedIn direct messages", () => {
