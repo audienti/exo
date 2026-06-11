@@ -182,7 +182,7 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
+      "commit": "db4048bd03f9ff6fb39647f473d8accfcafd50fb",
       "notes": "Focused CLI and agent-run verification passed with 95 tests. Syntax check passed. Full npm test passed with Node v24.14.0: 711 pass, 0 fail."
     },
     {
