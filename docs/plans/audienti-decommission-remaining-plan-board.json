@@ -47,7 +47,7 @@
       "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-11T17:09:49Z"
+    "updatedAt": "2026-06-11T17:10:30Z"
   },
   "tasks": [
     {
@@ -190,7 +190,7 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "source-commit-pending",
+      "commit": "984a75e0eb49a4456a538da15b19fd418432a6e0",
       "notes": "Discovered during T02 after queue expanded to connection-status reconciliation work. This intentionally keeps disappeared sent-invite deltas in agent-owned transport maintenance rather than manual operator triage."
     },
     {
