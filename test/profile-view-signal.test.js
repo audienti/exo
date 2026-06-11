@@ -742,6 +742,57 @@ test("connections shows synced follower and following rows even when they are ba
   assert.equal(followingTab.people[0].name, "Harper Followed");
 });
 
+test("connections opens on the first populated surface instead of an empty received tab", () => {
+  const follower = baseReviewItem({
+    id: "obs-follower",
+    kind: "follower_confirmed",
+    surfaceKey: "linkedin-followers-list",
+    actorName: "Grace Follower",
+    actorTitle: "VP Growth",
+    actorCompanyName: "BuyerCo",
+    actorProfileUrl: "https://www.linkedin.com/in/grace-follower/",
+    actorLinkedinPublicId: "grace-follower",
+    actorLinkedinMemberId: "member-grace",
+    summary: "Grace Follower is present in the LinkedIn follower list.",
+  });
+  const truthAccounts = [{
+    accountId: "account-1",
+    surfaces: [
+      {
+        key: "linkedin-received-invitations",
+        label: "Received Invitations",
+        lastRunStatus: "success",
+        lastSyncedAt: "2026-06-05T16:30:00.000Z",
+        lastObservedAt: "2026-06-05T16:30:00.000Z",
+        lastItemCount: 0,
+        meta: {},
+      },
+      {
+        key: "linkedin-followers-list",
+        label: "Followers",
+        lastRunStatus: "success",
+        lastSyncedAt: "2026-06-05T16:30:00.000Z",
+        lastObservedAt: "2026-06-05T16:30:00.000Z",
+        lastItemCount: 1,
+        meta: {},
+      },
+    ],
+  }];
+
+  const model = buildConnectionsViewModel({
+    observations: [follower],
+    truthAccounts,
+  });
+
+  const html = renderConnectionsPage(model, {
+    user: { label: "william-main" },
+    generatedAt: now,
+  });
+
+  assert.match(html, /id="cn-followers" class="conn-toggle" checked/);
+  assert.doesNotMatch(html, /id="cn-received" class="conn-toggle" checked/);
+});
+
 test("connections sent rows expose claim-to-motion and stale-withdraw controls on the list itself", () => {
   const staleSent = baseReviewItem({
     id: "obs-stale-sent",

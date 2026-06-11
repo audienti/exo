@@ -532,6 +532,42 @@ test("buildAgentQueue skips submitted account packets and requeues returned pack
   assert.equal(task.notes, "Find a primary source before resubmitting.");
 });
 
+test("buildAgentQueue emits company_research for linked companies missing from legacy targetMap", () => {
+  const queue = buildAgentQueue({
+    motions: [
+      {
+        id: "motion-1",
+        name: "Motion One",
+        status: "active",
+        targetMap: { accounts: [] },
+      },
+    ],
+    companies: [
+      {
+        id: "company-1",
+        name: "Acme",
+        createdAt: "2026-06-03T05:00:00.000Z",
+        updatedAt: "2026-06-03T05:00:00.000Z",
+        motionIds: ["motion-1"],
+        engagementUserAssignment: { accountRefs: [] },
+      },
+    ],
+    users: [],
+    observations: [],
+    cues: [],
+  });
+
+  const task = queue.tasks.find((item) => item.kind === "company_research");
+  assert.ok(task);
+  assert.equal(task.companyId, "company-1");
+  assert.equal(task.companyName, "Acme");
+  assert.equal(task.packetId, "company_research:company-1");
+  assert.equal(task.claimState, "claimable");
+  assert.equal(task.queueStatus, "discovered");
+  assert.equal(task.dueAt, "2026-06-03T05:00:00.000Z");
+  assert.match(task.claimCommand, /exo companies queue claim company-1 --motion motion-1 --worker <worker-label> --json/);
+});
+
 /**
  * Full-shape motion + company input that produces a due company_discovery
  * task (thin backlog). Shared by the discovery test and the queue-ordering

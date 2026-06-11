@@ -78,7 +78,7 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
       const priorSurfaceState = account.inboundSync?.surfaces?.find(
         (surface) => surface.surfaceKey === surfaceInput.surfaceKey
       ) ?? null;
-      const visibleTotalCount = surfaceInput.visibleTotalCount ?? null;
+      const rawVisibleTotalCount = surfaceInput.visibleTotalCount ?? null;
       const exhaustionStatus = normalizeExhaustionStatus(surfaceInput);
       const rawPreparedObservations = surfaceInput.observations.map((observationInput) => {
         const observation = recordInboundObservation(updatedUser, {
@@ -147,18 +147,15 @@ export function prepareUserInboundSyncRun(rawUser, rawPayload, options = {}) {
       const derivedItemCount = surfaceInput.status === "failed"
         ? surfaceInput.itemCount
         : Math.max(surfaceInput.itemCount ?? 0, currentObservations.length);
+      const visibleTotalCount = surfaceInput.status === "failed"
+        ? rawVisibleTotalCount
+        : normalizeVisibleTotalCount(rawVisibleTotalCount, derivedItemCount);
       const countDiscrepancyCount = Math.max((visibleTotalCount ?? derivedItemCount ?? 0) - (derivedItemCount ?? 0), 0);
       const surfaceDefinition = findInboundSurfaceDefinition(surfaceInput.surfaceKey);
       const isAuthoritative = surfaceDefinition?.truthLevel === "authoritative";
       if (derivedItemCount !== null && derivedItemCount < currentObservations.length) {
         throw new Error(
           `Inbound sync surface ${surfaceInput.surfaceKey} reported ${derivedItemCount} items but included ${currentObservations.length} observations.`
-        );
-      }
-
-      if (visibleTotalCount !== null && derivedItemCount !== null && visibleTotalCount < derivedItemCount) {
-        throw new Error(
-          `Inbound sync surface ${surfaceInput.surfaceKey} cannot report a visible total smaller than its itemized count.`
         );
       }
 
@@ -685,6 +682,15 @@ function normalizeExhaustionStatus(input) {
   }
 
   return "incomplete";
+}
+
+/**
+ * @param {number | null} visibleTotalCount
+ * @param {number | null} itemCount
+ */
+function normalizeVisibleTotalCount(visibleTotalCount, itemCount) {
+  if (visibleTotalCount === null || itemCount === null) return visibleTotalCount;
+  return Math.max(visibleTotalCount, itemCount);
 }
 
 const deltaObservationDefinitionBySurfaceKey = {

@@ -230,16 +230,13 @@ function buildLegacySurface(definition, section) {
   const derivedItemCount = section.status === "failed"
     ? section.itemCount
     : section.itemCount ?? section.items.length;
-  const visibleTotalCount = section.visibleTotalCount ?? null;
+  const rawVisibleTotalCount = section.visibleTotalCount ?? null;
+  const visibleTotalCount = section.status === "failed"
+    ? rawVisibleTotalCount
+    : normalizeVisibleTotalCount(rawVisibleTotalCount, derivedItemCount);
   if (derivedItemCount !== null && derivedItemCount < section.items.length) {
     throw new Error(
       `LinkedIn capture reported ${derivedItemCount} items but included ${section.items.length} items for ${definition.surfaceKey}.`
-    );
-  }
-
-  if (visibleTotalCount !== null && derivedItemCount !== null && visibleTotalCount < derivedItemCount) {
-    throw new Error(
-      `LinkedIn capture cannot report a visible total smaller than the itemized count for ${definition.surfaceKey}.`
     );
   }
 
@@ -348,6 +345,15 @@ function normalizeSurfaceExhaustionStatus(section) {
   }
 
   return "incomplete";
+}
+
+/**
+ * @param {number | null} visibleTotalCount
+ * @param {number | null} itemCount
+ */
+function normalizeVisibleTotalCount(visibleTotalCount, itemCount) {
+  if (visibleTotalCount === null || itemCount === null) return visibleTotalCount;
+  return Math.max(visibleTotalCount, itemCount);
 }
 
 /**

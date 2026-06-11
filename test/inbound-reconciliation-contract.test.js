@@ -329,6 +329,155 @@ test("linkedin capture payload maps followers captures into the governed followe
   assert.equal(followers.observations[0].actorProfileUrl, "https://www.linkedin.com/in/grace-follower/");
 });
 
+test("linkedin capture payload normalizes visible totals below itemized follower rows", () => {
+  const result = buildLinkedinInboundSyncPayload(
+    {
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "william-main",
+      owner: "William",
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "william-main",
+          sourceType: "browser-profile",
+          browserProfileId: "profile-1",
+          preferred: true
+        }
+      ],
+      harnessConnections: []
+    },
+    {
+      accountId: "linkedin-account-1",
+      capture: {
+        mode: "full",
+        sentInvitations: { status: "success", checkedAt: timestamp, itemCount: 0, visibleTotalCount: 0, error: null, items: [] },
+        receivedInvitations: { status: "success", checkedAt: timestamp, itemCount: 0, visibleTotalCount: 0, error: null, items: [] },
+        messagingInbox: { status: "success", checkedAt: timestamp, itemCount: 0, visibleTotalCount: 0, error: null, items: [] },
+        profileViews: { status: "success", checkedAt: timestamp, itemCount: 0, visibleTotalCount: 0, error: null, items: [] },
+        followersList: {
+          status: "success",
+          checkedAt: timestamp,
+          itemCount: 2,
+          visibleTotalCount: 1,
+          captureCompleteness: "complete",
+          requestedMode: "full",
+          actualMode: "full",
+          reconcileRequired: false,
+          reconcileReason: null,
+          error: null,
+          items: [
+            {
+              entryId: "follower-1",
+              kind: "follower_confirmed",
+              observedAt: timestamp,
+              actorName: "Grace Follower",
+              actorProfileUrl: "https://www.linkedin.com/in/grace-follower/",
+              sourceUrl: "https://www.linkedin.com/mynetwork/network-manager/people-follow/followers/",
+              summary: "Grace Follower currently follows this profile."
+            },
+            {
+              entryId: "follower-2",
+              kind: "follower_confirmed",
+              observedAt: timestamp,
+              actorName: "Jordan Follower",
+              actorProfileUrl: "https://www.linkedin.com/in/jordan-follower/",
+              sourceUrl: "https://www.linkedin.com/mynetwork/network-manager/people-follow/followers/",
+              summary: "Jordan Follower currently follows this profile."
+            }
+          ]
+        },
+        followingList: { status: "success", checkedAt: timestamp, itemCount: 0, visibleTotalCount: 0, error: null, items: [] }
+      }
+    }
+  );
+
+  const followers = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-followers-list");
+  assert.ok(followers);
+  assert.equal(followers.itemCount, 2);
+  assert.equal(followers.visibleTotalCount, 2);
+  assert.equal(followers.observations.length, 2);
+});
+
+test("inbound sync run normalizes visible totals below itemized follower rows", () => withIsolatedExoState(() => {
+  const rawUser = {
+    id: "user-1",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    label: "william-main",
+    owner: "William",
+    accounts: [
+      {
+        id: "linkedin-account-1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        capability: "linkedin",
+        handle: "william-main",
+        sourceType: "browser-profile",
+        browserProfileId: "profile-1",
+        preferred: true
+      }
+    ],
+    harnessConnections: []
+  };
+
+  const result = prepareUserInboundSyncRun(rawUser, {
+    mode: "full",
+    accounts: [
+      {
+        accountId: "linkedin-account-1",
+        surfaces: [
+          {
+            surfaceKey: "linkedin-followers-list",
+            status: "success",
+            observedAt: timestamp,
+            itemCount: 2,
+            visibleTotalCount: 1,
+            captureCompleteness: "complete",
+            requestedMode: "full",
+            actualMode: "full",
+            reconcileRequired: false,
+            reconcileReason: null,
+            exhaustionStatus: "complete",
+            error: null,
+            observations: [
+              {
+                kind: "follower_confirmed",
+                externalId: "follower-1",
+                observedAt: timestamp,
+                actorName: "Grace Follower",
+                actorProfileUrl: "https://www.linkedin.com/in/grace-follower/",
+                summary: "Grace Follower currently follows this profile."
+              },
+              {
+                kind: "follower_confirmed",
+                externalId: "follower-2",
+                observedAt: timestamp,
+                actorName: "Jordan Follower",
+                actorProfileUrl: "https://www.linkedin.com/in/jordan-follower/",
+                summary: "Jordan Follower currently follows this profile."
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  });
+
+  const surface = result.accounts[0].surfaces[0];
+  const storedSurface = result.updatedUser.accounts[0].inboundSync.surfaces.find((candidate) =>
+    candidate.surfaceKey === "linkedin-followers-list"
+  );
+  assert.equal(surface.itemCount, 2);
+  assert.equal(surface.visibleTotalCount, 2);
+  assert.equal(surface.itemizationGapCount, 0);
+  assert.equal(storedSurface.lastVisibleTotalCount, 2);
+}));
+
 test("full authoritative sent-invitation reconciliation can complete after terminal exhaustion even when the visible count badge is slightly higher", () => {
   const rawUser = {
     id: "user-1",

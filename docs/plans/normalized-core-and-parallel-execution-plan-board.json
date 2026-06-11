@@ -1,7 +1,7 @@
 {
   "plan": {
     "slug": "normalized-core-and-parallel-execution-plan",
-    "source": "docs/wip/normalized-core-and-parallel-execution-plan.md",
+    "source": "docs/wip/audienti-decommission-remaining-plan.md",
     "objective": "Ship Exo 0.3.0 with a clean-break normalized relational execution core, safe agent runtime coordination, and post-cutover parallel research scale-out.",
     "acceptanceCriteria": [
       "WS0 host pass starts as a real main module, touches host state on startup, releases expired task leases, and no longer crashes on HOST_STATE_LOCK_* temporal dead zone.",
@@ -181,7 +181,7 @@
         "src/lib/agent-pass-summary.js",
         "test/agent-run.test.js",
         "test/agent-host-pass.test.js",
-        "docs/wip/normalized-core-and-parallel-execution-plan.md"
+        "docs/wip/audienti-decommission-remaining-plan.md"
       ],
       "context": "WS2 part 3-4. Move mergeLanePassSummaries from src/cli/commands/agent.js into a shared lib module. Each lane pass, at exit, regenerates agent-last-pass.json from lane files under the host-state lock. Scheduled-style lane run must leave a fresh merged agent-last-pass.json. Update routine artifact version/reinstall instructions in runbook/docs if artifacts encode version.",
       "doneWhen": [
@@ -356,7 +356,7 @@
         "src/schema/motion.js",
         "test"
       ],
-      "context": "Amendment A1 in docs/wip/normalized-core-and-parallel-execution-plan.md (source: docs/wip/prospect-lifecycle-and-packet-review-plan.md, issue omalab/exo#12). Pre-cutover baseline edit, no migration. (1) migrations.js: add to BOTH prospects and motion_accounts: disposition TEXT NOT NULL DEFAULT 'active' CHECK (disposition IN ('active','nurture','not_a_fit','no_longer_target','exhausted')); disposition_at TEXT; disposition_actor TEXT CHECK (disposition_actor IS NULL OR disposition_actor IN ('operator','agent','system')); packet_status TEXT CHECK (packet_status IS NULL OR packet_status IN ('claimed','submitted','returned')). Replace prospects_due with partial index WHERE disposition = 'active'; add prospects_review ON prospects(motion_id) WHERE packet_status IN ('submitted','returned') and motion_accounts_review likewise. (2) Entity modules: setProspectDisposition/setAccountDisposition as the ONLY writers of disposition columns -- apply the legacy queue_status invariant (not_a_fit/no_longer_target => suppressed, exhausted => exhausted, nurture leaves queue_status untouched), append a kind='system' activity_events row (payload: from, to, reason, actor), commit in one transaction. Packet transitions claim/submit/accept/return/clear on packet_status. Shared workable-branch predicate helper: prospect.disposition='active' AND its motion_account.disposition='active'. (3) Hydrated motion views expose disposition and packetStatus as additive fields; legacy queueState.status renders unchanged.",
+      "context": "Amendment A1 folded into docs/wip/audienti-decommission-remaining-plan.md after the completed WIP files were consolidated. Pre-cutover baseline edit, no migration. (1) migrations.js: add to BOTH prospects and motion_accounts: disposition TEXT NOT NULL DEFAULT 'active' CHECK (disposition IN ('active','nurture','not_a_fit','no_longer_target','exhausted')); disposition_at TEXT; disposition_actor TEXT CHECK (disposition_actor IS NULL OR disposition_actor IN ('operator','agent','system')); packet_status TEXT CHECK (packet_status IS NULL OR packet_status IN ('claimed','submitted','returned')). Replace prospects_due with partial index WHERE disposition = 'active'; add prospects_review ON prospects(motion_id) WHERE packet_status IN ('submitted','returned') and motion_accounts_review likewise. (2) Entity modules: setProspectDisposition/setAccountDisposition as the ONLY writers of disposition columns -- apply the legacy queue_status invariant (not_a_fit/no_longer_target => suppressed, exhausted => exhausted, nurture leaves queue_status untouched), append a kind='system' activity_events row (payload: from, to, reason, actor), commit in one transaction. Packet transitions claim/submit/accept/return/clear on packet_status. Shared workable-branch predicate helper: prospect.disposition='active' AND its motion_account.disposition='active'. (3) Hydrated motion views expose disposition and packetStatus as additive fields; legacy queueState.status renders unchanged.",
       "doneWhen": [
         "Baseline schema has disposition, disposition_at, disposition_actor, and packet_status on prospects and motion_accounts with the A1 CHECK constraints, partial prospects_due, and review indexes.",
         "Disposition setters enforce the queue_status invariant, append a system activity event, and commit atomically; no other module writes these columns (test gate).",
@@ -564,7 +564,7 @@
         "package-lock.json",
         ".codex-plugin/plugin.json",
         "CHANGELOG.md",
-        "docs/wip/normalized-core-and-parallel-execution-plan.md"
+        "docs/wip/audienti-decommission-remaining-plan.md"
       ],
       "context": "End of WS3. User approved the wipe, but still record the operator gate and backup facts. Run exo agent queue --json against the real original state dir, export config to backup path, snapshot .exo, stop scheduler if present, remove .exo/exo.db .exo/exo.db-wal .exo/exo.db-shm and agent host summaries, import config, reinstall routine in verify mode, and verify doctor/queue. Bump target release to 0.3.0 across package.json, package-lock.json if applicable, .codex-plugin/plugin.json, and CHANGELOG.md per repo rule.",
       "doneWhen": [
@@ -644,7 +644,7 @@
         "src/cli/commands/agent.js",
         "src/lib/agent-routine.js",
         "test/agent-run.test.js",
-        "docs/wip/normalized-core-and-parallel-execution-plan.md"
+        "docs/wip/audienti-decommission-remaining-plan.md"
       ],
       "context": "WS4 part 3-4. Optional but recommended per plan: per-lane scheduler cadence with transport every 5m and research every 15m if routine artifacts support it. Doctor surfaces last pass per lane, lock holders, and research concurrency setting. Verify transport cadence unaffected by a long research pass using doctor/log evidence or deterministic tests.",
       "doneWhen": [

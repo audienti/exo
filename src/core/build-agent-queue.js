@@ -447,7 +447,7 @@ export function buildAgentQueue(input) {
       placeTask(discoveryTask, { now, tasks, waiting });
     }
 
-    for (const account of (motion.targetMap?.accounts ?? []).map((item) => normalizeAccountForAgentQueue(item, now))) {
+    for (const account of buildMotionAccountsForAgentQueue(motion, input.companies ?? [], now)) {
       if (!isActiveDisposition(account?.disposition)) {
         continue;
       }
@@ -784,6 +784,48 @@ function normalizeAccountForAgentQueue(rawAccount, now) {
       ? account.prospects.map((prospect) => withDerivedProspectQueueState(prospect, now))
       : [],
   };
+}
+
+/**
+ * The normalized store can expose motion-linked companies before they are
+ * embedded in the legacy targetMap payload. Keep the autonomous queue aligned
+ * with `exo motion packets` so post-cutover company-research backlog is
+ * runnable instead of invisible to the worker.
+ *
+ * @param {any} motion
+ * @param {any[]} companies
+ * @param {string} now
+ */
+function buildMotionAccountsForAgentQueue(motion, companies, now) {
+  const accountsByCompanyId = new Map();
+  for (const rawAccount of motion.targetMap?.accounts ?? []) {
+    const account = normalizeAccountForAgentQueue(rawAccount, now);
+    accountsByCompanyId.set(account.companyId, normalizeAccountForAgentQueue(account, now));
+  }
+
+  for (const company of companies ?? []) {
+    if (!Array.isArray(company?.motionIds) || !company.motionIds.includes(motion.id)) {
+      continue;
+    }
+    if (accountsByCompanyId.has(company.id)) {
+      continue;
+    }
+    accountsByCompanyId.set(company.id, normalizeAccountForAgentQueue({
+      companyId: company.id,
+      companyName: company.name,
+      queueState: {
+        status: "discovered",
+        source: "derived",
+        updatedAt: company.updatedAt ?? company.createdAt ?? now,
+        notes: null,
+      },
+      packetState: null,
+      signalMatches: [],
+      prospects: [],
+    }, now));
+  }
+
+  return [...accountsByCompanyId.values()];
 }
 
 /**

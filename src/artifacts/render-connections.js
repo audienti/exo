@@ -33,8 +33,9 @@ import {
  */
 export function renderConnectionsPage(model, meta = {}) {
   const agentPassActive = isAgentPassActive(meta.agentRuntime ?? null);
+  const activeTabKey = resolveInitialConnectionsTab(model.tabs);
   const radios = model.tabs
-    .map((tab, i) => `<input type="radio" name="cn-tab" id="cn-${escapeAttr(tab.key)}" class="conn-toggle"${i === 0 ? " checked" : ""}>`)
+    .map((tab) => `<input type="radio" name="cn-tab" id="cn-${escapeAttr(tab.key)}" class="conn-toggle"${tab.key === activeTabKey ? " checked" : ""}>`)
     .join("");
   const sentFilters =
     `<input type="radio" name="cn-sent-filter" id="cn-sent-filter-all" class="conn-toggle" checked>` +
@@ -66,6 +67,20 @@ export function renderConnectionsPage(model, meta = {}) {
     interactive: meta.interactive,
     agentRuntime: meta.agentRuntime ?? null,
   });
+}
+
+/**
+ * @param {Array<{ key: string, count?: number, gap?: string | null, people?: any[] }>} tabs
+ * @returns {string | null}
+ */
+function resolveInitialConnectionsTab(tabs) {
+  const populated = tabs.find((tab) => Array.isArray(tab.people) && tab.people.length > 0);
+  if (populated) return populated.key;
+
+  const meaningful = tabs.find((tab) => Number(tab.count ?? 0) > 0 || Boolean(tab.gap));
+  if (meaningful) return meaningful.key;
+
+  return tabs[0]?.key ?? null;
 }
 
 /**
