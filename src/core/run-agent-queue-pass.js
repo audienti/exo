@@ -8,12 +8,14 @@ import { fileURLToPath } from "node:url";
 import { runAgentWorkerPass } from "../cli/commands/agent.js";
 import { getHomeStateDir } from "../db/paths.js";
 import { inspectAgentRunLock } from "../lib/agent-run-lock.js";
+import { AGENT_EXECUTION_LANES } from "../lib/agent-task-lanes.js";
 
 /** @param {Record<string, any>} args */
 export async function runAgentQueuePassAction(args) {
-  const runLock = inspectAgentRunLock({ stateDir: getHomeStateDir() });
-  if (runLock.active) {
-    throw new Error(`Another agent pass is already active${runLock.pid ? ` (pid ${runLock.pid})` : ""}.`);
+  const stateDir = getHomeStateDir();
+  const activeLockMessage = describeActiveAgentPassLock(stateDir);
+  if (activeLockMessage) {
+    throw new Error(activeLockMessage);
   }
   if (args.background !== false) {
     const pid = launchDetachedAgentQueuePass(args);
@@ -38,6 +40,36 @@ export async function runAgentQueuePassAction(args) {
     writer: "runAgentQueuePass",
     message: summarizeAgentQueuePass(summary),
   };
+}
+
+/**
+ * @param {string} stateDir
+ * @returns {string | null}
+ */
+function describeActiveAgentPassLock(stateDir) {
+  const activeLocks = [
+    {
+      scope: "agent",
+      label: "agent pass",
+      lock: inspectAgentRunLock({ stateDir }),
+    },
+    ...AGENT_EXECUTION_LANES.map((lane) => ({
+      scope: lane,
+      label: `${lane} lane pass`,
+      lock: inspectAgentRunLock({ stateDir, lane }),
+    })),
+  ].filter((entry) => entry.lock.active);
+
+  if (!activeLocks.length) return null;
+  if (activeLocks.length === 1) {
+    const active = activeLocks[0];
+    return `Another ${active.label} is already active${active.lock.pid ? ` (pid ${active.lock.pid})` : ""}.`;
+  }
+
+  const details = activeLocks
+    .map((active) => `${active.scope}${active.lock.pid ? ` pid ${active.lock.pid}` : ""}`)
+    .join(", ");
+  return `Another agent pass is already active (${details}).`;
 }
 
 /** @param {Record<string, any>} args */

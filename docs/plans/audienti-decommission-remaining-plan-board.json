@@ -1,0 +1,434 @@
+{
+  "plan": {
+    "slug": "audienti-decommission-remaining-plan",
+    "source": "docs/wip/audienti-decommission-remaining-plan.md",
+    "objective": "Finish the remaining Audienti decommission work by shipping the current Exo decommission fixes, draining research and retrieval backlog safely, adding outbound dispatch gates and pacing, improving operator visibility, and closing listed P2 risk follow-ups while keeping live sends gated.",
+    "acceptanceCriteria": [
+      "The committed revision contains the decommission-critical queue, visible-total, and related fixes.",
+      "Focused decommission tests pass from a clean working tree.",
+      "exo agent queue --json shows due research or retrieval work until real backlog drains, with no false zero.",
+      "exo agent doctor --json shows the scheduler installed and loaded with no queue blockers.",
+      "Bounded agent passes reduce current due research/retrieval tasks through durable Exo writeback.",
+      "LinkedIn outbound dispatch cannot bypass ownership, disposition, pacing, rolling caps, warm-up limits, randomized spacing, or target-local send windows.",
+      "Operator CLI and UI surfaces show current worker activity, captured counts, waiting reasons, next due times, throughput, and explicit partial reasons.",
+      "P2 follow-ups have regression coverage for Gmail canonical variants, held branch visibility, slim next path behavior, targetMap payload storage, and removed unreachable repair paths."
+    ],
+    "verificationCommands": [
+      "npm test -- test/agent-queue.test.js test/agent-host-pass.test.js test/inbound-reconciliation-contract.test.js test/profile-view-signal.test.js",
+      "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent doctor --json",
+      "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent queue --json"
+    ],
+    "constraints": [
+      "Keep scheduled send mode at verify or canary until the outbound dispatch gate is complete.",
+      "Retrieval and research may drain. Outbound sends may not drain during this plan unless explicitly bounded after the gate is proven.",
+      "Use EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo for live Exo checks.",
+      "Do not run blind loops over older WIP items. This plan file is the active work source.",
+      "Treat live-send rollout as gated by passing tests, exo agent doctor --json, exo agent queue --json, and one bounded pass.",
+      "Current plan audit expected 50 due tasks, but preflight on 2026-06-11T16:37Z showed 84 due, 0 waiting, 0 blockers. Use live queue truth, not the stale count."
+    ],
+    "nonGoals": [
+      "Do not promote scheduled send mode beyond verify/canary as part of P0.",
+      "Do not implement deferred prospect lifecycle phase B before throughput and safe outbound are stable.",
+      "Do not implement WS4 research concurrency before single-worker research drain is stable."
+    ]
+  },
+  "board": {
+    "status": "active",
+    "controller": "Codex GPT-5 desktop session",
+    "concurrencyCap": 3,
+    "worktreeRoot": ".worktrees",
+    "models": {
+      "fast": "inherit",
+      "default": "inherit",
+      "max": "inherit"
+    },
+    "base": {
+      "branch": "plan/audienti-decommission-remaining-plan",
+      "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
+      "verifiedGreen": true
+    },
+    "updatedAt": "2026-06-11T16:40:24Z"
+  },
+  "tasks": [
+    {
+      "id": "T01",
+      "title": "Classify and commit current decommission fixes",
+      "status": "running",
+      "priority": 100,
+      "dependsOn": [],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/cli/commands/agent.js",
+        "src/cli/exo-ui-server.js",
+        "src/core/build-inbound-review-view.js",
+        "src/core/inbound-sync-run.js",
+        "src/core/run-agent-queue-pass.js",
+        "test/agent-routine.test.js",
+        "test/execute-action-intent.test.js",
+        "test/exo-ui-server.test.js",
+        "test/private-inbound-message-classification.test.js",
+        "docs/wip/audienti-decommission-remaining-plan.md"
+      ],
+      "context": "P0 requires reviewing the dirty tree, separating unrelated changes from decommission fixes, committing the queue fix, visible-total fix, and related tests, rerunning the focused suite, and confirming live queue and scheduler state. Preflight found the dirty code diff aligned to decommission themes: lane-lock-aware queue pass and UI revision, install-routine artifact safety, sync-evidence preview wording, and regression tests. The plan file is untracked under docs/wip and is the accepted source artifact.",
+      "doneWhen": [
+        "Current diff is classified in task outputs as decommission-critical or unrelated.",
+        "Decommission-critical code and tests are committed on plan/audienti-decommission-remaining-plan.",
+        "Focused suite passes after commit.",
+        "Live exo agent doctor reports scheduler installed and loaded with no blockers.",
+        "Live exo agent queue reports due non-send backlog and 0 blockers."
+      ],
+      "verification": [
+        "npm test -- test/agent-queue.test.js test/agent-host-pass.test.js test/inbound-reconciliation-contract.test.js test/profile-view-signal.test.js",
+        "npm test -- test/agent-routine.test.js test/execute-action-intent.test.js test/exo-ui-server.test.js test/private-inbound-message-classification.test.js",
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent doctor --json",
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent queue --json"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Preflight focused suite passed 165/165; doctor and queue showed 84 due, 0 waiting, 0 blockers."
+    },
+    {
+      "id": "T02",
+      "title": "Run bounded research drain and record throughput",
+      "status": "backlog",
+      "priority": 90,
+      "dependsOn": [
+        "T01"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        ".exo/agent-last-pass.json",
+        ".exo/agent-host-state.json",
+        "docs/plans/audienti-decommission-remaining-plan-board.json"
+      ],
+      "context": "P1 research backlog drain allows retrieval and research to drain while outbound sends remain gated. Use the live queue as source of truth. Before a pass, confirm sendMode remains verify/canary and due send count is safe. Run one bounded agent pass against current queue, then compare before and after counts and durable last-pass results.",
+      "doneWhen": [
+        "A bounded pass runs without live outbound send drain.",
+        "Due research/retrieval count decreases or the next bottleneck is explicit.",
+        "Completed or exhausted packets have durable Exo state in last-pass or queue readback.",
+        "Queue does not return to false zero while work remains."
+      ],
+      "verification": [
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent doctor --json",
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent queue --json",
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent run --max-tasks 5 --send-mode verify --json",
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent queue --json"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T03",
+      "title": "Define outbound dispatch gate contract",
+      "status": "backlog",
+      "priority": 85,
+      "dependsOn": [
+        "T01"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core/agent-queue.js",
+        "src/core/execute-action-intent.js",
+        "src/lib",
+        "test/agent-queue.test.js",
+        "test/execute-action-intent.test.js"
+      ],
+      "context": "Outbound dispatch must have one pre-dispatch gate shared by LinkedIn send handoff and physical transport. The contract must re-check cross-motion ownership, prospect/account disposition, per-account pacing, rolling hourly/daily/weekly caps per connector account and action type, warm-up ceilings, target-local business hours, randomized LinkedIn delays, and inbound-reply exemptions from send windows while still counting budgets.",
+      "doneWhen": [
+        "A single gate API returns allow, wait, or block with visible reason fields.",
+        "Tests cover stale cross-motion branch blocked before dispatch.",
+        "Tests cover 26th default daily connection request deferred with waitingReason pacing.",
+        "Tests cover warm-up account ceiling, Morocco target-local send window, and inbound reply send-window exemption."
+      ],
+      "verification": [
+        "npm test -- test/agent-queue.test.js test/execute-action-intent.test.js"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T04",
+      "title": "Wire dispatch gate into LinkedIn send transport",
+      "status": "backlog",
+      "priority": 80,
+      "dependsOn": [
+        "T03"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/cli/commands/agent.js",
+        "src/core/run-agent-queue-pass.js",
+        "src/core/execute-action-intent.js",
+        "test/agent-host-pass.test.js",
+        "test/execute-action-intent.test.js"
+      ],
+      "context": "Use the gate from T03 immediately before physical LinkedIn dispatch, not only when tasks are queued. Preserve verify/canary safety. Deferred tasks must surface waitingReason pacing or blocked ownership/disposition details in queue and pass summaries.",
+      "doneWhen": [
+        "LinkedIn send handoff and transport executor both call the pre-dispatch gate.",
+        "Rejected dispatches do not send physically and surface the gate reason.",
+        "Passing gate decisions preserve current verify/canary behavior."
+      ],
+      "verification": [
+        "npm test -- test/agent-host-pass.test.js test/execute-action-intent.test.js test/agent-queue.test.js"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T05",
+      "title": "Add retrieval scheduling and drain posture",
+      "status": "backlog",
+      "priority": 75,
+      "dependsOn": [
+        "T03"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core/agent-queue.js",
+        "src/core/inbound-sync-plan.js",
+        "src/lib",
+        "test/agent-queue.test.js",
+        "test/inbound-sync-contract.test.js"
+      ],
+      "context": "P1 retrieval throughput replaces the single working-hours gate with per-capability scheduling. Gmail retrieval stays available around the clock. LinkedIn retrieval uses humane account-local windows. LinkedIn outbound stays on stricter target-local send windows and pacing. Add drain posture for retrieval and research only, surface fair-share across LinkedIn surfaces, and back off repeat retrieval failures across passes.",
+      "doneWhen": [
+        "Gmail retrieval is due regardless of operator working hours.",
+        "LinkedIn retrieval is due only inside account-local humane windows.",
+        "LinkedIn sends remain gated by target-local send windows and pacing.",
+        "Drain posture applies to retrieval/research lanes but not outbound sends.",
+        "Repeat retrieval failures back off across passes and expose blockers instead of hot-looping."
+      ],
+      "verification": [
+        "npm test -- test/agent-queue.test.js test/inbound-reconciliation-contract.test.js"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T06",
+      "title": "Add agent status CLI surface",
+      "status": "backlog",
+      "priority": 70,
+      "dependsOn": [
+        "T01"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/cli/commands/agent.js",
+        "src/core",
+        "test/agent-routine.test.js",
+        "test/cli.test.js"
+      ],
+      "context": "Operator visibility requires exo agent status --watch or an equivalent status command. Show lane, current task, subject, started time, elapsed time, captured items, pages walked, resume cursor, last error, backlog grouped by waiting reason with next due time, throughput for the last pass and last 24 hours, and partial states with reason plus next action.",
+      "doneWhen": [
+        "CLI status command returns structured JSON and readable text.",
+        "--watch refreshes without losing JSON mode compatibility.",
+        "Waiting reasons, next due times, current lane/task, throughput, and partial reasons are visible."
+      ],
+      "verification": [
+        "npm test -- test/agent-routine.test.js test/cli.test.js"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T07",
+      "title": "Add agent status UI panel",
+      "status": "backlog",
+      "priority": 65,
+      "dependsOn": [
+        "T06"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/cli/exo-ui-server.js",
+        "src/core/build-workspace-projection.js",
+        "test/exo-ui-server.test.js",
+        "test/workspace-projection.test.js"
+      ],
+      "context": "Add the UI equivalent of the agent status surface using the same status data as the CLI where practical. One screen should answer what is running, what it captured, what is waiting, and when it resumes. Avoid stale panels by tying revision state to queue, lock, host-state, last-pass, and status artifacts.",
+      "doneWhen": [
+        "UI projection includes agent status panel data.",
+        "The served UI can show running lane/task, captured counts, waiting groups, throughput, and partial reasons.",
+        "State revision updates when status-relevant files or locks change."
+      ],
+      "verification": [
+        "npm test -- test/exo-ui-server.test.js test/workspace-projection.test.js"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T08",
+      "title": "Close Gmail variant identity and held-branch visibility follow-ups",
+      "status": "backlog",
+      "priority": 55,
+      "dependsOn": [
+        "T01"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core",
+        "test"
+      ],
+      "context": "P2 follow-ups: Gmail dot and plus variants should link as same_person_probable rather than disconnected people. Held cross-motion branches should remain visible as held behind the owning motion in at least one operator-facing view.",
+      "doneWhen": [
+        "Gmail canonical variants have regression coverage and same-person probable linkage.",
+        "Held branches are visible behind the owning motion in an operator-facing view."
+      ],
+      "verification": [
+        "npm test -- test/private-inbound-message-classification.test.js test/daily.test.js test/inbox.test.js"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T09",
+      "title": "Slim next path and add storage guardrails",
+      "status": "backlog",
+      "priority": 50,
+      "dependsOn": [
+        "T01"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/cli/commands/next.js",
+        "src/core/rehydrate-motion.js",
+        "src/db",
+        "test"
+      ],
+      "context": "P2 follow-ups: avoid full daily projection and duplicate describeExo work on the happy next path, add golden snapshots for next --json across daily, motion, and operator-call sources, prove motions.payload_json never stores targetMap, delete unreachable prospect-level repair paths from rehydrate-motion.js, and decide whether cross-motion release cooldown semantics belongs now or remains lifecycle work.",
+      "doneWhen": [
+        "next --json happy path avoids duplicate heavy projection work.",
+        "Golden snapshots cover daily, motion, and operator-call next sources.",
+        "Tests fail if stored motion payload contains targetMap.",
+        "Unreachable prospect-level repair paths are removed or explicitly justified.",
+        "Cross-motion release cooldown decision is recorded in code/docs or deferred with reason."
+      ],
+      "verification": [
+        "npm test -- test/next.test.js test/cli.test.js test/motion-persistence.test.js"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T10",
+      "title": "Final decommission acceptance sweep",
+      "status": "backlog",
+      "priority": 40,
+      "dependsOn": [
+        "T02",
+        "T04",
+        "T05",
+        "T07",
+        "T08",
+        "T09"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "docs/plans/audienti-decommission-remaining-plan-board.json"
+      ],
+      "context": "Run the plan-level verification, inspect live queue and doctor, confirm send mode remains bounded, confirm operator visibility exists, and mark remaining deferred phase B and WS4 research concurrency as outside active acceptance unless prerequisites are now met.",
+      "doneWhen": [
+        "Plan-level verification commands pass.",
+        "Live queue and doctor satisfy final active acceptance.",
+        "Board records attempts-per-solve by tier and any deferred items.",
+        "Board status is complete if all active criteria pass."
+      ],
+      "verification": [
+        "npm test",
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent doctor --json",
+        "EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo exo agent queue --json"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T11",
+      "title": "Deferred prospect lifecycle phase B",
+      "status": "deferred",
+      "priority": 10,
+      "dependsOn": [],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core",
+        "src/cli",
+        "test"
+      ],
+      "context": "The plan explicitly defers prospect lifecycle phase B until throughput and safe outbound are stable unless packet review becomes the next bottleneck.",
+      "doneWhen": [
+        "Not part of active acceptance unless reopened."
+      ],
+      "verification": [],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Deferred by plan."
+    },
+    {
+      "id": "T12",
+      "title": "Deferred WS4 research concurrency",
+      "status": "deferred",
+      "priority": 10,
+      "dependsOn": [],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core",
+        "src/cli",
+        "test"
+      ],
+      "context": "The plan explicitly defers WS4 research concurrency until single-worker research drain is stable.",
+      "doneWhen": [
+        "Not part of active acceptance unless reopened."
+      ],
+      "verification": [],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Deferred by plan."
+    }
+  ]
+}

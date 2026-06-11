@@ -434,13 +434,18 @@ needs operator input.
       const requestedArtifactWrite = Boolean(options.writeArtifacts || shouldInstall);
       const shouldWriteArtifacts = requestedArtifactWrite && (installReadiness.ready || options.force);
       let artifactsWritten = false;
+      const writtenArtifactPaths = new Set();
 
       if (shouldWriteArtifacts) {
+        const artifactsToWrite = shouldInstall
+          ? plan.artifacts
+          : plan.artifacts.filter((artifact) => artifact.path !== plan.launchAgent?.launchdEntryPath);
         fs.mkdirSync(stateDir, { recursive: true });
-        for (const artifact of plan.artifacts) {
+        for (const artifact of artifactsToWrite) {
           fs.mkdirSync(path.dirname(artifact.path), { recursive: true });
           fs.writeFileSync(artifact.path, artifact.content, "utf8");
           if (artifact.mode != null) fs.chmodSync(artifact.path, artifact.mode);
+          writtenArtifactPaths.add(artifact.path);
         }
         artifactsWritten = true;
       }
@@ -546,12 +551,18 @@ needs operator input.
         }
         if (plan.scheduler === "launchd" && plan.launchAgent) {
           console.log(`Wrote the LaunchAgent source → ${plan.launchAgent.sourcePath}`);
-          if (plan.launchAgent.launchdEntryPath) {
+          if (plan.launchAgent.launchdEntryPath && writtenArtifactPaths.has(plan.launchAgent.launchdEntryPath)) {
             console.log(`Wrote the launchd entry point → ${plan.launchAgent.launchdEntryPath} (outside macOS protected folders)`);
           }
-          console.log(`\nThe scheduled agent (${plan.runtime}, every ${plan.interval.label}, send mode ${plan.sendMode}) now runs through macOS launchd:`);
-          console.log(`  installed plist: ${plan.launchAgent.installPath}`);
-          console.log(`  target:         ${plan.launchAgent.target}`);
+          if (shouldInstall) {
+            console.log(`\nThe scheduled agent (${plan.runtime}, every ${plan.interval.label}, send mode ${plan.sendMode}) now runs through macOS launchd:`);
+            console.log(`  installed plist: ${plan.launchAgent.installPath}`);
+            console.log(`  target:         ${plan.launchAgent.target}`);
+          } else {
+            console.log(`\nPrepared local launchd artifacts for the scheduled agent (${plan.runtime}, every ${plan.interval.label}, send mode ${plan.sendMode}).`);
+            console.log(`  install plist: ${plan.launchAgent.installPath}`);
+            console.log(`  target:        ${plan.launchAgent.target}`);
+          }
         } else if (plan.cronLine) {
           console.log(`\nThe scheduled agent (${plan.runtime}, every ${plan.interval.label}, send mode ${plan.sendMode}) drains the queue each pass:`);
           console.log(`  ${plan.cronLine}`);

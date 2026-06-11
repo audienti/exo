@@ -767,6 +767,20 @@ console.log(JSON.stringify({
       fs.rmSync(lockDir, { recursive: true, force: true });
     }
   });
+
+  await t.test("runAgentQueuePass refuses to launch while a lane worker is active", async () => {
+    const lockDir = buildAgentRunLockDir({ stateDir, lane: "transport" });
+    fs.mkdirSync(lockDir, { recursive: true });
+    fs.writeFileSync(path.join(lockDir, "pid"), `${process.pid}\n`, "utf8");
+    try {
+      await assert.rejects(
+        () => executeActionIntent({ writer: "runAgentQueuePass", args: {} }),
+        /transport lane pass is already active/i,
+      );
+    } finally {
+      fs.rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
 });
 
 test.after(() => {

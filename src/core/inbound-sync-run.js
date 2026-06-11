@@ -697,25 +697,25 @@ const deltaObservationDefinitionBySurfaceKey = {
   "linkedin-sent-invitations": {
     previousKinds: ["connection_request_pending"],
     nextKind: "connection_request_no_longer_pending",
-    notes: "Derived from a complete sent-invitations reconciliation pass.",
+    notes: "Exo checked the full pending sent-invitations list. This invite is no longer pending, so the outcome needs review.",
     buildSummary: (observation) => `${observation.actorName ?? "A pending invite"} is no longer present in the live pending invitations list.`
   },
   "linkedin-received-invitations": {
     previousKinds: ["connection_request_received"],
     nextKind: "connection_request_received_no_longer_pending",
-    notes: "Derived from a complete received-invitations reconciliation pass.",
+    notes: "Exo checked the full received-invitations list. This invite is no longer pending, so the outcome needs review.",
     buildSummary: (observation) => `${observation.actorName ?? "An inbound invite"} is no longer present in the live received invitations list.`
   },
   "linkedin-followers-list": {
     previousKinds: ["follower_added", "follower_confirmed"],
     nextKind: "follower_removed",
-    notes: "Derived from a complete followers reconciliation pass.",
+    notes: "Exo checked the full followers list. This person is no longer listed as a follower.",
     buildSummary: (observation) => `${observation.actorName ?? "A follower"} is no longer present in the live followers list.`
   },
   "linkedin-following-list": {
     previousKinds: ["follow_state_changed", "follow_state_confirmed"],
     nextKind: "follow_state_removed",
-    notes: "Derived from a complete following-list reconciliation pass.",
+    notes: "Exo checked the full following list. This profile is no longer in the following list.",
     buildSummary: (observation) => `${observation.actorName ?? "A followed profile"} is no longer present in the live following list.`
   }
 };
@@ -726,7 +726,7 @@ const additiveObservationDefinitionBySurfaceKey = {
     deltaKind: "follower_added",
     presentKinds: ["follower_added", "follower_confirmed"],
     relevantKinds: ["follower_added", "follower_confirmed", "follower_removed"],
-    notes: "Derived from a complete followers reconciliation pass against the prior complete snapshot.",
+    notes: "Exo compared the full followers list with the prior complete snapshot. This person newly appeared as a follower.",
     buildSummary: (observation) => `${observation.actorName ?? "A follower"} newly appeared in the live followers list.`
   },
   "linkedin-following-list": {
@@ -734,7 +734,7 @@ const additiveObservationDefinitionBySurfaceKey = {
     deltaKind: "follow_state_changed",
     presentKinds: ["follow_state_changed", "follow_state_confirmed"],
     relevantKinds: ["follow_state_changed", "follow_state_confirmed", "follow_state_removed"],
-    notes: "Derived from a complete following-list reconciliation pass against the prior complete snapshot.",
+    notes: "Exo compared the full following list with the prior complete snapshot. This profile newly appeared in the following list.",
     buildSummary: (observation) => `${observation.actorName ?? "A followed profile"} newly appeared in the live following list.`
   }
 };

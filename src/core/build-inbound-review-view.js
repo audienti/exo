@@ -870,6 +870,14 @@ function buildReviewPreview(observation, prospect, state) {
 
   const noteText = compactPreviewText(parsedNotes.body);
   if (noteText) {
+    const syncEvidence = buildSyncEvidencePreview(noteText);
+    if (syncEvidence) {
+      return {
+        label: syncEvidence.label,
+        subject: previewSubject,
+        text: syncEvidence.text,
+      };
+    }
     return {
       label: observation.kind === "connection_request_received" ? "Invitation note" : "Thread context",
       subject: previewSubject,
@@ -887,6 +895,36 @@ function buildReviewPreview(observation, prospect, state) {
   }
 
   return { label: null, subject: previewSubject, text: null };
+}
+
+/**
+ * @param {string} noteText
+ * @returns {{ label: string, text: string } | null}
+ */
+function buildSyncEvidencePreview(noteText) {
+  const normalized = noteText.trim();
+  const syncEvidenceByNote = {
+    "Derived from a complete sent-invitations reconciliation pass.":
+      "Exo checked the full pending sent-invitations list. This invite is no longer pending, so the outcome needs review.",
+    "Derived from a complete received-invitations reconciliation pass.":
+      "Exo checked the full received-invitations list. This invite is no longer pending, so the outcome needs review.",
+    "Derived from a complete followers reconciliation pass.":
+      "Exo checked the full followers list. This person is no longer listed as a follower.",
+    "Derived from a complete following-list reconciliation pass.":
+      "Exo checked the full following list. This profile is no longer in the following list.",
+    "Derived from a complete followers reconciliation pass against the prior complete snapshot.":
+      "Exo compared the full followers list with the prior complete snapshot. This person newly appeared as a follower.",
+    "Derived from a complete following-list reconciliation pass against the prior complete snapshot.":
+      "Exo compared the full following list with the prior complete snapshot. This profile newly appeared in the following list.",
+  };
+  const translated = syncEvidenceByNote[normalized] ?? null;
+  if (translated) {
+    return { label: "Sync evidence", text: translated };
+  }
+  if (/^Exo (checked|compared) the full /.test(normalized)) {
+    return { label: "Sync evidence", text: normalized };
+  }
+  return null;
 }
 
 /**

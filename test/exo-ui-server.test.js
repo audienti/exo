@@ -150,6 +150,14 @@ test("ui state revision changes when agent runtime artifacts change without a DB
   fs.writeFileSync(path.join(lockDir, "pid"), "4242\n");
   const rev4 = buildUiStateRevision(statePaths);
   assert.notEqual(rev4, rev3);
+
+  fs.rmSync(lockDir, { recursive: true, force: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const laneLockDir = buildAgentRunLockDir({ stateDir, lane: "transport" });
+  fs.mkdirSync(laneLockDir, { recursive: true });
+  fs.writeFileSync(path.join(laneLockDir, "pid"), "4242\n");
+  const rev5 = buildUiStateRevision(statePaths);
+  assert.notEqual(rev5, rev4);
 });
 
 test("ui projection cache reuses the same derived projection for the same state revision", async (t) => {

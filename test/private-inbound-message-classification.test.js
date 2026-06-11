@@ -387,6 +387,27 @@ test("received invitation notes become operator preview content", () => {
   assert.equal(reviewItem.previewText, note);
 });
 
+test("reconciliation notes become sync evidence instead of thread context", () => {
+  const observation = rawObservation({
+    id: "obs-4",
+    dedupeKey: "obs-4",
+    kind: "connection_request_no_longer_pending",
+    surfaceKey: "linkedin-sent-invitations",
+    subject: null,
+    summary: "Boby Antony is no longer present in pending sent invitations.",
+    notes: "Derived from a complete sent-invitations reconciliation pass.",
+    messages: [],
+  });
+  const review = buildInboundReviewView(rawUser, [observation], [], []);
+  const reviewItem = review.reviewItems[0];
+
+  assert.equal(reviewItem.previewLabel, "Sync evidence");
+  assert.equal(
+    reviewItem.previewText,
+    "Exo checked the full pending sent-invitations list. This invite is no longer pending, so the outcome needs review.",
+  );
+});
+
 test("claimed private inbound without a draft stays in the agent lane", () => {
   const { observation, rawMotions, rawCompanies } = claimedPrivateInboundFixture();
   const inbox = buildInboxView(rawUser, [observation], rawMotions, rawCompanies);

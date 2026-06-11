@@ -296,19 +296,23 @@ test("agent install-routine preview does not write artifacts unless explicitly r
 test("agent install-routine --write-artifacts writes local runner files without installing", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-agent-routine-write-artifacts-"));
   const stateDir = path.join(tempRoot, ".exo");
+  const homeDir = path.join(tempRoot, "home");
 
   try {
+    fs.mkdirSync(homeDir, { recursive: true });
     const output = execFileSync("node", [cliPath, "agent", "install-routine", "--runtime", "codex", "--interval", "15m", "--write-artifacts"], {
       cwd: repoRoot,
-      env: buildNodeTestEnv({ ...process.env, EXO_STATE_DIR: stateDir }),
+      env: buildNodeTestEnv({ ...process.env, EXO_STATE_DIR: stateDir, HOME: homeDir }),
       encoding: "utf8",
     });
 
+    const launchdEntryPath = path.join(homeDir, "Library", "Application Support", "exo", "com.williamflanagan.exo.queue-drainer", "launchd-entry.mjs");
     assert.match(output, /Wrote the agent routine/);
     assert.match(output, /Not installed \(dry run\)\./);
     assert.equal(fs.existsSync(path.join(stateDir, "agent-routine.md")), true);
     assert.equal(fs.existsSync(path.join(stateDir, "run-agent-host.sh")), true);
     assert.equal(fs.existsSync(path.join(stateDir, "agent-launchd.plist")), true);
+    assert.equal(fs.existsSync(launchdEntryPath), false);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }

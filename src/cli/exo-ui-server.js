@@ -64,6 +64,7 @@ import { buildWorkspaceProjection } from "./workspace-runtime.js";
 import { buildSchedulerCadenceSummary, inspectAgentRoutineState, inspectAgentSchedulerState } from "./commands/agent.js";
 import { buildAgentRunLockDir, inspectAgentRunLock } from "../lib/agent-run-lock.js";
 import { pruneExpiredBrowserBackoffs } from "../lib/agent-host-state.js";
+import { AGENT_EXECUTION_LANES } from "../lib/agent-task-lanes.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4317;
@@ -851,9 +852,15 @@ function currentStateRev() {
  */
 export function buildUiStateRevision(statePaths = resolveStatePaths()) {
   const homeStateDir = statePaths.homeStateDir ?? null;
-  const agentRunLockPidPath = homeStateDir
-    ? path.join(buildAgentRunLockDir({ stateDir: homeStateDir }), "pid")
-    : null;
+  const agentRunLockPidPaths = homeStateDir
+    ? [
+        { label: "agent-run-lock", path: path.join(buildAgentRunLockDir({ stateDir: homeStateDir }), "pid") },
+        ...AGENT_EXECUTION_LANES.map((lane) => ({
+          label: `agent-run-lock-${lane}`,
+          path: path.join(buildAgentRunLockDir({ stateDir: homeStateDir, lane }), "pid"),
+        })),
+      ]
+    : [];
   const parts = [
     ...buildDatabaseFamilyRevisions(statePaths.localDatabasePath ?? null, "local-db"),
     ...buildDatabaseFamilyRevisions(statePaths.homeDatabasePath ?? null, "home-db"),
@@ -862,7 +869,7 @@ export function buildUiStateRevision(statePaths = resolveStatePaths()) {
     buildFileRevision(homeStateDir ? path.join(homeStateDir, "agent-preflight.json") : null, "agent-preflight"),
     buildFileRevision(homeStateDir ? path.join(homeStateDir, "agent-host-state.json") : null, "agent-host-state"),
     buildFileRevision(homeStateDir ? path.join(homeStateDir, "agent-last-pass.json") : null, "agent-last-pass"),
-    buildFileRevision(agentRunLockPidPath, "agent-run-lock"),
+    ...agentRunLockPidPaths.map((lock) => buildFileRevision(lock.path, lock.label)),
   ].filter(Boolean);
   return parts.length ? parts.join("|") : "0";
 }
@@ -939,12 +946,13 @@ function buildAgentRuntimeSnapshot(userId = null) {
   const sendTasks = Array.isArray(queue?.tasks) ? queue.tasks.filter((task) => task?.kind === "send_message") : [];
   const verificationSendCount = sendTasks.filter((task) => !isOperatorControlledQueueSendTask(task)).length;
   const operatorSendCount = sendTasks.length - verificationSendCount;
-  const lock = inspectAgentRunLock({ stateDir });
+  const { lock, laneLocks } = inspectAgentRuntimeLocks(stateDir);
   const scheduler = inspectAgentSchedulerState(stateDir);
   const routine = inspectAgentRoutineState(stateDir);
   const lastPass = readJsonIfExists(path.join(stateDir, "agent-last-pass.json"));
   return {
     lock,
+    laneLocks,
     scheduler,
     routine,
     hostState,
@@ -956,6 +964,38 @@ function buildAgentRuntimeSnapshot(userId = null) {
     operatorSendCount,
     waitingCount: Number.isFinite(queue?.waitingCount) ? Number(queue.waitingCount) : 0,
     blockerCount: Array.isArray(queue?.blockers) ? queue.blockers.length : 0,
+  };
+}
+
+/**
+ * @param {string} stateDir
+ */
+function inspectAgentRuntimeLocks(stateDir) {
+  const sharedLock = inspectAgentRunLock({ stateDir });
+  const laneLocks = AGENT_EXECUTION_LANES.map((lane) => ({
+    lane,
+    ...inspectAgentRunLock({ stateDir, lane }),
+  }));
+  if (sharedLock.active) {
+    return { lock: sharedLock, laneLocks };
+  }
+
+  const activeLaneLocks = laneLocks.filter((lock) => lock.active);
+  if (!activeLaneLocks.length) {
+    return { lock: sharedLock, laneLocks };
+  }
+
+  return {
+    lock: {
+      exists: true,
+      active: true,
+      stale: false,
+      lockDir: activeLaneLocks.map((lock) => lock.lockDir).join(","),
+      pidPath: activeLaneLocks.map((lock) => lock.pidPath).join(","),
+      pid: activeLaneLocks.length === 1 ? activeLaneLocks[0].pid : null,
+      lanes: activeLaneLocks.map((lock) => ({ lane: lock.lane, pid: lock.pid })),
+    },
+    laneLocks,
   };
 }
 
