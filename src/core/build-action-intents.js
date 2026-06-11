@@ -13,7 +13,7 @@
 
 /**
  * @typedef {Object} ActionIntent
- * @property {string} kind                       "schedule" | "record-touch" | "queue"
+ * @property {string} kind                       "schedule" | "record-touch" | "queue" | "lifecycle" | "packet-review"
  * @property {string} label                      human label for the affordance
  * @property {string} command                    a runnable `exo ...` command
  * @property {string} writer                      core writer function name
@@ -30,6 +30,20 @@ const BRANCH_MOVE = {
   ready: { step: "connection-request", surface: "connection_request", outcome: "sent", verb: "Queue first move" },
   waiting: { step: "quarterly-retouch", surface: "follow_up_direct_message", outcome: "nurture", verb: "Hold for retouch" },
   blocked: { step: "value-add-email", surface: "email", outcome: "pending", verb: "Try email fallback" },
+};
+
+const DISPOSITION_LABELS = {
+  active: "Reactivate",
+  nurture: "Nurture",
+  not_a_fit: "Not a fit",
+  no_longer_target: "No longer target",
+  exhausted: "Exhausted",
+};
+
+const PACKET_ACTION_LABELS = {
+  accepted: "Accept",
+  amended: "Amend",
+  returned: "Return",
 };
 
 /**
@@ -124,6 +138,105 @@ export function buildProspectActionIntents(prospect, options = {}) {
 }
 
 /**
+ * Build the canonical Exo writeback intent for a motion-linked account
+ * lifecycle disposition.
+ *
+ * @param {{
+ *   motionId: string,
+ *   companyId: string,
+ *   disposition: "active" | "nurture" | "not_a_fit" | "no_longer_target" | "exhausted",
+ *   reason?: string | null,
+ *   actor?: "operator" | "agent" | "system" | null,
+ * }} input
+ * @returns {ActionIntent}
+ */
+export function buildAccountDispositionActionIntent(input) {
+  const actor = input.actor ?? "operator";
+  const reason = input.reason ?? (input.disposition === "active" ? "Reactivated by operator." : null);
+  return {
+    kind: "lifecycle",
+    label: DISPOSITION_LABELS[input.disposition] ?? input.disposition,
+    command: buildAccountDispositionCommand(input, reason, actor),
+    writer: "setAccountDisposition",
+    args: {
+      motionId: input.motionId,
+      companyId: input.companyId,
+      disposition: input.disposition,
+      reason,
+      actor,
+    },
+  };
+}
+
+/**
+ * Build the canonical Exo writeback intent for a motion prospect lifecycle
+ * disposition.
+ *
+ * @param {{
+ *   motionId: string,
+ *   companyId: string,
+ *   prospectId: string,
+ *   disposition: "active" | "nurture" | "not_a_fit" | "no_longer_target" | "exhausted",
+ *   reason?: string | null,
+ *   actor?: "operator" | "agent" | "system" | null,
+ * }} input
+ * @returns {ActionIntent}
+ */
+export function buildProspectDispositionActionIntent(input) {
+  const actor = input.actor ?? "operator";
+  const reason = input.reason ?? (input.disposition === "active" ? "Reactivated by operator." : null);
+  return {
+    kind: "lifecycle",
+    label: DISPOSITION_LABELS[input.disposition] ?? input.disposition,
+    command: buildProspectDispositionCommand(input, reason, actor),
+    writer: "setProspectDisposition",
+    args: {
+      motionId: input.motionId,
+      companyId: input.companyId,
+      prospectId: input.prospectId,
+      disposition: input.disposition,
+      reason,
+      actor,
+    },
+  };
+}
+
+/**
+ * Build the canonical Exo writeback intent for resolving an operator packet
+ * review.
+ *
+ * @param {{
+ *   motionId: string,
+ *   packetId: string,
+ *   action: "accepted" | "amended" | "returned",
+ *   outcome?: "advance" | "nurture" | "not_a_fit" | "no_longer_target" | "exhausted" | null,
+ *   nextStatus?: "researched" | "suppressed" | "exhausted" | null,
+ *   reason?: string | null,
+ *   notes?: string | null,
+ *   reviewer?: string | null,
+ * }} input
+ * @returns {ActionIntent}
+ */
+export function buildPacketReviewActionIntent(input) {
+  return {
+    kind: "packet-review",
+    label: packetReviewLabel(input),
+    command: buildPacketReviewCommand(input),
+    writer: "resolvePacketReview",
+    args: compactObject({
+      motionId: input.motionId,
+      packetId: input.packetId,
+      action: input.action,
+      outcome: input.outcome ?? null,
+      nextStatus: input.nextStatus ?? null,
+      reason: input.reason ?? null,
+      notes: input.notes ?? null,
+      reviewer: input.reviewer ?? null,
+    }),
+  };
+}
+
+/**
  * Minimal POSIX shell quoting for the emitted command strings.
  * @param {string} value
  */
@@ -131,6 +244,78 @@ function shellQuote(value) {
   if (value === "") return "''";
   if (/^[A-Za-z0-9_./:-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * @param {{
+ *   motionId: string,
+ *   companyId: string,
+ *   disposition: string,
+ * }} input
+ * @param {string | null} reason
+ * @param {string} actor
+ */
+function buildAccountDispositionCommand(input, reason, actor) {
+  const base = input.disposition === "active"
+    ? `exo companies disposition reactivate ${input.companyId} --motion ${input.motionId}`
+    : `exo companies disposition set ${input.companyId} --motion ${input.motionId} --disposition ${input.disposition}`;
+  return `${base}${reason ? ` --reason ${shellQuote(reason)}` : ""}${actor !== "operator" ? ` --actor ${actor}` : ""} --json`;
+}
+
+/**
+ * @param {{
+ *   motionId: string,
+ *   companyId: string,
+ *   prospectId: string,
+ *   disposition: string,
+ * }} input
+ * @param {string | null} reason
+ * @param {string} actor
+ */
+function buildProspectDispositionCommand(input, reason, actor) {
+  const base = input.disposition === "active"
+    ? `exo companies prospects disposition reactivate ${input.companyId} --motion ${input.motionId} --prospect ${input.prospectId}`
+    : `exo companies prospects disposition set ${input.companyId} --motion ${input.motionId} --prospect ${input.prospectId} --disposition ${input.disposition}`;
+  return `${base}${reason ? ` --reason ${shellQuote(reason)}` : ""}${actor !== "operator" ? ` --actor ${actor}` : ""} --json`;
+}
+
+/**
+ * @param {{
+ *   motionId: string,
+ *   packetId: string,
+ *   action: "accepted" | "amended" | "returned",
+ *   outcome?: string | null,
+ *   nextStatus?: string | null,
+ *   reason?: string | null,
+ *   notes?: string | null,
+ *   reviewer?: string | null,
+ * }} input
+ */
+function buildPacketReviewCommand(input) {
+  const verb = input.action === "accepted" ? "accept" : input.action === "returned" ? "return" : "amend";
+  const parts = [`exo agent packets ${verb} ${input.motionId}`, `--packet ${input.packetId}`];
+  if (input.outcome) parts.push(`--outcome ${input.outcome}`);
+  if (input.nextStatus) parts.push(`--next-status ${input.nextStatus}`);
+  if (input.reason) parts.push(`--reason ${shellQuote(input.reason)}`);
+  if (input.notes) parts.push(`--notes ${shellQuote(input.notes)}`);
+  if (input.reviewer) parts.push(`--reviewer ${shellQuote(input.reviewer)}`);
+  parts.push("--json");
+  return parts.join(" ");
+}
+
+/**
+ * @param {{ action: "accepted" | "amended" | "returned", outcome?: string | null }} input
+ */
+function packetReviewLabel(input) {
+  if (input.action === "amended" && input.outcome) {
+    return DISPOSITION_LABELS[input.outcome] ?? `Amend ${input.outcome.replaceAll("_", " ")}`;
+  }
+  return PACKET_ACTION_LABELS[input.action] ?? input.action;
+}
+
+/** @param {Record<string, any>} input */
+function compactObject(input) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined && value !== null));
 }
 
 /**

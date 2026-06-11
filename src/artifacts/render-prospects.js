@@ -20,6 +20,7 @@ import {
   escapeAttr,
   escapeHtml,
   iconSvg,
+  liveActionBtn,
   ownerTag,
   renderMotionChoiceOption,
   renderNextMoveAlert,
@@ -27,6 +28,10 @@ import {
   stateDot,
   truthTag,
 } from "../lib/exo-ui-components.js";
+import {
+  buildPacketReviewActionIntent,
+  buildProspectDispositionActionIntent,
+} from "../core/build-action-intents.js";
 import { isSendableDraftStatus } from "../lib/draft-policy.js";
 import { describePrivateInboundResponse } from "../core/private-inbound-message-classification.js";
 import { selectNextDraftSurface } from "../core/select-next-draft-surface.js";
@@ -367,15 +372,128 @@ function renderPersonDetail(p, meta = {}) {
     : "";
 
   const timeline = renderTimeline(p, meta);
+  const lifecycle = renderProspectLifecyclePanel(p, meta);
 
   return (
-    `<section class="dom-wrap person-detail" id="p-${escapeAttr(p.id)}">${head}${pipeline}${handledNotification}${timeline}${colleagues}</section>` +
+    `<section class="dom-wrap person-detail" id="p-${escapeAttr(p.id)}">${head}${lifecycle}${pipeline}${handledNotification}${timeline}${colleagues}</section>` +
     renderContextPanel(p, meta) +
     (meta.interactive ? renderTimelineNotePanel(p, meta) : "") +
     (meta.interactive ? renderComposePanel(p, meta) : "") +
     (meta.interactive ? renderRehomePanel(p, meta) : "") +
     (meta.interactive && !p.owner ? renderAssignPanel(p, meta) : "")
   );
+}
+
+/**
+ * @param {any} p
+ * @param {{ interactive?: boolean }} meta
+ */
+function renderProspectLifecyclePanel(p, meta = {}) {
+  if (!meta.interactive || !p.motionId || !p.companyId || !p.id) return "";
+  const disposition = normalizeDisposition(p.disposition);
+  const accountDisposition = normalizeDisposition(p.accountDisposition);
+  const status = [
+    `Prospect ${disposition.replaceAll("_", " ")}`,
+    accountDisposition !== "active" ? `account ${accountDisposition.replaceAll("_", " ")}` : null,
+  ].filter(Boolean).join(" · ");
+  const lifecycleActions = renderProspectDispositionActions(p, disposition);
+  const packetActions = renderProspectPacketReviewActions(p);
+  if (!lifecycleActions && !packetActions) return "";
+  return (
+    `<div class="lifecycle-panel" data-exo-field-scope>` +
+    `<div class="lifecycle-head">` +
+    `<span class="def-cap">${iconSvg("flag", 12)}Lifecycle</span>` +
+    stateDot(disposition === "active" && accountDisposition === "active" ? "active" : "waiting", status) +
+    `</div>` +
+    `<div class="lifecycle-actions">` +
+    `<input class="compose-input lifecycle-reason" name="lifecycleReason" placeholder="Reason for nurture or terminal state" autocomplete="off" />` +
+    lifecycleActions +
+    packetActions +
+    `</div>` +
+    `</div>`
+  );
+}
+
+/**
+ * @param {any} p
+ * @param {string} disposition
+ */
+function renderProspectDispositionActions(p, disposition) {
+  if (disposition !== "active") {
+    const intent = buildProspectDispositionActionIntent({
+      motionId: p.motionId,
+      companyId: p.companyId,
+      prospectId: p.id,
+      disposition: "active",
+      reason: "Reactivated by operator.",
+    });
+    return liveActionBtn({
+      writer: intent.writer,
+      args: intent.args,
+      variant: "primary",
+      size: "sm",
+      icon: "check",
+      label: "Reactivate prospect",
+      title: intent.command,
+    });
+  }
+
+  return [
+    renderProspectDispositionButton(p, "nurture", "Nurture", "clock", "secondary"),
+    renderProspectDispositionButton(p, "not_a_fit", "Not a fit", "x", "danger"),
+    renderProspectDispositionButton(p, "exhausted", "Exhausted", "flag", "ghost"),
+  ].join("");
+}
+
+/**
+ * @param {any} p
+ * @param {"nurture" | "not_a_fit" | "exhausted"} disposition
+ * @param {string} label
+ * @param {string} icon
+ * @param {"primary" | "secondary" | "ghost" | "danger"} variant
+ */
+function renderProspectDispositionButton(p, disposition, label, icon, variant) {
+  const intent = buildProspectDispositionActionIntent({
+    motionId: p.motionId,
+    companyId: p.companyId,
+    prospectId: p.id,
+    disposition,
+  });
+  return liveActionBtn({
+    writer: intent.writer,
+    args: intent.args,
+    variant,
+    size: "sm",
+    icon,
+    label,
+    title: intent.command,
+    fields: "lifecycleReason:reason",
+  });
+}
+
+/** @param {any} p */
+function renderProspectPacketReviewActions(p) {
+  if (p.packetState?.status !== "submitted" || p.packetState?.kind !== "prospect_research") {
+    return "";
+  }
+  const packetId = `prospect_research:${p.companyId}:${p.id}`;
+  const accept = buildPacketReviewActionIntent({ motionId: p.motionId, packetId, action: "accepted" });
+  const nurture = buildPacketReviewActionIntent({ motionId: p.motionId, packetId, action: "amended", outcome: "nurture" });
+  const terminal = buildPacketReviewActionIntent({ motionId: p.motionId, packetId, action: "amended", outcome: "not_a_fit" });
+  const returned = buildPacketReviewActionIntent({ motionId: p.motionId, packetId, action: "returned" });
+  return (
+    `<span class="lifecycle-sep">Packet review</span>` +
+    liveActionBtn({ writer: accept.writer, args: accept.args, variant: "primary", size: "sm", icon: "check", label: "Accept packet", title: accept.command }) +
+    liveActionBtn({ writer: nurture.writer, args: nurture.args, variant: "secondary", size: "sm", icon: "clock", label: "Packet nurture", title: nurture.command, fields: "lifecycleReason:reason" }) +
+    liveActionBtn({ writer: terminal.writer, args: terminal.args, variant: "danger", size: "sm", icon: "x", label: "Packet not a fit", title: terminal.command, fields: "lifecycleReason:reason" }) +
+    liveActionBtn({ writer: returned.writer, args: returned.args, variant: "ghost", size: "sm", icon: "refresh", label: "Return packet", title: returned.command, fields: "lifecycleReason:notes" })
+  );
+}
+
+/** @param {unknown} value */
+function normalizeDisposition(value) {
+  const normalized = String(value ?? "active").trim();
+  return normalized || "active";
 }
 
 /**

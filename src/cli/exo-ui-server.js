@@ -324,7 +324,7 @@ export async function renderRoute(route, ctx, hooks = {}) {
   if (pathname.startsWith("/motions/") && pathname.endsWith("/settings")) {
     const segments = pathname.split("/").filter(Boolean);
     const id = decodeURIComponent(segments[1] ?? "");
-    const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions() });
+    const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions(), rawCompanies: listCompanies() });
     const motion = model.details.find((candidate) => candidate.id === id);
     if (!motion) {
       return renderNotFound("Motion", id, "/motions", "Motions");
@@ -340,7 +340,7 @@ export async function renderRoute(route, ctx, hooks = {}) {
   if (pathname.startsWith("/motions/")) {
     const segments = pathname.split("/").filter(Boolean);
     const id = decodeURIComponent(segments[1] ?? "");
-    const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions() });
+    const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions(), rawCompanies: listCompanies() });
     const motion = model.details.find((candidate) => candidate.id === id);
     if (!motion) {
       return renderNotFound("Motion", id, "/motions", "Motions");
@@ -393,6 +393,10 @@ export async function renderRoute(route, ctx, hooks = {}) {
     person.threadMessages = motionProspectView?.threadMessages ?? [];
     person.latestInboundMessage = motionProspectView?.latestInboundMessage ?? null;
     person.timelineObservations = motionProspectView?.timelineObservations ?? [];
+    person.accountDisposition = motionProspectView?.accountDisposition ?? "active";
+    person.disposition = motionProspectView?.disposition ?? "active";
+    person.packetStatus = motionProspectView?.packetStatus ?? null;
+    person.packetState = motionProspectView?.packetState ?? null;
     const linkedinExecution = company
       ? resolveScopedExecutionAssignment({
           rawCompany: company,
@@ -538,7 +542,7 @@ export async function renderRoute(route, ctx, hooks = {}) {
       return renderCleanupPage(model, { ...baseMeta, returnTo: "/cleanup" });
     }
     case "/motions": {
-      const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions() });
+      const model = buildMotionsViewModel({ motionSummaries: data.motionSummaries, motionDetails: data.motionDetails, rawMotions: listMotions(), rawCompanies: listCompanies() });
       return renderMotionsPage(model, {
         ...baseMeta,
         users: listUsers().map((user) => ({ id: user.id, label: user.label })),

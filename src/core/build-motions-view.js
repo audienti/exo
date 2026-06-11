@@ -9,6 +9,8 @@
 //
 // Pure data. The renderer turns this into HTML using the shared primitives.
 
+import { buildMotionPacketSummary } from "../lib/motion-packets.js";
+
 /**
  * Stage → readiness fraction. Honest, monotonic ordering of the targeting loop.
  * @type {Record<string, number>}
@@ -44,11 +46,12 @@ const STATUS_STATE = {
 };
 
 /**
- * @param {{ motionSummaries: any[], motionDetails: any[], rawMotions?: any[] }} input
+ * @param {{ motionSummaries: any[], motionDetails: any[], rawMotions?: any[], rawCompanies?: any[] }} input
  */
 export function buildMotionsViewModel(input) {
   const detailById = new Map(input.motionDetails.map((detail) => [detail.motionId, detail]));
   const rawMotionById = new Map((input.rawMotions ?? []).map((motion) => [motion.id, motion]));
+  const rawCompanies = input.rawCompanies ?? [];
 
   const motions = input.motionSummaries.map((summary) => {
     const readiness = STAGE_READINESS[summary.overallStage] ?? 0.15;
@@ -92,7 +95,7 @@ export function buildMotionsViewModel(input) {
       };
     })
     .filter((entry) => entry.detail)
-    .map(({ detail, rawMotion, blocker }) => shapeDetail(detail, detailById.size, rawMotion, blocker));
+    .map(({ detail, rawMotion, blocker }) => shapeDetail(detail, detailById.size, rawMotion, blocker, rawCompanies));
 
   return { motions, details };
 }
@@ -126,7 +129,14 @@ function deriveListBlocker(summary, detail, rawMotion) {
  * @param {any} rawMotion
  * @param {{ text: string | null, kind: string | null }} blocker
  */
-function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, kind: null }) {
+function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, kind: null }, rawCompanies = []) {
+  const accountByCompanyId = new Map((rawMotion?.targetMap?.accounts ?? []).map((account) => [account.companyId, account]));
+  const prospectById = new Map();
+  for (const account of rawMotion?.targetMap?.accounts ?? []) {
+    for (const prospect of account.prospects ?? []) {
+      prospectById.set(prospect.id, { account, prospect });
+    }
+  }
   const signals = (detail.signals ?? []).map((signal, index) => ({
     id: signal.id,
     index: index + 1,
@@ -148,6 +158,7 @@ function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, k
   }));
 
   const companies = (detail.companies ?? []).map((company) => ({
+    ...shapeAccountLifecycle(accountByCompanyId.get(company.companyId) ?? null),
     id: company.companyId,
     name: company.companyName,
     industry: company.domain ?? company.websiteUrl ?? "",
@@ -158,6 +169,7 @@ function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, k
     enrichmentLabel: company.executionIdentity?.status === "pinned-ready" ? "assigned" : "unassigned",
   }));
   const backlogCompanies = (detail.backlogCompanies ?? []).map((company) => ({
+    ...shapeAccountLifecycle(accountByCompanyId.get(company.companyId) ?? null),
     id: company.companyId,
     name: company.companyName,
     industry: company.domain ?? company.websiteUrl ?? "",
@@ -169,6 +181,7 @@ function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, k
   }));
 
   const people = (detail.people ?? []).map((person) => ({
+    ...shapeProspectLifecycle(prospectById.get(person.prospectId) ?? null),
     id: person.prospectId,
     name: person.name,
     initials: initials(person.name),
@@ -180,6 +193,7 @@ function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, k
     branchLabel: person.branchState?.label ?? null,
     owner: person.ownerLabel ?? null,
   }));
+  const reviewPackets = shapeReviewPackets(rawMotion, rawCompanies, detail);
 
   const plan = detail.plan ?? {};
   const readiness = STAGE_READINESS[detail.overallStage] ?? 0.15;
@@ -210,6 +224,7 @@ function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, k
     companies,
     backlogCompanies,
     people,
+    reviewPackets,
     blocker: blocker.text,
     blockerKind: blocker.kind,
     activity: summarizeMotionActivity(rawMotion),
@@ -226,6 +241,58 @@ function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, k
       packet: derivePacketState(plan),
     },
   };
+}
+
+/** @param {any | null} account */
+function shapeAccountLifecycle(account) {
+  return {
+    disposition: account?.disposition ?? "active",
+    packetStatus: account?.packetStatus ?? null,
+    packetState: account?.packetState ?? null,
+  };
+}
+
+/** @param {{ account: any, prospect: any } | null} entry */
+function shapeProspectLifecycle(entry) {
+  return {
+    companyId: entry?.account?.companyId ?? null,
+    accountDisposition: entry?.account?.disposition ?? "active",
+    disposition: entry?.prospect?.disposition ?? "active",
+    packetStatus: entry?.prospect?.packetStatus ?? null,
+    packetState: entry?.prospect?.packetState ?? null,
+  };
+}
+
+/**
+ * @param {any} rawMotion
+ * @param {any[]} rawCompanies
+ * @param {any} detail
+ */
+function shapeReviewPackets(rawMotion, rawCompanies, detail) {
+  if (!rawMotion) return [];
+  const companies = rawCompanies.length
+    ? rawCompanies
+    : [
+        ...(detail.companies ?? []),
+        ...(detail.backlogCompanies ?? []),
+      ].map((company) => ({
+        id: company.companyId,
+        name: company.companyName,
+        motionIds: [detail.motionId],
+      }));
+  return buildMotionPacketSummary(rawMotion, companies, { status: "submitted" }).items.map((packet) => ({
+    packetId: packet.packetId,
+    packetKind: packet.packetKind,
+    packetLabel: packet.packetKind.replaceAll("_", " "),
+    companyId: packet.companyId,
+    companyName: packet.companyName,
+    prospectId: packet.prospectId ?? null,
+    prospectName: packet.prospectName ?? null,
+    prospectTitle: packet.prospectTitle ?? null,
+    proposal: packet.proposal ?? null,
+    notes: packet.notes ?? null,
+    completedAt: packet.completedAt ?? null,
+  }));
 }
 
 /**

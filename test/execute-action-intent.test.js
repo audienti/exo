@@ -30,7 +30,7 @@ process.env.EXO_STATE_DIR = stateDir;
 process.env.EXO_AGENT_RUN_LOCK_TEMP_DIR = path.join(stateDir, "run-lock");
 
 const { executeActionIntent } = await import("../src/core/execute-action-intent.js");
-const { findCompanyById, findMotionById, insertMotion, listInboundObservations, listMotions } = await import("../src/db/database.js");
+const { findCompanyById, findMotionById, insertMotion, listInboundObservations, listMotions, updateMotion } = await import("../src/db/database.js");
 const { TRANSITION_MOTION_MARKER_URL } = await import("../src/core/ensure-transition-motion.js");
 const { reconcileConnectionDegreesFromAccepts } = await import("../src/core/reconcile-connection-degrees.js");
 const { buildAgentRunLockDir } = await import("../src/lib/agent-run-lock.js");
@@ -280,6 +280,82 @@ test("executeActionIntent drives every operator writer against governed state", 
     });
     assert.equal(again.ok, true);
     assert.match(again.message, /already queued/i);
+  });
+
+  await t.test("setAccountDisposition and setProspectDisposition update lifecycle state", async () => {
+    const accountHeld = await executeActionIntent({
+      writer: "setAccountDisposition",
+      args: {
+        motionId: motion.id,
+        companyId: company.id,
+        disposition: "nurture",
+        reason: "Account should pause until a stronger signal appears.",
+      },
+    });
+    assert.equal(accountHeld.ok, true);
+    assert.equal(reAccount(motion.id, company.id)?.disposition, "nurture");
+
+    const accountActive = await executeActionIntent({
+      writer: "setAccountDisposition",
+      args: {
+        motionId: motion.id,
+        companyId: company.id,
+        disposition: "active",
+      },
+    });
+    assert.equal(accountActive.ok, true);
+    assert.equal(reAccount(motion.id, company.id)?.disposition, "active");
+
+    const prospectSuppressed = await executeActionIntent({
+      writer: "setProspectDisposition",
+      args: {
+        motionId: motion.id,
+        companyId: company.id,
+        prospectId: prospect.id,
+        disposition: "not_a_fit",
+        reason: "Prospect no longer matches the branch.",
+      },
+    });
+    assert.equal(prospectSuppressed.ok, true);
+    assert.equal(reProspect(prospect.id)?.prospect.disposition, "not_a_fit");
+
+    const prospectActive = await executeActionIntent({
+      writer: "setProspectDisposition",
+      args: {
+        motionId: motion.id,
+        companyId: company.id,
+        prospectId: prospect.id,
+        disposition: "active",
+      },
+    });
+    assert.equal(prospectActive.ok, true);
+    assert.equal(reProspect(prospect.id)?.prospect.disposition, "active");
+  });
+
+  await t.test("resolvePacketReview accepts submitted account packet reviews", async () => {
+    updateMotion({
+      ...findMotionById(motion.id),
+      packetReviewPolicy: "review",
+    });
+    const reviewCompany = cliJson([
+      "companies", "add", "--name", "Review Intent Co", "--domain", "review-intent.example", "--motion", motion.id,
+    ]);
+    cli(["companies", "queue", "claim", reviewCompany.id, "--motion", motion.id, "--worker", "review-intent-worker", "--json"]);
+    cli(["companies", "queue", "complete", reviewCompany.id, "--motion", motion.id, "--worker", "review-intent-worker", "--next-status", "researched", "--notes", "Submitted through dispatcher test.", "--json"]);
+
+    const res = await executeActionIntent({
+      writer: "resolvePacketReview",
+      args: {
+        motionId: motion.id,
+        packetId: `company_research:${reviewCompany.id}`,
+        action: "accepted",
+      },
+    });
+
+    assert.equal(res.ok, true);
+    const account = reAccount(motion.id, reviewCompany.id);
+    assert.equal(account?.packetStatus, null);
+    assert.equal(account?.queueState?.status, "researched");
   });
 
   await t.test("addMotionSignals appends new signal questions without replacing the current set", async () => {

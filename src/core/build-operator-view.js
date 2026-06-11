@@ -57,6 +57,7 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {Record<string, any> | null} args
  * @property {"primary" | "secondary" | "ghost" | "danger"} variant
  * @property {string | null} icon
+ * @property {Array<{ name: string, argKey?: string, placeholder?: string, required?: boolean }> | undefined} [fields]
  *
  * @typedef {Object} OperatorNextMove
  * @property {string} title

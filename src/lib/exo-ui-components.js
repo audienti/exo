@@ -336,7 +336,7 @@ export function renderNextMoveAlert(opts) {
 
 /**
  * Wrap a button in a live action host the shared client dispatcher POSTs to /act.
- * @param {{ writer: string, args: Record<string, any>, variant?: "primary" | "secondary" | "ghost" | "danger", size?: "sm" | "md", label: string, icon?: string, title?: string, className?: string }} opts
+ * @param {{ writer: string, args: Record<string, any>, variant?: "primary" | "secondary" | "ghost" | "danger", size?: "sm" | "md", label: string, icon?: string, title?: string, className?: string, fields?: string | null }} opts
  */
 export function liveActionBtn(opts) {
   const inner = btn({
@@ -347,7 +347,8 @@ export function liveActionBtn(opts) {
     title: opts.title,
   });
   const className = ["exo-action", "exo-action-flat", opts.className].filter(Boolean).join(" ");
-  return `<span class="${escapeAttr(className)}" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}">${inner}</span>`;
+  const fieldsAttr = opts.fields ? ` data-exo-fields="${escapeAttr(opts.fields)}"` : "";
+  return `<span class="${escapeAttr(className)}" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}"${fieldsAttr}>${inner}</span>`;
 }
 
 /**
@@ -595,7 +596,12 @@ export const EXO_CLIENT_JS = `
         var parts = rawSpec.split(':');
         var fieldName = parts[0];
         var argKey = parts[1] || fieldName;
-        var field = host.querySelector('[name="' + fieldName.replace(/"/g, '\\"') + '"]');
+        var selector = '[name="' + fieldName.replace(/"/g, '\\"') + '"]';
+        var field = host.querySelector(selector);
+        if (!field) {
+          var scope = host.closest('[data-exo-field-scope]');
+          field = scope ? scope.querySelector(selector) : null;
+        }
         if (!field) continue;
         var value = typeof field.value === 'string' ? field.value.trim() : field.value;
         if (!value) {
@@ -2018,6 +2024,16 @@ body.view-settings .exec-policy-card{max-width:none}
 .pd-meta-link:hover{color:var(--text)}
 .pd-div{width:1px;height:14px;background:var(--border-2)}
 .pd-actions{display:flex;align-items:center;gap:9px;flex:none;justify-self:end}
+.lifecycle-panel{display:flex;flex-direction:column;gap:10px;background:var(--bg-1);border:1px solid var(--border);
+  border-radius:10px;padding:11px 13px;margin:0 0 16px;max-width:900px}
+.lifecycle-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.lifecycle-actions,.lifecycle-inline,.packet-review-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.lifecycle-inline{justify-content:flex-end;max-width:560px}
+.packet-review-actions{justify-content:flex-end;max-width:620px}
+.lifecycle-reason{max-width:310px;min-width:220px;padding:7px 10px;font-size:12px}
+.lifecycle-reason-compact{width:148px;min-width:124px}
+.lifecycle-sep{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-4)}
+.packet-review-row{align-items:flex-start}
 .next-alert{display:flex;align-items:flex-start;gap:9px;background:var(--bg-2);border:1px solid var(--border);
   border-radius:12px;padding:11px 14px;margin:4px 0 18px}
 .next-alert>.ic{color:var(--accent);flex:none;margin-top:2px}
@@ -2053,6 +2069,8 @@ body.view-settings .exec-policy-card{max-width:none}
 .exo-action{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--bg-1);
   border:1px solid var(--border);border-radius:10px;padding:10px 12px}
 .exo-action-flat{background:transparent;border:none;border-radius:0;padding:0}
+.exo-action-inline{display:inline-flex;align-items:center;gap:7px}
+.exo-action-input{width:170px;min-height:30px;padding:6px 9px;font-size:12px;border-radius:8px}
 .exo-cmd{font-family:var(--mono);font-size:11px;color:var(--text-3);background:var(--bg);border:1px solid var(--border);
   border-radius:6px;padding:5px 8px;overflow-x:auto;white-space:nowrap;flex:1;min-width:0}
 .exo-cmd::selection{background:color-mix(in srgb,var(--accent) 35%,transparent)}

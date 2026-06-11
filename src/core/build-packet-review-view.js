@@ -2,6 +2,7 @@
 
 import { buildMotionPacketSummary } from "../lib/motion-packets.js";
 import { motionSchema } from "../schema/motion.js";
+import { buildPacketReviewActionIntent } from "./build-action-intents.js";
 
 /**
  * @param {unknown[]} rawMotions
@@ -54,6 +55,35 @@ function shapePacketReviewItem(motion, packet, now) {
   const acceptCommand = `exo agent packets accept ${motion.id} --packet ${packet.packetId} --json`;
   const amendCommand = `exo agent packets amend ${motion.id} --packet ${packet.packetId} --outcome <outcome> --reason "Why this outcome is correct" --json`;
   const returnCommand = `exo agent packets return ${motion.id} --packet ${packet.packetId} --notes "What the worker must fix" --json`;
+  const acceptIntent = buildPacketReviewActionIntent({
+    motionId: motion.id,
+    packetId: packet.packetId,
+    action: "accepted",
+  });
+  const returnIntent = buildPacketReviewActionIntent({
+    motionId: motion.id,
+    packetId: packet.packetId,
+    action: "returned",
+  });
+  const nurtureIntent = buildPacketReviewActionIntent({
+    motionId: motion.id,
+    packetId: packet.packetId,
+    action: "amended",
+    outcome: "nurture",
+  });
+  const terminalOutcome = packet.packetKind === "prospect_research" ? "not_a_fit" : "no_longer_target";
+  const terminalIntent = buildPacketReviewActionIntent({
+    motionId: motion.id,
+    packetId: packet.packetId,
+    action: "amended",
+    outcome: terminalOutcome,
+  });
+  const exhaustedIntent = buildPacketReviewActionIntent({
+    motionId: motion.id,
+    packetId: packet.packetId,
+    action: "amended",
+    outcome: "exhausted",
+  });
 
   return {
     id: `packet-review:${motion.id}:${packet.packetId}`,
@@ -86,7 +116,10 @@ function shapePacketReviewItem(motion, packet, now) {
       brief: briefCommand,
       accept: acceptCommand,
       amend: amendCommand,
-      return: returnCommand
+      return: returnCommand,
+      nurture: nurtureIntent.command,
+      terminal: terminalIntent.command,
+      exhausted: exhaustedIntent.command,
     },
     actions: [
       {
@@ -99,7 +132,9 @@ function shapePacketReviewItem(motion, packet, now) {
         kind: "accept",
         label: "Accept",
         command: acceptCommand,
-        href: reviewHref
+        href: reviewHref,
+        writer: acceptIntent.writer,
+        args: acceptIntent.args,
       },
       {
         kind: "amend",
@@ -108,10 +143,36 @@ function shapePacketReviewItem(motion, packet, now) {
         href: reviewHref
       },
       {
+        kind: "nurture",
+        label: "Nurture",
+        command: nurtureIntent.command,
+        href: reviewHref,
+        writer: nurtureIntent.writer,
+        args: nurtureIntent.args,
+      },
+      {
+        kind: "terminal",
+        label: terminalOutcome === "not_a_fit" ? "Not a fit" : "No longer target",
+        command: terminalIntent.command,
+        href: reviewHref,
+        writer: terminalIntent.writer,
+        args: terminalIntent.args,
+      },
+      {
+        kind: "terminal",
+        label: "Exhausted",
+        command: exhaustedIntent.command,
+        href: reviewHref,
+        writer: exhaustedIntent.writer,
+        args: exhaustedIntent.args,
+      },
+      {
         kind: "return",
         label: "Return",
         command: returnCommand,
-        href: reviewHref
+        href: reviewHref,
+        writer: returnIntent.writer,
+        args: returnIntent.args,
       }
     ]
   };

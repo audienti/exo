@@ -24,6 +24,11 @@ import {
 } from "../lib/exo-ui-components.js";
 import { MOTION_INTAKE_PROMPTS } from "../core/build-motion-intake.js";
 import { isTransitionMotion } from "../core/ensure-transition-motion.js";
+import {
+  buildAccountDispositionActionIntent,
+  buildPacketReviewActionIntent,
+  buildProspectDispositionActionIntent,
+} from "../core/build-action-intents.js";
 
 /**
  * @param {{ motions: any[], details: any[] }} model
@@ -620,6 +625,7 @@ function renderDetail(m, meta = {}) {
     renderSignals(m.signals) +
     renderAudiences(m.audiences) +
     renderMatches(m, meta) +
+    renderPacketReviews(m, meta) +
     renderActivity(m.activity) +
     renderPlan(m) +
     `</section>`
@@ -638,6 +644,7 @@ function renderOperationalDetail(m, meta = {}) {
     renderHead(m, meta) +
     renderAudiences(m.audiences) +
     renderMatches(m, meta) +
+    renderPacketReviews(m, meta) +
     renderActivity(m.activity) +
     renderPlan(m) +
     `</section>`
@@ -964,16 +971,20 @@ function renderMatches(m, meta = {}) {
       m.companies
         .map(
           (c) =>
-            `<a class="md-co is-link" href="${escapeAttr(companyHref(c.id, meta))}">` +
+            `<div class="md-co">` +
             iconSvg("building", 15, "md-co-ic") +
-            `<div class="md-co-id"><span class="md-co-name">${escapeHtml(c.name)}</span><span class="md-co-sub">${escapeHtml(c.industry)}</span></div>` +
+            `<div class="md-co-id">` +
+            `<a class="md-co-name" href="${escapeAttr(companyHref(c.id, meta))}">${escapeHtml(c.name)}</a>` +
+            `<span class="md-co-sub">${escapeHtml(c.industry)}</span>` +
+            `</div>` +
             (c.matchedSignalIndexes.length
               ? `<span class="match-sig"${c.topMatch ? ` title="${escapeAttr(c.topMatch)}"` : ""}>matched ${escapeHtml(c.matchedSignalIndexes.join(", "))}</span>`
               : "") +
             `<span class="md-co-meta">${c.prospectCount} people</span>` +
             stateDot(c.enrichment, `${c.enrichmentLabel}`) +
-            iconSvg("chevronR", 13, "md-co-go") +
-            `</a>`,
+            renderAccountLifecycleActions(c, m.id, meta) +
+            `<a class="md-co-go" href="${escapeAttr(companyHref(c.id, meta))}" aria-label="Open ${escapeAttr(c.name)}">${iconSvg("chevronR", 13)}</a>` +
+            `</div>`,
         )
         .join("") +
       `</div>`
@@ -996,6 +1007,7 @@ function renderMatches(m, meta = {}) {
             `<span class="match-sig">${iconSvg("refresh", 11)}${escapeHtml(titleizeQueueStage(c.stage))}</span>` +
             `<span class="md-co-meta">${c.prospectCount} people</span>` +
             stateDot(c.enrichment, c.enrichmentLabel) +
+            renderAccountLifecycleActions(c, m.id, meta) +
             (queueHref
               ? btn({ variant: "primary", size: "sm", icon: "cpu", label: "Open queue", href: queueHref })
               : "") +
@@ -1013,22 +1025,202 @@ function renderMatches(m, meta = {}) {
       m.people
         .map(
           (p) =>
-            `<a class="md-co is-link" href="${escapeAttr(prospectHref(p.id, meta))}">` +
+            `<div class="md-co">` +
             avatar({ src: p.avatarUrl, initials: p.initials, name: p.name, size: 30 }) +
-            `<div class="md-co-id"><span class="md-co-name">${escapeHtml(p.name)}</span><span class="md-co-sub">${escapeHtml([p.title, p.company].filter(Boolean).join(" · "))}</span></div>` +
+            `<div class="md-co-id">` +
+            `<a class="md-co-name" href="${escapeAttr(prospectHref(p.id, meta))}">${escapeHtml(p.name)}</a>` +
+            `<span class="md-co-sub">${escapeHtml([p.title, p.company].filter(Boolean).join(" · "))}</span>` +
+            `</div>` +
             (p.signal
               ? `<span class="match-sig" title="${escapeAttr(p.signal)}">${iconSvg("activity", 11)}${escapeHtml(truncate(p.signal, 40))}</span>`
               : "") +
             stateDot(p.branch, p.branchLabel ?? undefined) +
             ownerTag({ ownerName: p.owner }) +
-            iconSvg("chevronR", 13, "md-co-go") +
-            `</a>`,
+            renderMotionProspectLifecycleActions(p, m.id, meta) +
+            `<a class="md-co-go" href="${escapeAttr(prospectHref(p.id, meta))}" aria-label="Open ${escapeAttr(p.name)}">${iconSvg("chevronR", 13)}</a>` +
+            `</div>`,
         )
         .join("") +
       `</div>`
     : emptyState({ icon: "users", message: "No people have lit a signal yet." });
 
   return divider + coHead + coBody + backlogHead + backlogBody + peopleHead + peopleBody;
+}
+
+/**
+ * @param {any} company
+ * @param {string} motionId
+ * @param {{ interactive?: boolean }} meta
+ */
+function renderAccountLifecycleActions(company, motionId, meta = {}) {
+  if (!meta.interactive || !company.id) return "";
+  const disposition = normalizeDisposition(company.disposition);
+  const active = disposition === "active";
+  const buttons = active
+    ? [
+        renderAccountDispositionButton({ motionId, companyId: company.id, disposition: "nurture", label: "Nurture", icon: "clock", variant: "secondary" }),
+        renderAccountDispositionButton({ motionId, companyId: company.id, disposition: "no_longer_target", label: "No longer target", icon: "x", variant: "danger" }),
+        renderAccountDispositionButton({ motionId, companyId: company.id, disposition: "exhausted", label: "Exhausted", icon: "flag", variant: "ghost" }),
+      ].join("")
+    : renderAccountDispositionButton({ motionId, companyId: company.id, disposition: "active", label: "Reactivate", icon: "check", variant: "primary" });
+  return (
+    `<span class="lifecycle-inline" data-exo-field-scope>` +
+    (active ? `<input class="compose-input lifecycle-reason lifecycle-reason-compact" name="lifecycleReason" placeholder="Reason" autocomplete="off" />` : "") +
+    buttons +
+    `</span>`
+  );
+}
+
+/**
+ * @param {{
+ *   motionId: string,
+ *   companyId: string,
+ *   disposition: "active" | "nurture" | "no_longer_target" | "exhausted",
+ *   label: string,
+ *   icon: string,
+ *   variant: "primary" | "secondary" | "ghost" | "danger",
+ * }} input
+ */
+function renderAccountDispositionButton(input) {
+  const intent = buildAccountDispositionActionIntent({
+    motionId: input.motionId,
+    companyId: input.companyId,
+    disposition: input.disposition,
+  });
+  return liveActionBtn({
+    writer: intent.writer,
+    args: intent.args,
+    variant: input.variant,
+    size: "sm",
+    icon: input.icon,
+    label: input.label,
+    title: intent.command,
+    fields: input.disposition === "active" ? null : "lifecycleReason:reason",
+  });
+}
+
+/**
+ * @param {any} prospect
+ * @param {string} motionId
+ * @param {{ interactive?: boolean }} meta
+ */
+function renderMotionProspectLifecycleActions(prospect, motionId, meta = {}) {
+  if (!meta.interactive || !prospect.companyId || !prospect.id) return "";
+  const disposition = normalizeDisposition(prospect.disposition);
+  const active = disposition === "active" && normalizeDisposition(prospect.accountDisposition) === "active";
+  const buttons = active
+    ? [
+        renderMotionProspectDispositionButton({ motionId, companyId: prospect.companyId, prospectId: prospect.id, disposition: "nurture", label: "Nurture", icon: "clock", variant: "secondary" }),
+        renderMotionProspectDispositionButton({ motionId, companyId: prospect.companyId, prospectId: prospect.id, disposition: "not_a_fit", label: "Not a fit", icon: "x", variant: "danger" }),
+        renderMotionProspectDispositionButton({ motionId, companyId: prospect.companyId, prospectId: prospect.id, disposition: "exhausted", label: "Exhausted", icon: "flag", variant: "ghost" }),
+      ].join("")
+    : renderMotionProspectDispositionButton({ motionId, companyId: prospect.companyId, prospectId: prospect.id, disposition: "active", label: "Reactivate", icon: "check", variant: "primary" });
+  return (
+    `<span class="lifecycle-inline" data-exo-field-scope>` +
+    (active ? `<input class="compose-input lifecycle-reason lifecycle-reason-compact" name="lifecycleReason" placeholder="Reason" autocomplete="off" />` : "") +
+    buttons +
+    `</span>`
+  );
+}
+
+/**
+ * @param {{
+ *   motionId: string,
+ *   companyId: string,
+ *   prospectId: string,
+ *   disposition: "active" | "nurture" | "not_a_fit" | "exhausted",
+ *   label: string,
+ *   icon: string,
+ *   variant: "primary" | "secondary" | "ghost" | "danger",
+ * }} input
+ */
+function renderMotionProspectDispositionButton(input) {
+  const intent = buildProspectDispositionActionIntent({
+    motionId: input.motionId,
+    companyId: input.companyId,
+    prospectId: input.prospectId,
+    disposition: input.disposition,
+  });
+  return liveActionBtn({
+    writer: intent.writer,
+    args: intent.args,
+    variant: input.variant,
+    size: "sm",
+    icon: input.icon,
+    label: input.label,
+    title: intent.command,
+    fields: input.disposition === "active" ? null : "lifecycleReason:reason",
+  });
+}
+
+/**
+ * @param {any} m
+ * @param {{ interactive?: boolean }} meta
+ */
+function renderPacketReviews(m, meta = {}) {
+  if (!m.reviewPackets?.length) return "";
+  const rows = m.reviewPackets
+    .map((packet) => renderPacketReviewRow(packet, m.id, meta))
+    .join("");
+  return `<div class="md-section">Packet review <span>${m.reviewPackets.length}</span></div><div class="md-list">${rows}</div>`;
+}
+
+/**
+ * @param {any} packet
+ * @param {string} motionId
+ * @param {{ interactive?: boolean }} meta
+ */
+function renderPacketReviewRow(packet, motionId, meta = {}) {
+  const subject = packet.prospectName
+    ? `${packet.prospectName} · ${packet.companyName}`
+    : packet.companyName;
+  const proposal = packet.proposal?.action
+    ? `<span class="match-sig">${iconSvg("flag", 11)}${escapeHtml(packet.proposal.action.replaceAll("_", " "))}</span>`
+    : "";
+  return (
+    `<div class="md-co packet-review-row" data-exo-field-scope>` +
+    iconSvg("flag", 15, "md-co-ic") +
+    `<div class="md-co-id">` +
+    `<span class="md-co-name">${escapeHtml(subject)}</span>` +
+    `<span class="md-co-sub">${escapeHtml(packet.packetLabel)} · ${escapeHtml(packet.packetId)}</span>` +
+    `</div>` +
+    proposal +
+    (packet.notes ? `<span class="md-co-meta">${escapeHtml(packet.notes)}</span>` : "") +
+    renderPacketReviewActions(packet, motionId, meta) +
+    `</div>`
+  );
+}
+
+/**
+ * @param {any} packet
+ * @param {string} motionId
+ * @param {{ interactive?: boolean }} meta
+ */
+function renderPacketReviewActions(packet, motionId, meta = {}) {
+  if (!meta.interactive) return "";
+  const terminalOutcome = packet.packetKind === "prospect_research" ? "not_a_fit" : "no_longer_target";
+  const accept = buildPacketReviewActionIntent({ motionId, packetId: packet.packetId, action: "accepted" });
+  const nurture = buildPacketReviewActionIntent({ motionId, packetId: packet.packetId, action: "amended", outcome: "nurture" });
+  const terminal = buildPacketReviewActionIntent({ motionId, packetId: packet.packetId, action: "amended", outcome: terminalOutcome });
+  const exhausted = buildPacketReviewActionIntent({ motionId, packetId: packet.packetId, action: "amended", outcome: "exhausted" });
+  const returned = buildPacketReviewActionIntent({ motionId, packetId: packet.packetId, action: "returned" });
+  return (
+    `<span class="packet-review-actions">` +
+    `<input class="compose-input lifecycle-reason lifecycle-reason-compact" name="packetReviewReason" placeholder="Reason or return note" autocomplete="off" />` +
+    liveActionBtn({ writer: accept.writer, args: accept.args, variant: "primary", size: "sm", icon: "check", label: "Accept", title: accept.command }) +
+    `<span class="lifecycle-sep">Amend</span>` +
+    liveActionBtn({ writer: nurture.writer, args: nurture.args, variant: "secondary", size: "sm", icon: "clock", label: "Nurture", title: nurture.command, fields: "packetReviewReason:reason" }) +
+    liveActionBtn({ writer: terminal.writer, args: terminal.args, variant: "danger", size: "sm", icon: "x", label: terminalOutcome === "not_a_fit" ? "Not a fit" : "No longer target", title: terminal.command, fields: "packetReviewReason:reason" }) +
+    liveActionBtn({ writer: exhausted.writer, args: exhausted.args, variant: "ghost", size: "sm", icon: "flag", label: "Exhausted", title: exhausted.command, fields: "packetReviewReason:reason" }) +
+    liveActionBtn({ writer: returned.writer, args: returned.args, variant: "ghost", size: "sm", icon: "refresh", label: "Return", title: returned.command, fields: "packetReviewReason:notes" }) +
+    `</span>`
+  );
+}
+
+/** @param {unknown} value */
+function normalizeDisposition(value) {
+  const normalized = String(value ?? "active").trim();
+  return normalized || "active";
 }
 
 /** @param {any} m */

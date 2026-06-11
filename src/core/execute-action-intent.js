@@ -14,6 +14,8 @@ import { ignoreInboundObservation } from "./ignore-inbound-observation.js";
 import { approveMotionProspectDraft } from "./set-prospect-draft.js";
 import { addMotionProspectTimelineNote } from "./add-prospect-note.js";
 import { claimMotionTargetAccountPacket } from "./claim-target-account-packet.js";
+import { acceptMotionTargetAccountPacket, returnMotionTargetAccountPacket } from "./review-target-account-packet.js";
+import { acceptMotionProspectPacket, returnMotionProspectPacket } from "./review-motion-prospect-packet.js";
 import { recordActionResult } from "./record-action-result.js";
 import { recordMotionProspectTouch } from "./record-prospect-touch.js";
 import { rehomeProspect } from "./rehome-prospect.js";
@@ -36,13 +38,17 @@ import {
 import {
   findCompanyById,
   deleteSignalMatchesForSignal,
+  findMotionAccountByMotionAndCompany,
   findMotionById,
+  findProspectById,
   findUserById,
   listBrowserProfiles,
   listCompanies,
   listInboundObservations,
   listMotions,
   moveProspectToMotionRows,
+  setAccountDisposition,
+  setProspectDisposition,
   updateUser,
   updateCompany,
   updateMotion,
@@ -61,6 +67,12 @@ export async function executeActionIntent(intent) {
   const args = intent.args ?? {};
 
   switch (intent.writer) {
+    case "setAccountDisposition":
+      return runSetAccountDisposition(args);
+    case "setProspectDisposition":
+      return runSetProspectDisposition(args);
+    case "resolvePacketReview":
+      return runResolvePacketReview(args);
     case "setMotionProspectCadence":
       return runCadence(args);
     case "recordMotionProspectTouch":
@@ -163,6 +175,21 @@ export async function executeActionIntent(intent) {
 }
 
 /** @param {Record<string, any>} args */
+function loadMotionCompanyContext(args) {
+  if (!args.companyId) {
+    throw new Error("Company action requires companyId.");
+  }
+  const rawCompany = findCompanyById(args.companyId);
+  if (!rawCompany) throw new Error(`Company not found: ${args.companyId}`);
+
+  const rawMotion = args.motionId ? findMotionById(args.motionId) : null;
+  if (!rawMotion) {
+    throw new Error("Company action requires motionId.");
+  }
+  return { rawMotion, rawCompany };
+}
+
+/** @param {Record<string, any>} args */
 function loadMotionAndCompany(args) {
   if (!args.companyId || !args.prospectId) {
     throw new Error("Prospect action requires companyId and prospectId.");
@@ -184,6 +211,271 @@ function loadMotionAndCompany(args) {
   }
   if (!rawMotion) throw new Error(`No motion targets prospect ${args.prospectId} at company ${args.companyId}.`);
   return { rawMotion, rawCompany };
+}
+
+/** @param {Record<string, any>} args */
+function runSetAccountDisposition(args) {
+  const { rawMotion, rawCompany } = loadMotionCompanyContext(args);
+  const disposition = normalizeDisposition(args.disposition);
+  const actor = normalizeDispositionActor(args.actor);
+  const reason = normalizeDispositionReason(disposition, args.reason);
+  const motionAccount = findMotionAccountByMotionAndCompany(rawMotion.id, rawCompany.id);
+  if (!motionAccount) {
+    throw new Error(`Motion account not found for ${rawCompany.name} on ${rawMotion.name}.`);
+  }
+
+  const updated = setAccountDisposition(motionAccount.id, {
+    disposition,
+    actor,
+    reason,
+  });
+  if (!updated) {
+    throw new Error(`Motion account not found: ${motionAccount.id}`);
+  }
+
+  const action = disposition === "active" ? "Reactivated" : `Marked ${disposition.replaceAll("_", " ")}`;
+  return {
+    ok: true,
+    writer: "setAccountDisposition",
+    message: `${action} ${rawCompany.name} on ${rawMotion.name}.`,
+  };
+}
+
+/** @param {Record<string, any>} args */
+function runSetProspectDisposition(args) {
+  const { rawMotion, rawCompany } = loadMotionAndCompany(args);
+  const disposition = normalizeDisposition(args.disposition);
+  const actor = normalizeDispositionActor(args.actor);
+  const reason = normalizeDispositionReason(disposition, args.reason);
+  const account = rawMotion.targetMap?.accounts?.find((item) => item.companyId === rawCompany.id) ?? null;
+  const prospect = account?.prospects?.find((item) => item.id === args.prospectId) ?? null;
+  if (!prospect) {
+    throw new Error(`Prospect not found on target account: ${args.prospectId}`);
+  }
+
+  const updated = setProspectDisposition(prospect.id, {
+    disposition,
+    actor,
+    reason,
+  });
+  if (!updated) {
+    throw new Error(`Prospect not found: ${prospect.id}`);
+  }
+
+  const stored = findProspectById(prospect.id);
+  const action = disposition === "active" ? "Reactivated" : `Marked ${disposition.replaceAll("_", " ")}`;
+  return {
+    ok: true,
+    writer: "setProspectDisposition",
+    message: `${action} ${stored?.payload?.name ?? prospect.name ?? "prospect"} on ${rawMotion.name}.`,
+  };
+}
+
+/** @param {Record<string, any>} args */
+function runResolvePacketReview(args) {
+  if (!args.motionId || !args.packetId) {
+    throw new Error("resolvePacketReview requires motionId and packetId.");
+  }
+  const action = normalizePacketReviewAction(args.action);
+  const context = loadPacketReviewContext(args.motionId, args.packetId);
+  const reason = normalizeOptionalText(args.reason);
+  const notes = normalizeOptionalText(args.notes);
+  if (action === "amended" && !reason && !notes) {
+    throw new Error("Packet review reason is required for amended decisions.");
+  }
+  if (action === "returned" && !notes && !reason) {
+    throw new Error("Packet review return notes are required.");
+  }
+
+  const decisionInput = {
+    outcome: args.outcome ? normalizePacketReviewOutcome(args.outcome) : undefined,
+    nextStatus: args.nextStatus ? normalizePacketReviewNextStatus(args.nextStatus) : undefined,
+    reason: reason ?? notes ?? null,
+    notes: notes ?? reason ?? null,
+    reviewer: normalizeOptionalText(args.reviewer) ?? null,
+  };
+  const updatedMotion = context.packet.packetKind === "prospect_research"
+    ? resolveProspectPacketReviewDecision(context, action, decisionInput)
+    : resolveAccountPacketReviewDecision(context, action, decisionInput);
+  const result = buildPacketReviewDecisionResult(context, updatedMotion, action);
+  const subject = result.prospect
+    ? `${result.prospect.name} at ${result.company.name}`
+    : result.company.name;
+  return {
+    ok: true,
+    writer: "resolvePacketReview",
+    message: `Packet ${action.replace(/ed$/, "")}ed: ${subject}.`,
+  };
+}
+
+/**
+ * @param {ReturnType<typeof loadPacketReviewContext>} context
+ * @param {"accepted" | "amended" | "returned"} action
+ * @param {Record<string, any>} input
+ */
+function resolveAccountPacketReviewDecision(context, action, input) {
+  if (action === "returned") {
+    return returnMotionTargetAccountPacket(context.motion, context.company, {
+      notes: input.notes,
+      reviewer: input.reviewer,
+    });
+  }
+  return acceptMotionTargetAccountPacket(context.motion, context.company, input);
+}
+
+/**
+ * @param {ReturnType<typeof loadPacketReviewContext>} context
+ * @param {"accepted" | "amended" | "returned"} action
+ * @param {Record<string, any>} input
+ */
+function resolveProspectPacketReviewDecision(context, action, input) {
+  if (!context.packet.prospectId) {
+    throw new Error(`Prospect packet ${context.packet.id} is missing a prospect id.`);
+  }
+  if (action === "returned") {
+    return returnMotionProspectPacket(context.motion, context.company, {
+      prospectId: context.packet.prospectId,
+      notes: input.notes,
+      reviewer: input.reviewer,
+    });
+  }
+  return acceptMotionProspectPacket(context.motion, context.company, {
+    ...input,
+    prospectId: context.packet.prospectId,
+  });
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} packetId
+ */
+function loadPacketReviewContext(motionId, packetId) {
+  const motion = findMotionById(motionId);
+  if (!motion) {
+    throw new Error(`Motion not found: ${motionId}`);
+  }
+  const packet = parsePacketId(packetId);
+  const company = findCompanyById(packet.companyId);
+  if (!company) {
+    throw new Error(`Company not found: ${packet.companyId}`);
+  }
+  return { motion, company, packet };
+}
+
+/**
+ * @param {ReturnType<typeof loadPacketReviewContext>} context
+ * @param {any} updatedMotion
+ * @param {"accepted" | "amended" | "returned"} action
+ */
+function buildPacketReviewDecisionResult(context, updatedMotion, action) {
+  const account = updatedMotion.targetMap.accounts.find((item) => item.companyId === context.company.id) ?? null;
+  const prospect = context.packet.prospectId
+    ? account?.prospects.find((item) => item.id === context.packet.prospectId) ?? null
+    : null;
+  return {
+    action,
+    motion: { id: updatedMotion.id, name: updatedMotion.name },
+    company: { id: context.company.id, name: context.company.name },
+    packet: context.packet,
+    account,
+    prospect,
+  };
+}
+
+/**
+ * @param {string} packetId
+ */
+function parsePacketId(packetId) {
+  const [packetKind, companyId, prospectId = null] = String(packetId).split(":");
+  if (packetKind !== "company_research" && packetKind !== "prospect_selection" && packetKind !== "prospect_research") {
+    throw new Error(`Invalid packet kind in packet id: ${packetId}`);
+  }
+  if (!companyId) {
+    throw new Error(`Invalid packet id: ${packetId}`);
+  }
+  if (packetKind === "prospect_research" && !prospectId) {
+    throw new Error(`Prospect research packet id must include a prospect id: ${packetId}`);
+  }
+  return { id: packetId, packetKind, companyId, prospectId };
+}
+
+/** @param {unknown} value */
+function normalizeDisposition(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (
+    normalized === "active"
+    || normalized === "nurture"
+    || normalized === "not_a_fit"
+    || normalized === "no_longer_target"
+    || normalized === "exhausted"
+  ) {
+    return normalized;
+  }
+  throw new Error(`Invalid disposition: ${String(value ?? "")}`);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {"operator" | "agent" | "system"}
+ */
+function normalizeDispositionActor(value) {
+  const normalized = String(value ?? "operator").trim().toLowerCase();
+  if (normalized === "operator" || normalized === "agent" || normalized === "system") {
+    return normalized;
+  }
+  throw new Error(`Invalid disposition actor: ${String(value ?? "")}`);
+}
+
+/**
+ * @param {string} disposition
+ * @param {unknown} value
+ */
+function normalizeDispositionReason(disposition, value) {
+  const reason = normalizeOptionalText(value);
+  if (disposition !== "active" && !reason) {
+    throw new Error("Disposition reason is required for nurture and terminal states.");
+  }
+  return reason ?? "Reactivated by operator.";
+}
+
+/** @param {unknown} value */
+function normalizePacketReviewAction(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "accepted" || normalized === "amended" || normalized === "returned") {
+    return normalized;
+  }
+  throw new Error(`Invalid packet review action: ${String(value ?? "")}`);
+}
+
+/** @param {unknown} value */
+function normalizePacketReviewOutcome(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (
+    normalized === "advance"
+    || normalized === "nurture"
+    || normalized === "not_a_fit"
+    || normalized === "no_longer_target"
+    || normalized === "exhausted"
+  ) {
+    return normalized;
+  }
+  throw new Error(`Invalid packet review outcome: ${String(value ?? "")}`);
+}
+
+/** @param {unknown} value */
+function normalizePacketReviewNextStatus(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "researched" || normalized === "suppressed" || normalized === "exhausted") {
+    return normalized;
+  }
+  throw new Error(`Invalid packet review next status: ${String(value ?? "")}`);
+}
+
+/** @param {unknown} value */
+function normalizeOptionalText(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
 }
 
 /** @param {Record<string, any>} args */

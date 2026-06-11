@@ -460,7 +460,7 @@ function buildPacketReviewOperatorActions(item) {
     packetKind: item.packetKind,
     commands: item.commands
   };
-  return [
+  const actions = [
     {
       label: "Review packet",
       mode: "detail",
@@ -470,34 +470,36 @@ function buildPacketReviewOperatorActions(item) {
       variant: "primary",
       icon: "eye",
     },
-    {
-      label: "Accept",
-      mode: "detail",
-      href: item.reviewHref,
-      writer: null,
-      args: { ...actionMeta, command: item.commands.accept, action: "accept" },
-      variant: "secondary",
-      icon: "check",
-    },
-    {
-      label: "Amend",
-      mode: "detail",
-      href: item.reviewHref,
-      writer: null,
-      args: { ...actionMeta, command: item.commands.amend, action: "amend" },
-      variant: "secondary",
-      icon: "refresh",
-    },
-    {
-      label: "Return",
-      mode: "detail",
-      href: item.reviewHref,
-      writer: null,
-      args: { ...actionMeta, command: item.commands.return, action: "return" },
-      variant: "danger",
-      icon: "x",
-    }
   ];
+  for (const action of item.actions) {
+    if (action.kind === "review") continue;
+    const fields = action.kind === "return"
+      ? [{ name: "packetReviewReason", argKey: "notes", placeholder: "Return note", required: true }]
+      : action.kind === "nurture" || action.kind === "terminal"
+        ? [{ name: "packetReviewReason", argKey: "reason", placeholder: "Review reason", required: true }]
+        : [];
+    actions.push({
+      label: action.label,
+      mode: "detail",
+      href: action.href,
+      writer: action.writer ?? null,
+      args: action.writer
+        ? { ...action.args, command: action.command }
+        : { ...actionMeta, command: action.command, action: action.kind },
+      variant: action.kind === "return" ? "danger" : action.kind === "amend" ? "secondary" : "secondary",
+      icon: action.kind === "return"
+        ? "x"
+        : action.kind === "accept"
+          ? "check"
+          : action.kind === "nurture"
+            ? "clock"
+            : action.kind === "terminal"
+              ? "flag"
+              : "refresh",
+      fields,
+    });
+  }
+  return actions;
 }
 
 /**

@@ -136,6 +136,46 @@ test("prospect detail re-home panel reuses the shared motion chooser cards", () 
   assert.doesNotMatch(html, /Transition backlog/);
 });
 
+test("prospect detail exposes governed lifecycle and packet review actions", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    disposition: "active",
+    accountDisposition: "active",
+    packetStatus: "submitted",
+    packetState: {
+      kind: "prospect_research",
+      status: "submitted",
+      workerLabel: "packet-worker",
+      claimedAt: "2026-06-11T10:00:00.000Z",
+      completedAt: "2026-06-11T10:30:00.000Z",
+      proposal: {
+        kind: "prospect_research",
+        action: "advance",
+        nextStatus: null,
+        disposition: null,
+        reason: "Ready for branch review.",
+        proposedAt: "2026-06-11T10:30:00.000Z",
+      },
+    },
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Lifecycle/);
+  assert.match(html, /data-exo-writer="setProspectDisposition"/);
+  assert.match(html, /data-exo-fields="lifecycleReason:reason"/);
+  assert.match(html, /Nurture/);
+  assert.match(html, /Not a fit/);
+  assert.match(html, /Exhausted/);
+  assert.match(html, /Packet review/);
+  assert.match(html, /data-exo-writer="resolvePacketReview"/);
+  assert.match(html, /Accept packet/);
+  assert.match(html, /Return packet/);
+});
+
 test("prospect detail shows email thread observations and waits on a sent email instead of inventing a queued draft", () => {
   const html = renderProspectDetailPage(buildProspect({
     branch: "waiting",

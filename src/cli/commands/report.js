@@ -205,6 +205,7 @@ Rules:
         motionSummaries: data.motionSummaries,
         motionDetails: data.motionDetails,
         rawMotions: listMotions(),
+        rawCompanies: listCompanies(),
       });
 
       if (options.json) {

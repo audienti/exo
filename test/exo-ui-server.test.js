@@ -14,8 +14,15 @@ import {
   resolveWorkspaceProjectionForUi,
   startExoUiServer,
 } from "../src/cli/exo-ui-server.js";
-import { insertMotion, insertUser } from "../src/db/database.js";
+import { insertCompany, insertMotion, insertUser } from "../src/db/database.js";
 import { buildAgentRunLockDir } from "../src/lib/agent-run-lock.js";
+import {
+  buildCompanyView,
+  buildMotionView,
+  buildProspect,
+  buildTargetAccount,
+  fixtureNow,
+} from "./support/normalized-fixtures.js";
 
 /**
  * @param {() => Promise<void>} callback
@@ -844,6 +851,151 @@ test("motions route passes execution users into the new-motion intake form", asy
   assert.match(html, /name="userId"/);
   assert.match(html, /<option value="user-1" selected>Launch User<\/option>/);
   assert.doesNotMatch(html, /No execution users available/);
+});
+
+test("motion detail route renders governed account, prospect, and packet review actions", async () => {
+  await withSeededRouteUser(async () => {
+    const motionId = "motion-lifecycle-ui";
+    const companyId = "company-lifecycle-ui";
+    const prospectId = "prospect-lifecycle-ui";
+    const company = buildCompanyView({
+      id: companyId,
+      createdAt: fixtureNow,
+      updatedAt: fixtureNow,
+      name: "Lifecycle UI Co",
+      domain: "lifecycle-ui.example",
+      linkedinCompanyUrl: null,
+      websiteUrl: "https://lifecycle-ui.example",
+    }, { motionIds: [motionId] });
+    const prospect = buildProspect({
+      id: prospectId,
+      name: "Priya Lifecycle",
+      title: "VP Revenue",
+      packetStatus: "submitted",
+      packetState: {
+        kind: "prospect_research",
+        status: "submitted",
+        workerLabel: "prospect-worker",
+        claimedAt: "2026-06-11T10:00:00.000Z",
+        completedAt: "2026-06-11T10:20:00.000Z",
+        proposal: {
+          kind: "prospect_research",
+          action: "advance",
+          nextStatus: null,
+          disposition: null,
+          reason: "Prospect branch is ready for review.",
+          proposedAt: "2026-06-11T10:20:00.000Z",
+        },
+      },
+    });
+    const account = buildTargetAccount({
+      companyId,
+      companyName: company.name,
+      domain: company.domain,
+      websiteUrl: company.websiteUrl,
+      queueState: {
+        status: "researched",
+        source: "manual",
+        updatedAt: fixtureNow,
+        notes: null,
+      },
+      packetStatus: "submitted",
+      packetState: {
+        kind: "company_research",
+        status: "submitted",
+        workerLabel: "account-worker",
+        claimedAt: "2026-06-11T09:00:00.000Z",
+        completedAt: "2026-06-11T09:30:00.000Z",
+        notes: "Account evidence is ready.",
+        proposal: {
+          kind: "company_research",
+          action: "advance",
+          nextStatus: "researched",
+          disposition: null,
+          reason: "Company has enough evidence to advance.",
+          proposedAt: "2026-06-11T09:30:00.000Z",
+        },
+      },
+      prospects: [prospect],
+    });
+    const motion = buildMotionView({
+      id: motionId,
+      name: "lifecycle-motion",
+      targetMap: {
+        status: "ready",
+        accounts: [account],
+        segments: [],
+      },
+    });
+    insertCompany(company);
+    insertMotion(motion);
+
+    const html = await renderRoute(`/motions/${motionId}`, { userId: "user-1", capability: "linkedin" }, {
+      resolveWorkspaceProjectionForUi: async () => ({
+        data: {
+          user: { id: "user-1", label: "william-main", owner: "William" },
+          generatedAt: "2026-06-11T12:00:00.000Z",
+          motionSummaries: [{
+            id: motionId,
+            name: "lifecycle-motion",
+            status: "active",
+            overallStage: "targeting-ready",
+            companyCount: 1,
+            prospectCount: 1,
+            dueNowCount: 0,
+            readyToEngage: true,
+          }],
+          motionDetails: [{
+            motionId,
+            motionName: "lifecycle-motion",
+            motionStatus: "active",
+            overallStage: "targeting-ready",
+            strategyState: { tone: "success" },
+            truth: "checked",
+            offer: { title: "Lifecycle offer", url: "https://example.com/lifecycle", summary: "" },
+            premise: { statement: "Lifecycle matters when active prospects must be explicit.", status: "checked", source: "operator" },
+            audiences: [],
+            signals: [],
+            companies: [{
+              companyId,
+              companyName: company.name,
+              domain: company.domain,
+              websiteUrl: company.websiteUrl,
+              prospectCount: 1,
+              matchedSignalIndexes: [1],
+              matchedSignals: [{ summary: "Lifecycle signal." }],
+              executionIdentity: { status: "pinned-ready" },
+            }],
+            backlogCompanies: [],
+            people: [{
+              prospectId,
+              name: prospect.name,
+              title: prospect.title,
+              companyName: company.name,
+              signalLabel: "Lifecycle signal.",
+              branchState: { key: "ready", label: "Ready" },
+              ownerLabel: "william-main",
+            }],
+            plan: { nextSteps: [], dueNowCount: 0, messageTestReadyCount: 0, readyToSendCount: 0, packetStatus: "ready" },
+          }],
+          reviewItems: [],
+        },
+        html: "",
+      }),
+    });
+
+    assert.match(html, /Lifecycle UI Co/);
+    assert.match(html, /Priya Lifecycle/);
+    assert.match(html, /data-exo-writer="setAccountDisposition"/);
+    assert.match(html, /data-exo-writer="setProspectDisposition"/);
+    assert.match(html, /Packet review/);
+    assert.match(html, /company_research:company-lifecycle-ui/);
+    assert.match(html, /data-exo-writer="resolvePacketReview"/);
+    assert.match(html, /Accept/);
+    assert.match(html, /Amend/);
+    assert.match(html, /Return/);
+    assert.match(html, /No longer target/);
+  });
 });
 
 test("user-specific connections route renders the target user's connections view", async (t) => {

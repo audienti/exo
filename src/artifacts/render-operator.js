@@ -522,7 +522,8 @@ function actionBtn(opts) {
  *   writer: string | null,
  *   args: Record<string, any> | null,
  *   variant: "primary" | "secondary" | "ghost" | "danger",
- *   icon: string | null
+ *   icon: string | null,
+ *   fields?: Array<{ name: string, argKey?: string, placeholder?: string, required?: boolean }>
  * }>} actions
  * @param {{
  *   label: string,
@@ -531,7 +532,8 @@ function actionBtn(opts) {
  *   writer: string | null,
  *   args: Record<string, any> | null,
  *   variant: "primary" | "secondary" | "ghost" | "danger",
- *   icon: string | null
+ *   icon: string | null,
+ *   fields?: Array<{ name: string, argKey?: string, placeholder?: string, required?: boolean }>
  * }} fallback
  * @param {{
  *   prospectId: string | null | undefined,
@@ -556,7 +558,8 @@ function renderOperatorActionSet(actions, fallback, context) {
  *   writer: string | null,
  *   args: Record<string, any> | null,
  *   variant: "primary" | "secondary" | "ghost" | "danger",
- *   icon: string | null
+ *   icon: string | null,
+ *   fields?: Array<{ name: string, argKey?: string, placeholder?: string, required?: boolean }>
  * }} action
  * @param {{
  *   prospectId: string | null | undefined,
@@ -567,14 +570,18 @@ function renderOperatorActionSet(actions, fallback, context) {
  */
 function renderOperatorAction(action, context) {
   if (action.writer) {
-    return liveActionBtn({
-      writer: action.writer,
-      args: action.args ?? {},
-      variant: action.variant,
-      size: context.size,
-      icon: action.icon ?? undefined,
-      label: action.label,
-    });
+    const fields = renderActionFields(action.fields);
+    const fieldSpec = buildActionFieldSpec(action.fields);
+    const inner =
+      fields +
+      `<button class="btn btn-${escapeAttr(action.variant)} btn-${escapeAttr(context.size)}" type="button">` +
+      (action.icon ? iconSvg(action.icon, context.size === "sm" ? 14 : 16) : "") +
+      `<span>${escapeHtml(action.label)}</span></button>`;
+    const fieldAttr = fieldSpec ? ` data-exo-fields="${escapeAttr(fieldSpec)}"` : "";
+    return (
+      `<span class="exo-action exo-action-flat exo-action-inline" data-exo-writer="${escapeAttr(action.writer)}"` +
+      ` data-exo-args="${escapeAttr(JSON.stringify(action.args ?? {}))}"${fieldAttr}>${inner}</span>`
+    );
   }
   const href = action.mode === "compose"
     ? composeHref(context.prospectId, context.personId, action.href, context.meta)
@@ -586,6 +593,29 @@ function renderOperatorAction(action, context) {
     label: action.label,
     href,
   });
+}
+
+/**
+ * @param {Array<{ name: string, argKey?: string, placeholder?: string, required?: boolean }> | undefined} fields
+ */
+function renderActionFields(fields) {
+  if (!fields?.length) return "";
+  return fields
+    .map((field) =>
+      `<input class="compose-input exo-action-input" name="${escapeAttr(field.name)}"` +
+      ` placeholder="${escapeAttr(field.placeholder ?? field.argKey ?? field.name)}" autocomplete="off" />`
+    )
+    .join("");
+}
+
+/**
+ * @param {Array<{ name: string, argKey?: string, required?: boolean }> | undefined} fields
+ */
+function buildActionFieldSpec(fields) {
+  if (!fields?.length) return "";
+  return fields
+    .map((field) => `${field.name}:${field.argKey ?? field.name}${field.required === false ? "?" : ""}`)
+    .join(",");
 }
 
 /** @param {string | null | undefined} value */
