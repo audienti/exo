@@ -52,7 +52,7 @@
       ],
       "notes": "Baseline needed one preflight repair for a red cold-start onboarding UI test. Full suite then passed with Node v24.14.0: 704 pass, 0 fail."
     },
-    "updatedAt": "2026-06-11T11:53:56Z"
+    "updatedAt": "2026-06-11T12:55:38Z"
   },
   "tasks": [
     {
@@ -233,7 +233,7 @@
     {
       "id": "T05",
       "title": "Add lifecycle reporting, nurture shelf, and stale review warnings",
-      "status": "backlog",
+      "status": "done",
       "priority": 5,
       "dependsOn": [
         "T04"
@@ -243,10 +243,16 @@
       "files": [
         "src/cli/commands/report.js",
         "src/core/build-motion-report.js",
-        "src/core/agent-doctor.js",
-        "src/artifacts/render-motion-report.js",
+        "src/core/build-motion-prospect-view.js",
+        "src/core/build-agent-queue.js",
+        "src/core/build-stale-packet-review-warnings.js",
+        "src/cli/commands/agent.js",
+        "scripts/run-agent-host-pass.js",
+        "src/lib/agent-pass-summary.js",
+        "src/artifacts/render-motion.js",
         "test/cli.test.js",
-        "test/agent-doctor.test.js"
+        "test/agent-doctor.test.js",
+        "test/agent-host-pass.test.js"
       ],
       "context": "Plan FB4. Report motion must show active, nurture, and terminal counts by reason, review pending count and oldest age, branch-ended timeline entries, and a motion-scoped nurture shelf that is visible but never due. Doctor warns when submitted review packets age past a threshold and host pass summary carries that warning.",
       "doneWhen": [
@@ -256,15 +262,19 @@
         "Focused tests prove one report answers active, parked, ended, and awaiting review."
       ],
       "verification": [
-        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH node --test test/cli.test.js test/agent-doctor.test.js",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH node --test test/cli.test.js test/agent-doctor.test.js test/agent-host-pass.test.js",
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
         "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Motion report now includes lifecycle counts for accounts and prospects, review pending count with oldest age, nurture shelf rows, and branch-ended timeline entries sourced from disposition activity events.",
+        "Agent queue now blocks non-active account and prospect dispositions from due worker tasks.",
+        "Doctor and host pass summaries now include stale submitted packet review warnings with review commands."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "69df24c95b590c8a8a010d9699c6ac3ff8e3423d",
+      "notes": "Focused verification passed with 182 tests across CLI, doctor, and host-pass suites. npm run check passed. Full npm test passed."
     },
     {
       "id": "T06",
