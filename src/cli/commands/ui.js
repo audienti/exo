@@ -6,6 +6,8 @@ import { summarizeExecutionUsers } from "../../lib/execution-users.js";
 import { startExoUiServer } from "../exo-ui-server.js";
 import { isPidAlive, probeUiStatus, readUiLock, removeUiLock } from "../ui-lock.js";
 
+const DEFAULT_UI_PORT = 4317;
+
 /**
  * @param {import("commander").Command} program
  */
@@ -20,8 +22,15 @@ export function registerUi(program) {
         console.log(JSON.stringify(status, null, 2));
         return;
       }
+      if (status.status === "degraded") {
+        console.log(
+          `Exo UI may still be holding ${status.url} (pid ${status.pid}), but /status could not be reached. ` +
+          "Treat the port as occupied until that process exits or the lock is repaired.",
+        );
+        return;
+      }
       if (!status.running) {
-        console.log(status.lock ? "Exo UI is not running (stale lock cleared)." : "Exo UI is not running.");
+        console.log(status.status === "stale" ? "Exo UI is not running (stale lock cleared)." : "Exo UI is not running.");
         return;
       }
       console.log(
@@ -53,6 +62,13 @@ Rules:
     )
     .option("--reuse", "If an Exo UI is already running, print its URL and exit instead of starting another")
     .action(async (options) => {
+      const port = options.port ? Number(options.port) : undefined;
+      if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+        console.error(`Invalid --port: ${options.port}`);
+        process.exitCode = 1;
+        return;
+      }
+
       const existing = await resolveUiStatus();
       if (existing.running) {
         if (options.reuse) {
@@ -66,6 +82,15 @@ Rules:
         process.exitCode = 1;
         return;
       }
+      const requestedPort = port ?? DEFAULT_UI_PORT;
+      if (existing.status === "degraded" && existing.port === requestedPort) {
+        console.error(
+          `An Exo UI process at ${existing.url} (pid ${existing.pid}) still holds port ${existing.port}, ` +
+          "but /status could not be reached. Treat that port as occupied until the process exits or the lock is repaired.",
+        );
+        process.exitCode = 1;
+        return;
+      }
 
       const launch = resolveUiLaunch(options.user);
       if (!launch) {
@@ -73,10 +98,6 @@ Rules:
       }
 
       try {
-        const port = options.port ? Number(options.port) : undefined;
-        if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) {
-          throw new Error(`Invalid --port: ${options.port}`);
-        }
         const server = await startExoUiServer({ userId: launch.userId, capability: options.capability, port });
         console.log(`Exo UI listening at ${server.url}`);
         console.log(`  Operator    ${server.url}operator`);
@@ -95,22 +116,71 @@ Rules:
 }
 
 /**
- * Determine whether an Exo UI is genuinely running: the lock must exist, its
- * pid alive, and its /status endpoint must answer. Clears a stale lock.
- * @returns {Promise<{ running: boolean, lock: any, url?: string, pid?: number, userId?: string, startedAt?: string }>}
+ * Determine whether an Exo UI is serving, stale, or degraded.
+ * Clears a lock only when its recorded pid is no longer alive.
+ * @returns {Promise<{
+ *   status: "not_running" | "stale" | "running" | "degraded",
+ *   running: boolean,
+ *   probeOk: boolean,
+ *   pidAlive: boolean,
+ *   lock: any,
+ *   url?: string,
+ *   pid?: number,
+ *   port?: number,
+ *   userId?: string,
+ *   startedAt?: string,
+ *   probeStatus?: any,
+ * }>}
  */
 async function resolveUiStatus() {
   const lock = readUiLock();
   if (!lock || !lock.url) {
-    return { running: false, lock: null };
+    return { status: "not_running", running: false, probeOk: false, pidAlive: false, lock: null };
   }
-  const alive = isPidAlive(lock.pid);
-  const status = alive ? await probeUiStatus(lock.url) : null;
-  if (!alive || !status) {
+  const pidAlive = isPidAlive(lock.pid);
+  if (!pidAlive) {
     removeUiLock();
-    return { running: false, lock };
+    return {
+      status: "stale",
+      running: false,
+      probeOk: false,
+      pidAlive: false,
+      lock,
+      url: lock.url,
+      pid: lock.pid,
+      port: lock.port,
+      userId: lock.userId,
+      startedAt: lock.startedAt,
+    };
   }
-  return { running: true, lock, url: lock.url, pid: lock.pid, userId: lock.userId, startedAt: lock.startedAt };
+  const probeStatus = await probeUiStatus(lock.url);
+  if (!probeStatus) {
+    return {
+      status: "degraded",
+      running: false,
+      probeOk: false,
+      pidAlive: true,
+      lock,
+      url: lock.url,
+      pid: lock.pid,
+      port: lock.port,
+      userId: lock.userId,
+      startedAt: lock.startedAt,
+    };
+  }
+  return {
+    status: "running",
+    running: true,
+    probeOk: true,
+    pidAlive: true,
+    lock,
+    url: lock.url,
+    pid: lock.pid,
+    port: lock.port,
+    userId: lock.userId,
+    startedAt: lock.startedAt,
+    probeStatus,
+  };
 }
 
 /**
