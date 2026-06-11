@@ -920,7 +920,7 @@ test("daily suppresses new connection-request pressure until a partial live sent
     assert.equal(syncTask.mode, "full");
     assert.ok(["due_now", "waiting"].includes(syncTask.queueState));
     if (syncTask.queueState === "waiting") {
-      assert.equal(syncTask.waitingReason, "outside_working_hours");
+      assert.equal(syncTask.waitingReason, "outside_retrieval_window");
     } else {
       assert.equal(syncTask.waitingReason, null);
     }

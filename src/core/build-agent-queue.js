@@ -66,10 +66,10 @@ import {
 } from "./select-next-draft-surface.js";
 import {
   buildUserInboundSyncView,
+  classifyInboundRetrievalWindow,
   classifyInboundSurfaceFreshness,
   computeInboundAutomationNextDueAt,
 } from "./user-inbound-sync.js";
-import { classifyUserWorkingHours } from "./working-hours.js";
 import { resolveScopedExecutionAssignment } from "./resolve-scoped-execution-assignment.js";
 import { resolveConnectionNoteCapability } from "./connection-note-capability.js";
 import { evaluateOutboundDispatchGate } from "./outbound-dispatch-gate.js";
@@ -190,7 +190,6 @@ export function buildAgentQueue(input) {
 
   for (const rawUser of input.users ?? []) {
     const syncView = buildUserInboundSyncView(rawUser);
-    const workingHoursStatus = classifyUserWorkingHours(rawUser, now);
     const review = buildInboundReviewView(rawUser, input.observations ?? [], activeMotions, input.companies ?? []);
     const itemizationGapsByAccountId = groupBy(review.itemizationGaps, (gap) => gap.accountId);
     const openCuesByAccountId = groupBy(
@@ -201,6 +200,7 @@ export function buildAgentQueue(input) {
     for (const account of syncView.accounts) {
       if (!LIVE_SYNC_TASK_CAPABILITIES.has(account.capability)) continue;
       if (!supportsAutonomousInboundSync(rawUser, account, profilesById)) continue;
+      const retrievalWindowStatus = classifyInboundRetrievalWindow(rawUser, account, now);
 
       const itemizationGaps = itemizationGapsByAccountId.get(account.accountId) ?? [];
       const openCues = openCuesByAccountId.get(account.accountId) ?? [];
@@ -208,7 +208,7 @@ export function buildAgentQueue(input) {
         .filter((surface) => surface.enabled && surface.autonomousBackgroundRetrieval !== false)
         .map((surface) => ({
           ...surface,
-          freshness: classifyInboundSurfaceFreshness(surface, now, { workingHoursStatus }),
+          freshness: classifyInboundSurfaceFreshness(surface, now, { workingHoursStatus: retrievalWindowStatus }),
         }))
         .filter((surface) => surface.freshness);
 
@@ -220,7 +220,7 @@ export function buildAgentQueue(input) {
           .filter((surface) => surface.enabled && surface.autonomousBackgroundRetrieval !== false)
           .map((surface) => ({
             ...surface,
-            nextDueAt: computeInboundAutomationNextDueAt(surface, { workingHoursStatus }),
+            nextDueAt: computeInboundAutomationNextDueAt(surface, { workingHoursStatus: retrievalWindowStatus }),
           }))
           .filter((surface) => typeof surface.nextDueAt === "string" && surface.nextDueAt.length > 0)
           .sort((left, right) => String(left.nextDueAt).localeCompare(String(right.nextDueAt)));
@@ -244,12 +244,12 @@ export function buildAgentQueue(input) {
             cueCount: 0,
             surfaceKeys: [scheduledSurface.key],
             surfaceLabels: [scheduledSurface.label],
-            dueAt: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
-              ? workingHoursStatus.nextOpenAt
+            dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
+              ? retrievalWindowStatus.nextOpenAt
               : nextDueAt,
             forceRetrieval: true,
-            waitingReason: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
-              ? "outside_working_hours"
+            waitingReason: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
+              ? "outside_retrieval_window"
               : null,
           }), { now, tasks, waiting });
         }
@@ -286,14 +286,14 @@ export function buildAgentQueue(input) {
           cueCount: surfaceCueCount,
           surfaceKeys: [surfaceKey],
           surfaceLabels: [cueLabelForAccount(account, surfaceKey)],
-          dueAt: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
-            ? workingHoursStatus.nextOpenAt
+          dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
+            ? retrievalWindowStatus.nextOpenAt
             : oldestDueAt,
           resumeCursor: normalizeNullableString(gapSurface?.nextCursor) ?? null,
           resumeStartOffset: Number.isInteger(gapSurface?.nextStartOffset) ? gapSurface.nextStartOffset : null,
           ...resolveAutonomousInboundPaginationConfig(surfaceKey),
-          waitingReason: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
-            ? "outside_working_hours"
+          waitingReason: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
+            ? "outside_retrieval_window"
             : null,
         }), { now, tasks, waiting });
       }
@@ -326,11 +326,11 @@ export function buildAgentQueue(input) {
           cueCount: surfaceCueCount,
           surfaceKeys: [surfaceKey],
           surfaceLabels: [cueLabelForAccount(account, surfaceKey)],
-          dueAt: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
-            ? workingHoursStatus.nextOpenAt
+          dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
+            ? retrievalWindowStatus.nextOpenAt
             : oldestDueAt,
-          waitingReason: !workingHoursStatus.openNow && workingHoursStatus.nextOpenAt
-            ? "outside_working_hours"
+          waitingReason: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
+            ? "outside_retrieval_window"
             : null,
         }), { now, tasks, waiting });
       }

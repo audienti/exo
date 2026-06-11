@@ -47,7 +47,7 @@
       "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-11T17:46:15Z"
+    "updatedAt": "2026-06-11T18:02:38Z"
   },
   "tasks": [
     {
@@ -278,7 +278,7 @@
     {
       "id": "T05",
       "title": "Add retrieval scheduling and drain posture",
-      "status": "ready",
+      "status": "done",
       "priority": 75,
       "dependsOn": [
         "T03"
@@ -286,11 +286,13 @@
       "ownerLane": "controller",
       "modelTier": "default",
       "files": [
-        "src/core/agent-queue.js",
-        "src/core/inbound-sync-plan.js",
-        "src/lib",
+        "src/artifacts/render-connections.js",
+        "src/core/build-agent-queue.js",
+        "src/core/user-inbound-sync.js",
         "test/agent-queue.test.js",
-        "test/inbound-sync-contract.test.js"
+        "test/cli.test.js",
+        "test/inbound-working-hours-cadence.test.js",
+        "test/inbound-reconciliation-contract.test.js"
       ],
       "context": "P1 retrieval throughput replaces the single working-hours gate with per-capability scheduling. Gmail retrieval stays available around the clock. LinkedIn retrieval uses humane account-local windows. LinkedIn outbound stays on stricter target-local send windows and pacing. Add drain posture for retrieval and research only, surface fair-share across LinkedIn surfaces, and back off repeat retrieval failures across passes.",
       "doneWhen": [
@@ -301,13 +303,25 @@
         "Repeat retrieval failures back off across passes and expose blockers instead of hot-looping."
       ],
       "verification": [
-        "npm test -- test/agent-queue.test.js test/inbound-reconciliation-contract.test.js"
+        "npm test -- test/agent-queue.test.js test/inbound-reconciliation-contract.test.js test/inbound-working-hours-cadence.test.js test/cli.test.js",
+        "npm run check",
+        "npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added classifyInboundRetrievalWindow so Gmail retrieval is always eligible while LinkedIn retrieval uses a humane account-local 07:00-22:00 window with account metadata overrides for timezone/window policy.",
+        "Agent queue now schedules inbound retrieval from the per-capability retrieval window instead of operator working hours, with waitingReason outside_retrieval_window for held LinkedIn retrieval.",
+        "Inbound automation status and health warnings now compute next due times against the same retrieval window while preserving failed-retrieval backoff and rollout blockers.",
+        "Connection repair UI copy now names the next allowed retrieval window instead of working hours.",
+        "Tests cover Gmail retrieval after operator hours, LinkedIn retrieval inside the humane window after operator hours, and LinkedIn retrieval deferred outside the humane window.",
+        "Verified npm test -- test/agent-queue.test.js: 58/58 passed.",
+        "Verified npm test -- test/agent-queue.test.js test/inbound-reconciliation-contract.test.js test/inbound-working-hours-cadence.test.js test/cli.test.js: 175/175 passed.",
+        "Verified npm run check.",
+        "Verified full npm test: 741/741 passed."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "source-commit-pending",
+      "notes": "Left unrelated accepted-invite UX, operator-view, execute-action-intent, and LinkedIn maintenance changes unstaged."
     },
     {
       "id": "T06",

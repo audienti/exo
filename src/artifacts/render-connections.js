@@ -196,13 +196,13 @@ function deriveRepairStatus(tab, meta, runtime) {
   }
   if (tab.autoRepairable && tab.repairTask) {
     const active = runtime.agentPassActive;
-    const queuedForWindow = tab.repairTask.waitingReason === "outside_working_hours";
+    const queuedForWindow = ["outside_retrieval_window", "outside_working_hours"].includes(tab.repairTask.waitingReason);
     return {
       label: active ? "Resyncing" : "Resync queued",
       message: active
         ? "Exo is running a full resync for this surface so the missing individual observations land back in the workspace."
         : queuedForWindow
-          ? "Exo already queued a full resync for this surface and will run it in the next allowed working window."
+          ? "Exo already queued a full resync for this surface and will run it in the next allowed retrieval window."
           : "Exo already queued a full resync for this surface so the missing individual observations land back in the workspace.",
       autoHost: !active && !queuedForWindow && meta.interactive ? renderAutoRepairHost(tab) : "",
     };

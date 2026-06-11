@@ -445,7 +445,7 @@ test("buildAgentQueue splits inbound sync work into one task per surface", () =>
     ],
     observations: [],
     cues: [],
-    now: "2026-06-03T09:00:00.000Z",
+    now: "2026-06-03T13:00:00.000Z",
   });
 
   const syncTasks = queue.tasks.filter((item) =>
@@ -1530,7 +1530,7 @@ test("buildAgentQueue can surface a waiting autonomous retrieval task when force
     ],
     observations: [],
     cues: [],
-    now: "2026-06-03T09:00:00.000Z",
+    now: "2026-06-03T13:00:00.000Z",
     includeWaitingRetrieval: true,
   });
 
@@ -1663,7 +1663,7 @@ test("buildAgentQueue requeues a bounded linkedin quick-pass warning when the su
     ],
     observations: [],
     cues: [],
-    now: "2026-06-03T09:00:00.000Z",
+    now: "2026-06-03T13:00:00.000Z",
   });
 
   const task = queue.tasks.find((item) => item.kind === "run_inbound_sync");
@@ -1761,7 +1761,7 @@ test("buildAgentQueue carries paginated full-sync continuation metadata for Link
     ],
     observations: [],
     cues: [],
-    now: "2026-06-03T09:00:00.000Z",
+    now: "2026-06-03T13:00:00.000Z",
   });
 
   const task = queue.tasks.find((item) => item.kind === "run_inbound_sync");

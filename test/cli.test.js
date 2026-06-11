@@ -3120,11 +3120,10 @@ test("agent queue surfaces inbound sync pressure from stale surfaces and fresh a
       cues: [],
       now: "2026-05-29T23:30:00.000Z",
     });
-    const afterHoursSync = afterHours.waiting.find((item) => item.kind === "run_inbound_sync" && item.capability === "gmail");
+    const afterHoursSync = afterHours.tasks.find((item) => item.kind === "run_inbound_sync" && item.capability === "gmail");
     assert.ok(afterHoursSync);
-    assert.equal(afterHoursSync.queueState, "waiting");
-    assert.equal(afterHoursSync.waitingReason, "outside_working_hours");
-    assert.equal(afterHoursSync.dueAt, "2026-05-30T13:00:00.000Z");
+    assert.equal(afterHoursSync.queueState, "due_now");
+    assert.equal(afterHoursSync.waitingReason, null);
     assert.equal(afterHoursSync.reason, "stale_surface");
     assert.equal(afterHoursSync.mode, "quick");
     assert.match(afterHoursSync.contractCommand, /exo inbound sync gmail-live .* --mode quick --json/);

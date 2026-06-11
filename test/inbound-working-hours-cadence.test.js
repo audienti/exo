@@ -85,6 +85,64 @@ function linkedinInboundUser(surfaceOverrides = {}) {
   };
 }
 
+function gmailInboundUser(surfaceOverrides = {}) {
+  return {
+    id: "user-1",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    label: "Operator",
+    owner: "operator",
+    notes: null,
+    workingHours: {
+      mode: "scheduled",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "07:00",
+      endLocalTime: "18:00",
+    },
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "gmail",
+        handle: "operator@example.com",
+        label: null,
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-1",
+        providerAccountId: "acct-gmail-1",
+        preferred: true,
+        notes: null,
+        inboundSync: {
+          surfaces: [
+            {
+              surfaceKey: "gmail-inbox-threads",
+              enabled: true,
+              lastSyncedAt: "2026-06-03T21:00:00.000Z",
+              lastObservedAt: "2026-06-03T21:00:00.000Z",
+              lastRunStatus: "success",
+              ...surfaceOverrides,
+            },
+          ],
+        },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        runtime: "codex",
+        connector: "gmail",
+        label: "codex:gmail",
+        status: "available",
+        notes: null,
+      },
+    ],
+  };
+}
+
 test("linkedin messaging uses a 15-minute freshness window during open working hours", () => {
   const surface = {
     key: "linkedin-messaging-inbox",
@@ -126,7 +184,7 @@ test("linkedin messaging uses a 15-minute freshness window during open working h
   );
 });
 
-test("buildAgentQueue defers after-hours linkedin refresh to the next open window", () => {
+test("buildAgentQueue runs LinkedIn retrieval after operator hours inside the humane window", () => {
   const queue = buildAgentQueue({
     motions: [],
     companies: [],
@@ -141,11 +199,57 @@ test("buildAgentQueue defers after-hours linkedin refresh to the next open windo
     now: "2026-06-03T23:30:00.000Z",
   });
 
+  const task = queue.tasks.find((item) => item.kind === "run_inbound_sync" && item.capability === "linkedin");
+  assert.ok(task);
+  assert.equal(task.reason, "stale_surface");
+  assert.equal(task.queueState, "due_now");
+  assert.equal(task.waitingReason, null);
+  assert.ok(task.surfaceKeys.includes("linkedin-sent-invitations"));
+});
+
+test("buildAgentQueue defers LinkedIn retrieval outside the humane account-local window", () => {
+  const queue = buildAgentQueue({
+    motions: [],
+    companies: [],
+    users: [
+      linkedinInboundUser({
+        lastObservedAt: "2026-06-03T21:00:00.000Z",
+        lastSyncedAt: "2026-06-03T21:00:00.000Z",
+      }),
+    ],
+    observations: [],
+    cues: [],
+    now: "2026-06-04T03:30:00.000Z",
+  });
+
   const task = queue.waiting.find((item) => item.kind === "run_inbound_sync" && item.capability === "linkedin");
   assert.ok(task);
   assert.equal(task.reason, "stale_surface");
   assert.equal(task.queueState, "waiting");
-  assert.equal(task.waitingReason, "outside_working_hours");
+  assert.equal(task.waitingReason, "outside_retrieval_window");
   assert.equal(task.dueAt, "2026-06-04T11:00:00.000Z");
   assert.ok(task.surfaceKeys.includes("linkedin-sent-invitations"));
+});
+
+test("buildAgentQueue keeps Gmail retrieval available after operator hours", () => {
+  const queue = buildAgentQueue({
+    motions: [],
+    companies: [],
+    users: [
+      gmailInboundUser({
+        lastObservedAt: "2026-06-03T21:00:00.000Z",
+        lastSyncedAt: "2026-06-03T21:00:00.000Z",
+      }),
+    ],
+    observations: [],
+    cues: [],
+    now: "2026-06-04T03:30:00.000Z",
+  });
+
+  const task = queue.tasks.find((item) => item.kind === "run_inbound_sync" && item.capability === "gmail");
+  assert.ok(task);
+  assert.equal(task.reason, "stale_surface");
+  assert.equal(task.queueState, "due_now");
+  assert.equal(task.waitingReason, null);
+  assert.deepEqual(task.surfaceKeys, ["gmail-inbox-threads"]);
 });

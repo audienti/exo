@@ -9,6 +9,12 @@ import { classifyWorkingHoursWindow } from "./working-hours.js";
 export const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
 export const INBOUND_SYNC_FAILED_RETRY_MS = 30 * 60 * 1000;
 export const INBOUND_SYNC_LINKEDIN_MESSAGE_OPEN_WINDOW_MS = 15 * 60 * 1000;
+const WEEKDAY_ORDER = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const DEFAULT_LINKEDIN_RETRIEVAL_WINDOW = {
+  weekdays: WEEKDAY_ORDER,
+  startLocalTime: "07:00",
+  endLocalTime: "22:00",
+};
 const QUICK_MODE_SUPPLEMENTARY_SURFACES = new Set([
   "linkedin-followers-list"
 ]);
@@ -40,6 +46,31 @@ export function buildUserInboundSyncView(rawUser, options = {}) {
     },
     accounts
   };
+}
+
+/**
+ * @param {unknown} rawUser
+ * @param {{ capability?: string | null, metadata?: Record<string, unknown> | null }} rawAccount
+ * @param {string} now
+ */
+export function classifyInboundRetrievalWindow(rawUser, rawAccount, now) {
+  const user = userSchema.parse(rawUser);
+  const capability = String(rawAccount?.capability ?? "").trim().toLowerCase();
+  if (capability === "gmail") {
+    const nowDate = new Date(now);
+    return {
+      mode: "always",
+      openNow: true,
+      nextOpenAt: Number.isNaN(nowDate.getTime()) ? now : nowDate.toISOString(),
+      summary: "Gmail retrieval is always open for autonomous inbox truth."
+    };
+  }
+
+  if (capability === "linkedin") {
+    return classifyWorkingHoursWindow(resolveLinkedinRetrievalWindow(user, rawAccount), now);
+  }
+
+  return classifyWorkingHoursWindow(user.workingHours, now);
 }
 
 /**
@@ -86,12 +117,12 @@ export function buildInboundAutomationHealthWarnings(rawUsers, now = new Date().
   const warnings = [];
   for (const rawUser of rawUsers ?? []) {
     const user = userSchema.parse(rawUser);
-    const workingHoursStatus = classifyWorkingHoursWindow(user.workingHours, now);
     const syncView = buildUserInboundSyncView(user);
     for (const account of syncView.accounts) {
+      const retrievalWindowStatus = classifyInboundRetrievalWindow(user, account, now);
       for (const surface of account.surfaces) {
         if (!surface.enabled || surface.autonomousBackgroundRetrieval === false) continue;
-        const healthState = classifyInboundAutomationHealthState(surface, now, { workingHoursStatus });
+        const healthState = classifyInboundAutomationHealthState(surface, now, { workingHoursStatus: retrievalWindowStatus });
         if (!healthState) continue;
         warnings.push({
           userId: syncView.user.id,
@@ -129,14 +160,14 @@ export function buildInboundAutomationStatus(rawUsers, now = new Date().toISOStr
 
   for (const rawUser of rawUsers ?? []) {
     const user = userSchema.parse(rawUser);
-    const workingHoursStatus = classifyWorkingHoursWindow(user.workingHours, now);
     const syncView = buildUserInboundSyncView(user);
     for (const account of syncView.accounts) {
+      const retrievalWindowStatus = classifyInboundRetrievalWindow(user, account, now);
       for (const surface of account.surfaces) {
         if (!surface.enabled || surface.autonomousBackgroundRetrieval === false) continue;
         enabledAutonomousSurfaceCount += 1;
         const freshness = classifyInboundSurfaceFreshness(surface, now, {
-          workingHoursStatus,
+          workingHoursStatus: retrievalWindowStatus,
           deferOutsideWorkingHours: true,
         });
         if (freshness) {
@@ -147,7 +178,7 @@ export function buildInboundAutomationStatus(rawUsers, now = new Date().toISOStr
         if (surface.lastRunStatus === "failed" && !isAutonomousSurfaceUnsupported(surface)) {
           retryBackoffCount += 1;
         }
-        const dueAt = computeInboundAutomationNextDueAt(surface, { workingHoursStatus });
+        const dueAt = computeInboundAutomationNextDueAt(surface, { workingHoursStatus: retrievalWindowStatus });
         if (!dueAt) continue;
         if (!nextDueSurface || Date.parse(dueAt) < Date.parse(nextDueSurface.dueAt)) {
           nextDueSurface = {
@@ -188,7 +219,6 @@ export function buildUserInboundSyncPlan(rawUser, options = {}) {
   const capability = options.capability ? browserProfileCapabilitySchema.parse(options.capability) : null;
   const mode = inboundSyncPlanModeSchema.parse(options.mode ?? "quick");
   const now = options.now ?? new Date().toISOString();
-  const workingHoursStatus = classifyWorkingHoursWindow(user.workingHours, now);
   const syncView = buildUserInboundSyncView(user, { capability });
   const accountId = options.accountId ?? null;
 
@@ -198,7 +228,11 @@ export function buildUserInboundSyncPlan(rawUser, options = {}) {
 
   const accounts = syncView.accounts
     .filter((account) => !accountId || account.accountId === accountId)
-    .map((account) => buildAccountSyncPlan(user.id, account, { mode, now, workingHoursStatus }))
+    .map((account) => buildAccountSyncPlan(user.id, account, {
+      mode,
+      now,
+      workingHoursStatus: classifyInboundRetrievalWindow(user, account, now),
+    }))
     .filter((account) => account.includedSurfaceCount > 0);
 
   const includedSurfaces = accounts.flatMap((account) => account.phases.flatMap((phase) => phase.surfaces));
@@ -626,6 +660,7 @@ function buildAccountInboundView(account) {
     label: account.label,
     preferred: account.preferred,
     sourceType: account.sourceType,
+    metadata: account.metadata,
     enabledSurfaceCount: surfaces.filter((surface) => surface.enabled).length,
     staleSurfaceCount: surfaces.filter((surface) => surface.enabled && surface.lastRunStatus === "never").length,
     failedSurfaceCount: surfaces.filter((surface) => surface.lastRunStatus === "failed").length,
@@ -1124,6 +1159,54 @@ function normalizeNullableString(value) {
 
   const normalized = value.trim();
   return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type} user
+ * @param {{ metadata?: Record<string, unknown> | null }} account
+ */
+function resolveLinkedinRetrievalWindow(user, account) {
+  const metadata = objectOrEmpty(account?.metadata);
+  const policy = objectOrEmpty(metadata.inboundRetrievalPolicy ?? metadata.retrievalPolicy);
+  const window = objectOrEmpty(policy.window ?? metadata.inboundRetrievalWindow ?? metadata.retrievalWindow);
+  return {
+    mode: "scheduled",
+    timezone: normalizeNullableString(window.timezone)
+      ?? normalizeNullableString(policy.timezone)
+      ?? normalizeNullableString(metadata.retrievalTimezone)
+      ?? normalizeNullableString(metadata.timezone)
+      ?? user.workingHours.timezone,
+    weekdays: normalizeWeekdays(window.weekdays ?? policy.weekdays)
+      ?? DEFAULT_LINKEDIN_RETRIEVAL_WINDOW.weekdays,
+    startLocalTime: normalizeLocalTime(window.startLocalTime ?? policy.startLocalTime ?? metadata.retrievalStartLocalTime)
+      ?? DEFAULT_LINKEDIN_RETRIEVAL_WINDOW.startLocalTime,
+    endLocalTime: normalizeLocalTime(window.endLocalTime ?? policy.endLocalTime ?? metadata.retrievalEndLocalTime)
+      ?? DEFAULT_LINKEDIN_RETRIEVAL_WINDOW.endLocalTime,
+  };
+}
+
+/** @param {unknown} value */
+function objectOrEmpty(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+/** @param {unknown} value */
+function normalizeLocalTime(value) {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(normalized) ? normalized : null;
+}
+
+/** @param {unknown} value */
+function normalizeWeekdays(value) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const requested = new Set(
+    value
+      .map((item) => String(item).trim().slice(0, 3).toLowerCase())
+      .filter((item) => WEEKDAY_ORDER.includes(item)),
+  );
+  return requested.size ? WEEKDAY_ORDER.filter((weekday) => requested.has(weekday)) : null;
 }
 
 /**
