@@ -1,0 +1,284 @@
+{
+  "plan": {
+    "slug": "prospect-lifecycle-and-packet-review-plan",
+    "source": "docs/wip/prospect-lifecycle-and-packet-review-plan.md",
+    "objective": "Implement Phase B of issue #12: worker outcome proposals, packet review policy, disposition actions, review queue surfaces, and lifecycle reporting so active, nurture, and terminal prospects are represented cleanly.",
+    "acceptanceCriteria": [
+      "Auto packet review policy preserves current next, daily, agent queue, and motion report behavior for existing motions.",
+      "Review policy completion parks packets as submitted without advancing queue_status until an operator accepts, amends, or returns them.",
+      "Returned packet briefs include the return notes for the next worker claim.",
+      "Terminal branches never reappear in exo next, due scans, or the agent queue across restarts and worker passes.",
+      "Nurture branches are visible but excluded from due-now work, and reactivation restores eligibility at the existing queue and cadence state.",
+      "Every disposition transition appends a durable activity_events row.",
+      "Inbox, daily, and agent packet review commands expose packets awaiting review with accept, amend, and return actions.",
+      "Motion reports answer what is active, parked, terminal, and awaiting review, including stale review warnings."
+    ],
+    "verificationCommands": [
+      "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
+      "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
+    ],
+    "constraints": [
+      "No schema changes beyond the existing Amendment A1 columns and indexes.",
+      "Default packetReviewPolicy must be auto and preserve current behavior.",
+      "All disposition writes route through setProspectDisposition or setAccountDisposition.",
+      "Packet review decisions are single transactions over packet state, queue/disposition state, and event append.",
+      "No live sends, live connector writes, production deploys, or destructive migrations.",
+      "Current main checkout has unrelated dirty work, so this board runs in the clean git worktree .worktrees/prospect-lifecycle-and-packet-review-plan."
+    ],
+    "nonGoals": [
+      "Outreach mode policy, CRM stage vocabulary, motion classes, or analytics dashboards.",
+      "Automatic nurture-retouch scheduling.",
+      "Suppression-policy semantics or global person-level do-not-contact lists.",
+      "Backfill or migration work beyond the existing 0.3.0 normalized schema."
+    ]
+  },
+  "board": {
+    "status": "active",
+    "controller": "codex-gpt-5",
+    "concurrencyCap": 1,
+    "worktreeRoot": ".worktrees",
+    "models": {
+      "fast": "inherit",
+      "default": "inherit",
+      "max": "inherit"
+    },
+    "base": {
+      "branch": "plan/prospect-lifecycle-and-packet-review-plan",
+      "commit": "9a759ec16fb2ab844d06e70c2e3f46df5ed7aad9",
+      "verifiedGreen": true,
+      "verification": [
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
+      ],
+      "notes": "Baseline needed one preflight repair for a red cold-start onboarding UI test. Full suite then passed with Node v24.14.0: 704 pass, 0 fail."
+    },
+    "updatedAt": "2026-06-11T10:46:10Z"
+  },
+  "tasks": [
+    {
+      "id": "T01",
+      "title": "Add packet review policy and proposal transactions",
+      "status": "ready",
+      "priority": 1,
+      "dependsOn": [],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/schema/motion.js",
+        "src/lib/motion-packets.js",
+        "src/core/complete-target-account-packet.js",
+        "src/core/complete-motion-prospect-packet.js",
+        "src/db/motion-accounts.js",
+        "src/db/prospects.js",
+        "test/motion-hydration.test.js",
+        "test/normalized-entity-modules.test.js"
+      ],
+      "context": "Plan FB1 and design decisions L4-L7. Add motionCoreSchema packetReviewPolicy with default auto and optional per-kind override. Completion APIs accept a proposed outcome: advance, nurture, or terminal plus reason. Auto policy applies the proposal in transaction and preserves current behavior. Review policy parks packet_status=submitted and stores the proposal in payload without advancing queue_status. Accept/amend/return operations clear or return packets and apply the selected outcome in one transaction with activity_events disposition writes when disposition changes. No schema changes beyond existing A1 columns.",
+      "doneWhen": [
+        "packetReviewPolicy parses on motion core with default auto and per-kind override support.",
+        "Existing auto-policy completion behavior stays unchanged for researched, suppressed, and exhausted paths.",
+        "Review-policy account and prospect completions set packet_status=submitted, keep queue_status unchanged, and persist the proposal in payload.",
+        "Accept and amend apply advance, nurture, and terminal outcomes through existing disposition entry points.",
+        "Return sets packet_status=returned, stores return notes, and does not advance queue_status.",
+        "Focused tests cover auto unchanged behavior, submitted review parking, accept/amend/return, and durable disposition events."
+      ],
+      "verification": [
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH node --test test/motion-hydration.test.js test/normalized-entity-modules.test.js",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T02",
+      "title": "Update worker briefs and packet queue semantics",
+      "status": "backlog",
+      "priority": 2,
+      "dependsOn": [
+        "T01"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core/build-motion-packet-brief.js",
+        "src/lib/motion-packets.js",
+        "src/core/build-agent-queue.js",
+        "test/agent-queue.test.js",
+        "test/cli.test.js",
+        "test/workspace-enrichment-policy-cli.test.js"
+      ],
+      "context": "Plan FB1. Worker prompts and briefs must ask workers to propose advance, nurture, or terminal outcomes honestly. Returned packet notes must appear in the regenerated packet brief. The agent queue must distinguish claimable, claimed, submitted review, and returned redo states without reworking terminal or nurture branches.",
+      "doneWhen": [
+        "Packet summaries expose submitted review and returned redo packets with notes and proposal metadata.",
+        "Returned packets become claimable for redo with return notes in the brief.",
+        "Worker briefs list completion commands or contracts for advance, nurture, not_a_fit, no_longer_target, and exhausted outcomes.",
+        "Agent queue does not schedule submitted review packets as worker work.",
+        "Focused tests cover returned-note brief regeneration and review-state queue exclusion."
+      ],
+      "verification": [
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH node --test test/agent-queue.test.js test/cli.test.js test/workspace-enrichment-policy-cli.test.js",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T03",
+      "title": "Add disposition and packet review CLI actions",
+      "status": "backlog",
+      "priority": 3,
+      "dependsOn": [
+        "T01",
+        "T02"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/cli/commands/companies.js",
+        "src/cli/commands/agent.js",
+        "src/cli/workspace-runtime.js",
+        "test/cli.test.js",
+        "test/agent-run.test.js"
+      ],
+      "context": "Plan FB2 and FB3. Add names aligned to existing command families: prospect/account disposition set and reactivate, plus packet review, accept, amend, and return actions. Terminal disposition reasons are required. Reactivation returns to active without changing the branch's existing queue or cadence state. Expert command exo agent packets review|accept|return mirrors the operator surface.",
+      "doneWhen": [
+        "CLI can set prospect and account disposition to nurture or terminal states with required reasons.",
+        "CLI can reactivate prospect and account branches and records the arc event.",
+        "CLI can list submitted review packets and accept, amend, or return each packet.",
+        "Terminal reason validation fails closed.",
+        "Focused CLI tests prove terminal branches disappear from next/daily/agent queue and reactivate restores eligibility."
+      ],
+      "verification": [
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH node --test test/cli.test.js test/agent-run.test.js",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T04",
+      "title": "Surface packets awaiting review in the operator loop",
+      "status": "backlog",
+      "priority": 4,
+      "dependsOn": [
+        "T03"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core/build-daily-view.js",
+        "src/core/build-next-view.js",
+        "src/core/build-inbox-view.js",
+        "src/core/build-operator-view.js",
+        "src/artifacts/render-operator.js",
+        "test/cli.test.js",
+        "test/operator-view.test.js"
+      ],
+      "context": "Plan FB3. Inbox and daily gain a packets-awaiting-review section only when review policy produces submitted packets. The section needs count, age, packet identity, proposal, and accept/amend/return actions. The operator can resolve straight to nurture or terminal in one step through the same T03 commands or action intents.",
+      "doneWhen": [
+        "Daily and inbox include a review section with count, oldest age, and packet rows.",
+        "Next prefers packet review before idle outbound or generic inventory work.",
+        "Operator projection exposes review rows and action metadata.",
+        "Review-resolved terminal branch shows the packet decision and reason in timeline data.",
+        "Focused tests cover daily, next, inbox, and operator projection ordering."
+      ],
+      "verification": [
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH node --test test/cli.test.js test/operator-view.test.js",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T05",
+      "title": "Add lifecycle reporting, nurture shelf, and stale review warnings",
+      "status": "backlog",
+      "priority": 5,
+      "dependsOn": [
+        "T04"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/cli/commands/report.js",
+        "src/core/build-motion-report.js",
+        "src/core/agent-doctor.js",
+        "src/artifacts/render-motion-report.js",
+        "test/cli.test.js",
+        "test/agent-doctor.test.js"
+      ],
+      "context": "Plan FB4. Report motion must show active, nurture, and terminal counts by reason, review pending count and oldest age, branch-ended timeline entries, and a motion-scoped nurture shelf that is visible but never due. Doctor warns when submitted review packets age past a threshold and host pass summary carries that warning.",
+      "doneWhen": [
+        "Motion report exposes disposition counts, review-pending count, oldest age, branch-ended timeline entries, and nurture shelf.",
+        "Nurtured branches are visible in reports but absent from due work.",
+        "Doctor and host pass summary warn on stale submitted review packets.",
+        "Focused tests prove one report answers active, parked, ended, and awaiting review."
+      ],
+      "verification": [
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH node --test test/cli.test.js test/agent-doctor.test.js",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T06",
+      "title": "Add governed UI actions and close acceptance",
+      "status": "backlog",
+      "priority": 6,
+      "dependsOn": [
+        "T05"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core/execute-action-intent.js",
+        "src/artifacts/render-prospects.js",
+        "src/artifacts/render-motions.js",
+        "src/artifacts/render-operator.js",
+        "test/prospect-ui.test.js",
+        "test/exo-ui-server.test.js",
+        "docs/plans/prospect-lifecycle-and-packet-review-plan-board.json"
+      ],
+      "context": "Plan FB2 UI actions plus final acceptance. Motion detail and prospect detail need governed actions matching the compose/approve pattern for disposition transitions and packet review resolution. Then run full plan verification, update board status, and report attempts per tier.",
+      "doneWhen": [
+        "Prospect detail and motion/account detail surfaces expose governed disposition actions.",
+        "Review packet rows expose accept, amend, return, nurture, and terminal actions without nested cards.",
+        "UI action intents route through the same kernel/CLI operations as tests.",
+        "Plan-level verification passes and all acceptance criteria are checked.",
+        "Board status is complete with final outputs and residual risks recorded."
+      ],
+      "verification": [
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH node --test test/prospect-ui.test.js test/exo-ui-server.test.js",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm run check",
+        "PATH=/Users/williamflanagan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin:$PATH npm test",
+        "python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.2.0/skills/plan-loop-executor/scripts/validate_board.py docs/plans/prospect-lifecycle-and-packet-review-plan-board.json"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    }
+  ]
+}
