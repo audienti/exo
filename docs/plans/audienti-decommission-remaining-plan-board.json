@@ -47,7 +47,7 @@
       "commit": "a248842a3cec09e90540dfaf22f27c81d733224a",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-11T18:52:00Z"
+    "updatedAt": "2026-06-11T19:12:00Z"
   },
   "tasks": [
     {
@@ -406,7 +406,7 @@
     {
       "id": "T08",
       "title": "Close Gmail variant identity and held-branch visibility follow-ups",
-      "status": "ready",
+      "status": "done",
       "priority": 55,
       "dependsOn": [
         "T01"
@@ -423,13 +423,27 @@
         "Held branches are visible behind the owning motion in an operator-facing view."
       ],
       "verification": [
-        "npm test -- test/private-inbound-message-classification.test.js test/daily.test.js test/inbox.test.js"
+        "npm test -- test/normalized-entity-modules.test.js test/private-inbound-message-classification.test.js test/action-result.test.js",
+        "npm test -- test/action-result.test.js test/motion-detail-surface.test.js test/build-motion-prospect-view.test.js test/workspace-runtime.test.js test/agent-queue.test.js",
+        "npm run check",
+        "npm test"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added shared Gmail/googlemail identity normalization so exact and canonical dot/plus variants participate in person resolution and inbound observation link matching.",
+        "Person identity resolution now links Gmail dot and plus variants to the existing canonical email identity as same_person_probable instead of creating disconnected people.",
+        "Unscoped Gmail reply observations now infer motion, company, and prospect links from canonical email variants before inbox, review, and daily routing derive claim state.",
+        "Queue state schema and normalization now preserve crossMotionOwner for held_cross_motion branches.",
+        "Motion workspace, motions view, prospect view, and report models now expose held_cross_motion branches as Held behind owner with the owning motion context.",
+        "Focused Gmail and held-branch tests passed: npm test -- test/normalized-entity-modules.test.js test/private-inbound-message-classification.test.js test/action-result.test.js, 29/29.",
+        "Focused motion/workspace queue visibility tests passed: npm test -- test/action-result.test.js test/motion-detail-surface.test.js test/build-motion-prospect-view.test.js test/workspace-runtime.test.js test/agent-queue.test.js, 74/74.",
+        "Verified npm run check.",
+        "Verified full npm test, 745/745.",
+        "Smoke checked the live UI /motions route with EXO_STATE_DIR=/Users/williamflanagan/Projects/omalab/exo/.exo on port 4327."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "53b1cb3a7b95bfbba4bac74f818e9074beea9faa",
+      "notes": "The plan task listed test/daily.test.js and test/inbox.test.js, but this repo does not currently have those files; focused coverage landed in private-inbound, normalized-entity, action-result, motion detail, workspace runtime, and agent queue tests."
     },
     {
       "id": "T09",
