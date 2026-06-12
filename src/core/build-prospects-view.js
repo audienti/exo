@@ -210,6 +210,7 @@ function shapeProspect(raw, ctx) {
     motionId: raw.motionId,
     motionName: raw.motionName ?? null,
     signal,
+    signalHref: pickSignalHref(raw),
     signalRationale,
     signalTruth: deriveSignalTruth(signalMatchCount, raw.fitConfidence),
     fit: raw.fitConfidence ?? null,
@@ -468,6 +469,17 @@ function pickSignal(raw) {
   if (raw.triggerWindow?.summary) return raw.triggerWindow.summary;
   if (raw.whyRelevant) return raw.whyRelevant;
   return "No surfacing signal recorded.";
+}
+
+/** @param {any} raw */
+function pickSignalHref(raw) {
+  const matchHref = normalizeNonEmptyString((raw.signalMatches ?? [])[0]?.sourceUrl);
+  if (matchHref) return matchHref;
+
+  const liveSignalHref = normalizeNonEmptyString(raw.liveSignal?.url);
+  if (liveSignalHref) return liveSignalHref;
+
+  return null;
 }
 
 /**

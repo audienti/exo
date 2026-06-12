@@ -370,8 +370,10 @@ export async function renderRoute(route, ctx, hooks = {}) {
     person.drafts = record?.drafts ?? [];
     person.touches = record?.touches ?? [];
     person.timelineNotes = record?.timelineNotes ?? [];
-    person.firstSeenAt = record?.observedAt ?? record?.profileViewedAt ?? null;
-    person.selectedAt = record?.queueState?.selectedAt ?? null;
+    const surfacedAt = resolveProspectSurfacedAt(record);
+    person.firstSeenAt = surfacedAt;
+    person.selectedAt = surfacedAt;
+    person.agentQueueItems = collectProspectAgentQueueItems(data.agentQueue, person);
     const handledReviewItem = (data.reviewItems ?? []).find(
       (item) => item?.prospect?.id === person.id && item.state === "reply_unavailable",
     );
@@ -828,6 +830,42 @@ function buildSentAtByProfile() {
     }
   }
   return map;
+}
+
+/**
+ * Prospect detail needs the live queued work for this exact branch so the
+ * renderer can show pre-connect warmup and queued approvals alongside stored
+ * drafts, touches, and notes.
+ *
+ * @param {any} agentQueue
+ * @param {{ id?: string | null, motionId?: string | null, companyId?: string | null }} person
+ */
+function collectProspectAgentQueueItems(agentQueue, person) {
+  const prospectId = typeof person?.id === "string" ? person.id : null;
+  if (!prospectId) return [];
+
+  return [...(agentQueue?.tasks ?? []), ...(agentQueue?.waiting ?? [])]
+    .filter((task) => task?.prospectId === prospectId)
+    .filter((task) => !person?.motionId || !task?.motionId || task.motionId === person.motionId)
+    .filter((task) => !person?.companyId || !task?.companyId || task.companyId === person.companyId);
+}
+
+/**
+ * The engagement timeline needs the time the prospect branch became real
+ * governed work. Raw `observedAt` drifts forward during later enrichment and
+ * can end up newer than already-drafted steps, which makes the timeline read
+ * backward.
+ *
+ * @param {any} record
+ * @returns {string | null}
+ */
+function resolveProspectSurfacedAt(record) {
+  return record?.queueState?.selectedAt
+    ?? record?.packetState?.completedAt
+    ?? record?.queueState?.updatedAt
+    ?? record?.observedAt
+    ?? record?.profileViewedAt
+    ?? null;
 }
 
 /**

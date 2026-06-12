@@ -291,6 +291,7 @@ function renderGroups(groups, meta) {
 function renderPersonDetail(p, meta = {}) {
   const composeSurface = composeSurfaceFor(p);
   const replyUnavailable = p.handledNotification?.state === "reply_unavailable";
+  const showComposeAction = !replyUnavailable && !shouldHideComposeAction(p);
   const stageBranch = stageBranchFor(p);
   const baseStageIdx = branchStageIndex(stageBranch);
   const stageIdx = reconcileStageIndex(stageBranch, p.connectionDegree);
@@ -325,7 +326,7 @@ function renderPersonDetail(p, meta = {}) {
       ? `<a class="btn btn-secondary btn-sm" href="#rehome-${escapeAttr(p.id)}">${iconSvg("layers", 14)}<span>Re-home</span></a>`
       : "") +
     (meta.interactive
-      ? (replyUnavailable ? "" : `<a class="btn btn-primary btn-sm" href="#compose-${escapeAttr(p.id)}">${iconSvg("mail", 14)}<span>${escapeHtml(composeTriggerLabel(p))}</span></a>`)
+      ? (showComposeAction ? `<a class="btn btn-primary btn-sm" href="#compose-${escapeAttr(p.id)}">${iconSvg("mail", 14)}<span>${escapeHtml(composeTriggerLabel(p))}</span></a>` : "")
       : btn({ variant: "primary", size: "sm", icon: "spark", label: "Draft opener" })) +
     `</div>` +
     (railSegments.length ? `<div class="pd-rail">${railSegments.join(`<i class="pd-div"></i>`)}</div>` : "") +
@@ -346,7 +347,7 @@ function renderPersonDetail(p, meta = {}) {
       label: "Next move",
       lead: next.lead,
       detail: next.detail,
-      meta: p.ageLabel ? `${p.ageLabel} in pipeline` : null,
+      meta: nextMoveMeta(p),
     }) +
     degreeNote;
   const handledNotification = replyUnavailable
@@ -536,6 +537,7 @@ function renderContextPanel(p, meta = {}) {
     `<div class="signal-card pd-signal">` +
     `<div class="sig-top"><span class="sig-idx">S</span><p class="sig-q">${escapeHtml(p.signal)}</p>${truthTag(p.signalTruth)}</div>` +
     (p.signalRationale ? `<p class="sig-why">${escapeHtml(p.signalRationale)}</p>` : "") +
+    (p.signalHref ? `<a class="tl-link" href="${escapeAttr(p.signalHref)}" target="_blank" rel="noreferrer">${iconSvg("link", 11)}Read signal</a>` : "") +
     `<p class="sig-meta">This is the evidence that surfaced ${escapeHtml(firstName)} into ${escapeHtml(p.motionName ?? "this motion")}${p.ageLabel ? ` — first seen ${escapeHtml(p.ageLabel)} ago` : ""}.</p>` +
     `</div></div>` +
     premise +
@@ -682,11 +684,180 @@ function fitLabel(fit) {
   }
 }
 
+const PUBLIC_ENGAGEMENT_DRAFT_SURFACES = new Set(["public_comment", "comment_reply"]);
+const PUBLIC_ENGAGEMENT_AUTONOMOUS_SURFACES = new Set(["like_post", "create_comment_reaction"]);
+const PUBLIC_ENGAGEMENT_SURFACES = new Set([
+  ...PUBLIC_ENGAGEMENT_DRAFT_SURFACES,
+  ...PUBLIC_ENGAGEMENT_AUTONOMOUS_SURFACES,
+]);
+
+/** @param {any} p */
+function prospectAgentQueueItems(p) {
+  return Array.isArray(p?.agentQueueItems)
+    ? p.agentQueueItems
+        .filter(Boolean)
+        .slice()
+        .sort((left, right) => queueTaskTimestamp(left).localeCompare(queueTaskTimestamp(right)))
+    : [];
+}
+
+/** @param {any} task */
+function queueTaskTimestamp(task) {
+  return String(task?.dueAt ?? task?.queuedAt ?? "");
+}
+
+/** @param {any} p */
+function nextMoveMeta(p) {
+  const parts = [];
+  const queueTask = activePublicEngagementQueueItem(p);
+  const queuedAt = normalizeMessageText(queueTaskTimestamp(queueTask));
+  if (queuedAt) {
+    parts.push(`queued ${relTimeShort(queuedAt)}`);
+  }
+  if (p.ageLabel) {
+    parts.push(`${p.ageLabel} in pipeline`);
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** @param {any} task */
+function queueTaskSurface(task) {
+  const surface = String(task?.surface ?? "").trim();
+  return surface.length ? surface : null;
+}
+
+/** @param {any} task */
+function isPublicEngagementQueueTask(task) {
+  const kind = String(task?.kind ?? task?.taskKind ?? "").trim();
+  const surface = queueTaskSurface(task);
+  if (task?.via === "public-engagement") return true;
+  if (String(task?.reason ?? "").trim().toLowerCase() === "public_engagement") return true;
+  return (kind === "write_draft" || kind === "send_message") && PUBLIC_ENGAGEMENT_SURFACES.has(surface ?? "");
+}
+
+/** @param {any} p */
+function publicEngagementQueueItems(p) {
+  return prospectAgentQueueItems(p).filter(isPublicEngagementQueueTask);
+}
+
+/** @param {any} p */
+function activePublicEngagementQueueItem(p) {
+  return publicEngagementQueueItems(p)[0] ?? null;
+}
+
+/**
+ * A queued public-comment draft is the current governed operator surface even
+ * before the draft body lands. Prefer it over the stale branch fallback.
+ *
+ * @param {any} p
+ * @returns {string | null}
+ */
+function pendingPublicEngagementComposeSurface(p) {
+  const task = publicEngagementQueueItems(p).find((item) => item?.kind === "write_draft") ?? null;
+  const surface = queueTaskSurface(task);
+  return PUBLIC_ENGAGEMENT_DRAFT_SURFACES.has(surface ?? "") ? surface : null;
+}
+
+/** @param {string | null | undefined} surface */
+function publicEngagementLabels(surface) {
+  switch (surface) {
+    case "public_comment":
+      return {
+        title: "Comment",
+        noun: "comment",
+        sendDetail: "The agent will post it on its next pass.",
+      };
+    case "comment_reply":
+      return {
+        title: "Comment reply",
+        noun: "comment reply",
+        sendDetail: "The agent will post it in-thread on its next pass.",
+      };
+    case "create_comment_reaction":
+      return {
+        title: "Pre-connect warmup",
+        noun: "comment reaction",
+        sendDetail: "The agent will react to the stored comment on its next pass.",
+      };
+    default:
+      return {
+        title: "Pre-connect warmup",
+        noun: "post reaction",
+        sendDetail: "The agent will react to the stored post on its next pass.",
+      };
+  }
+}
+
+/**
+ * @param {any} p
+ * @param {string | null} composeSurface
+ * @returns {{ lead: string, detail: string | null } | null}
+ */
+function publicEngagementNextMove(p, composeSurface = null) {
+  const task = activePublicEngagementQueueItem(p);
+  const surface = queueTaskSurface(task) ?? composeSurface;
+  if (!PUBLIC_ENGAGEMENT_SURFACES.has(surface ?? "")) return null;
+
+  const labels = publicEngagementLabels(surface);
+  if (task?.kind === "send_message") {
+    if (PUBLIC_ENGAGEMENT_AUTONOMOUS_SURFACES.has(surface ?? "")) {
+      return {
+        lead: "Pre-connect warmup queued",
+        detail: [labels.sendDetail, normalizeMessageText(task.postSendNextAction)].filter(Boolean).join(" "),
+      };
+    }
+    return {
+      lead: `${labels.title} queued for send`,
+      detail: [labels.sendDetail, normalizeMessageText(task.postSendNextAction)].filter(Boolean).join(" "),
+    };
+  }
+
+  if (task?.kind === "write_draft") {
+    return {
+      lead: `Agent is drafting the pre-connect ${labels.noun}`,
+      detail: "Review it when it lands, then queue it for send.",
+    };
+  }
+
+  if (!PUBLIC_ENGAGEMENT_DRAFT_SURFACES.has(surface ?? "")) {
+    return null;
+  }
+
+  const draftState = draftStateForSurface(p, surface);
+  if (draftState === "queued") {
+    return {
+      lead: `${labels.title} queued for send`,
+      detail: labels.sendDetail,
+    };
+  }
+  if (draftState === "ready") {
+    return {
+      lead: `Review the drafted ${labels.noun}`,
+      detail: "Edit it if needed, then queue it for send.",
+    };
+  }
+  return {
+    lead: `Agent is drafting the pre-connect ${labels.noun}`,
+    detail: "Wait for the governed draft to land, or write your own below if you need to move now.",
+  };
+}
+
+/** @param {any} p */
+function shouldHideComposeAction(p) {
+  const task = activePublicEngagementQueueItem(p);
+  const surface = queueTaskSurface(task);
+  return Boolean(task?.kind === "send_message" && PUBLIC_ENGAGEMENT_AUTONOMOUS_SURFACES.has(surface ?? ""));
+}
+
 /**
  * @param {number} idx
  * @param {any} p
  */
 function nextMoveForStage(idx, p, composeSurface = null) {
+  const publicMove = publicEngagementNextMove(p, composeSurface);
+  if (publicMove) {
+    return publicMove;
+  }
   if (composeSurface === "inbound_reply") {
     const responseState = privateThreadResponseState(p, composeSurface);
     if (responseState === "sent") {
@@ -1413,10 +1584,53 @@ function touchDuplicatesRenderedMessageTouch(touch, renderedTouches) {
 }
 
 /**
- * Merge touches + draft lifecycle + the genesis (surfacing) event into one
- * descending-by-time list. Message-bearing entries carry their body + a status
- * so a queued message reads as the message itself, updating to "Sent" once it
- * lands; other entries (accept, profile view, surfaced) stay compact.
+ * LinkedIn capture often gives us a durable public target without a reliable
+ * original post timestamp. Still show the evaluated target in the timeline,
+ * anchored to when Exo selected or captured it instead of pretending silence.
+ *
+ * @param {any} p
+ * @param {any} activity
+ * @param {string | null} selectedTargetUrl
+ * @returns {string | null}
+ */
+function publicActivityTimelineAt(p, activity, selectedTargetUrl) {
+  const postedAt = normalizeMessageText(activity?.postedAt ?? null);
+  if (postedAt) return postedAt;
+
+  const targetUrl = normalizeMessageText(activity?.url);
+  if (selectedTargetUrl && targetUrl && selectedTargetUrl === targetUrl) {
+    return normalizeMessageText(p.publicEngagementSelection?.selectedAt ?? null)
+      ?? normalizeMessageText(p.profileViewedAt ?? null)
+      ?? normalizeMessageText(p.selectedAt ?? null)
+      ?? normalizeMessageText(p.firstSeenAt ?? null);
+  }
+
+  return normalizeMessageText(p.profileViewedAt ?? null)
+    ?? normalizeMessageText(p.selectedAt ?? null)
+    ?? normalizeMessageText(p.firstSeenAt ?? null);
+}
+
+/**
+ * Once pre-connect becomes the governed branch, an unsent connection-request
+ * draft from the old branch is just stale noise in the visible timeline.
+ *
+ * @param {any} p
+ * @param {any} draft
+ * @returns {boolean}
+ */
+function shouldHideTimelineDraft(p, draft) {
+  if (draft?.surface !== "connection_request") return false;
+  if (draft?.approvedByOperator || draft?.status === "approved") return false;
+  const activePublicTask = activePublicEngagementQueueItem(p);
+  if (!activePublicTask) return false;
+  const surface = queueTaskSurface(activePublicTask);
+  if (!PUBLIC_ENGAGEMENT_SURFACES.has(surface ?? "")) return false;
+  return !(p.touches ?? []).some((touch) => touch?.surface === "connection_request");
+}
+
+/**
+ * Merge completed/observed engagement history into one descending-by-time list.
+ * Queued future work belongs in Next move, not in this historical record.
  * @param {any} p
  */
 function timelineEvents(p) {
@@ -1427,7 +1641,7 @@ function timelineEvents(p) {
   const selectedTargetUrl = normalizeMessageText(p.publicEngagementSelection?.url ?? p.publicEngagementSelection?.targetUrl ?? null);
   for (const activity of p.capturedPublicActivity ?? []) {
     const targetUrl = normalizeMessageText(activity?.url);
-    const postedAt = activity?.postedAt ?? null;
+    const postedAt = publicActivityTimelineAt(p, activity, selectedTargetUrl);
     if (!targetUrl || !postedAt) continue;
     const targetKind = activity?.targetKind === "comment" ? "comment" : "post";
     const recommendedAction = activity?.recommendedAction === "comment" ? "comment" : "reaction";
@@ -1501,6 +1715,7 @@ function timelineEvents(p) {
     if (d.status === "discarded") continue;
     // A sent draft is already recorded as a touch — don't double-count it.
     if (d.status === "sent") continue;
+    if (shouldHideTimelineDraft(p, d)) continue;
     const responseState = privateThreadResponseState(p, d.surface);
     if (responseState === "sent" || responseState === "blocked") continue;
     const meta = TOUCH_SURFACE[d.surface] ?? { label: humanizeSurface(d.surface) };
@@ -1538,6 +1753,8 @@ function timelineEvents(p) {
       title: `Surfaced into ${p.motionName ?? "this motion"}`,
       detail: p.signal && p.signal !== "No surfacing signal recorded." ? p.signal : "Selected as a prospect.",
       rationale: p.signalRationale ?? null,
+      href: p.signalHref ?? null,
+      hrefLabel: p.signalHref ? "Read signal" : null,
     });
   }
   return events.filter((e) => e.at).sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
@@ -1573,8 +1790,8 @@ function renderTimelineEvent(e) {
     (e.outcome && OUTCOME_LABEL[e.outcome] ? `<span class="tl-outcome">${escapeHtml(OUTCOME_LABEL[e.outcome])}</span>` : "") +
     `<span class="tl-time">${escapeHtml(relTimeShort(e.at))}</span></div>` +
     (e.detail ? `<p class="tl-detail">${escapeHtml(e.detail)}</p>` : "") +
-    (e.rationale ? `<p class="tl-detail tl-rationale"><strong>Why this connects:</strong> ${escapeHtml(e.rationale)}</p>` : "") +
-    (e.href ? `<a class="tl-link" href="${escapeAttr(e.href)}" target="_blank" rel="noreferrer">${iconSvg("link", 11)}Open</a>` : "") +
+    (e.rationale ? `<p class="tl-detail tl-rationale"><strong>Why:</strong> ${escapeHtml(e.rationale)}</p>` : "") +
+    (e.href ? `<a class="tl-link" href="${escapeAttr(e.href)}" target="_blank" rel="noreferrer">${iconSvg("link", 11)}${escapeHtml(e.hrefLabel ?? "Open")}</a>` : "") +
     `</div></li>`
   );
 }
@@ -1762,6 +1979,8 @@ const SURFACE_META = {
   post_accept_message: { label: "First message", channel: "LinkedIn", subject: false },
   follow_up_direct_message: { label: "Follow-up message", channel: "LinkedIn", subject: false },
   inbound_reply: { label: "Reply", channel: "LinkedIn", subject: false },
+  public_comment: { label: "Comment", channel: "LinkedIn", subject: false },
+  comment_reply: { label: "Comment reply", channel: "LinkedIn", subject: false },
   in_mail_message: { label: "InMail", channel: "LinkedIn", subject: true },
   email: { label: "Email", channel: "Email", subject: true },
 };
@@ -1782,6 +2001,8 @@ const STAGE_SURFACE = [
  * @param {any} p
  */
 function composeSurfaceFor(p) {
+  const queuedPublicSurface = pendingPublicEngagementComposeSurface(p);
+  if (queuedPublicSurface) return queuedPublicSurface;
   const nextSurface = selectNextDraftSurface(buildComposeSurfaceContext(p));
   if (nextSurface === "inbound_reply" || nextSurface === "comment_reply") return nextSurface;
   const draftedSurface = resolveDraftedComposeSurface(p);
@@ -1902,7 +2123,11 @@ function threadMessageMatchesSurface(p, message, surface) {
 
 /** @param {any} p */
 function composeTriggerLabel(p) {
-  return composeSurfaceFor(p) === "connection_request" ? "Compose request" : "Compose message";
+  const surface = composeSurfaceFor(p);
+  if (surface === "connection_request") return "Compose request";
+  if (surface === "public_comment") return "Compose comment";
+  if (surface === "comment_reply") return "Reply to comment";
+  return "Compose message";
 }
 
 /**

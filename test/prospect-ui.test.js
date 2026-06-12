@@ -20,6 +20,7 @@ function buildProspect(overrides = {}) {
     motionId: "motion-1",
     motionName: "transition-inbound-backlog",
     signal: "Transitioned from inbox threads — in-flight before Exo.",
+    signalHref: null,
     signalTruth: "partial",
     fit: "moderate",
     branch: "connection-requested",
@@ -46,6 +47,9 @@ function buildProspect(overrides = {}) {
     threadMessages: [],
     timelineObservations: [],
     handledNotification: null,
+    agentQueueItems: [],
+    capturedPublicActivity: [],
+    publicEngagementSelection: null,
     timelineNotes: [],
     firstSeenAt: null,
     selectedAt: null,
@@ -299,6 +303,151 @@ test("prospect detail still falls back to connection-request compose when no act
 
   assert.match(html, /Compose request/);
   assert.match(html, /Connection request note · Lina Park/);
+});
+
+test("prospect detail keeps queued pre-connect warmup in next move and out of the engagement timeline", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    branch: "identified",
+    agentQueueItems: [{
+      kind: "send_message",
+      via: "public-engagement",
+      surface: "like_post",
+      recipientUrl: "https://www.linkedin.com/posts/lina-park",
+      dueAt: "2026-06-04T17:14:29.676Z",
+      postSendNextAction: "Wait 48 hours, then queue the connection-request draft for review.",
+    }],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Pre-connect warmup queued/);
+  assert.match(html, /The agent will react to the stored post on its next pass\./);
+  assert.match(html, /Wait 48 hours, then queue the connection-request draft for review\./);
+  assert.match(html, /Engagement timeline <span>0<\/span>/);
+  assert.doesNotMatch(html, /tl-title">Pre-connect warmup queued/);
+  assert.doesNotMatch(html, /Compose request/);
+  assert.doesNotMatch(html, /Send the first connection request\./);
+});
+
+test("prospect detail targets the public-comment compose surface when pre-connect draft work is queued", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    branch: "identified",
+    agentQueueItems: [{
+      kind: "write_draft",
+      reason: "public_engagement",
+      surface: "public_comment",
+      recipientUrl: "https://www.linkedin.com/posts/lina-park",
+      dueAt: "2026-06-04T17:14:29.676Z",
+      postSendNextAction: "Wait 48 hours, then queue the connection-request draft for review.",
+    }],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Compose comment/);
+  assert.match(html, /Comment · Lina Park/);
+  assert.match(html, /Agent is drafting the pre-connect comment/);
+  assert.match(html, /Review it when it lands, then queue it for send\./);
+  assert.match(html, /Engagement timeline <span>0<\/span>/);
+  assert.doesNotMatch(html, /tl-title">Pre-connect comment queued/);
+  assert.doesNotMatch(html, /Compose request/);
+});
+
+test("prospect detail shows the selected public activity even when the original post timestamp is missing", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    branch: "identified",
+    profileViewedAt: "2026-06-04T17:14:29.676Z",
+    capturedPublicActivity: [{
+      activityType: "own-post",
+      url: "https://www.linkedin.com/posts/lina-park",
+      postedAt: null,
+      targetKind: "post",
+      recommendedAction: "reaction",
+      summary: "Lina posted about procurement orchestration and vendor governance.",
+      rationale: "Stored as the lightweight public-engagement target.",
+    }],
+    publicEngagementSelection: {
+      url: "https://www.linkedin.com/posts/lina-park",
+      selectedAt: "2026-06-04T17:14:29.676Z",
+    },
+    firstSeenAt: "2026-06-04T17:10:00.000Z",
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Selected LinkedIn post/);
+  assert.match(html, /Lina posted about procurement orchestration and vendor governance\./);
+});
+
+test("prospect detail links to the surfacing signal and uses the shorter rationale label", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    signal: "Generational recently promoted DealForce and a strategic alliance tied to David's remit.",
+    signalHref: "https://www.linkedin.com/company/generational-group/",
+    signalRationale: "This is role-linked evidence tied to current programs he owns.",
+    firstSeenAt: "2026-06-04T17:10:00.000Z",
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Read signal/);
+  assert.match(html, /https:\/\/www\.linkedin\.com\/company\/generational-group\//);
+  assert.match(html, /<strong>Why:<\/strong> This is role-linked evidence tied to current programs he owns\./);
+  assert.doesNotMatch(html, /Why this connects:/);
+});
+
+test("prospect detail hides a stale connection-request draft while pre-connect is the active governed branch", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    branch: "identified",
+    drafts: [{
+      id: "draft-1",
+      surface: "connection_request",
+      channel: "linkedin",
+      subject: null,
+      body: "Lina, I'd like to connect.",
+      status: "ready",
+      authoredBy: "agent",
+      editedByOperator: false,
+      approvedByOperator: false,
+      createdAt: "2026-06-04T17:14:29.676Z",
+      updatedAt: "2026-06-04T17:14:29.676Z",
+      approvedAt: null,
+      sentAt: null,
+      notes: null,
+    }],
+    agentQueueItems: [{
+      kind: "send_message",
+      via: "public-engagement",
+      surface: "like_post",
+      recipientUrl: "https://www.linkedin.com/posts/lina-park",
+      dueAt: "2026-06-04T17:20:00.000Z",
+      postSendNextAction: "Wait 48 hours, then queue the connection-request draft for review.",
+    }],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Pre-connect warmup queued/);
+  assert.doesNotMatch(html, /tl-title">Connection request/);
 });
 
 test("prospect detail keeps the connection-request note editor when the assigned LinkedIn account is Sales Navigator capable", () => {

@@ -201,7 +201,7 @@ export function buildOperatorViewModel(input) {
   const decisionItems = (input.decisionQueue?.items ?? []).filter(
     (item) => !HANDLED_STATES.has(item.state) && !isCleanupLaneItem(item, { now }),
   );
-  const plannerItems = collectPlannerActionItems(input.dueNowItems ?? []);
+  const plannerItems = collectPlannerActionItems(input.dueNowItems ?? [], input.agentQueue ?? null);
   const operatorItems = decisionItems.concat(plannerItems);
   // The Next-move hero should follow the governed planner summary when it
   // points at a concrete decision item. Falling back to the raw top decision
@@ -635,11 +635,12 @@ function shapeStale(truthAccounts) {
 
 /**
  * @param {any[] | null | undefined} items
+ * @param {any} agentQueue
  * @returns {any[]}
  */
-function collectPlannerActionItems(items) {
+function collectPlannerActionItems(items, agentQueue) {
   return toArray(items)
-    .filter(shouldSurfacePlannerActionItem)
+    .filter((item) => shouldSurfacePlannerActionItem(item, agentQueue))
     .sort((left, right) => parseAgendaTime(left?.dueAt) - parseAgendaTime(right?.dueAt))
     .map(normalizePlannerActionItem)
     .filter(Boolean);
@@ -657,11 +658,51 @@ function parseAgendaTime(iso) {
   return Number.isNaN(target.getTime()) ? Number.MAX_SAFE_INTEGER : target.getTime();
 }
 
-/** @param {any} item */
-function shouldSurfacePlannerActionItem(item) {
+/**
+ * A queued public-engagement warmup means the agent is already executing the
+ * pre-connect branch. Keep that out of the operator decision lane until it
+ * becomes real operator work again (for example, a drafted public comment that
+ * needs approval).
+ *
+ * @param {any} item
+ * @param {any} agentQueue
+ */
+function shouldSurfacePlannerActionItem(item, agentQueue) {
   if (!item || item.state !== "due_now" || item.state === "done") return false;
   const sourceType = String(item?.source?.type ?? "").toLowerCase();
-  return sourceType !== "inbound_review" && sourceType !== "outbound_capacity";
+  if (sourceType === "inbound_review" || sourceType === "outbound_capacity") return false;
+  const prospectId = normalizeUuid(item?.prospect?.id);
+  if (prospectId && prospectHasQueuedPublicWarmup(agentQueue, prospectId)) return false;
+  return true;
+}
+
+const PUBLIC_ENGAGEMENT_QUEUE_SURFACES = new Set([
+  "public_comment",
+  "comment_reply",
+  "like_post",
+  "create_comment_reaction",
+]);
+
+/**
+ * @param {any} agentQueue
+ * @param {string} prospectId
+ */
+function prospectHasQueuedPublicWarmup(agentQueue, prospectId) {
+  return [
+    ...(Array.isArray(agentQueue?.tasks) ? agentQueue.tasks : []),
+    ...(Array.isArray(agentQueue?.waiting) ? agentQueue.waiting : []),
+    ...(Array.isArray(agentQueue?.items) ? agentQueue.items : []),
+    ...(Array.isArray(agentQueue?.waitingItems) ? agentQueue.waitingItems : []),
+  ].some((task) => task?.prospectId === prospectId && queueTaskLooksLikePublicWarmup(task));
+}
+
+/** @param {any} task */
+function queueTaskLooksLikePublicWarmup(task) {
+  const kind = String(task?.kind ?? task?.taskKind ?? "").trim();
+  const surface = String(task?.surface ?? "").trim();
+  if (task?.via === "public-engagement") return true;
+  if (String(task?.reason ?? "").trim().toLowerCase() === "public_engagement") return true;
+  return (kind === "write_draft" || kind === "send_message") && PUBLIC_ENGAGEMENT_QUEUE_SURFACES.has(surface);
 }
 
 /** @param {any} item */

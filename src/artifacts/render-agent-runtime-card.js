@@ -75,6 +75,47 @@ export function renderAgentRuntimeCard(runtime, meta = {}, options = {}) {
 }
 
 /**
+ * One-line collapsed disclosure for surfaces where the runtime is context
+ * rather than the main event (the queue page). Headline + detail stay in the
+ * summary; status facts and the next action expand on demand. The bar opens
+ * itself when the agent needs attention so problems are never hidden.
+ *
+ * @param {import("../core/build-operator-view.js").OperatorAgentRuntime | null | undefined} runtime
+ * @param {{ side?: string | null, forceOpen?: boolean }} [options]
+ * @returns {string}
+ */
+export function renderAgentRuntimeBar(runtime, options = {}) {
+  if (!runtime) return "";
+  const needsAttention = runtime.state === "off";
+  const open = needsAttention || options.forceOpen ? " open" : "";
+  const facts = Array.isArray(runtime.statusFacts) && runtime.statusFacts.length
+    ? `<div class="nm-chips">${runtime.statusFacts.map((fact) => `<span class="surface-ref">${escapeHtml(fact)}</span>`).join("")}</div>`
+    : "";
+  const nextAction = runtime.nextAction
+    ? `<div class="nm-sub">Next action: ${escapeHtml(runtime.nextAction)}</div>`
+    : "";
+  const body = facts || nextAction ? `<div class="ab-body">${facts}${nextAction}</div>` : "";
+
+  return (
+    `<details class="agent-bar"${open}>` +
+    `<summary>` +
+    avatar({
+      name: "Agent runtime",
+      initials: "AG",
+      size: 26,
+      accent: needsAttention ? "#f59e0b" : "#3b82f6",
+    }) +
+    `<span class="ab-title">${escapeHtml(runtime.headline)}</span>` +
+    `<span class="ab-detail">${escapeHtml(runtime.detail)}</span>` +
+    (options.side ? `<span class="ab-side">${options.side}</span>` : "") +
+    iconSvg("chevron", 14, "ab-chev") +
+    `</summary>` +
+    body +
+    `</details>`
+  );
+}
+
+/**
  * @param {import("../core/build-operator-view.js").OperatorAgentRuntime | null | undefined} runtime
  * @param {{ className?: string, iconSize?: number }} [options]
  * @returns {string}

@@ -13,6 +13,7 @@ import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
 import { buildPacketReviewView } from "./build-packet-review-view.js";
 import { buildOutboundCapacityView } from "./build-outbound-capacity-view.js";
 import { buildMotionCompanyScopeKey, buildUserAssignedExecutionScopeIndex } from "./user-execution-scope.js";
+import { isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
 
 /**
  * @param {unknown} rawUser
@@ -189,7 +190,20 @@ function shouldUseProspectBranch({ motion, account, prospect }, filters) {
   if (filters.companyId && account.companyId !== filters.companyId) return false;
   if (filters.prospectId && prospect.id !== filters.prospectId) return false;
   if (!filters.assignedExecutionScopeKeys.has(buildMotionCompanyScopeKey(motion.id, account.companyId))) return false;
+  if (hasQueuedAutonomousSend(prospect)) return false;
   return prospect.cadenceState.status === "ready";
+}
+
+/**
+ * Once the operator has approved an outbound draft, the branch is no longer an
+ * open operator decision. It belongs to the send lane until writeback marks it
+ * sent or discarded.
+ *
+ * @param {any} prospect
+ */
+function hasQueuedAutonomousSend(prospect) {
+  return Array.isArray(prospect?.drafts)
+    && prospect.drafts.some((draft) => isAutonomousSendReadyDraft(draft));
 }
 
 /**

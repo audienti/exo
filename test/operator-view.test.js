@@ -857,7 +857,7 @@ test("operator hero follows the governed summary instead of the top raw decision
   assert.match(html, /Matt Pierce/);
 });
 
-test("queue page shows the same run-now runtime card when the background agent is off", () => {
+test("queue page shows the same run-now runtime bar when the background agent is off", () => {
   const runtime = {
       scheduler: { kind: "launchd", installed: false, loaded: false, running: false, runIntervalSeconds: 900 },
       routine: { exists: true, sendMode: "verify" },
@@ -889,8 +889,11 @@ test("queue page shows the same run-now runtime card when the background agent i
 
   const html = renderQueuePage(model, { interactive: true, agentRuntime: runtime });
   const introStart = html.indexOf("<h1>Agent queue</h1>");
-  const runtimeCardStart = html.indexOf("next-move agent-runtime");
-  const introHtml = html.slice(introStart, runtimeCardStart);
+  const runtimeBarStart = html.indexOf('<details class="agent-bar"');
+  const introHtml = html.slice(introStart, runtimeBarStart);
+  assert.ok(runtimeBarStart > -1, "queue page should render the runtime disclosure bar");
+  assert.match(html, /<details class="agent-bar" open>/);
+  assert.doesNotMatch(html, /next-move agent-runtime/);
   assert.match(html, /data-agent-health="yellow"/);
   assert.match(html, /Agent work queued/i);
   assert.match(html, /Background agent off/i);
@@ -944,6 +947,157 @@ test("queue page shows checked-out agent work distinctly from plain queued work"
   assert.match(html, /Checked out/i);
   assert.match(html, /william@host/i);
   assert.doesNotMatch(html, /Queued for agent<\/span>/i);
+});
+
+test("queue page folds agent status into a strip and tabs the full surface list", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "blocked", endedAt: "2026-06-04T10:48:00.000Z" },
+    queueCount: 1,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-04T11:00:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "task-1",
+          subject: "LinkedIn inbound truth",
+          action: "run_inbound_sync",
+          why: "Refresh stale truth.",
+          dueAt: "2026-06-04T10:55:00.000Z",
+          sourceType: "inbound_itemization_gap",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+  const agentStatus = {
+    checkedAt: "2026-06-04T11:00:00.000Z",
+    state: "queued",
+    current: { active: false, activeTaskCount: 0, tasks: [], locks: { active: false, lanes: [] } },
+    backlog: {
+      dueTaskCount: 2,
+      waitingTaskCount: 0,
+      blockerCount: 0,
+      dueByKind: [{ kind: "send_message", count: 2 }],
+      waitingByReason: [],
+      blockersByReason: [],
+    },
+    throughput: {
+      lastPass: {
+        status: "blocked",
+        resultCount: 1,
+        completedCount: 0,
+        blockedCount: 1,
+        failedCount: 0,
+        durationSeconds: 1,
+        byKind: [],
+      },
+      last24Hours: { resultCount: 1, recentMotionRunCount: 9 },
+    },
+    partial: { active: false },
+    inboundSurfaces: {
+      count: 3,
+      items: [
+        {
+          capability: "gmail",
+          accountHandle: "wflanagan",
+          surfaceLabel: "Inbox Threads",
+          lastRunStatus: "success",
+          lastSyncedAt: "2026-06-04T10:40:00.000Z",
+          lastObservedAt: "2026-06-04T10:40:00.000Z",
+          capturedItemCount: 1,
+          visibleTotalCount: null,
+          observationCount: 1,
+          pageWalkStatus: "pages not recorded",
+          resumeCursor: null,
+          resumeStartOffset: null,
+          lastError: null,
+        },
+        {
+          capability: "linkedin",
+          accountHandle: "wf",
+          surfaceLabel: "Followers",
+          lastRunStatus: "failed",
+          lastSyncedAt: null,
+          lastObservedAt: "2026-06-04T09:00:00.000Z",
+          capturedItemCount: 0,
+          visibleTotalCount: null,
+          observationCount: 0,
+          pageWalkStatus: null,
+          resumeCursor: null,
+          resumeStartOffset: null,
+          lastError: "Connector timeout",
+        },
+        {
+          capability: "linkedin",
+          accountHandle: "wf",
+          surfaceLabel: "Connections",
+          lastRunStatus: null,
+          lastSyncedAt: null,
+          lastObservedAt: null,
+          capturedItemCount: null,
+          visibleTotalCount: null,
+          observationCount: null,
+          pageWalkStatus: null,
+          resumeCursor: null,
+          resumeStartOffset: null,
+          lastError: null,
+        },
+      ],
+    },
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    generatedAt: "2026-06-04T11:00:00.000Z",
+  });
+
+  // Runtime bar: collapsed by default when the scheduler is on, status side chip present.
+  assert.match(html, /<details class="agent-bar">/);
+  assert.match(html, /Queued · checked just now/);
+  assert.doesNotMatch(html, /next-move agent-runtime/);
+
+  // Status strip replaces the panel grid.
+  assert.match(html, /Current work/);
+  assert.match(html, /No task checked out/);
+  assert.match(html, /<b>2<\/b> due · <b>0<\/b> waiting · <b>0<\/b> blockers/);
+  assert.match(html, /2 Send Message/);
+  assert.match(html, /Last pass blocked · 1 result · 1s/);
+  assert.match(html, /24h: 1 result, 9 motion runs/);
+  assert.doesNotMatch(html, /class="ws-grid"/);
+
+  // Segmented control with deep-linkable queue/surfaces panels.
+  assert.match(html, /role="tablist"[^>]*data-tabset="queue-views"/);
+  assert.match(html, /class="seg seg-tabs"/);
+  assert.match(html, /data-tab-target="queue"/);
+  assert.match(html, /data-tab-target="surfaces"/);
+  assert.match(html, /data-tab-panel="surfaces" hidden/);
+
+  // Surfaces tab: every enabled surface renders — no truncation, errors first,
+  // sync recency on each row.
+  assert.match(html, /gmail \/ wflanagan \/ Inbox Threads/);
+  assert.match(html, /linkedin \/ wf \/ Followers/);
+  assert.match(html, /linkedin \/ wf \/ Connections/);
+  assert.match(html, /synced 20m ago/);
+  assert.match(html, /synced 2h ago/);
+  assert.match(html, /never synced/);
+  assert.match(html, /No telemetry recorded yet/);
+  assert.doesNotMatch(html, /more enabled surfaces/);
+  assert.ok(
+    html.indexOf("Connector timeout") < html.indexOf("Inbox Threads"),
+    "surfaces with errors should sort to the top of the list",
+  );
 });
 
 test("operator header marks an overdue loaded scheduler as behind instead of healthy queued", () => {
@@ -1281,8 +1435,8 @@ test("agent runtime spells out that verify mode will not send already-proved dra
 
   const queueHtml = renderQueuePage(model, { interactive: true, agentRuntime: runtime });
   const introStart = queueHtml.indexOf("<h1>Agent queue</h1>");
-  const runtimeCardStart = queueHtml.indexOf("next-move agent-runtime");
-  const introHtml = queueHtml.slice(introStart, runtimeCardStart);
+  const runtimeBarStart = queueHtml.indexOf('<details class="agent-bar"');
+  const introHtml = queueHtml.slice(introStart, runtimeBarStart);
   assert.match(queueHtml, /Approved drafts are waiting in review only/i);
   assert.match(queueHtml, /2 queued agent-authored sends already have fresh proof/i);
   assert.match(queueHtml, /Review only will not send them\./i);
@@ -1455,6 +1609,68 @@ test("operator merges due-now planner work into the main action queue without du
   assert.match(html, /The first queued action is promoted above\./i);
   assert.doesNotMatch(html, /Reply to Tony Robbins and move the branch into an active conversation/i);
   assert.doesNotMatch(html, /Due now<\/h2>/i);
+});
+
+test("operator suppresses fresh connection-request decisions while public warmup is already queued", () => {
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-04T11:05:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: {
+      checklist: [],
+    },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      tasks: [
+        {
+          kind: "send_message",
+          via: "public-engagement",
+          prospectId: "d149a3e4-6988-4ad7-b40b-000e231e1ac9",
+          surface: "like_post",
+        },
+      ],
+      waiting: [],
+      items: [
+        {
+          id: "send_message::d149a3e4-6988-4ad7-b40b-000e231e1ac9::like_post",
+          taskKind: "send_message",
+          prospectId: "d149a3e4-6988-4ad7-b40b-000e231e1ac9",
+          subject: "Sue Weinheimer",
+          action: "Send Like post",
+          sourceType: "cadence",
+          surface: "like_post",
+          dueAt: "2026-06-04T11:05:30.000Z",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    dueNowItems: [
+      {
+        state: "due_now",
+        source: { type: "cadence" },
+        motion: { id: "17adf3ca-a6b3-4d26-9f93-bc60f28fe94d", name: "harsh-spare-mongoose" },
+        company: { id: "82b0baf7-f98d-4bb6-b12c-c913fcb998cf", name: "Columbus McKinnon" },
+        prospect: {
+          id: "d149a3e4-6988-4ad7-b40b-000e231e1ac9",
+          name: "Sue Weinheimer",
+          avatarUrl: "https://example.com/sue.jpg",
+        },
+        recommendedAction: "First-touch decision: LinkedIn connection request is the only verified usable direct channel.",
+        dueAt: "2026-06-04T11:06:00.000Z",
+      },
+    ],
+    waitingItems: [],
+    truthAccounts: [],
+  });
+
+  assert.equal(model.counts.decisions, 0);
+  assert.equal(model.nextMove, null);
+  assert.equal(model.queue.length, 1);
+
+  const html = renderOperatorPage(model, { interactive: true });
+  assert.match(html, /No operator decision is waiting right now/i);
+  assert.doesNotMatch(html, /Compose request/i);
 });
 
 test("agent runtime reports a renamed foreign scheduler instead of saying the agent is off", () => {

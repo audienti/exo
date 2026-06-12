@@ -19,6 +19,7 @@ import {
   readinessBar,
   renderShell,
   scopeBadge,
+  segTabs,
   stateDot,
   truthTag,
 } from "../lib/exo-ui-components.js";
@@ -747,14 +748,17 @@ function renderDeleteMotionAction(motion, meta = {}) {
  * @param {string} tabsetId
  */
 function renderSettingsTabs(tabsetId) {
-  return (
-    `<div class="settings-tabs" role="tablist" aria-label="Motion settings" data-tabset="${escapeAttr(tabsetId)}">` +
-    `<button class="settings-tab is-active" id="${escapeAttr(tabsetId)}-tab-premise" type="button" role="tab" aria-selected="true" aria-controls="premise" tabindex="0" data-tab-target="premise">Premise</button>` +
-    `<button class="settings-tab" id="${escapeAttr(tabsetId)}-tab-offer" type="button" role="tab" aria-selected="false" aria-controls="offer" tabindex="-1" data-tab-target="offer">Offer</button>` +
-    `<button class="settings-tab" id="${escapeAttr(tabsetId)}-tab-signals" type="button" role="tab" aria-selected="false" aria-controls="signals" tabindex="-1" data-tab-target="signals">Signals</button>` +
-    `<button class="settings-tab" id="${escapeAttr(tabsetId)}-tab-execution" type="button" role="tab" aria-selected="false" aria-controls="execution" tabindex="-1" data-tab-target="execution">Execution</button>` +
-    `</div>`
-  );
+  return segTabs({
+    tabsetId,
+    ariaLabel: "Motion settings",
+    className: "settings-tabs",
+    tabs: [
+      { target: "premise", label: "Premise", panelId: "premise", active: true },
+      { target: "offer", label: "Offer", panelId: "offer" },
+      { target: "signals", label: "Signals", panelId: "signals" },
+      { target: "execution", label: "Execution", panelId: "execution" },
+    ],
+  });
 }
 
 /** @param {any} offer */

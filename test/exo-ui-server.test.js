@@ -445,7 +445,8 @@ test("queue route renders the agent status panel from workspace projection data"
       }),
     });
 
-    assert.match(html, /Agent status/);
+    assert.match(html, /Current work/);
+    assert.match(html, /data-tabset="queue-views"/);
     assert.match(html, /Research: Prospect Research/);
     assert.match(html, /Workspace runtime surface/);
     assert.match(html, /Waiting: 2 Pacing Limit/);
