@@ -11,6 +11,7 @@ coverage/
 .idea/
 .vscode/
 .worktrees/
+.claude/
 prototype/motion-workspace.html
 docs/wip/*/**
 docs/superpowers/*/**
