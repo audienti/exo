@@ -160,6 +160,119 @@ test("resolveUserConnection ignores a stored managed identity once it is exclude
   assert.match(result.reason, /No connected linkedin account is stored/i);
 });
 
+test("users remove refuses to delete an execution user that still owns active motion or company assignments (issue 27)", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-remove-blocked-"));
+  const offerHtml = [
+    "<html>",
+    "<head>",
+    "<title>Issue 27 Offer</title>",
+    '<meta name="description" content="Issue 27 regression offer." />',
+    "</head>",
+    "<body>ok</body>",
+    "</html>",
+  ].join("");
+  const offerUrl = `data:text/html,${encodeURIComponent(offerHtml)}`;
+
+  try {
+    // Seed two users (mirrors the live state from the issue: Audienti + Ali).
+    const audientiUser = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "audienti", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      }),
+    );
+    const aliUser = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "ali-umair", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      }),
+    );
+
+    // Create a motion and pin it to Ali, mirroring the live lucid-fierce-crow
+    // motion whose engagementUserAssignment.userId pointed at Ali.
+    const motion = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "motion",
+        "add",
+        "--url",
+        offerUrl,
+        "--premise",
+        "Issue 27 regression premise.",
+        "--json",
+      ], {
+        cwd: tempDir,
+        encoding: "utf8",
+      }),
+    );
+
+    const assignedMotion = JSON.parse(
+      execFileSync("node", [
+        cliPath,
+        "motion",
+        "user",
+        "assign",
+        motion.id,
+        "--user",
+        aliUser.id,
+        "--reason",
+        "Pin Ali on this motion",
+        "--json",
+      ], {
+        cwd: tempDir,
+        encoding: "utf8",
+      }),
+    );
+    assert.equal(assignedMotion.engagementUserAssignment?.userId, aliUser.id);
+
+    // Attempting to remove Ali must fail; the guard should preserve both the
+    // user row and the motion assignment instead of silently deleting them.
+    let removeOutput = "";
+    let removeStatus = 0;
+    try {
+      removeOutput = execFileSync(
+        "node",
+        [cliPath, "users", "remove", aliUser.id, "--json"],
+        { cwd: tempDir, encoding: "utf8" },
+      );
+    } catch (error) {
+      removeOutput = error.stdout?.toString() ?? "";
+      removeStatus = typeof error.status === "number" ? error.status : 1;
+    }
+    assert.equal(removeStatus, 1, "users remove should exit non-zero when assignments exist");
+    const blocked = JSON.parse(removeOutput);
+    assert.equal(blocked.removed, false);
+    assert.equal(blocked.user.id, aliUser.id);
+    assert.equal(blocked.blockedBy.motions.length, 1);
+    assert.equal(blocked.blockedBy.motions[0].id, motion.id);
+    assert.match(blocked.message, /still assigned to/i);
+
+    // Both Audienti and Ali must still be visible, and the motion must still
+    // resolve to Ali. The previous behavior would have wiped Ali and left a
+    // dangling engagementUserAssignment.userId.
+    const remainingUsers = JSON.parse(
+      execFileSync("node", [cliPath, "users", "list", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      }),
+    );
+    assert.equal(remainingUsers.length, 2);
+    assert.ok(remainingUsers.some((entry) => entry.id === aliUser.id));
+    assert.ok(remainingUsers.some((entry) => entry.id === audientiUser.id));
+
+    const motionAfter = JSON.parse(
+      execFileSync("node", [cliPath, "motion", "user", "show", motion.id, "--json"], {
+        cwd: tempDir,
+        encoding: "utf8",
+      }),
+    );
+    assert.equal(motionAfter.assignment?.userId, aliUser.id);
+    assert.equal(motionAfter.user?.id, aliUser.id);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("users accounts remove can exclude a removed managed identity and users remove deletes the user", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-remove-governance-"));
 

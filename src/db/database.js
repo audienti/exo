@@ -300,9 +300,75 @@ export function listUsers() {
 }
 
 /**
+ * Surface every motion or company whose engagementUserAssignment still points
+ * at the given user id. Returns an empty array when the user is unreferenced.
+ *
+ * @param {string} userId
+ * @returns {{
+ *   motions: { id: string, name: string }[],
+ *   companies: { id: string, name: string }[],
+ * }}
+ */
+export function findActiveUserAssignmentReferences(userId) {
+  const local = getLocalDatabase();
+  const motions = local
+    .prepare(`
+      SELECT id, name, payload_json
+      FROM motions
+      WHERE status != 'archived'
+        AND json_extract(payload_json, '$.engagementUserAssignment.userId') = ?
+      ORDER BY created_at DESC
+    `)
+    .all(userId)
+    .map((row) => ({ id: String(row.id), name: String(row.name) }));
+
+  const companies = local
+    .prepare(`
+      SELECT id, name
+      FROM companies
+      WHERE json_extract(payload_json, '$.engagementUserAssignment.userId') = ?
+      ORDER BY created_at DESC
+    `)
+    .all(userId)
+    .map((row) => ({ id: String(row.id), name: String(row.name) }));
+
+  return { motions, companies };
+}
+
+export class UserDeletionBlockedError extends Error {
+  /**
+   * @param {{
+   *   userId: string,
+   *   references: ReturnType<typeof findActiveUserAssignmentReferences>,
+   * }} input
+   */
+  constructor(input) {
+    const { motions, companies } = input.references;
+    const parts = [];
+    if (motions.length) {
+      parts.push(`${motions.length} active motion${motions.length === 1 ? "" : "s"}`);
+    }
+    if (companies.length) {
+      parts.push(`${companies.length} compan${companies.length === 1 ? "y" : "ies"}`);
+    }
+    const detail = parts.length ? parts.join(" and ") : "active assignments";
+    super(
+      `Cannot delete user ${input.userId}: still assigned to ${detail}. Reassign or archive those records first.`
+    );
+    this.name = "UserDeletionBlockedError";
+    this.userId = input.userId;
+    this.references = input.references;
+  }
+}
+
+/**
  * @param {string} id
  */
 export function deleteUser(id) {
+  const references = findActiveUserAssignmentReferences(id);
+  if (references.motions.length || references.companies.length) {
+    throw new UserDeletionBlockedError({ userId: id, references });
+  }
   getHomeDatabase()
     .prepare(`DELETE FROM users WHERE id = ?`)
     .run(id);

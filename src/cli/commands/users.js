@@ -23,7 +23,8 @@ import {
   listBrowserProfiles,
   listUsers,
   mutateUserById,
-  updateUser
+  updateUser,
+  UserDeletionBlockedError
 } from "../../db/database.js";
 import {
   renderUserHarnessProbe,
@@ -177,7 +178,29 @@ Rules:
         return;
       }
 
-      deleteUser(String(raw.id));
+      try {
+        deleteUser(String(raw.id));
+      } catch (error) {
+        if (error instanceof UserDeletionBlockedError) {
+          const blocked = {
+            removed: false,
+            user: {
+              id: String(raw.id),
+              label: String(raw.label),
+            },
+            blockedBy: error.references,
+            message: error.message,
+          };
+          if (options.json) {
+            console.log(JSON.stringify(blocked, null, 2));
+          } else {
+            console.error(error.message);
+          }
+          process.exitCode = 1;
+          return;
+        }
+        throw error;
+      }
       const result = {
         removed: true,
         user: {
