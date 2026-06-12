@@ -65,6 +65,10 @@ Examples:
           owner: options.owner ?? null,
           runtime: options.runtime ?? "codex",
         });
+        const warnings = Array.isArray(applied.user?.warnings) ? applied.user.warnings : [];
+        for (const warning of warnings) {
+          console.error(warning);
+        }
       }
 
       const preferredUserId = applied.user?.user?.id ?? options.user ?? null;

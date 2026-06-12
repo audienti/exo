@@ -4,7 +4,16 @@ import { discoverRuntimeConnectorAccounts } from "./discover-runtime-account-ide
 import { probeUserHarnessConnections } from "./probe-user-harness-connections.js";
 import { upsertUserConnectedAccount, upsertUserHarnessConnection } from "./upsert-user-harness-connection.js";
 import { isManagedAccountExcluded } from "./user-account-governance.js";
+import { LINKEDIN_DEFAULT_WEEKLY_INVITATIONS } from "./user-account-defaults.js";
 import { userSchema } from "../schema/user.js";
+
+const BLOCKED_LINKEDIN_QUOTA_ACTIONS = new Set([
+  "connector_not_available",
+  "excluded_identity",
+  "session_unavailable",
+  "identity_unresolved",
+  "missing_handle",
+]);
 
 const CONNECTOR_CAPABILITY_MAP = {
   gmail: ["gmail"],
@@ -19,6 +28,7 @@ const CONNECTOR_CAPABILITY_MAP = {
  *   connector?: string | null | undefined,
  *   apply?: boolean | undefined,
  *   preferManaged?: boolean | undefined,
+ *   linkedinInvitationQuota?: number | null | undefined,
  *   codexHome?: string | null | undefined,
  *   claudeCli?: string | null | undefined,
  *   runtimeAccountHints?: unknown[] | null | undefined,
@@ -31,6 +41,11 @@ export function mapUserRuntimeAccounts(rawUser, options) {
   const connectorFilter = normalizeNullableString(options.connector)?.toLowerCase() ?? null;
   const apply = Boolean(options.apply);
   const preferManaged = Boolean(options.preferManaged);
+  const linkedinInvitationQuota = (typeof options.linkedinInvitationQuota === "number"
+    && Number.isInteger(options.linkedinInvitationQuota)
+    && options.linkedinInvitationQuota >= 1)
+    ? options.linkedinInvitationQuota
+    : null;
   const probeResult = probeUserHarnessConnections(user, {
     runtime,
     connector: connectorFilter,
@@ -163,7 +178,42 @@ export function mapUserRuntimeAccounts(rawUser, options) {
         let mappedAccount = existingManagedAccount ?? null;
         let preferredApplied = false;
 
-        if (apply && action === "ready_to_map") {
+        // Compute quotaAction BEFORE the write-branch decision. The write
+        // branch uses it to decide whether to enter the writer at all.
+        let quotaAction = "none";
+        if (capability === "linkedin") {
+          if (BLOCKED_LINKEDIN_QUOTA_ACTIONS.has(action)) {
+            quotaAction = "none";
+          } else {
+            // Resolve the upsert match key the same way upsertUserConnectedAccount does.
+            const existingAtUpsertKey = findAccountAtUpsertKey(updatedUser, {
+              capability,
+              providerAccountId: discoveredAccount?.providerAccountId ?? null,
+              harnessConnectionId: existingManagedConnection?.id ?? null,
+            });
+            const existingPositiveInvitations = resolvePositiveInvitations(
+              existingAtUpsertKey?.automationControls?.weeklyQuotas?.invitations ?? null,
+            );
+
+            if (linkedinInvitationQuota !== null) {
+              quotaAction = "explicit_override";
+            } else if (existingPositiveInvitations === null) {
+              quotaAction = "defaulted";
+            } else {
+              quotaAction = "preserved";
+            }
+          }
+        }
+
+        const shouldEnterWriteBranch = apply && (
+          action === "ready_to_map"
+          || (action === "already_mapped"
+            && capability === "linkedin"
+            && quotaAction !== "preserved"
+            && quotaAction !== "none")
+        );
+
+        if (shouldEnterWriteBranch) {
           updatedUser = upsertUserHarnessConnection(updatedUser, {
             runtime: probe.runtime,
             connector: probe.connector,
@@ -180,6 +230,18 @@ export function mapUserRuntimeAccounts(rawUser, options) {
             throw new Error(`Failed to persist harness connection ${probe.runtime}:${probe.connector}.`);
           }
 
+          /** @type {{ weeklyQuotas: { invitations: number } } | undefined} */
+          let automationControlsForWrite;
+          if (quotaAction === "explicit_override" && linkedinInvitationQuota !== null) {
+            automationControlsForWrite = {
+              weeklyQuotas: { invitations: linkedinInvitationQuota },
+            };
+          } else if (quotaAction === "defaulted") {
+            automationControlsForWrite = {
+              weeklyQuotas: { invitations: LINKEDIN_DEFAULT_WEEKLY_INVITATIONS },
+            };
+          }
+
           updatedUser = upsertUserConnectedAccount(updatedUser, {
             capability,
             handle,
@@ -187,6 +249,7 @@ export function mapUserRuntimeAccounts(rawUser, options) {
             harnessConnectionId: persistedConnection.id,
             providerAccountId: discoveredAccount?.providerAccountId ?? null,
             preferred: preferManaged,
+            ...(automationControlsForWrite ? { automationControls: automationControlsForWrite } : {}),
             metadata: discoveredAccount?.metadata ?? existingManagedAccount?.metadata ?? existingAccount?.metadata ?? null,
             notes: existingManagedAccount?.notes ?? existingAccount?.notes ?? null,
           });
@@ -217,6 +280,7 @@ export function mapUserRuntimeAccounts(rawUser, options) {
           registration: probe.registration,
           action,
           preferredApplied,
+          quotaAction,
           reason,
           discoveredAccount: discoveredAccount
             ? {
@@ -230,6 +294,22 @@ export function mapUserRuntimeAccounts(rawUser, options) {
           existingAccount: existingAccount ? shapeAccountRef(existingAccount) : null,
           mappedAccount: mappedAccount ? shapeAccountRef(mappedAccount) : null,
         });
+      }
+    }
+  }
+
+  /** @type {string[]} */
+  const warnings = [];
+  if (apply) {
+    for (const mapping of mappings) {
+      if (mapping.quotaAction === "defaulted") {
+        const handleRef = mapping.discoveredAccount?.handle
+          ?? mapping.mappedAccount?.handle
+          ?? mapping.existingAccount?.handle
+          ?? "<unknown handle>";
+        warnings.push(
+          `map-runtime defaulted LinkedIn quota to ${LINKEDIN_DEFAULT_WEEKLY_INVITATIONS}/week for ${mapping.runtime}:${mapping.connector} -> ${handleRef}. Re-run users accounts add ... --max-connection-requests <n> to set a different value.`,
+        );
       }
     }
   }
@@ -262,8 +342,46 @@ export function mapUserRuntimeAccounts(rawUser, options) {
       excludedCount: mappings.filter((mapping) => mapping.action === "excluded_identity").length,
     },
     mappings,
+    warnings,
     updatedUser
   };
+}
+
+/**
+ * Look up the account that `upsertUserConnectedAccount` would match on, using
+ * the exact same key as `src/core/upsert-user-harness-connection.js:71-81`.
+ *
+ * @param {import("../schema/user.js").userSchema._type} user
+ * @param {{
+ *   capability: string,
+ *   providerAccountId: string | null,
+ *   harnessConnectionId: string | null,
+ * }} input
+ */
+function findAccountAtUpsertKey(user, input) {
+  return user.accounts.find((account) => {
+    if (account.capability !== input.capability) {
+      return false;
+    }
+    if (input.providerAccountId) {
+      return account.providerAccountId === input.providerAccountId;
+    }
+    return account.harnessConnectionId === input.harnessConnectionId;
+  }) ?? null;
+}
+
+/**
+ * Treats stored values that are not a positive integer (null, 0, NaN, etc.) as
+ * "no quota set" so the W1/W2 default can heal legacy 0s.
+ *
+ * @param {unknown} value
+ * @returns {number | null}
+ */
+function resolvePositiveInvitations(value) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    return null;
+  }
+  return value;
 }
 
 /**

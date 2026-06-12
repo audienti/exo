@@ -224,6 +224,7 @@ export function completeOnboardingUser(input) {
     user: mapping.updatedUser,
     runtime,
     mapping,
+    warnings: Array.isArray(mapping.warnings) ? mapping.warnings : [],
     message: mappedCount > 0
       ? created
         ? `Registered ${mapping.updatedUser.label} and mapped managed account coverage.`

@@ -49,6 +49,40 @@ function seedBrowserEvidence(profilePath, input) {
 }
 
 /**
+ * Force the LinkedIn invitations quota on a user's harness-backed LinkedIn
+ * account to a specific value by writing directly to the SQLite payload — used
+ * by tests that need legacy 0 or another value the strict CLI parser rejects.
+ *
+ * @param {string} stateDir
+ * @param {string} userId
+ * @param {number} quotaValue
+ */
+function forceLinkedinQuotaInDb(stateDir, userId, quotaValue) {
+  const localStateDir = path.join(stateDir, ".exo");
+  const dbPath = fs.existsSync(path.join(localStateDir, "exo.db"))
+    ? path.join(localStateDir, "exo.db")
+    : path.join(stateDir, "exo.db");
+  const db = new DatabaseSync(dbPath);
+  const row = db.prepare("SELECT id, payload_json FROM users WHERE id = ?").get(userId);
+  if (!row) {
+    db.close();
+    throw new Error(`Could not find user ${userId} in DB at ${dbPath}`);
+  }
+  const userRecord = JSON.parse(row.payload_json);
+  const linkedin = userRecord.accounts.find((account) => account.capability === "linkedin" && account.sourceType === "harness-connection");
+  if (!linkedin) {
+    db.close();
+    throw new Error(`Could not find harness-backed LinkedIn account on user ${userId}`);
+  }
+  linkedin.automationControls = linkedin.automationControls ?? { weeklyQuotas: {} };
+  linkedin.automationControls.weeklyQuotas = linkedin.automationControls.weeklyQuotas ?? {};
+  linkedin.automationControls.weeklyQuotas.invitations = quotaValue;
+  db.prepare("UPDATE users SET payload_json = ? WHERE id = ?").run(JSON.stringify(userRecord), userId);
+  db.close();
+  return userRecord;
+}
+
+/**
  * @param {string} filePath
  * @param {unknown} capture
  * @param {{ exitCode?: number | null }} [options]
@@ -2134,8 +2168,6 @@ test("claimed browser identities can be pinned to a company and sticky resolutio
           "gmail:operator-linkedin@example.com",
           "--max-profile-visits",
           "75",
-          "--max-connection-requests",
-          "40",
           "--max-inmail-messages",
           "20",
           "--json"
@@ -2154,7 +2186,7 @@ test("claimed browser identities can be pinned to a company and sticky resolutio
     ]);
     assert.deepEqual(claimed.automationControls.weeklyQuotas, {
       profileVisits: 75,
-      invitations: 40,
+      invitations: null,
       messages: 20
     });
 
@@ -6970,43 +7002,10 @@ test("daily and next surface connection-request quota gaps and invitation defici
       { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
     );
 
-    const beforeQuotaDaily = JSON.parse(
-      execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
-        cwd: repoRoot,
-        env: codexEnv
-      }).toString()
-    );
-
-    assert.equal(beforeQuotaDaily.capacity.linkedin.status, "needs_configuration");
-    assert.equal(beforeQuotaDaily.items[0].cadenceEffect, "capacity_configuration_needed");
-    assert.equal(beforeQuotaDaily.items[0].source.kind, "configure_connection_request_quota");
-    assert.equal(beforeQuotaDaily.items[0].guidance.key, "configure_connection_request_quota");
-    assert.match(beforeQuotaDaily.items[0].recommendedAction, /set a durable linkedin connection-request quota/i);
-
-    execFileSync(
-      "node",
-      [
-        cliPath,
-        "users",
-        "accounts",
-        "add",
-        user.id,
-        "--capability",
-        "linkedin",
-        "--handle",
-        "quota-user",
-        "--runtime",
-        "codex",
-        "--connector",
-        "unipile",
-        "--provider-account-id",
-        "acct-linkedin-1",
-        "--max-connection-requests",
-        "125",
-        "--json"
-      ],
-      { cwd: repoRoot, env: codexEnv }
-    );
+    // Under W1, the initial `users accounts add` for LinkedIn already writes the
+    // default 125/week invitations quota — capacity is computable immediately
+    // without an explicit `--max-connection-requests` flag. The test no longer
+    // needs the obsolete "before" assertion that exercised the pre-W1 gap.
 
     const afterQuotaDaily = JSON.parse(
       execFileSync("node", [cliPath, "daily", "--user", user.id, "--json"], {
@@ -7097,8 +7096,6 @@ test("daily and next require execution assignment before seeding more targets wh
         "profiles",
         "claim",
         profile.id,
-        "--max-connection-requests",
-        "125",
         "--json"
       ],
       { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
@@ -8057,8 +8054,6 @@ test("motion queue exposes discovered and queued research inventory and daily us
         "profiles",
         "claim",
         profile.id,
-        "--max-connection-requests",
-        "125",
         "--json"
       ],
       { cwd: repoRoot, env: { ...process.env, EXO_STATE_DIR: tempDir } }
@@ -12035,8 +12030,6 @@ test("next surfaces a parallel support action while the live connection-request 
         "profiles",
         "claim",
         profile.id,
-        "--max-connection-requests",
-        "0",
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
@@ -12109,7 +12102,7 @@ test("next surfaces a parallel support action while the live connection-request 
       { cwd: tempDir, encoding: "utf8" }
     );
 
-    const userWithAccount = JSON.parse(
+    let userWithAccount = JSON.parse(
       execFileSync(
         "node",
         [
@@ -12129,13 +12122,17 @@ test("next surfaces a parallel support action while the live connection-request 
           "--provider-account-id",
           "acct-linkedin-1",
           "--max-connection-requests",
-          "0",
+          "125",
           "--preferred",
           "--json"
         ],
         { cwd: tempDir, encoding: "utf8", env: codexEnv }
       ).toString()
     );
+    // Force the LinkedIn account's invitations quota to 0 in the DB so the next
+    // planner sees no outbound capacity and surfaces the parallel-support path.
+    // The strict CLI parser rejects 0; legacy data on disk can still carry it.
+    userWithAccount = forceLinkedinQuotaInDb(tempDir, userWithAccount.id, 0);
     const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
     assert.ok(linkedinAccount);
     const syncedAt = new Date().toISOString();
@@ -13300,8 +13297,6 @@ test("next does not surface a held reserve branch as due after fallback enrichme
         "profiles",
         "claim",
         profile.id,
-        "--max-connection-requests",
-        "0",
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8" }
@@ -13369,12 +13364,15 @@ test("next does not surface a held reserve branch as due after fallback enrichme
         "--provider-account-id",
         "acct-linkedin-1",
         "--max-connection-requests",
-        "0",
+        "125",
         "--preferred",
         "--json"
       ],
       { cwd: tempDir, encoding: "utf8", env: codexEnv }
     );
+    // Force the LinkedIn account's invitations quota to 0 in the DB so the
+    // planner sees no outbound capacity for the held reserve branch test.
+    forceLinkedinQuotaInDb(tempDir, user.id, 0);
 
     execFileSync(
       "node",
@@ -16264,9 +16262,8 @@ test("CLI help explains agent-safe usage and profile gating", () => {
     cwd: repoRoot,
     encoding: "utf8"
   });
-  assert.match(profileClaimHelp, /max-connection-requests/);
+  assert.doesNotMatch(profileClaimHelp, /max-connection-requests/);
   assert.match(profileClaimHelp, /max-inmail-messages/);
-  assert.match(profileClaimHelp, /weekly quotas/);
 
   const configHelp = execFileSync("node", [cliPath, "config", "--help"], {
     cwd: repoRoot,
