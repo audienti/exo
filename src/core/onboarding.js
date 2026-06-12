@@ -14,7 +14,7 @@ import {
   listCompanies,
   listMotions,
   listUsers,
-  updateUser,
+  mutateUserById,
 } from "../db/database.js";
 import {
   getDefaultGlobalHomeStateDir,
@@ -204,15 +204,19 @@ export function completeOnboardingUser(input) {
     created = true;
   }
 
-  const mapping = mapUserRuntimeAccounts(user, {
-    runtime,
-    apply: true,
-    preferManaged: true,
-    codexHome: process.env.CODEX_HOME ?? null,
-    claudeCli: process.env.EXO_CLAUDE_CLI ?? null,
+  // Serialize the apply through mutateUserById so concurrent CLI-driven
+  // claims against the same user cannot drop the LinkedIn or Gmail accounts
+  // that onboarding has just mapped.
+  const { result: mapping } = mutateUserById(user.id, (latestRaw) => {
+    const next = mapUserRuntimeAccounts(latestRaw, {
+      runtime,
+      apply: true,
+      preferManaged: true,
+      codexHome: process.env.CODEX_HOME ?? null,
+      claudeCli: process.env.EXO_CLAUDE_CLI ?? null,
+    });
+    return { user: next.updatedUser, result: next };
   });
-
-  updateUser(mapping.updatedUser);
 
   const mappedCount = mapping.counts.mappedCount + mapping.counts.alreadyMappedCount;
   return {
@@ -220,6 +224,7 @@ export function completeOnboardingUser(input) {
     user: mapping.updatedUser,
     runtime,
     mapping,
+    warnings: Array.isArray(mapping.warnings) ? mapping.warnings : [],
     message: mappedCount > 0
       ? created
         ? `Registered ${mapping.updatedUser.label} and mapped managed account coverage.`

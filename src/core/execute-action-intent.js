@@ -47,9 +47,9 @@ import {
   listInboundObservations,
   listMotions,
   moveProspectToMotionRows,
+  mutateUserById,
   setAccountDisposition,
   setProspectDisposition,
-  updateUser,
   updateCompany,
   updateMotion,
   updateMotionWithRetry,
@@ -808,23 +808,27 @@ function runClaimRuntimeAccount(args) {
   if (!args.userId || !args.capability || !args.runtime || !args.connector || !args.handle) {
     throw new Error("claimRuntimeAccount requires userId, capability, runtime, connector, and handle.");
   }
-  const rawUser = findUserById(args.userId);
-  if (!rawUser) throw new Error(`User not found: ${args.userId}`);
 
-  const result = claimUserRuntimeAccount(rawUser, {
-    capability: args.capability,
-    handle: args.handle,
-    label: args.label ?? null,
-    runtime: args.runtime,
-    connector: args.connector,
-    providerAccountId: args.providerAccountId ?? null,
-    preferred: typeof args.preferred === "boolean" ? args.preferred : true,
-    metadata: args.metadata && typeof args.metadata === "object" ? args.metadata : null,
-    notes: args.notes ?? null,
-    codexHome: process.env.CODEX_HOME ?? null,
-    claudeCli: process.env.EXO_CLAUDE_CLI ?? null,
+  // Run the read/mutate/write inside one home-database transaction so two
+  // parallel claims against the same user cannot lose the other writer's
+  // connected account. See src/db/database.js mutateUserById for the
+  // serialization contract.
+  const { result } = mutateUserById(args.userId, (latestRaw) => {
+    const claimed = claimUserRuntimeAccount(latestRaw, {
+      capability: args.capability,
+      handle: args.handle,
+      label: args.label ?? null,
+      runtime: args.runtime,
+      connector: args.connector,
+      providerAccountId: args.providerAccountId ?? null,
+      preferred: typeof args.preferred === "boolean" ? args.preferred : true,
+      metadata: args.metadata && typeof args.metadata === "object" ? args.metadata : null,
+      notes: args.notes ?? null,
+      codexHome: process.env.CODEX_HOME ?? null,
+      claudeCli: process.env.EXO_CLAUDE_CLI ?? null,
+    });
+    return { user: claimed.updatedUser, result: claimed };
   });
-  updateUser(result.updatedUser);
 
   return {
     ok: true,

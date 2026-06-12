@@ -849,7 +849,17 @@ export function chooseNextQueueTask(
   const sendCircuitBreaker = getSendCircuitBreaker(hostState, now);
   const canaryCooldown = getCanaryCooldown(hostState, now);
   const automationBlockReason = getInboundAutomationRolloutBlockReason(automationWarnings, sendMode, automationHealthWarnings);
-  const orderedTasks = getQueueTasksForExecution(queue, forceRetrieval, hostState, now);
+  // When inbound health is degraded the live send rollout gate is closed, so
+  // running another send_message is a guaranteed block. Promote due (and
+  // waiting) inbound retrieval recovery work in that case so the drainer
+  // actively heals the gate instead of treating the pass as a no-op while
+  // sends pile up. Manual-only surface warnings have no in-queue recovery
+  // task (operator must disable the surface), so they are not promoted.
+  const healthGatePromotesRetrieval = Boolean(automationBlockReason)
+    && Array.isArray(automationHealthWarnings)
+    && automationHealthWarnings.length > 0;
+  const effectiveForceRetrieval = forceRetrieval || healthGatePromotesRetrieval;
+  const orderedTasks = getQueueTasksForExecution(queue, effectiveForceRetrieval, hostState, now);
   const candidateTasks = shouldPreferBackfillSlice(passState)
     ? [...orderedTasks.filter(isBackfillInboundSyncTask), ...orderedTasks.filter((task) => !isBackfillInboundSyncTask(task))]
     : orderedTasks;

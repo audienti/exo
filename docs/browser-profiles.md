@@ -74,12 +74,11 @@ exo profiles claim <profile-id> \
   --scope work \
   --account linkedin:operator-linkedin@example.com \
   --account gmail:operator-linkedin@example.com \
-  --max-connection-requests 40 \
   --max-inmail-messages 20
 ```
 
 That is how Exo moves from "browser mechanics" to "execution identity."
-It is also where account-level weekly outreach pacing is configured.
+It is also where browser-profile-level pacing is configured.
 
 ## Weekly quotas
 
@@ -87,9 +86,8 @@ Exo should mirror the existing operator control shape here instead of inventing 
 
 The durable weekly quota buckets are:
 
-- `profile visits`
-- `invitations` / connection requests
-- `messages`
+- `profile visits` and `messages` — configured on the browser profile via `exo profiles claim`
+- `invitations` / connection requests — configured on the user-account record via `exo users accounts add ... --max-connection-requests <n>` or `exo users accounts map-runtime ... --max-connection-requests <n>`. Defaults to 125/week for harness-backed LinkedIn accounts when omitted.
 
 For LinkedIn work, `messages` is the pacing bucket that covers direct messages and InMail. Fresh InMail credits are still a separate live observation, not a static config knob.
 
@@ -98,11 +96,10 @@ Use:
 ```bash
 exo profiles claim <profile-id> \
   --max-profile-visits 75 \
-  --max-connection-requests 40 \
   --max-inmail-messages 20
 ```
 
-You can edit those settings later by running `exo profiles claim` again on the same profile.
+You can edit those profile-level settings later by running `exo profiles claim` again on the same profile. Connection-request quotas are edited on the account, not the profile (see `exo users accounts add --help`).
 
 ## Example
 

@@ -71,7 +71,6 @@ exo profiles claim <profile-id> \
   --workspace primary \
   --scope work \
   --account linkedin:operator-linkedin@example.com \
-  --max-connection-requests 40 \
   --max-inmail-messages 20
 ```
 

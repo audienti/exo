@@ -1038,6 +1038,13 @@ export function formatAgentDoctorReport(report) {
     if (scheduler.loaded && (String(scheduler.lastExitCode) === "126" || String(scheduler.lastExitCode) === "78")) {
       lines.push(`Last launchd exit code ${scheduler.lastExitCode} usually means macOS privacy controls (TCC) blocked the runner. Reinstall the routine to move the launchd entry point outside protected folders: exo agent install-routine --runtime codex --install`);
     }
+    if (scheduler.stateDirMismatch) {
+      const reinstallCommand = scheduler.reinstallCommand ?? "exo agent install-routine --runtime codex --install";
+      const bootoutCommand = scheduler.bootoutCommand ?? `launchctl bootout ${scheduler.target}`;
+      lines.push(`Loaded launchd job is draining a different EXO_STATE_DIR than this workspace (loaded=${scheduler.loadedStateDir ?? "unknown"}, expected=${scheduler.expectedStateDir ?? "unknown"}). The scheduled drainer is operating on a stale state scope.`);
+      lines.push(`Reinstall the routine to converge: ${reinstallCommand}`);
+      lines.push(`Or bootout the stale job first: ${bootoutCommand}`);
+    }
     const foreignAgents = Array.isArray(scheduler.foreignAgents)
       ? scheduler.foreignAgents.filter((agent) => agent?.referencesStateDir !== false)
       : [];
@@ -1608,10 +1615,46 @@ export function scanForeignExoLaunchAgents(input) {
 }
 
 /**
- * @param {string | null} [stateDir]
+ * Pull `EXO_STATE_DIR` out of `launchctl print` output. The loaded job's state
+ * dir lives inside the `environment = { ... }` block that launchd echoes back
+ * from the plist's `EnvironmentVariables`, so when status sees a different
+ * value than the currently pinned EXO_STATE_DIR, two state stores are in play
+ * and the operator needs to reinstall or bootout to converge.
+ *
+ * @param {string} output
  */
-export function inspectAgentSchedulerState(stateDir = null) {
-  if (process.platform !== "darwin") {
+export function parseLoadedLaunchAgentStateDir(output) {
+  if (typeof output !== "string" || !output.length) return null;
+  const match = output.match(/^\s*EXO_STATE_DIR\s*(?:=>|=)\s*(.+)$/m);
+  if (!match) return null;
+  const trimmed = match[1].trim().replace(/^"|"$/g, "").replace(/;$/, "").trim();
+  return trimmed.length ? trimmed : null;
+}
+
+/**
+ * @param {string | null | undefined} stateDir
+ */
+function normalizeStateDirForComparison(stateDir) {
+  if (!stateDir || typeof stateDir !== "string") return null;
+  const trimmed = stateDir.trim();
+  if (!trimmed.length) return null;
+  return trimmed.replace(/\/+$/, "");
+}
+
+/**
+ * @param {string | null} [stateDir]
+ * @param {{
+ *   launchAgentsDir?: string,
+ *   uid?: number | null,
+ *   printLaunchctl?: (target: string) => string,
+ *   homeDir?: string,
+ *   username?: string,
+ *   platform?: NodeJS.Platform,
+ * }} [options]
+ */
+export function inspectAgentSchedulerState(stateDir = null, options = {}) {
+  const platform = options.platform ?? process.platform;
+  if (platform !== "darwin") {
     return {
       kind: "none",
       installed: false,
@@ -1619,13 +1662,24 @@ export function inspectAgentSchedulerState(stateDir = null) {
     };
   }
 
-  const username = os.userInfo().username;
-  const uid = process.getuid?.() ?? null;
+  const homeDir = options.homeDir ?? os.homedir();
+  const username = options.username ?? os.userInfo().username;
+  const uid = options.uid !== undefined ? options.uid : (process.getuid?.() ?? null);
+  const launchAgentsDir = options.launchAgentsDir ?? path.join(homeDir, "Library", "LaunchAgents");
+  const printLaunchctl = options.printLaunchctl
+    ?? ((target) => execFileSync("launchctl", ["print", target], { encoding: "utf8" }));
   const label = buildLaunchAgentLabel(username);
-  const installPath = path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`);
+  const installPath = path.join(launchAgentsDir, `${label}.plist`);
   const target = uid === null ? label : `gui/${uid}/${label}`;
   const installed = fs.existsSync(installPath);
-  const foreignAgents = scanForeignExoLaunchAgents({ canonicalLabel: label, stateDir, uid });
+  const foreignAgents = scanForeignExoLaunchAgents({
+    canonicalLabel: label,
+    stateDir,
+    uid,
+    launchAgentsDir,
+    printLaunchctl,
+  });
+  const normalizedExpectedStateDir = normalizeStateDirForComparison(stateDir);
 
   if (!installed) {
     return {
@@ -1644,17 +1698,29 @@ export function inspectAgentSchedulerState(stateDir = null) {
       lastExitCode: null,
       error: null,
       foreignAgents,
+      loadedStateDir: null,
+      expectedStateDir: stateDir ?? null,
+      stateDirMismatch: false,
+      reinstallCommand: null,
+      bootoutCommand: uid === null ? null : `launchctl bootout ${target}`,
     };
   }
 
   try {
-    const output = execFileSync("launchctl", ["print", target], { encoding: "utf8" });
+    const output = printLaunchctl(target);
     const state = output.match(/^\s*state = (.+)$/m)?.[1]?.trim() ?? null;
     const pidRaw = output.match(/^\s*pid = (\d+)/m)?.[1] ?? null;
     const runsRaw = output.match(/^\s*runs = (\d+)/m)?.[1] ?? null;
     const lastExitRaw = output.match(/^\s*last exit code = (.+)$/m)?.[1]?.trim() ?? null;
     const runIntervalRaw = output.match(/^\s*run interval = (\d+) seconds$/m)?.[1] ?? null;
     const pid = pidRaw ? Number(pidRaw) : null;
+    const loadedStateDir = parseLoadedLaunchAgentStateDir(output);
+    const normalizedLoadedStateDir = normalizeStateDirForComparison(loadedStateDir);
+    const stateDirMismatch = Boolean(
+      normalizedExpectedStateDir
+      && normalizedLoadedStateDir
+      && normalizedExpectedStateDir !== normalizedLoadedStateDir
+    );
     return {
       kind: "launchd",
       label,
@@ -1671,6 +1737,15 @@ export function inspectAgentSchedulerState(stateDir = null) {
       lastExitCode: lastExitRaw && lastExitRaw !== "(never exited)" ? lastExitRaw : null,
       error: null,
       foreignAgents,
+      loadedStateDir,
+      expectedStateDir: stateDir ?? null,
+      stateDirMismatch,
+      reinstallCommand: stateDirMismatch
+        ? "exo agent install-routine --runtime codex --install"
+        : null,
+      bootoutCommand: stateDirMismatch && uid !== null
+        ? `launchctl bootout ${target}`
+        : null,
     };
   } catch (error) {
     return {
@@ -1689,6 +1764,11 @@ export function inspectAgentSchedulerState(stateDir = null) {
       lastExitCode: null,
       error: error instanceof Error ? error.message : String(error),
       foreignAgents,
+      loadedStateDir: null,
+      expectedStateDir: stateDir ?? null,
+      stateDirMismatch: false,
+      reinstallCommand: null,
+      bootoutCommand: uid === null ? null : `launchctl bootout ${target}`,
     };
   }
 }

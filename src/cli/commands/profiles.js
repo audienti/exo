@@ -52,7 +52,7 @@ Status meanings:
 Typical flow:
   exo profiles discover --json
   exo profiles add --browser chrome --label work-linkedin --profile-directory "Profile 2" --capability linkedin --capability sales-navigator
-  exo profiles claim <profile-id> --label workspace-main --workspace workspace --account linkedin:operator-linkedin --max-connection-requests 40 --max-inmail-messages 20
+  exo profiles claim <profile-id> --label workspace-main --workspace workspace --account linkedin:operator-linkedin --max-inmail-messages 20
   exo profiles list
   exo profiles capabilities --json
   exo profiles resolve --capability linkedin --json
@@ -142,7 +142,6 @@ Rules:
     .option("--scope <scope>", "unknown | work | personal | shared")
     .option("--account <mapping>", "Capability mapping like linkedin:operator-linkedin", collect, [])
     .option("--max-profile-visits <count>", "Weekly quota for profile visits, or 'unlimited'")
-    .option("--max-connection-requests <count>", "Weekly quota for connection requests/invitations, or 'unlimited'")
     .option("--max-messages <count>", "Weekly quota for LinkedIn messages, or 'unlimited'")
     .option("--max-inmail-messages <count>", "Alias for the weekly LinkedIn messages quota, or 'unlimited'")
     .option("--json", "Emit machine-readable JSON")
@@ -152,10 +151,11 @@ Rules:
 Examples:
   exo profiles claim <profile-id> --label workspace-main --owner operator --workspace workspace --scope work --account linkedin:operator-linkedin --account gmail:operator@example.com
   exo profiles claim <profile-id> --label client-main --workspace client --account hubspot:client-main
-  exo profiles claim <profile-id> --label workspace-main --max-connection-requests 40 --max-inmail-messages 20
+  exo profiles claim <profile-id> --label workspace-main --max-profile-visits 60 --max-inmail-messages 20
 
 This is the step that turns a browser context into a stable execution identity.
-It is also the edit path for account-level weekly quotas.
+LinkedIn connection-request weekly quotas are now configured on the user-account record
+(see exo users accounts add --help and exo users accounts map-runtime --help).
 `
     )
     .action((profileId, options) => {
@@ -689,7 +689,6 @@ function parseAccountMapping(value) {
  * @returns {{
  *   weeklyQuotas?: {
  *     profileVisits?: number | null,
- *     invitations?: number | null,
  *     messages?: number | null
  *   }
  * } | null}
@@ -698,19 +697,15 @@ function buildAutomationControlsFromOptions(options) {
   const profileVisits = options.maxProfileVisits !== undefined
     ? parseQuotaValue(options.maxProfileVisits, "max-profile-visits")
     : undefined;
-  const invitations = options.maxConnectionRequests !== undefined
-    ? parseQuotaValue(options.maxConnectionRequests, "max-connection-requests")
-    : undefined;
   const messageQuota = parseMessageQuotaOption(options.maxMessages, options.maxInmailMessages);
 
-  if (profileVisits === undefined && invitations === undefined && messageQuota === undefined) {
+  if (profileVisits === undefined && messageQuota === undefined) {
     return null;
   }
 
   return {
     weeklyQuotas: {
       ...(profileVisits !== undefined ? { profileVisits } : {}),
-      ...(invitations !== undefined ? { invitations } : {}),
       ...(messageQuota !== undefined ? { messages: messageQuota } : {})
     }
   };

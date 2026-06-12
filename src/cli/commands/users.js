@@ -5,6 +5,10 @@ import { addUser } from "../../core/add-user.js";
 import { buildUserIntake } from "../../core/build-user-intake.js";
 import { mapUserRuntimeAccounts } from "../../core/map-user-runtime-accounts.js";
 import {
+  LINKEDIN_DEFAULT_WEEKLY_INVITATIONS,
+  LINKEDIN_MAX_WEEKLY_INVITATIONS,
+} from "../../core/user-account-defaults.js";
+import {
   removeManagedAccountExclusion,
   removeUserConnectedAccount,
   upsertManagedAccountExclusion,
@@ -22,7 +26,9 @@ import {
   insertUser,
   listBrowserProfiles,
   listUsers,
-  updateUser
+  mutateUserById,
+  updateUser,
+  UserDeletionBlockedError
 } from "../../db/database.js";
 import {
   renderUserHarnessProbe,
@@ -54,6 +60,7 @@ Examples:
   exo users accounts map-runtime <user-id> --runtime codex --apply --json
   exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --runtime codex --connector <connector-from-probe> --provider-account-id <provider-account-id> --preferred
   exo users accounts add <user-id> --capability linkedin --handle operator-linkedin --runtime codex --connector <connector-from-probe> --provider-account-id acct-linkedin-1 --preferred --max-connection-requests 125
+  exo users accounts map-runtime <user-id> --runtime codex --apply --max-connection-requests 125 --json
   exo users accounts remove <user-id> <account-id> --exclude --json
   exo users accounts exclude <user-id> --runtime codex --connector unipile --capability linkedin --provider-account-id acct-linkedin-2 --label "Wrong LinkedIn" --json
   exo users accounts add <user-id> --capability gmail --handle operator@example.com --runtime codex --connector gmail --provider-account-id <provider-account-id> --preferred
@@ -176,7 +183,29 @@ Rules:
         return;
       }
 
-      deleteUser(String(raw.id));
+      try {
+        deleteUser(String(raw.id));
+      } catch (error) {
+        if (error instanceof UserDeletionBlockedError) {
+          const blocked = {
+            removed: false,
+            user: {
+              id: String(raw.id),
+              label: String(raw.label),
+            },
+            blockedBy: error.references,
+            message: error.message,
+          };
+          if (options.json) {
+            console.log(JSON.stringify(blocked, null, 2));
+          } else {
+            console.error(error.message);
+          }
+          process.exitCode = 1;
+          return;
+        }
+        throw error;
+      }
       const result = {
         removed: true,
         user: {
@@ -273,21 +302,22 @@ Rules:
     .option("--notes <notes>", "Freeform notes")
     .option("--json", "Emit machine-readable JSON")
     .action((userId, options) => {
-      const raw = findUserById(userId);
-      if (!raw) {
+      if (!findUserById(userId)) {
         console.error(`User not found: ${userId}`);
         process.exitCode = 1;
         return;
       }
 
-      const updated = upsertUserHarnessConnection(raw, {
-        runtime: options.runtime,
-        connector: options.connector,
-        label: options.label ?? null,
-        status: options.status ? userHarnessConnectionStatusSchema.parse(options.status) : null,
-        notes: options.notes ?? null
+      const { user: updated } = mutateUserById(userId, (latestRaw) => {
+        const next = upsertUserHarnessConnection(latestRaw, {
+          runtime: options.runtime,
+          connector: options.connector,
+          label: options.label ?? null,
+          status: options.status ? userHarnessConnectionStatusSchema.parse(options.status) : null,
+          notes: options.notes ?? null
+        });
+        return { user: next };
       });
-      updateUser(updated);
 
       if (options.json) {
         console.log(JSON.stringify(updated, null, 2));
@@ -347,12 +377,11 @@ Rules:
     .option("--connector <connector>", "Harness connector such as gmail or chrome")
     .option("--provider-account-id <account-id>", "Exact external account identity for managed connector accounts")
     .option("--preferred", "Mark this as the preferred account for the capability")
-    .option("--max-connection-requests <count>", "Weekly quota for connection requests/invitations, or 'unlimited'")
+    .option("--max-connection-requests <count>", "Weekly quota for connection requests/invitations (positive integer). Defaults to 125 for LinkedIn on first add when omitted; re-adds preserve the previously stored value.")
     .option("--notes <notes>", "Freeform notes")
     .option("--json", "Emit machine-readable JSON")
     .action((userId, options) => {
-      const raw = findUserById(userId);
-      if (!raw) {
+      if (!findUserById(userId)) {
         console.error(`User not found: ${userId}`);
         process.exitCode = 1;
         return;
@@ -378,45 +407,90 @@ Rules:
         return;
       }
 
-      let nextRaw = raw;
-      let harnessConnectionId = null;
+      if (options.profile && options.maxConnectionRequests !== undefined) {
+        console.error("--max-connection-requests is not valid for profile-backed accounts. LinkedIn quotas are only configurable on harness-backed accounts (--runtime + --connector).");
+        process.exitCode = 1;
+        return;
+      }
 
-      if (options.runtime || options.connector) {
-        if (!options.runtime || !options.connector) {
-          console.error("Harness-backed accounts require both --runtime and --connector.");
+      let parsedInvitations;
+      if (options.maxConnectionRequests !== undefined) {
+        try {
+          parsedInvitations = parseInvitationsQuotaValue(options.maxConnectionRequests);
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
           process.exitCode = 1;
           return;
         }
-
-        const probe = probeRuntimeConnectorAvailability(options.runtime, options.connector, {
-          codexHome: process.env.CODEX_HOME ?? null,
-          claudeCli: process.env.EXO_CLAUDE_CLI ?? null
-        });
-        const updatedHarnessUser = upsertUserHarnessConnection(nextRaw, {
-          runtime: options.runtime,
-          connector: options.connector,
-          status: probe.detectedStatus
-        });
-        nextRaw = updatedHarnessUser;
-        harnessConnectionId = updatedHarnessUser.harnessConnections.find(
-          (connection) =>
-            connection.runtime.toLowerCase() === options.runtime.toLowerCase()
-            && connection.connector.toLowerCase() === options.connector.toLowerCase()
-        )?.id ?? null;
       }
 
-      const updated = upsertUserConnectedAccount(nextRaw, {
-        capability: browserProfileCapabilitySchema.parse(options.capability),
-        handle: options.handle,
-        label: options.label ?? null,
-        browserProfileId: options.profile ?? null,
-        harnessConnectionId,
-        providerAccountId: options.providerAccountId ?? null,
-        preferred: options.preferred ? true : null,
-        automationControls: buildAccountAutomationControlsFromOptions(options),
-        notes: options.notes ?? null
+      if ((options.runtime || options.connector) && (!options.runtime || !options.connector)) {
+        console.error("Harness-backed accounts require both --runtime and --connector.");
+        process.exitCode = 1;
+        return;
+      }
+
+      // Probing the runtime is a side-effecty external call. Do it once
+      // outside the user-row transaction so concurrent writers do not stack
+      // up holding a BEGIN IMMEDIATE lock while a probe is in flight.
+      const probe = (options.runtime && options.connector)
+        ? probeRuntimeConnectorAvailability(options.runtime, options.connector, {
+            codexHome: process.env.CODEX_HOME ?? null,
+            claudeCli: process.env.EXO_CLAUDE_CLI ?? null
+          })
+        : null;
+
+      const capability = browserProfileCapabilitySchema.parse(options.capability);
+
+      const outcome = mutateUserById(userId, (latestRaw) => {
+        let nextRaw = latestRaw;
+        let harnessConnectionId = null;
+        if (probe) {
+          const updatedHarnessUser = upsertUserHarnessConnection(nextRaw, {
+            runtime: options.runtime,
+            connector: options.connector,
+            status: probe.detectedStatus
+          });
+          nextRaw = updatedHarnessUser;
+          harnessConnectionId = updatedHarnessUser.harnessConnections.find(
+            (connection) =>
+              connection.runtime.toLowerCase() === options.runtime.toLowerCase()
+              && connection.connector.toLowerCase() === options.connector.toLowerCase()
+          )?.id ?? null;
+        }
+
+        const existingInvitationsQuota = findExistingInvitationsQuota(nextRaw, {
+          capability,
+          browserProfileId: options.profile ?? null,
+          providerAccountId: options.providerAccountId ?? null,
+          harnessConnectionId,
+        });
+        const { controls, defaulted: didDefault } = buildAccountAutomationControlsFromOptions(options, {
+          capability,
+          hasHarness,
+          parsedInvitations,
+          existingInvitationsQuota,
+        });
+
+        const next = upsertUserConnectedAccount(nextRaw, {
+          capability,
+          handle: options.handle,
+          label: options.label ?? null,
+          browserProfileId: options.profile ?? null,
+          harnessConnectionId,
+          providerAccountId: options.providerAccountId ?? null,
+          preferred: options.preferred ? true : null,
+          automationControls: controls,
+          notes: options.notes ?? null
+        });
+        return { user: next, result: { defaulted: didDefault } };
       });
-      updateUser(updated);
+      const updated = outcome.user;
+      const defaulted = outcome.result?.defaulted ?? false;
+
+      if (defaulted) {
+        console.error(`warning: no --max-connection-requests supplied for linkedin; defaulting to ${LINKEDIN_DEFAULT_WEEKLY_INVITATIONS}/week. Re-run with --max-connection-requests <n> to set a different value.`);
+      }
 
       if (options.json) {
         console.log(JSON.stringify(updated, null, 2));
@@ -529,6 +603,7 @@ Rules:
     .option("--connector <connector>", "Limit mapping to one connector such as unipile, gmail, or hubspot")
     .option("--apply", "Persist the discovered connector mappings onto this user")
     .option("--prefer-managed", "Mark mapped managed accounts as preferred for their capability")
+    .option("--max-connection-requests <count>", "Weekly quota for LinkedIn connection requests/invitations (positive integer). Defaults to 125 on first mapping when omitted; re-mappings preserve the previously stored value.")
     .option("--json", "Emit machine-readable JSON")
     .action((userId, options) => {
       const raw = findUserById(userId);
@@ -538,17 +613,59 @@ Rules:
         return;
       }
 
-      const result = mapUserRuntimeAccounts(raw, {
-        runtime: options.runtime,
-        connector: options.connector ?? null,
-        apply: Boolean(options.apply),
-        preferManaged: Boolean(options.preferManaged),
-        codexHome: process.env.CODEX_HOME ?? null,
-        claudeCli: process.env.EXO_CLAUDE_CLI ?? null
-      });
+      let linkedinInvitationQuota = null;
+      if (options.maxConnectionRequests !== undefined) {
+        try {
+          linkedinInvitationQuota = parseInvitationsQuotaValue(options.maxConnectionRequests);
+        } catch (error) {
+          console.error(error instanceof Error ? error.message : String(error));
+          process.exitCode = 1;
+          return;
+        }
+      }
 
+      let result;
       if (options.apply) {
-        updateUser(result.updatedUser);
+        // Run the discovery + merge inside the transaction so a parallel
+        // claim against the same user cannot drop the LinkedIn or Gmail
+        // accounts that this mapping just attached.
+        const outcome = mutateUserById(userId, (latestRaw) => {
+          const mapping = mapUserRuntimeAccounts(latestRaw, {
+            runtime: options.runtime,
+            connector: options.connector ?? null,
+            apply: true,
+            preferManaged: Boolean(options.preferManaged),
+            linkedinInvitationQuota,
+            codexHome: process.env.CODEX_HOME ?? null,
+            claudeCli: process.env.EXO_CLAUDE_CLI ?? null
+          });
+          return { user: mapping.updatedUser, result: mapping };
+        });
+        result = outcome.result;
+      } else {
+        result = mapUserRuntimeAccounts(raw, {
+          runtime: options.runtime,
+          connector: options.connector ?? null,
+          apply: false,
+          preferManaged: Boolean(options.preferManaged),
+          linkedinInvitationQuota,
+          codexHome: process.env.CODEX_HOME ?? null,
+          claudeCli: process.env.EXO_CLAUDE_CLI ?? null
+        });
+      }
+
+      const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+      for (const warning of warnings) {
+        console.error(warning);
+      }
+
+      // Ignored-flag detection: warn only when no LinkedIn capability is in scope at all.
+      if (
+        options.maxConnectionRequests !== undefined
+        && Array.isArray(result.mappings)
+        && !result.mappings.some((mapping) => mapping.capability === "linkedin")
+      ) {
+        console.error("--max-connection-requests was ignored: no LinkedIn capability mapping was in scope for this runtime/connector.");
       }
 
       if (options.json) {
@@ -628,26 +745,100 @@ function collect(value, previous) {
 
 /**
  * @param {Record<string, any>} options
+ * @param {{
+ *   capability: string,
+ *   hasHarness: boolean,
+ *   parsedInvitations: number | undefined,
+ *   existingInvitationsQuota: number | null,
+ * }} context
  * @returns {{
- *   weeklyQuotas?: {
- *     invitations?: number | null
- *   }
- * } | null}
+ *   controls: {
+ *     weeklyQuotas?: {
+ *       invitations?: number | null
+ *     }
+ *   } | null,
+ *   defaulted: boolean,
+ * }}
  */
-function buildAccountAutomationControlsFromOptions(options) {
-  const invitations = options.maxConnectionRequests !== undefined
-    ? parseQuotaValue(options.maxConnectionRequests, "max-connection-requests")
-    : undefined;
+function buildAccountAutomationControlsFromOptions(options, context) {
+  // Explicit value supplied via --max-connection-requests (already strictly parsed).
+  if (context.parsedInvitations !== undefined) {
+    return {
+      controls: {
+        weeklyQuotas: {
+          invitations: context.parsedInvitations,
+        },
+      },
+      defaulted: false,
+    };
+  }
 
-  if (invitations === undefined) {
-    return null;
+  // W1 default: harness-backed LinkedIn account, no flag supplied, no existing positive quota.
+  if (
+    context.capability === "linkedin"
+    && context.hasHarness === true
+    && context.existingInvitationsQuota === null
+  ) {
+    return {
+      controls: {
+        weeklyQuotas: {
+          invitations: LINKEDIN_DEFAULT_WEEKLY_INVITATIONS,
+        },
+      },
+      defaulted: true,
+    };
   }
 
   return {
-    weeklyQuotas: {
-      invitations
-    }
+    controls: null,
+    defaulted: false,
   };
+}
+
+/**
+ * Look up the existing invitations quota for the about-to-be-upserted account,
+ * mirroring `upsertUserConnectedAccount`'s match function exactly. Returns null
+ * when no match is found OR when the stored value is missing/zero/non-integer
+ * (treated as "no quota present" so the W1 default can heal legacy state).
+ *
+ * @param {any} rawUser
+ * @param {{
+ *   capability: string,
+ *   browserProfileId: string | null,
+ *   providerAccountId: string | null,
+ *   harnessConnectionId: string | null,
+ * }} input
+ * @returns {number | null}
+ */
+function findExistingInvitationsQuota(rawUser, input) {
+  const accounts = Array.isArray(rawUser?.accounts) ? rawUser.accounts : [];
+  const match = accounts.find((account) => {
+    if (account?.capability !== input.capability) {
+      return false;
+    }
+
+    if (input.browserProfileId) {
+      return account.browserProfileId === input.browserProfileId;
+    }
+
+    if (input.providerAccountId) {
+      return account.providerAccountId === input.providerAccountId;
+    }
+
+    return account.harnessConnectionId === input.harnessConnectionId;
+  });
+
+  if (!match) {
+    return null;
+  }
+
+  const stored = match.automationControls?.weeklyQuotas?.invitations;
+  if (typeof stored !== "number" || !Number.isInteger(stored) || stored < 1) {
+    // Legacy 0, null, or other unparseable values are treated as "no quota set".
+    return null;
+  }
+
+  return stored;
 }
 
 /**
@@ -714,6 +905,28 @@ function parseQuotaValue(value, label) {
   const parsed = Number.parseInt(normalized, 10);
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new Error(`Invalid ${label}: ${value}. Use a non-negative integer or 'unlimited'.`);
+  }
+
+  return parsed;
+}
+
+/**
+ * Strict positive-integer parser for `--max-connection-requests`. Rejects
+ * `unlimited`, `0`, `-1`, `1.5`, `12abc`, and values above
+ * LINKEDIN_MAX_WEEKLY_INVITATIONS with actionable error messages.
+ *
+ * @param {string} value
+ * @returns {number}
+ */
+export function parseInvitationsQuotaValue(value) {
+  const raw = String(value).trim();
+  if (!/^[1-9]\d*$/.test(raw)) {
+    throw new Error(`Invalid max-connection-requests: ${value}. Use a positive integer (>= 1).`);
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (parsed > LINKEDIN_MAX_WEEKLY_INVITATIONS) {
+    throw new Error(`Invalid max-connection-requests: ${value}. Maximum allowed is ${LINKEDIN_MAX_WEEKLY_INVITATIONS}/week.`);
   }
 
   return parsed;

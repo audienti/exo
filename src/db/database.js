@@ -200,6 +200,65 @@ export function updateUser(user) {
 }
 
 /**
+ * Serialize a read-modify-write against the embedded user JSON payload.
+ *
+ * Connected accounts and harness connections live inside the user's
+ * `payload_json` blob, so two parallel callers that read the same starting
+ * snapshot can both call `updateUser` and the last writer overwrites the
+ * other writer's account list. Issue #31 captured exactly this loss while
+ * adding LinkedIn and Gmail accounts in parallel.
+ *
+ * This helper runs the entire read-mutate-write cycle inside one
+ * `BEGIN IMMEDIATE` SQLite transaction against the home database. SQLite's
+ * busy_timeout queues concurrent writers, so each `mutator` sees the latest
+ * stored user and merges its change on top.
+ *
+ * @template T
+ * @param {string} userId
+ * @param {(latest: unknown) => { user: import("../schema/user.js").userSchema._type, result?: T }} mutator
+ * @returns {{ user: import("../schema/user.js").userSchema._type, result: T | undefined }}
+ */
+export function mutateUserById(userId, mutator) {
+  const database = getHomeDatabase();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const row = database
+      .prepare(`SELECT payload_json FROM users WHERE id = ?`)
+      .get(userId);
+
+    if (!row) {
+      throw new Error(`User not found: ${userId}`);
+    }
+
+    const latest = JSON.parse(row.payload_json);
+    const outcome = mutator(latest);
+    if (!outcome || !outcome.user) {
+      throw new Error(`mutateUserById mutator must return { user, result? }.`);
+    }
+
+    const nextUser = outcome.user;
+    database.prepare(`
+      UPDATE users
+      SET label = @label,
+          updated_at = @updatedAt,
+          payload_json = @payloadJson
+      WHERE id = @id
+    `).run({
+      id: nextUser.id,
+      label: nextUser.label,
+      updatedAt: nextUser.updatedAt,
+      payloadJson: JSON.stringify(nextUser, null, 2)
+    });
+
+    database.exec("COMMIT");
+    return { user: nextUser, result: outcome.result };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/**
  * @param {string} id
  * @returns {unknown | null}
  */
@@ -241,9 +300,75 @@ export function listUsers() {
 }
 
 /**
+ * Surface every motion or company whose engagementUserAssignment still points
+ * at the given user id. Returns an empty array when the user is unreferenced.
+ *
+ * @param {string} userId
+ * @returns {{
+ *   motions: { id: string, name: string }[],
+ *   companies: { id: string, name: string }[],
+ * }}
+ */
+export function findActiveUserAssignmentReferences(userId) {
+  const local = getLocalDatabase();
+  const motions = local
+    .prepare(`
+      SELECT id, name, payload_json
+      FROM motions
+      WHERE status != 'archived'
+        AND json_extract(payload_json, '$.engagementUserAssignment.userId') = ?
+      ORDER BY created_at DESC
+    `)
+    .all(userId)
+    .map((row) => ({ id: String(row.id), name: String(row.name) }));
+
+  const companies = local
+    .prepare(`
+      SELECT id, name
+      FROM companies
+      WHERE json_extract(payload_json, '$.engagementUserAssignment.userId') = ?
+      ORDER BY created_at DESC
+    `)
+    .all(userId)
+    .map((row) => ({ id: String(row.id), name: String(row.name) }));
+
+  return { motions, companies };
+}
+
+export class UserDeletionBlockedError extends Error {
+  /**
+   * @param {{
+   *   userId: string,
+   *   references: ReturnType<typeof findActiveUserAssignmentReferences>,
+   * }} input
+   */
+  constructor(input) {
+    const { motions, companies } = input.references;
+    const parts = [];
+    if (motions.length) {
+      parts.push(`${motions.length} active motion${motions.length === 1 ? "" : "s"}`);
+    }
+    if (companies.length) {
+      parts.push(`${companies.length} compan${companies.length === 1 ? "y" : "ies"}`);
+    }
+    const detail = parts.length ? parts.join(" and ") : "active assignments";
+    super(
+      `Cannot delete user ${input.userId}: still assigned to ${detail}. Reassign or archive those records first.`
+    );
+    this.name = "UserDeletionBlockedError";
+    this.userId = input.userId;
+    this.references = input.references;
+  }
+}
+
+/**
  * @param {string} id
  */
 export function deleteUser(id) {
+  const references = findActiveUserAssignmentReferences(id);
+  if (references.motions.length || references.companies.length) {
+    throw new UserDeletionBlockedError({ userId: id, references });
+  }
   getHomeDatabase()
     .prepare(`DELETE FROM users WHERE id = ?`)
     .run(id);
