@@ -2178,6 +2178,119 @@ test("stale autonomous retrieval rollout guard explains why live and canary no-o
   );
 });
 
+// Regression for issue #30: when inbound health closes the live send rollout
+// gate, the drainer must promote due (and waiting) inbound retrieval recovery
+// work ahead of send_message so the gate actually heals. Before the fix the
+// queue picked nothing and the host pass ended `status: blocked`, leaving the
+// recovery path invisible.
+test("chooseNextQueueTask drains inbound retrieval recovery before sends when inbound health gates the rollout", () => {
+  const sendTask = {
+    kind: "send_message",
+    id: "send-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-one/",
+    dueAt: "2026-06-08T21:00:00.000Z",
+    queuedAt: "2026-06-08T20:00:00.000Z",
+    body: "First message",
+    writeback: "exo actions result ...prospect-1",
+  };
+  const dueRecoveryTask = {
+    kind: "run_inbound_sync",
+    mode: "quick",
+    id: "sync-due-1",
+    userId: "user-1",
+    accountId: "account-1",
+    capability: "linkedin",
+    surface: "linkedin-sent-invitations",
+    surfaceKeys: ["linkedin-sent-invitations"],
+    dueAt: "2026-06-08T20:30:00.000Z",
+    queuedAt: "2026-06-08T20:30:00.000Z",
+  };
+  const waitingRecoveryTask = {
+    kind: "run_inbound_sync",
+    mode: "quick",
+    id: "sync-waiting-1",
+    userId: "user-1",
+    accountId: "account-2",
+    capability: "gmail",
+    surface: "gmail-inbox-threads",
+    surfaceKeys: ["gmail-inbox-threads"],
+    dueAt: "2026-06-08T23:00:00.000Z",
+    queuedAt: "2026-06-08T20:30:00.000Z",
+  };
+  const healthWarnings = [
+    {
+      capability: "linkedin",
+      handle: "williamflanagan",
+      surfaceLabel: "Sent Invitations",
+      freshnessState: "never",
+    },
+    {
+      capability: "gmail",
+      handle: "wflanagan@audienti.com",
+      surfaceLabel: "Inbox Threads",
+      freshnessState: "never",
+    },
+  ];
+
+  // The block reason is the same one emitted in agent.log — sends would
+  // simply be skipped, so without the fix the drainer returns null and the
+  // pass blocks even though due retrieval recovery is ready to run.
+  assert.match(
+    getInboundAutomationRolloutBlockReason([], "live", healthWarnings) ?? "",
+    /autonomous inbound retrieval is healthy again/,
+  );
+
+  // Due recovery work outranks sends when the health gate is closed.
+  assert.equal(
+    chooseNextQueueTask(
+      { tasks: [sendTask, dueRecoveryTask] },
+      true,
+      {},
+      "2026-06-08T21:52:30.000Z",
+      false,
+      "live",
+      [],
+      healthWarnings,
+    )?.id,
+    "sync-due-1",
+  );
+
+  // With no due recovery, the drainer pulls waiting retrieval into the
+  // candidate pool so the gate can still heal.
+  assert.equal(
+    chooseNextQueueTask(
+      { tasks: [sendTask], waiting: [waitingRecoveryTask] },
+      true,
+      {},
+      "2026-06-08T21:52:30.000Z",
+      false,
+      "live",
+      [],
+      healthWarnings,
+    )?.id,
+    "sync-waiting-1",
+  );
+
+  // Once retrieval health recovers, send work resumes its normal priority.
+  assert.equal(
+    chooseNextQueueTask(
+      { tasks: [sendTask, dueRecoveryTask] },
+      true,
+      {},
+      "2026-06-08T21:52:30.000Z",
+      false,
+      "live",
+      [],
+      [],
+    )?.id,
+    "send-1",
+  );
+});
+
 test("chooseNextQueueTask respects canary cooldown but still allows proof-only work", () => {
   const verifiedTask = {
     kind: "send_message",
