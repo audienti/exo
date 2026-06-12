@@ -200,6 +200,65 @@ export function updateUser(user) {
 }
 
 /**
+ * Serialize a read-modify-write against the embedded user JSON payload.
+ *
+ * Connected accounts and harness connections live inside the user's
+ * `payload_json` blob, so two parallel callers that read the same starting
+ * snapshot can both call `updateUser` and the last writer overwrites the
+ * other writer's account list. Issue #31 captured exactly this loss while
+ * adding LinkedIn and Gmail accounts in parallel.
+ *
+ * This helper runs the entire read-mutate-write cycle inside one
+ * `BEGIN IMMEDIATE` SQLite transaction against the home database. SQLite's
+ * busy_timeout queues concurrent writers, so each `mutator` sees the latest
+ * stored user and merges its change on top.
+ *
+ * @template T
+ * @param {string} userId
+ * @param {(latest: unknown) => { user: import("../schema/user.js").userSchema._type, result?: T }} mutator
+ * @returns {{ user: import("../schema/user.js").userSchema._type, result: T | undefined }}
+ */
+export function mutateUserById(userId, mutator) {
+  const database = getHomeDatabase();
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    const row = database
+      .prepare(`SELECT payload_json FROM users WHERE id = ?`)
+      .get(userId);
+
+    if (!row) {
+      throw new Error(`User not found: ${userId}`);
+    }
+
+    const latest = JSON.parse(row.payload_json);
+    const outcome = mutator(latest);
+    if (!outcome || !outcome.user) {
+      throw new Error(`mutateUserById mutator must return { user, result? }.`);
+    }
+
+    const nextUser = outcome.user;
+    database.prepare(`
+      UPDATE users
+      SET label = @label,
+          updated_at = @updatedAt,
+          payload_json = @payloadJson
+      WHERE id = @id
+    `).run({
+      id: nextUser.id,
+      label: nextUser.label,
+      updatedAt: nextUser.updatedAt,
+      payloadJson: JSON.stringify(nextUser, null, 2)
+    });
+
+    database.exec("COMMIT");
+    return { user: nextUser, result: outcome.result };
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/**
  * @param {string} id
  * @returns {unknown | null}
  */

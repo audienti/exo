@@ -22,6 +22,7 @@ import {
   insertUser,
   listBrowserProfiles,
   listUsers,
+  mutateUserById,
   updateUser
 } from "../../db/database.js";
 import {
@@ -273,21 +274,22 @@ Rules:
     .option("--notes <notes>", "Freeform notes")
     .option("--json", "Emit machine-readable JSON")
     .action((userId, options) => {
-      const raw = findUserById(userId);
-      if (!raw) {
+      if (!findUserById(userId)) {
         console.error(`User not found: ${userId}`);
         process.exitCode = 1;
         return;
       }
 
-      const updated = upsertUserHarnessConnection(raw, {
-        runtime: options.runtime,
-        connector: options.connector,
-        label: options.label ?? null,
-        status: options.status ? userHarnessConnectionStatusSchema.parse(options.status) : null,
-        notes: options.notes ?? null
+      const { user: updated } = mutateUserById(userId, (latestRaw) => {
+        const next = upsertUserHarnessConnection(latestRaw, {
+          runtime: options.runtime,
+          connector: options.connector,
+          label: options.label ?? null,
+          status: options.status ? userHarnessConnectionStatusSchema.parse(options.status) : null,
+          notes: options.notes ?? null
+        });
+        return { user: next };
       });
-      updateUser(updated);
 
       if (options.json) {
         console.log(JSON.stringify(updated, null, 2));
@@ -351,8 +353,7 @@ Rules:
     .option("--notes <notes>", "Freeform notes")
     .option("--json", "Emit machine-readable JSON")
     .action((userId, options) => {
-      const raw = findUserById(userId);
-      if (!raw) {
+      if (!findUserById(userId)) {
         console.error(`User not found: ${userId}`);
         process.exitCode = 1;
         return;
@@ -378,45 +379,52 @@ Rules:
         return;
       }
 
-      let nextRaw = raw;
-      let harnessConnectionId = null;
-
-      if (options.runtime || options.connector) {
-        if (!options.runtime || !options.connector) {
-          console.error("Harness-backed accounts require both --runtime and --connector.");
-          process.exitCode = 1;
-          return;
-        }
-
-        const probe = probeRuntimeConnectorAvailability(options.runtime, options.connector, {
-          codexHome: process.env.CODEX_HOME ?? null,
-          claudeCli: process.env.EXO_CLAUDE_CLI ?? null
-        });
-        const updatedHarnessUser = upsertUserHarnessConnection(nextRaw, {
-          runtime: options.runtime,
-          connector: options.connector,
-          status: probe.detectedStatus
-        });
-        nextRaw = updatedHarnessUser;
-        harnessConnectionId = updatedHarnessUser.harnessConnections.find(
-          (connection) =>
-            connection.runtime.toLowerCase() === options.runtime.toLowerCase()
-            && connection.connector.toLowerCase() === options.connector.toLowerCase()
-        )?.id ?? null;
+      if ((options.runtime || options.connector) && (!options.runtime || !options.connector)) {
+        console.error("Harness-backed accounts require both --runtime and --connector.");
+        process.exitCode = 1;
+        return;
       }
 
-      const updated = upsertUserConnectedAccount(nextRaw, {
-        capability: browserProfileCapabilitySchema.parse(options.capability),
-        handle: options.handle,
-        label: options.label ?? null,
-        browserProfileId: options.profile ?? null,
-        harnessConnectionId,
-        providerAccountId: options.providerAccountId ?? null,
-        preferred: options.preferred ? true : null,
-        automationControls: buildAccountAutomationControlsFromOptions(options),
-        notes: options.notes ?? null
+      // Probing the runtime is a side-effecty external call. Do it once
+      // outside the user-row transaction so concurrent writers do not stack
+      // up holding a BEGIN IMMEDIATE lock while a probe is in flight.
+      const probe = (options.runtime && options.connector)
+        ? probeRuntimeConnectorAvailability(options.runtime, options.connector, {
+            codexHome: process.env.CODEX_HOME ?? null,
+            claudeCli: process.env.EXO_CLAUDE_CLI ?? null
+          })
+        : null;
+
+      const { user: updated } = mutateUserById(userId, (latestRaw) => {
+        let nextRaw = latestRaw;
+        let harnessConnectionId = null;
+        if (probe) {
+          const updatedHarnessUser = upsertUserHarnessConnection(nextRaw, {
+            runtime: options.runtime,
+            connector: options.connector,
+            status: probe.detectedStatus
+          });
+          nextRaw = updatedHarnessUser;
+          harnessConnectionId = updatedHarnessUser.harnessConnections.find(
+            (connection) =>
+              connection.runtime.toLowerCase() === options.runtime.toLowerCase()
+              && connection.connector.toLowerCase() === options.connector.toLowerCase()
+          )?.id ?? null;
+        }
+
+        const next = upsertUserConnectedAccount(nextRaw, {
+          capability: browserProfileCapabilitySchema.parse(options.capability),
+          handle: options.handle,
+          label: options.label ?? null,
+          browserProfileId: options.profile ?? null,
+          harnessConnectionId,
+          providerAccountId: options.providerAccountId ?? null,
+          preferred: options.preferred ? true : null,
+          automationControls: buildAccountAutomationControlsFromOptions(options),
+          notes: options.notes ?? null
+        });
+        return { user: next };
       });
-      updateUser(updated);
 
       if (options.json) {
         console.log(JSON.stringify(updated, null, 2));
@@ -538,17 +546,32 @@ Rules:
         return;
       }
 
-      const result = mapUserRuntimeAccounts(raw, {
-        runtime: options.runtime,
-        connector: options.connector ?? null,
-        apply: Boolean(options.apply),
-        preferManaged: Boolean(options.preferManaged),
-        codexHome: process.env.CODEX_HOME ?? null,
-        claudeCli: process.env.EXO_CLAUDE_CLI ?? null
-      });
-
+      let result;
       if (options.apply) {
-        updateUser(result.updatedUser);
+        // Run the discovery + merge inside the transaction so a parallel
+        // claim against the same user cannot drop the LinkedIn or Gmail
+        // accounts that this mapping just attached.
+        const outcome = mutateUserById(userId, (latestRaw) => {
+          const mapping = mapUserRuntimeAccounts(latestRaw, {
+            runtime: options.runtime,
+            connector: options.connector ?? null,
+            apply: true,
+            preferManaged: Boolean(options.preferManaged),
+            codexHome: process.env.CODEX_HOME ?? null,
+            claudeCli: process.env.EXO_CLAUDE_CLI ?? null
+          });
+          return { user: mapping.updatedUser, result: mapping };
+        });
+        result = outcome.result;
+      } else {
+        result = mapUserRuntimeAccounts(raw, {
+          runtime: options.runtime,
+          connector: options.connector ?? null,
+          apply: false,
+          preferManaged: Boolean(options.preferManaged),
+          codexHome: process.env.CODEX_HOME ?? null,
+          claudeCli: process.env.EXO_CLAUDE_CLI ?? null
+        });
       }
 
       if (options.json) {
