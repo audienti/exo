@@ -36,7 +36,7 @@
     "viewer": {
       "htmlPath": "docs/plans/remaining-sync-reconcile-mutate-seams-board.html"
     },
-    "parallelismNote": "T8 is done after targeted tests, git diff --check, and npm test. T9 is ready as a controller-owned sync review and agent queue integration task.",
+    "parallelismNote": "T9 is done after targeted tests, git diff --check, and npm test. T10 is ready for final verification and board closeout.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -47,7 +47,7 @@
       "commit": "2acfed988706e8c3f97ea6f08baa84e8bf2d361f",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T13:33:52.000Z"
+    "updatedAt": "2026-06-13T13:44:54.000Z"
   },
   "tasks": [
     {
@@ -382,7 +382,7 @@
     {
       "id": "T9",
       "title": "Integrate seam status into sync review and agent queue",
-      "status": "ready",
+      "status": "done",
       "priority": 60,
       "dependsOn": [
         "T8"
@@ -395,7 +395,7 @@
         "src/core/user-inbound-sync.js",
         "src/core/account-capability-health.js",
         "test/agent-queue.test.js",
-        "test/inbound-sync.test.js",
+        "test/inbound-reconciliation-contract.test.js",
         "test/user-inbound-sync.test.js",
         "test/account-capability-health.test.js"
       ],
@@ -407,23 +407,27 @@
         "Full suite is green before final closeout."
       ],
       "verification": [
-        "npm test -- test/agent-queue.test.js test/inbound-sync.test.js test/user-inbound-sync.test.js test/account-capability-health.test.js",
+        "npm test -- test/agent-queue.test.js test/inbound-reconciliation-contract.test.js test/user-inbound-sync.test.js test/account-capability-health.test.js",
         "git diff --check"
       ],
       "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
-      "outputs": [],
+      "startedAt": "2026-06-13T13:34:34.000Z",
+      "updatedAt": "2026-06-13T13:44:54.000Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "User inbound sync plan surfaces now carry owner-shaped seamStatus for stale, quiet, pending, and unsupported truth surfaces.",
+        "Agent queue run_inbound_sync tasks now expose surfaceSeams for the exact surfaces being refreshed.",
+        "Account capability health exposes HubSpot account seamStatus and per-surface seamStatus without collapsing unsupported to unchecked."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Shared integration gate. Run full suite after this task."
+      "commit": "fe2b6edf997f3431294641fdec94271889135a2b",
+      "notes": "Verification passed: npm test -- test/agent-queue.test.js test/inbound-reconciliation-contract.test.js test/user-inbound-sync.test.js test/account-capability-health.test.js, git diff --check, npm test."
     },
     {
       "id": "T10",
       "title": "Close board with final verification",
-      "status": "backlog",
+      "status": "ready",
       "priority": 50,
       "dependsOn": [
         "T9"
@@ -496,7 +500,7 @@
       "subject": "Wire Gmail seam owners into shared writeback and sync paths",
       "body": "T3 added pure Gmail owner functions, but shared record-action-result and user-inbound-sync integration is outside its write set. T8 should delegate send_email writeback debt to buildEmailSendMutationReconciliation. T9 should decide whether Gmail thread truth reads reconcileGmailThreadTruth.",
       "createdAt": "2026-06-13T13:15:35.000Z",
-      "status": "acknowledged"
+      "status": "resolved"
     },
     {
       "id": "M4",
