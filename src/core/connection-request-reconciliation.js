@@ -3,6 +3,7 @@
 import { extractLinkedinPublicId } from "../lib/prospect-contacts.js";
 
 export const CONNECTION_REQUEST_RECONCILIATION_REQUIRED_REASON = "unresolved_connection_request_reconciliation";
+export const CONNECTION_REQUEST_RECONCILIATION_OWNER = "src/core/connection-request-reconciliation.js";
 
 const STATUS_RECONCILIATION_OBSERVATION_KINDS = new Set([
   "connection_request_no_longer_pending",
@@ -99,6 +100,78 @@ export function classifyConnectionRequestProfileStatus(profile) {
 }
 
 /**
+ * @param {{
+ *   actionKey: string,
+ *   resultKey: string,
+ *   surface?: string | null,
+ *   observationId?: string | null,
+ *   inboundObservationTransitionedTo?: string | null,
+ * }} input
+ */
+export function buildConnectionRequestMutationReconciliation(input) {
+  const actionKey = String(input.actionKey ?? "");
+  const resultKey = String(input.resultKey ?? "");
+
+  if (actionKey === "connection_request" && resultKey === "sent") {
+    return buildMutationReconciliation({
+      actionKey,
+      resultKey,
+      surface: input.surface ?? "connection_request",
+      state: "pending_reconciliation",
+      proofSurface: "linkedin-sent-invitations",
+      externalState: "connection_request_pending",
+      reason: "connection_request_sent_requires_sent_invitation_sync",
+      observationId: input.observationId ?? null,
+      clearedBy: null,
+    });
+  }
+
+  if (actionKey === "withdraw_connection" && resultKey === "sent") {
+    return buildMutationReconciliation({
+      actionKey,
+      resultKey,
+      surface: input.surface ?? "withdraw_connection",
+      state: "pending_reconciliation",
+      proofSurface: "linkedin-sent-invitations",
+      externalState: "connection_request_withdrawn",
+      reason: "withdraw_connection_requires_sent_invitation_sync",
+      observationId: input.observationId ?? null,
+      clearedBy: input.inboundObservationTransitionedTo ?? null,
+    });
+  }
+
+  if (actionKey === "accept_connection" && resultKey === "accepted") {
+    return buildMutationReconciliation({
+      actionKey,
+      resultKey,
+      surface: input.surface ?? "accept_connection",
+      state: "reconciled",
+      proofSurface: "linkedin-received-invitations",
+      externalState: input.inboundObservationTransitionedTo ?? "connection_request_accepted",
+      reason: "inbound_observation_transitioned",
+      observationId: input.observationId ?? null,
+      clearedBy: input.inboundObservationTransitionedTo ?? "connection_request_accepted",
+    });
+  }
+
+  if (actionKey === "decline_connection" && resultKey === "declined") {
+    return buildMutationReconciliation({
+      actionKey,
+      resultKey,
+      surface: input.surface ?? "decline_connection",
+      state: "reconciled",
+      proofSurface: "linkedin-received-invitations",
+      externalState: input.inboundObservationTransitionedTo ?? "connection_request_declined",
+      reason: "inbound_observation_transitioned",
+      observationId: input.observationId ?? null,
+      clearedBy: input.inboundObservationTransitionedTo ?? "connection_request_declined",
+    });
+  }
+
+  return null;
+}
+
+/**
  * @param {any} observation
  */
 export function resolveConnectionRequestProfileIdentity(observation) {
@@ -114,4 +187,33 @@ function normalizeNullableString(value) {
   if (!value) return null;
   const normalized = String(value).trim();
   return normalized.length ? normalized : null;
+}
+
+/**
+ * @param {{
+ *   actionKey: string,
+ *   resultKey: string,
+ *   surface: string | null,
+ *   state: "pending_reconciliation" | "reconciled",
+ *   proofSurface: string,
+ *   externalState: string,
+ *   reason: string,
+ *   observationId: string | null,
+ *   clearedBy: string | null,
+ * }} input
+ */
+function buildMutationReconciliation(input) {
+  return {
+    state: input.state,
+    owner: CONNECTION_REQUEST_RECONCILIATION_OWNER,
+    actionKey: input.actionKey,
+    resultKey: input.resultKey,
+    surface: input.surface,
+    proofSurface: input.proofSurface,
+    missingProofSurface: null,
+    externalState: input.externalState,
+    reason: input.reason,
+    observationId: input.observationId,
+    clearedBy: input.clearedBy,
+  };
 }

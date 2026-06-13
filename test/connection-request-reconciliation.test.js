@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildConnectionRequestMutationReconciliation,
   classifyConnectionRequestProfileStatus,
   CONNECTION_REQUEST_RECONCILIATION_REQUIRED_REASON,
   shouldQueueConnectionRequestStatusReconciliation,
@@ -140,6 +141,102 @@ test("connection request profile status classification is owned outside Unipile 
         invitationType: null,
         invitationStatus: "EXPIRED",
       },
+    },
+  );
+});
+
+test("connection request mutation reconciliation marks send and withdraw as proof-pending", () => {
+  assert.deepEqual(
+    buildConnectionRequestMutationReconciliation({
+      actionKey: "connection_request",
+      resultKey: "sent",
+      surface: "connection_request",
+      observationId: null,
+      inboundObservationTransitionedTo: null,
+    }),
+    {
+      state: "pending_reconciliation",
+      owner: "src/core/connection-request-reconciliation.js",
+      actionKey: "connection_request",
+      resultKey: "sent",
+      surface: "connection_request",
+      proofSurface: "linkedin-sent-invitations",
+      missingProofSurface: null,
+      externalState: "connection_request_pending",
+      reason: "connection_request_sent_requires_sent_invitation_sync",
+      observationId: null,
+      clearedBy: null,
+    },
+  );
+
+  assert.deepEqual(
+    buildConnectionRequestMutationReconciliation({
+      actionKey: "withdraw_connection",
+      resultKey: "sent",
+      surface: "withdraw_connection",
+      observationId: "obs-withdraw",
+      inboundObservationTransitionedTo: "connection_request_withdrawn",
+    }),
+    {
+      state: "pending_reconciliation",
+      owner: "src/core/connection-request-reconciliation.js",
+      actionKey: "withdraw_connection",
+      resultKey: "sent",
+      surface: "withdraw_connection",
+      proofSurface: "linkedin-sent-invitations",
+      missingProofSurface: null,
+      externalState: "connection_request_withdrawn",
+      reason: "withdraw_connection_requires_sent_invitation_sync",
+      observationId: "obs-withdraw",
+      clearedBy: "connection_request_withdrawn",
+    },
+  );
+});
+
+test("connection request mutation reconciliation marks inbound accept and decline as reconciled", () => {
+  assert.deepEqual(
+    buildConnectionRequestMutationReconciliation({
+      actionKey: "accept_connection",
+      resultKey: "accepted",
+      surface: "accept_connection",
+      observationId: "obs-accept",
+      inboundObservationTransitionedTo: "connection_request_accepted",
+    }),
+    {
+      state: "reconciled",
+      owner: "src/core/connection-request-reconciliation.js",
+      actionKey: "accept_connection",
+      resultKey: "accepted",
+      surface: "accept_connection",
+      proofSurface: "linkedin-received-invitations",
+      missingProofSurface: null,
+      externalState: "connection_request_accepted",
+      reason: "inbound_observation_transitioned",
+      observationId: "obs-accept",
+      clearedBy: "connection_request_accepted",
+    },
+  );
+
+  assert.deepEqual(
+    buildConnectionRequestMutationReconciliation({
+      actionKey: "decline_connection",
+      resultKey: "declined",
+      surface: "decline_connection",
+      observationId: "obs-decline",
+      inboundObservationTransitionedTo: "connection_request_declined",
+    }),
+    {
+      state: "reconciled",
+      owner: "src/core/connection-request-reconciliation.js",
+      actionKey: "decline_connection",
+      resultKey: "declined",
+      surface: "decline_connection",
+      proofSurface: "linkedin-received-invitations",
+      missingProofSurface: null,
+      externalState: "connection_request_declined",
+      reason: "inbound_observation_transitioned",
+      observationId: "obs-decline",
+      clearedBy: "connection_request_declined",
     },
   );
 });

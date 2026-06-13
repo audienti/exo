@@ -1,6 +1,7 @@
 // @ts-check
 
 import { autoPromoteInboundAccepts } from "./auto-promote-inbound-accepts.js";
+import { buildConnectionRequestMutationReconciliation } from "./connection-request-reconciliation.js";
 import { transitionInboundObservation } from "./transition-inbound-observation.js";
 import { findActionDefinition, normalizeActionKey } from "../lib/action-catalog.js";
 import { findSupportedActionResult, normalizeActionResultKey } from "../lib/action-result-catalog.js";
@@ -86,6 +87,13 @@ export function recordActionResult(input) {
   // seller invite). The inbound transition above is the whole job — there's no
   // prospect to touch, advance, or message. Skip the prospect-centric work.
   if (!ids.companyId || !ids.prospectId) {
+    const reconciliation = buildActionResultReconciliation({
+      actionKey: action.key,
+      resultKey: result.key,
+      surface: null,
+      observationId: ids.observationId,
+      inboundObservationTransitionedTo,
+    });
     return {
       ok: true,
       actionResult: {
@@ -101,6 +109,7 @@ export function recordActionResult(input) {
         draftMarkedSent: false,
         cadenceUpdated: false,
         inboundObservationTransitionedTo,
+        reconciliation,
         message: `${result.label} ${action.label.toLowerCase()} for ${ids.actorName ?? "this invite"}.`,
       },
     };
@@ -108,6 +117,13 @@ export function recordActionResult(input) {
 
   let { rawMotion, prospect } = loadTargetContext(ids);
   const surface = resolveSurface({ action, result, explicitSurface: input.surface ?? null, prospect });
+  const reconciliation = buildActionResultReconciliation({
+    actionKey: action.key,
+    resultKey: result.key,
+    surface,
+    observationId: ids.observationId,
+    inboundObservationTransitionedTo,
+  });
   const sentDraft = surface && result.markDraftSent
     ? findSendableDraftForSurface(prospect, surface)
     : null;
@@ -143,6 +159,7 @@ export function recordActionResult(input) {
         body: normalizeOptionalMessageField(input.body) ?? normalizeOptionalMessageField(sentDraft?.body),
         sourceUrl: input.sourceUrl ?? null,
         notes: input.notes ?? null,
+        reconciliation,
       };
       appendActivityEvent({
         dedupeKey: `touch:${rawMotion.id}:${rowProspect.id}:${surface}:${result.touchOutcome}:${occurredAt}`,
@@ -219,6 +236,7 @@ export function recordActionResult(input) {
       draftMarkedDiscarded,
       cadenceUpdated,
       inboundObservationTransitionedTo,
+      reconciliation,
       message: buildResultMessage(action.label, result.label, prospect.name),
     },
   };
@@ -409,6 +427,40 @@ function deriveCadenceChannel(surface) {
   if (surface === "post_accept_message" || surface === "follow_up_direct_message" || surface === "inbound_reply") {
     return "direct-message";
   }
+  return null;
+}
+
+/**
+ * @param {{
+ *   actionKey: string,
+ *   resultKey: string,
+ *   surface: string | null,
+ *   observationId: string | null,
+ *   inboundObservationTransitionedTo: string | null,
+ * }} input
+ */
+function buildActionResultReconciliation(input) {
+  const connectionRequestReconciliation = buildConnectionRequestMutationReconciliation(input);
+  if (connectionRequestReconciliation) {
+    return connectionRequestReconciliation;
+  }
+
+  if (input.actionKey === "send_email" && input.resultKey === "sent") {
+    return {
+      state: "pending_external_proof",
+      owner: "src/core/record-action-result.js",
+      actionKey: input.actionKey,
+      resultKey: input.resultKey,
+      surface: input.surface ?? "email",
+      proofSurface: null,
+      missingProofSurface: "gmail-sent-mail",
+      externalState: "email_sent",
+      reason: "send_email_has_no_provider_proof_surface",
+      observationId: input.observationId,
+      clearedBy: null,
+    };
+  }
+
   return null;
 }
 
