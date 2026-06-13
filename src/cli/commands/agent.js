@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { buildAgentQueue } from "../../core/build-agent-queue.js";
+import { buildAgentRunLog } from "../../core/agent-run-log.js";
 import { buildAgentStatusReport, formatAgentStatusReport } from "../../core/build-agent-status.js";
 import { buildSendHandoff } from "../../core/build-send-handoff.js";
 import { buildStalePacketReviewWarnings } from "../../core/build-stale-packet-review-warnings.js";
@@ -209,6 +210,23 @@ invites. Nothing in this queue needs operator input.
         first = false;
         await sleep(intervalMs);
       }
+    });
+
+  agent
+    .command("run-log")
+    .description("Show recent agent worker runs and active job leases.")
+    .option("--limit <count>", "Maximum entries to return", "25")
+    .option("--json", "Emit machine-readable JSON")
+    .action((options) => {
+      const runLog = buildAgentRunLog({
+        stateDir: getHomeStateDir(),
+        limit: options.limit,
+      });
+      if (options.json) {
+        console.log(JSON.stringify(runLog, null, 2));
+        return;
+      }
+      console.log(formatAgentRunLog(runLog));
     });
 
   agent
@@ -901,6 +919,33 @@ function formatAgentWorkerTaskResult(result) {
     return `${subject}: ${truncate(detail.bodyPreview, 120)}`;
   }
   return subject;
+}
+
+/** @param {ReturnType<typeof buildAgentRunLog>} runLog */
+function formatAgentRunLog(runLog) {
+  const lines = [];
+  lines.push(`Agent run log checked at ${runLog.checkedAt}.`);
+  if (!runLog.entries.length) {
+    lines.push("No agent runs or active jobs are recorded yet.");
+    return lines.join("\n");
+  }
+
+  for (const entry of runLog.entries) {
+    const timestamp = entry.timestamp ?? entry.startedAt ?? entry.endedAt ?? "unknown time";
+    const lane = entry.lane ? `${entry.lane} ` : "";
+    const task = entry.taskKind ?? "pass";
+    lines.push(`- ${timestamp}: ${lane}${task} ${entry.status ?? "recorded"}`);
+    const subject = entry.subject ?? [entry.capability, entry.surface].filter(Boolean).join(" / ");
+    if (subject) lines.push(`  subject: ${subject}`);
+    if (entry.reason) lines.push(`  reason: ${entry.reason}`);
+    if (entry.workerLabel) lines.push(`  worker: ${entry.workerLabel}`);
+  }
+
+  if (runLog.warnings.length) {
+    lines.push("");
+    lines.push(`${runLog.warnings.length} warning${runLog.warnings.length === 1 ? "" : "s"} while reading run artifacts.`);
+  }
+  return lines.join("\n");
 }
 
 /** @param {number} ms */

@@ -2,11 +2,16 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { buildNodeTestEnv } from "../scripts/node-test-runtime.js";
 import { buildAgentRunLog } from "../src/core/agent-run-log.js";
+
+const repoRoot = path.resolve(import.meta.dirname, "..");
+const cliPath = path.join(repoRoot, "src", "cli", "index.js");
 
 function makeStateDir(prefix) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -212,6 +217,179 @@ test("buildAgentRunLog normalizes last-pass and host-state facts into recent ent
     assert.equal(verification.timestamp, "2026-06-11T14:04:00.000Z");
     assert.equal(verification.status, "ready_to_send");
     assert.equal(verification.taskKind, "send_message");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("buildAgentRunLog surfaces active task leases as running entries", () => {
+  const fixture = makeStateDir("exo-agent-run-log-active-");
+
+  try {
+    writeJson(path.join(fixture.stateDir, "agent-host-state.json"), {
+      taskLeases: [
+        {
+          taskKind: "run_inbound_sync",
+          fingerprint: "lease-fingerprint-1",
+          workerLabel: "worker@example.local",
+          acquiredAt: "2026-06-11T15:00:00.000Z",
+          expiresAt: "2026-06-11T15:10:00.000Z",
+          userId: "user-1",
+          accountId: "account-1",
+          capability: "linkedin",
+          surface: "linkedin-followers-list",
+          subject: "LinkedIn inbound truth",
+          action: "run_inbound_sync",
+        },
+      ],
+    });
+
+    const runLog = buildAgentRunLog({
+      stateDir: fixture.stateDir,
+      now: "2026-06-11T15:02:30.000Z",
+      limit: 10,
+    });
+
+    const activeEntry = runLog.entries.find((entry) =>
+      entry.sourceArtifact.kind === "agent-host-state"
+      && entry.sourceArtifact.section === "taskLeases"
+    );
+    assert.ok(activeEntry);
+    assert.equal(activeEntry.status, "running");
+    assert.equal(activeEntry.timestamp, "2026-06-11T15:00:00.000Z");
+    assert.equal(activeEntry.startedAt, "2026-06-11T15:00:00.000Z");
+    assert.equal(activeEntry.endedAt, null);
+    assert.equal(activeEntry.taskKind, "run_inbound_sync");
+    assert.deepEqual(activeEntry.taskKinds, ["run_inbound_sync"]);
+    assert.equal(activeEntry.workerLabel, "worker@example.local");
+    assert.equal(activeEntry.subject, "LinkedIn inbound truth");
+    assert.equal(activeEntry.userId, "user-1");
+    assert.equal(activeEntry.accountId, "account-1");
+    assert.equal(activeEntry.capability, "linkedin");
+    assert.equal(activeEntry.surface, "linkedin-followers-list");
+    assert.equal(activeEntry.expiresAt, "2026-06-11T15:10:00.000Z");
+    assert.equal(activeEntry.checkoutFingerprint, "lease-fingerprint-1");
+    assert.equal(activeEntry.resultCounts.total, 1);
+    assert.deepEqual(activeEntry.resultCounts.byStatus, [
+      { status: "running", count: 1 },
+    ]);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("agent run-log command exposes active task lease entries", () => {
+  const fixture = makeStateDir("exo-agent-run-log-cli-");
+
+  try {
+    writeJson(path.join(fixture.stateDir, "agent-host-state.json"), {
+      taskLeases: [
+        {
+          taskKind: "run_inbound_sync",
+          fingerprint: "lease-fingerprint-2",
+          workerLabel: "worker@example.local",
+          acquiredAt: "2099-06-11T15:00:00.000Z",
+          expiresAt: "2099-06-11T15:10:00.000Z",
+          userId: "user-1",
+          accountId: "account-1",
+          capability: "linkedin",
+          surface: "linkedin-sent-invitations",
+          subject: "LinkedIn sent invitations",
+          action: "run_inbound_sync",
+        },
+      ],
+    });
+
+    const output = execFileSync("node", [
+      cliPath,
+      "agent",
+      "run-log",
+      "--json",
+      "--limit",
+      "5",
+    ], {
+      cwd: repoRoot,
+      env: buildNodeTestEnv({
+        ...process.env,
+        EXO_STATE_DIR: fixture.stateDir,
+        EXO_HOME_STATE_DIR: fixture.stateDir,
+      }),
+      encoding: "utf8",
+    });
+    const runLog = JSON.parse(output);
+    const activeEntry = runLog.entries.find((entry) =>
+      entry.sourceArtifact.section === "taskLeases"
+    );
+
+    assert.ok(activeEntry);
+    assert.equal(activeEntry.status, "running");
+    assert.equal(activeEntry.taskKind, "run_inbound_sync");
+    assert.equal(activeEntry.surface, "linkedin-sent-invitations");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("agent run-log command stays bounded when agent.log has a large malformed history", () => {
+  const fixture = makeStateDir("exo-agent-run-log-large-");
+
+  try {
+    writeJson(path.join(fixture.stateDir, "agent-host-state.json"), {
+      taskLeases: [
+        {
+          taskKind: "run_inbound_sync",
+          fingerprint: "lease-fingerprint-3",
+          workerLabel: "worker@example.local",
+          acquiredAt: "2099-06-11T15:00:00.000Z",
+          expiresAt: "2099-06-11T15:10:00.000Z",
+          userId: "user-1",
+          accountId: "account-1",
+          capability: "linkedin",
+          surface: "linkedin-followers-list",
+          subject: "LinkedIn followers",
+          action: "run_inbound_sync",
+        },
+      ],
+    });
+    fs.mkdirSync(fixture.stateDir, { recursive: true });
+    fs.writeFileSync(path.join(fixture.stateDir, "agent.log"), [
+      "{",
+      ...Array.from({ length: 12000 }, (_, index) =>
+        `  "unfinished_${index}": "${"x".repeat(300)}",`
+      ),
+      JSON.stringify({
+        status: "completed",
+        startedAt: "2026-06-11T13:00:00.000Z",
+        endedAt: "2026-06-11T13:00:02.000Z",
+        results: [
+          { kind: "run_inbound_sync", status: "completed" },
+        ],
+      }),
+    ].join("\n"));
+
+    const output = execFileSync("node", [
+      cliPath,
+      "agent",
+      "run-log",
+      "--json",
+      "--limit",
+      "5",
+    ], {
+      cwd: repoRoot,
+      env: buildNodeTestEnv({
+        ...process.env,
+        EXO_STATE_DIR: fixture.stateDir,
+        EXO_HOME_STATE_DIR: fixture.stateDir,
+      }),
+      encoding: "utf8",
+      timeout: 1500,
+    });
+    const runLog = JSON.parse(output);
+    assert.ok(runLog.entries.some((entry) =>
+      entry.sourceArtifact.section === "taskLeases"
+      && entry.status === "running"
+      && entry.surface === "linkedin-followers-list"
+    ));
   } finally {
     fixture.cleanup();
   }

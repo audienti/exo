@@ -4,11 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { pruneExpiredBrowserBackoffs } from "../lib/agent-host-state.js";
+import { getTaskExecutionLane } from "../lib/agent-task-lanes.js";
 
 const HOST_STATE_FILE = "agent-host-state.json";
 const LAST_PASS_FILE = "agent-last-pass.json";
 const AGENT_LOG_FILE = "agent.log";
 const LANE_PASS_RE = /^agent-last-pass\.([^.]+)\.json$/;
+const AGENT_LOG_TAIL_BYTES = 1024 * 1024;
 
 /**
  * @param {{
@@ -201,6 +203,43 @@ function buildHostStateEntries(hostState, artifactPath, now) {
   const normalized = pruneExpiredBrowserBackoffs(hostState, now);
   const entries = [];
 
+  for (const lease of normalized.taskLeases ?? []) {
+    const startedAt = normalizeIsoDatetime(lease?.acquiredAt);
+    if (!startedAt) continue;
+    const taskKind = normalizeText(lease?.taskKind);
+    entries.push({
+      id: buildEntryId("agent-host-state", getTaskExecutionLane(taskKind), taskKind, startedAt, lease?.fingerprint),
+      runId: null,
+      timestamp: startedAt,
+      startedAt,
+      endedAt: null,
+      status: "running",
+      lane: getTaskExecutionLane(taskKind),
+      taskKind,
+      taskKinds: taskKind ? [taskKind] : [],
+      resultCounts: buildSingleResultCounts("running", taskKind),
+      queueCounts: null,
+      reason: null,
+      sourceArtifact: {
+        kind: "agent-host-state",
+        path: artifactPath,
+        section: "taskLeases",
+      },
+      workerLabel: normalizeText(lease?.workerLabel),
+      subject: normalizeText(lease?.subject),
+      action: normalizeText(lease?.action),
+      expiresAt: normalizeIsoDatetime(lease?.expiresAt),
+      checkoutFingerprint: normalizeText(lease?.fingerprint),
+      motionId: normalizeText(lease?.motionId),
+      companyId: normalizeText(lease?.companyId),
+      prospectId: normalizeText(lease?.prospectId),
+      userId: normalizeText(lease?.userId),
+      accountId: normalizeText(lease?.accountId),
+      capability: normalizeText(lease?.capability),
+      surface: normalizeText(lease?.surface),
+    });
+  }
+
   for (const entry of normalized.recentMotionTaskRuns ?? []) {
     const timestamp = normalizeIsoDatetime(entry?.recordedAt);
     if (!timestamp) continue;
@@ -268,7 +307,7 @@ function buildHostStateEntries(hostState, artifactPath, now) {
  */
 function buildAgentLogEntries(logPath, warnings) {
   const entries = [];
-  const lines = fs.readFileSync(logPath, "utf8").split(/\r?\n/);
+  const lines = readAgentLogTailLines(logPath);
   let buffer = [];
   let startLine = null;
 
@@ -309,6 +348,26 @@ function buildAgentLogEntries(logPath, warnings) {
   }
 
   return entries;
+}
+
+/** @param {string} logPath */
+function readAgentLogTailLines(logPath) {
+  const stat = fs.statSync(logPath);
+  if (stat.size <= AGENT_LOG_TAIL_BYTES) {
+    return fs.readFileSync(logPath, "utf8").split(/\r?\n/);
+  }
+
+  const fd = fs.openSync(logPath, "r");
+  try {
+    const start = Math.max(0, stat.size - AGENT_LOG_TAIL_BYTES);
+    const buffer = Buffer.alloc(stat.size - start);
+    fs.readSync(fd, buffer, 0, buffer.length, start);
+    const text = buffer.toString("utf8");
+    const lines = text.split(/\r?\n/);
+    return start > 0 ? lines.slice(1) : lines;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /**
