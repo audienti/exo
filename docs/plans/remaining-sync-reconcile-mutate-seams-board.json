@@ -47,7 +47,7 @@
       "commit": "2acfed988706e8c3f97ea6f08baa84e8bf2d361f",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T12:57:21.000Z"
+    "updatedAt": "2026-06-13T12:58:02.000Z"
   },
   "tasks": [
     {
@@ -85,7 +85,7 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
+      "commit": "5f013cd7c4a19489d8cb1e2e2c397c555a77f57d",
       "notes": "Verification passed: npm test -- test/backend-capability-registry.test.js, git diff --check, npm test."
     },
     {
