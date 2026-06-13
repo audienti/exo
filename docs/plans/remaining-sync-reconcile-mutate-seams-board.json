@@ -1,0 +1,430 @@
+{
+  "plan": {
+    "slug": "remaining-sync-reconcile-mutate-seams",
+    "source": "docs/wip/remaining-sync-reconcile-mutate-seams.md",
+    "objective": "Define and implement tested backend seam owners for the remaining sync, reconcile, and mutate surfaces so Exo can distinguish truth, local intent, external proof, and reconciliation debt.",
+    "acceptanceCriteria": [
+      "Registry tests fail if any row lacks stage status, owner, proof surface, state key, sync strategy, reconciliation strategy, or mutation debt policy.",
+      "Each remaining seam has a pure backend owner with tests for quiet, pending proof, contradicted, stale, and unsupported states where applicable.",
+      "Mutation writeback uses seam owners for reconciliation debt rather than embedding service-specific decisions in shared writeback code.",
+      "Agent queue and sync review read seam status from backend owners where integration exists.",
+      "The board stays green after each completed task and finishes with npm test and git diff --check."
+    ],
+    "verificationCommands": [
+      "npm test",
+      "git diff --check"
+    ],
+    "constraints": [
+      "Backend first. Do not update UI surfaces until backend contracts exist.",
+      "Use TDD. Write failing backend tests before implementing behavior changes.",
+      "No live external sends, withdrawals, accepts, declines, replies, or deploys.",
+      "No broad LinkedIn scraping or repeated full-surface polling.",
+      "Preserve Exo state-store safety. Tests must not write to the live workspace database."
+    ],
+    "nonGoals": [
+      "No frontend work in this board.",
+      "No live Sales Navigator retrieval.",
+      "No claim that unsupported surfaces are working without backend proof.",
+      "No new external connector calls inside tests."
+    ]
+  },
+  "board": {
+    "status": "active",
+    "controller": "codex",
+    "concurrencyCap": 5,
+    "worktreeRoot": ".worktrees",
+    "viewer": {
+      "htmlPath": "docs/plans/remaining-sync-reconcile-mutate-seams-board.html"
+    },
+    "parallelismNote": "T1 and T2 are interface gates. Subagent capacity is intentionally unused until shared registry metadata and seam contracts are green.",
+    "models": {
+      "fast": "inherit",
+      "default": "inherit",
+      "max": "inherit"
+    },
+    "base": {
+      "branch": "codex/remaining-sync-reconcile-mutate-seams",
+      "commit": "2acfed988706e8c3f97ea6f08baa84e8bf2d361f",
+      "verifiedGreen": true
+    },
+    "updatedAt": "2026-06-13T12:49:08.000Z"
+  },
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Expand capability seam matrix contract",
+      "status": "ready",
+      "priority": 100,
+      "dependsOn": [],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "src/lib/backend-capability-registry.js",
+        "test/backend-capability-registry.test.js",
+        "docs/wip/remaining-sync-reconcile-mutate-seams.md"
+      ],
+      "context": "Extend the existing backend capability registry from rows with owners and gaps into a cold-worker seam matrix. Each row needs stage status, owner metadata, proof surfaces, state keys, sync strategy, reconciliation strategy, mutation debt policy, and capability-specific gaps. Preserve coverage over listInboundSurfaceCatalog and listActionCatalog. This is an interface task, so no service-specific owner modules should be added here.",
+      "doneWhen": [
+        "Tests fail if any inbound surface, mutation action, or backend support row lacks required seam metadata.",
+        "Registry rows expose proofSurfaces, stateKeys, syncStrategy, reconciliationStrategy, and mutationDebtPolicy.",
+        "Existing connection-request owner metadata remains intact.",
+        "The plan artifact documents that the registry is the living seam matrix."
+      ],
+      "verification": [
+        "npm test -- test/backend-capability-registry.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "First interface gate. Subagent lanes wait for this metadata shape."
+    },
+    {
+      "id": "T2",
+      "title": "Add shared seam contract harness",
+      "status": "backlog",
+      "priority": 95,
+      "dependsOn": [
+        "T1"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "src/core/capability-seam-contract.js",
+        "test/capability-seam-contract.test.js",
+        "test/support/capability-seam-fixtures.js"
+      ],
+      "context": "Create a pure backend helper contract that service-specific reconciliation owners can implement without touching shared queue or sync files. It should normalize quiet, pending proof, contradicted, stale, reconciled, unsupported, and missing-proof outcomes. Tests should prove unsupported and missing-proof states are explicit rather than being treated as checked.",
+      "doneWhen": [
+        "A failing test is written first for missing-proof or unsupported seams being explicit.",
+        "The shared helper exports stable outcome constants and a validator or builder for seam reconciliation results.",
+        "Fixture helpers let later service lanes test against the same status vocabulary without importing live state.",
+        "No shared mutation or queue path is integrated yet."
+      ],
+      "verification": [
+        "npm test -- test/capability-seam-contract.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Second interface gate before fan-out."
+    },
+    {
+      "id": "T3",
+      "title": "Add Gmail email and thread seam owner",
+      "status": "backlog",
+      "priority": 90,
+      "dependsOn": [
+        "T1",
+        "T2"
+      ],
+      "ownerLane": "subagent",
+      "modelTier": "max",
+      "files": [
+        "src/core/email-send-reconciliation.js",
+        "src/core/gmail-thread-reconciliation.js",
+        "test/email-send-reconciliation.test.js",
+        "test/gmail-thread-reconciliation.test.js"
+      ],
+      "context": "Implement Gmail-owned pure reconciliation for send_email debt and gmail-inbox-threads truth. It must distinguish local send recorded, sent-mail proof missing, inbound reply observed, thread quiet, stale thread proof, and unsupported sent-mail proof. Do not edit record-action-result or user-inbound-sync in this lane. If integration needs a shared-file change, emit a controller message.",
+      "doneWhen": [
+        "Tests cover pending external proof after a local email send.",
+        "Tests cover an inbound Gmail thread resolving or overriding local waiting state.",
+        "Tests cover unsupported or missing Gmail sent-mail proof as explicit debt.",
+        "No live Gmail connector call is made."
+      ],
+      "verification": [
+        "npm test -- test/email-send-reconciliation.test.js test/gmail-thread-reconciliation.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Independent after T2. Owns only Gmail seam files."
+    },
+    {
+      "id": "T4",
+      "title": "Add LinkedIn private messaging and InMail seam owner",
+      "status": "backlog",
+      "priority": 85,
+      "dependsOn": [
+        "T1",
+        "T2"
+      ],
+      "ownerLane": "subagent",
+      "modelTier": "max",
+      "files": [
+        "src/core/linkedin-private-message-reconciliation.js",
+        "src/core/inmail-reconciliation.js",
+        "test/linkedin-private-message-reconciliation.test.js",
+        "test/inmail-reconciliation.test.js"
+      ],
+      "context": "Implement LinkedIn private messaging and InMail pure reconciliation. It should distinguish direct-message sent proof, inbound reply, thread quiet, missing messaging proof, InMail entitlement missing, InMail sent proof missing, and unsupported InMail inbox. Do not edit shared mutation writeback or queue files in this lane.",
+      "doneWhen": [
+        "Tests cover direct-message send debt and proof from messaging inbox observations.",
+        "Tests cover inbound LinkedIn replies overriding outbound waiting state.",
+        "Tests cover InMail as unavailable, missing proof, or pending proof without pretending it is checked.",
+        "No live LinkedIn connector call is made."
+      ],
+      "verification": [
+        "npm test -- test/linkedin-private-message-reconciliation.test.js test/inmail-reconciliation.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Independent after T2. Owns private-message and InMail seam files."
+    },
+    {
+      "id": "T5",
+      "title": "Add LinkedIn social graph and profile-view seam owner",
+      "status": "backlog",
+      "priority": 80,
+      "dependsOn": [
+        "T1",
+        "T2"
+      ],
+      "ownerLane": "subagent",
+      "modelTier": "default",
+      "files": [
+        "src/core/linkedin-social-graph-reconciliation.js",
+        "test/linkedin-social-graph-reconciliation.test.js"
+      ],
+      "context": "Implement pure reconciliation for followers, following, follow/unfollow mutations, and profile-view observations. It should distinguish complete itemized sync, partial itemization gap, follow pending proof, unfollow pending proof, profile-view observed after touch, and visible-total contradictions. Do not edit shared sync or queue files in this lane.",
+      "doneWhen": [
+        "Tests cover follower and following observations without repeated broad polling.",
+        "Tests cover follow and unfollow mutation debt against following-list proof.",
+        "Tests cover profile-view visible-total gaps as not quiet.",
+        "No live LinkedIn connector call is made."
+      ],
+      "verification": [
+        "npm test -- test/linkedin-social-graph-reconciliation.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Independent after T2. Owns only social graph seam files."
+    },
+    {
+      "id": "T6",
+      "title": "Add LinkedIn public engagement seam owner",
+      "status": "backlog",
+      "priority": 75,
+      "dependsOn": [
+        "T1",
+        "T2"
+      ],
+      "ownerLane": "subagent",
+      "modelTier": "default",
+      "files": [
+        "src/core/public-engagement-reconciliation.js",
+        "test/public-engagement-reconciliation.test.js"
+      ],
+      "context": "Implement pure reconciliation for public engagement mutations and disabled public truth surfaces. Public engagement actions include likes, unlikes, post comments, shares, comment replies, and comment reactions. The owner must explicitly return unsupported or missing proof for disabled browser-capture surfaces rather than calling them checked.",
+      "doneWhen": [
+        "Tests cover each public engagement action category producing explicit pending or missing proof.",
+        "Tests cover disabled linkedin-comment-replies and linkedin-catch-up-updates surfaces as unsupported for autonomous checking.",
+        "Tests cover quiet only when an explicit proof fact exists.",
+        "No live LinkedIn connector call is made."
+      ],
+      "verification": [
+        "npm test -- test/public-engagement-reconciliation.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Independent after T2. Owns only public engagement seam files."
+    },
+    {
+      "id": "T7",
+      "title": "Add HubSpot capability support seam",
+      "status": "backlog",
+      "priority": 70,
+      "dependsOn": [
+        "T1",
+        "T2"
+      ],
+      "ownerLane": "subagent",
+      "modelTier": "default",
+      "files": [
+        "src/core/hubspot-capability-reconciliation.js",
+        "test/hubspot-capability-reconciliation.test.js"
+      ],
+      "context": "Implement HubSpot backend support classification. HubSpot currently has managed account capability but no inbound surfaces. The owner should keep unsupported, unconfigured, checked-runtime, and failed-runtime states separate so user accounts do not all show as unchecked.",
+      "doneWhen": [
+        "Tests cover HubSpot with no backend inbound surfaces as unsupported or unconfigured, not unchecked.",
+        "Tests cover runtime probe facts producing checked or failed capability support.",
+        "Tests cover preferred and non-preferred account classification.",
+        "No live HubSpot connector call is made."
+      ],
+      "verification": [
+        "npm test -- test/hubspot-capability-reconciliation.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Independent after T2. Owns only HubSpot support seam files."
+    },
+    {
+      "id": "T8",
+      "title": "Integrate seam owners into mutation reconciliation debt",
+      "status": "backlog",
+      "priority": 65,
+      "dependsOn": [
+        "T3",
+        "T4",
+        "T5",
+        "T6",
+        "T7"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "src/core/record-action-result.js",
+        "src/lib/backend-capability-registry.js",
+        "test/action-result.test.js",
+        "test/backend-capability-registry.test.js"
+      ],
+      "context": "After service owners are green, replace remaining ad hoc mutation debt shape logic with owner calls where safe. This task touches shared writeback code and must remain controller-owned. Preserve existing connection-request behavior. Do not make unsupported surfaces look checked.",
+      "doneWhen": [
+        "send_email, send_direct_message, in_mail_message, follow, unfollow, profile_view, and public engagement actions create owner-shaped reconciliation metadata where applicable.",
+        "Unsupported proof surfaces produce explicit missing-proof or unsupported debt.",
+        "Connection-request mutation reconciliation tests remain green.",
+        "No live external mutation is performed."
+      ],
+      "verification": [
+        "npm test -- test/action-result.test.js test/backend-capability-registry.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Shared integration gate. Do not dispatch in parallel with other shared-file tasks."
+    },
+    {
+      "id": "T9",
+      "title": "Integrate seam status into sync review and agent queue",
+      "status": "backlog",
+      "priority": 60,
+      "dependsOn": [
+        "T8"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "src/core/build-agent-queue.js",
+        "src/core/inbound-sync-run.js",
+        "src/core/user-inbound-sync.js",
+        "src/core/account-capability-health.js",
+        "test/agent-queue.test.js",
+        "test/inbound-sync.test.js",
+        "test/user-inbound-sync.test.js",
+        "test/account-capability-health.test.js"
+      ],
+      "context": "Use the owner outputs from service lanes when shared sync review and queue paths decide whether work is quiet, stale, pending proof, or blocked by missing proof. This task is controller-owned because it crosses shared state paths and must preserve existing queue behavior.",
+      "doneWhen": [
+        "Sync review and queue tests cover at least one non-connection seam reading owner output.",
+        "Unchecked, unsupported, missing-proof, and stale states remain distinct in account health.",
+        "Queue work is not duplicated when owner state is quiet.",
+        "Full suite is green before final closeout."
+      ],
+      "verification": [
+        "npm test -- test/agent-queue.test.js test/inbound-sync.test.js test/user-inbound-sync.test.js test/account-capability-health.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Shared integration gate. Run full suite after this task."
+    },
+    {
+      "id": "T10",
+      "title": "Close board with final verification",
+      "status": "backlog",
+      "priority": 50,
+      "dependsOn": [
+        "T9"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "docs/plans/remaining-sync-reconcile-mutate-seams-board.json",
+        "docs/plans/remaining-sync-reconcile-mutate-seams-board.html",
+        "docs/wip/remaining-sync-reconcile-mutate-seams.md"
+      ],
+      "context": "Final controller closeout. Reconcile board state against commits, run full verification, render the HTML board, record attempts-per-solve by model tier, and mark complete only if all acceptance criteria pass.",
+      "doneWhen": [
+        "All preceding tasks are done or intentionally deferred with reason.",
+        "npm test passes.",
+        "git diff --check passes.",
+        "Board validates and HTML snapshot renders.",
+        "board.status is complete only when acceptance criteria pass."
+      ],
+      "verification": [
+        "npm test",
+        "git diff --check",
+        "python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/validate_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json",
+        "python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/render_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json"
+      ],
+      "worktree": "",
+      "startedAt": "",
+      "updatedAt": "",
+      "resolvedModel": "",
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Final verification and board closeout."
+    }
+  ],
+  "messages": []
+}
