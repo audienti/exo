@@ -21,6 +21,7 @@ import {
   needsInboundIdentityResolution,
   resolveManagedLinkedinAccount,
 } from "./inbound-identity-resolution.js";
+import { summarizeSentInvitationSurfaceReconciliation } from "./connection-request-reconciliation.js";
 
 /**
  * @param {unknown} rawUser
@@ -105,31 +106,44 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
     surfaces: account.surfaces
       .filter((surface) => surface.enabled)
       .map((surface) => {
+        const surfaceObservations = filteredObservations.filter((observation) =>
+          observation.accountId === account.accountId && observation.surfaceKey === surface.key
+        );
+        const connectionRequestSummary = surface.key === "linkedin-sent-invitations"
+          ? summarizeSentInvitationSurfaceReconciliation({ surface, observations: surfaceObservations })
+          : null;
+        const viewSurface = connectionRequestSummary?.reconcileRequired
+          ? {
+            ...surface,
+            lastReconcileRequired: true,
+            lastReconcileReason: connectionRequestSummary.reason,
+          }
+          : surface;
         const derivedObservationCount = derivedSurfaceObservationCounts.get(`${account.accountId}:${surface.key}`) ?? 0;
-        const observationCount = surface.lastObservationCount ?? derivedObservationCount;
-        const reportedItemCount = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;
-        const missingObservationCount = surface.lastItemizationGapCount
+        const observationCount = viewSurface.lastObservationCount ?? derivedObservationCount;
+        const reportedItemCount = viewSurface.lastVisibleTotalCount ?? viewSurface.lastItemCount ?? 0;
+        const missingObservationCount = viewSurface.lastItemizationGapCount
           ?? (reportedItemCount > 0 ? Math.max(reportedItemCount - observationCount, 0) : 0);
-        const needsItemization = surfaceNeedsReconciliation(surface, missingObservationCount);
+        const needsItemization = surfaceNeedsReconciliation(viewSurface, missingObservationCount);
 
         return {
-          key: surface.key,
-          label: surface.label,
-          truthLevel: surface.truthLevel,
-          lastRunStatus: surface.lastRunStatus,
-          lastSyncedAt: surface.lastSyncedAt,
-          lastObservedAt: surface.lastObservedAt,
-          lastItemCount: surface.lastItemCount,
-          lastVisibleTotalCount: surface.lastVisibleTotalCount,
-          lastCaptureCompleteness: surface.lastCaptureCompleteness,
-          lastRequestedMode: surface.lastRequestedMode,
-          lastActualMode: surface.lastActualMode,
-          lastReconcileRequired: surface.lastReconcileRequired,
-          lastReconcileReason: surface.lastReconcileReason,
-          lastExhaustionStatus: surface.lastExhaustionStatus,
-          lastExhaustionReason: surface.lastExhaustionReason,
-          summary: summarizeSurfaceState(surface),
-          recommendedAction: recommendSurfaceAction(surface),
+          key: viewSurface.key,
+          label: viewSurface.label,
+          truthLevel: viewSurface.truthLevel,
+          lastRunStatus: viewSurface.lastRunStatus,
+          lastSyncedAt: viewSurface.lastSyncedAt,
+          lastObservedAt: viewSurface.lastObservedAt,
+          lastItemCount: viewSurface.lastItemCount,
+          lastVisibleTotalCount: viewSurface.lastVisibleTotalCount,
+          lastCaptureCompleteness: viewSurface.lastCaptureCompleteness,
+          lastRequestedMode: viewSurface.lastRequestedMode,
+          lastActualMode: viewSurface.lastActualMode,
+          lastReconcileRequired: viewSurface.lastReconcileRequired,
+          lastReconcileReason: viewSurface.lastReconcileReason,
+          lastExhaustionStatus: viewSurface.lastExhaustionStatus,
+          lastExhaustionReason: viewSurface.lastExhaustionReason,
+          summary: summarizeSurfaceState(viewSurface),
+          recommendedAction: recommendSurfaceAction(viewSurface),
           observationCount,
           missingObservationCount,
           needsItemization

@@ -10,6 +10,7 @@ import {
   upsertInboundObservation,
 } from "../db/database.js";
 import { mergeInboundObservation, recordInboundObservation } from "../core/inbound-observations.js";
+import { classifyConnectionRequestProfileStatus } from "../core/connection-request-reconciliation.js";
 import { markUserInboundSurfaceMixedAfterOutOfBandReconciliation } from "../core/user-inbound-sync.js";
 import { extractLinkedinPublicId } from "./prospect-contacts.js";
 import { readUnipileConfig } from "./unipile-config.js";
@@ -139,7 +140,7 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
       };
     }
 
-    const resolution = classifyProfileStatus(response.parsed);
+    const resolution = classifyConnectionRequestProfileStatus(response.parsed);
     if (!resolution.nextKind) {
       return {
         status: "blocked",
@@ -290,49 +291,6 @@ function resolveLinkedinProfileIdentity(observation) {
     ?? extractLinkedinPublicId(observation.actorProfileUrl)
     ?? normalizeNullableString(observation.actorLinkedinMemberId)
     ?? null;
-}
-
-/**
- * @param {any} profile
- * @returns {{
- *   nextKind: "connection_request_pending" | "connection_request_accepted" | "connection_request_not_accepted" | null,
- *   profileStatus: {
- *     networkDistance: string | null,
- *     isRelationship: boolean | null,
- *     invitationType: string | null,
- *     invitationStatus: string | null,
- *   }
- * }}
- */
-function classifyProfileStatus(profile) {
-  const networkDistance = normalizeNullableString(profile?.network_distance)?.toUpperCase() ?? null;
-  const isRelationship = typeof profile?.is_relationship === "boolean" ? profile.is_relationship : null;
-  const invitationType = normalizeNullableString(profile?.invitation?.type)?.toUpperCase() ?? null;
-  const invitationStatus = normalizeNullableString(profile?.invitation?.status)?.toUpperCase() ?? null;
-  const profileStatus = {
-    networkDistance,
-    isRelationship,
-    invitationType,
-    invitationStatus,
-  };
-
-  if (isRelationship === true || networkDistance === "FIRST_DEGREE" || invitationStatus === "ACCEPTED") {
-    return { nextKind: "connection_request_accepted", profileStatus };
-  }
-
-  if (invitationType === "SENT" && invitationStatus === "PENDING") {
-    return { nextKind: "connection_request_pending", profileStatus };
-  }
-
-  if (isRelationship === false && networkDistance && networkDistance !== "FIRST_DEGREE") {
-    return { nextKind: "connection_request_not_accepted", profileStatus };
-  }
-
-  if (invitationStatus && invitationStatus !== "PENDING") {
-    return { nextKind: "connection_request_not_accepted", profileStatus };
-  }
-
-  return { nextKind: null, profileStatus };
 }
 
 /**

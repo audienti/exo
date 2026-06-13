@@ -5,6 +5,7 @@ import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
 import { isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
 import { buildUserInboundSyncView, hasMixedInboundBaseline } from "./user-inbound-sync.js";
+import { CONNECTION_REQUEST_RECONCILIATION_REQUIRED_REASON } from "./connection-request-reconciliation.js";
 import {
   classifyPrivateInboundMessage,
   describePrivateInboundResponse,
@@ -690,7 +691,9 @@ function compareInboxItems(left, right) {
  *   lastSyncedAt: string | null,
  *   lastObservedAt: string | null,
  *   lastItemCount: number | null,
- *   lastVisibleTotalCount?: number | null
+ *   lastVisibleTotalCount?: number | null,
+ *   lastReconcileRequired?: boolean | null,
+ *   lastReconcileReason?: string | null
  * }} surface
  */
 export function summarizeSurfaceState(surface) {
@@ -708,6 +711,13 @@ export function summarizeSurfaceState(surface) {
 
   if (hasMixedInboundBaseline(surface)) {
     return `${surface.label} has newer row-level reconciliation than the last full surface sync. Trust the itemized rows, but not silence or total counts, until the next full sync lands.`;
+  }
+
+  if (
+    surface.lastReconcileRequired === true
+    && surface.lastReconcileReason === CONNECTION_REQUEST_RECONCILIATION_REQUIRED_REASON
+  ) {
+    return `${surface.label} has unresolved connection-request reconciliation. Trust the itemized rows, but do not treat the zero-item surface count as quiet yet.`;
   }
 
   const count = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;
@@ -743,7 +753,9 @@ export function summarizeSurfaceState(surface) {
  *   key: string,
  *   lastRunStatus: string,
  *   lastItemCount: number | null,
- *   lastVisibleTotalCount?: number | null
+ *   lastVisibleTotalCount?: number | null,
+ *   lastReconcileRequired?: boolean | null,
+ *   lastReconcileReason?: string | null
  * }} surface
  */
 export function recommendSurfaceAction(surface) {
@@ -757,6 +769,13 @@ export function recommendSurfaceAction(surface) {
 
   if (hasMixedInboundBaseline(surface)) {
     return "Keep operating from the itemized rows, but do not trust silence or total counts until the next full surface sync lands.";
+  }
+
+  if (
+    surface.lastReconcileRequired === true
+    && surface.lastReconcileReason === CONNECTION_REQUEST_RECONCILIATION_REQUIRED_REASON
+  ) {
+    return "Run connection-request status reconciliation before treating this sent-invitations surface as quiet.";
   }
 
   const count = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;

@@ -41,7 +41,7 @@
       "commit": "a719092aaba2aae0cbf7c8f3b81f8020ce5d0d04",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T11:41:09.000Z"
+    "updatedAt": "2026-06-13T11:49:25.000Z"
   },
   "tasks": [
     {
@@ -81,7 +81,7 @@
     {
       "id": "T2",
       "title": "Create connection-request reconciliation owner",
-      "status": "ready",
+      "status": "done",
       "priority": 95,
       "dependsOn": [
         "T1"
@@ -109,16 +109,21 @@
         "npm test -- test/connection-request-reconciliation.test.js test/agent-queue.test.js test/linkedin-unipile-maintenance.test.js",
         "git diff --check"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added src/core/connection-request-reconciliation.js as the connection-request reconciliation owner.",
+        "Moved disappeared sent-invite queue eligibility behind the owner.",
+        "Moved Unipile profile status classification behind the owner.",
+        "Updated inbound review and surface summaries so unresolved disappeared invites cannot render as quiet."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Verification passed: npm test -- test/connection-request-reconciliation.test.js test/agent-queue.test.js test/linkedin-unipile-maintenance.test.js, git diff --check, npm test."
     },
     {
       "id": "T3",
       "title": "Record mutation reconciliation debt",
-      "status": "backlog",
+      "status": "ready",
       "priority": 90,
       "dependsOn": [
         "T2"

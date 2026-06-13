@@ -88,6 +88,7 @@ import {
   buildLinkedinPublicEngagementPlan,
   buildPublicEngagementMetadata,
 } from "./select-linkedin-public-engagement.js";
+import { shouldQueueConnectionRequestStatusReconciliation } from "./connection-request-reconciliation.js";
 
 const LIVE_SYNC_TASK_CAPABILITIES = new Set(["linkedin", "gmail"]);
 const SUBJECT_DRAFT_SURFACES = new Set(["email", "in_mail_message"]);
@@ -384,8 +385,7 @@ export function buildAgentQueue(input) {
   // decisions. The agent checks the profile relationship/invitation state via
   // the governed connector and writes back pending, accepted, or not accepted.
   for (const observation of input.observations ?? []) {
-    if (observation?.kind !== "connection_request_no_longer_pending") continue;
-    if (!hasLinkedinProfileIdentity(observation)) continue;
+    if (!shouldQueueConnectionRequestStatusReconciliation(observation)) continue;
     placeTask({
       kind: "reconcile_connection_request_status",
       action: "reconcile_connection_request_status",
@@ -2075,16 +2075,6 @@ function normalizeNullableString(value) {
   if (!value) return null;
   const normalized = String(value).trim();
   return normalized.length ? normalized : null;
-}
-
-/** @param {any} observation */
-function hasLinkedinProfileIdentity(observation) {
-  return Boolean(
-    normalizeNullableString(observation?.actorLinkedinPublicId)
-      || normalizeNullableString(observation?.actorHandle)
-      || normalizeNullableString(observation?.actorLinkedinMemberId)
-      || normalizeNullableString(observation?.actorProfileUrl)
-  );
 }
 
 /**
