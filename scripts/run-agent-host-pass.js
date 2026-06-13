@@ -633,7 +633,13 @@ export function canRunTaskInCurrentPass(taskKind, results, standardTaskCount, ma
     : STANDARD_PASS_BUDGET_MS;
 
   if (maintenanceTask) {
-    return !passHasNonMaintenanceWork && maintenanceTaskCount < MAX_MAINTENANCE_TASKS_PER_PASS;
+    if (passHasNonMaintenanceWork || maintenanceTaskCount >= MAX_MAINTENANCE_TASKS_PER_PASS) {
+      return false;
+    }
+    if (taskKind === "reconcile_connection_request_status") {
+      return !results.some((result) => result?.kind === "reconcile_connection_request_status");
+    }
+    return true;
   }
   if (elapsedMs >= standardPassBudgetMs) {
     return false;

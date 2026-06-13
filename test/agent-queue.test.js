@@ -3169,6 +3169,36 @@ test("buildAgentQueue queues disappeared sent-invite status reconciliation as ag
   assert.equal(task.reason, "sent_invite_status_reconciliation");
 });
 
+test("buildAgentQueue bounds disappeared sent-invite status reconciliation to one profile check per account", () => {
+  const observations = Array.from({ length: 29 }, (_, index) => ({
+    id: `obs-disappeared-${index + 1}`,
+    userId: "user-1",
+    accountId: "account-1",
+    capability: "linkedin",
+    kind: "connection_request_no_longer_pending",
+    observedAt: `2026-06-05T00:${String(index).padStart(2, "0")}:00.000Z`,
+    actorName: `Disappeared ${index + 1}`,
+    actorProfileUrl: `https://linkedin.com/in/disappeared-${index + 1}`,
+    actorLinkedinPublicId: `disappeared-${index + 1}`,
+  }));
+
+  const queue = buildAgentQueue(
+    fixture({
+      drafts: [],
+      touches: [],
+      observations,
+    }),
+  );
+
+  const tasks = queue.tasks.filter((item) => item.kind === "reconcile_connection_request_status");
+  assert.equal(tasks.length, 1);
+  assert.equal(tasks[0].observationId, "obs-disappeared-1");
+  assert.equal(tasks[0].batch.totalPending, 29);
+  assert.equal(tasks[0].batch.maxPerPass, 1);
+  assert.equal(tasks[0].batch.remainingAfterThisTask, 28);
+  assert.equal(tasks[0].reason, "sent_invite_status_reconciliation_bounded");
+});
+
 test("buildAgentQueue does not synthesize unfollow cleanup after a withdrawn branch", () => {
   const queue = buildAgentQueue(
     fixture({

@@ -1398,6 +1398,16 @@ test("maintenance bursts stay separate from standard task passes", () => {
     ),
     false,
   );
+
+  assert.equal(
+    canRunTaskInCurrentPass(
+      "reconcile_connection_request_status",
+      [{ kind: "reconcile_connection_request_status", status: "completed" }],
+      0,
+      1,
+    ),
+    false,
+  );
 });
 
 test("standard passes keep draining within the time budget even after the old 8-task mark", () => {

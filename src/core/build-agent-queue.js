@@ -101,6 +101,8 @@ const AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG = {
   "linkedin-received-invitations": { maxPages: 1, pageSize: 10 },
   "linkedin-messaging-inbox": { maxPages: 1, pageSize: 10 },
 };
+const MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD = 1;
+const CONNECTION_REQUEST_STATUS_RECONCILIATION_COOLDOWN_MS = 30 * 60 * 1000;
 // Every full-mode (backfill) sync task runs as a bounded slice: the sync stops
 // at the page budget with `page_budget_stopped_early`, persists `nextCursor`,
 // and the still-open itemization gap requeues the next slice with
@@ -389,30 +391,7 @@ export function buildAgentQueue(input) {
     }
   }
 
-  // Disappearance deltas from the sent-invitations list are not operator
-  // decisions. The agent checks the profile relationship/invitation state via
-  // the governed connector and writes back pending, accepted, or not accepted.
-  for (const observation of input.observations ?? []) {
-    if (!shouldQueueConnectionRequestStatusReconciliation(observation)) continue;
-    placeTask({
-      kind: "reconcile_connection_request_status",
-      action: "reconcile_connection_request_status",
-      needsOperatorInput: false,
-      observationId: observation.id,
-      userId: observation.userId ?? null,
-      accountId: observation.accountId ?? null,
-      capability: observation.capability ?? "linkedin",
-      companyId: observation.companyId ?? null,
-      companyName: observation.actorCompanyName ?? null,
-      prospectId: observation.prospectId ?? null,
-      prospectName: observation.actorName ?? "pending invite",
-      recipientUrl: observation.actorProfileUrl ?? observation.sourceUrl ?? null,
-      surface: "connection_request",
-      reason: "sent_invite_status_reconciliation",
-      queuedAt: observation.observedAt ?? null,
-      dueAt: observation.observedAt ?? now,
-    }, { now, tasks, waiting });
-  }
+  queueConnectionRequestStatusReconciliationTasks(input.observations ?? [], { now, tasks, waiting });
 
   // Accept tasks: inbound invites the operator queued for approval. The agent
   // performs the real accept on LinkedIn, then writes back the final connected
@@ -1510,6 +1489,76 @@ function buildInboundSyncTask({
       `exo next --user ${user.id} --json`,
     ],
   };
+}
+
+/**
+ * Disappearance deltas from the sent-invitations list are not operator
+ * decisions, but each one can require a live profile lookup. Bound those
+ * lookups per account so one stale surface cannot turn into bot-like fan-out.
+ *
+ * @param {any[]} observations
+ * @param {{ now: string, tasks: Array<Record<string, any>>, waiting: Array<Record<string, any>> }} queueContext
+ */
+function queueConnectionRequestStatusReconciliationTasks(observations, queueContext) {
+  const candidates = observations.filter((observation) => shouldQueueConnectionRequestStatusReconciliation(observation));
+  const candidatesByAccount = groupBy(candidates, buildConnectionRequestStatusReconciliationGroupKey);
+
+  for (const accountCandidates of candidatesByAccount.values()) {
+    const sortedCandidates = [...accountCandidates].sort(compareObservationQueueOrder);
+    const selectedCandidates = sortedCandidates.slice(0, MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD);
+
+    for (const observation of selectedCandidates) {
+      const totalPending = sortedCandidates.length;
+      const remainingAfterThisTask = Math.max(0, totalPending - 1);
+      placeTask({
+        kind: "reconcile_connection_request_status",
+        action: "reconcile_connection_request_status",
+        needsOperatorInput: false,
+        observationId: observation.id,
+        userId: observation.userId ?? null,
+        accountId: observation.accountId ?? null,
+        capability: observation.capability ?? "linkedin",
+        companyId: observation.companyId ?? null,
+        companyName: observation.actorCompanyName ?? null,
+        prospectId: observation.prospectId ?? null,
+        prospectName: observation.actorName ?? "pending invite",
+        recipientUrl: observation.actorProfileUrl ?? observation.sourceUrl ?? null,
+        surface: "connection_request",
+        reason: totalPending > 1
+          ? "sent_invite_status_reconciliation_bounded"
+          : "sent_invite_status_reconciliation",
+        queuedAt: observation.observedAt ?? null,
+        dueAt: observation.observedAt ?? queueContext.now,
+        batch: {
+          groupKey: buildConnectionRequestStatusReconciliationGroupKey(observation),
+          totalPending,
+          maxPerPass: MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD,
+          remainingAfterThisTask,
+          cooldownMs: CONNECTION_REQUEST_STATUS_RECONCILIATION_COOLDOWN_MS,
+          nextObservationId: sortedCandidates[1]?.id ?? null,
+        },
+      }, queueContext);
+    }
+  }
+}
+
+/** @param {any} observation */
+function buildConnectionRequestStatusReconciliationGroupKey(observation) {
+  return [
+    normalizeNullableString(observation?.userId) ?? "unknown-user",
+    normalizeNullableString(observation?.accountId) ?? "unknown-account",
+    normalizeNullableString(observation?.capability) ?? "linkedin",
+  ].join(":");
+}
+
+/**
+ * @param {any} left
+ * @param {any} right
+ */
+function compareObservationQueueOrder(left, right) {
+  const observedAtComparison = String(left?.observedAt ?? "").localeCompare(String(right?.observedAt ?? ""));
+  if (observedAtComparison !== 0) return observedAtComparison;
+  return String(left?.id ?? "").localeCompare(String(right?.id ?? ""));
 }
 
 /**
