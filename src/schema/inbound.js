@@ -23,6 +23,7 @@ export const inboundSyncRunStatusSchema = z.enum(["never", "success", "warning",
 export const inboundSyncPlanModeSchema = z.enum(["quick", "normal", "full"]);
 export const inboundCaptureCompletenessSchema = z.enum(["complete", "partial_visible_slice", "failed"]);
 export const inboundSurfaceExhaustionStatusSchema = z.enum(["complete", "incomplete", "blocked"]);
+export const inboundSurfaceSyncTrustStatusSchema = z.enum(["trusted", "degraded", "untrusted"]);
 
 export const inboundSyncWriteStatusSchema = z.enum(["success", "warning", "failed"]);
 export const inboundCueKindSchema = z.enum([
@@ -99,6 +100,13 @@ export const inboundSurfaceStateSchema = z.object({
   continuationStartedAt: z.string().datetime().nullable().default(null),
   nextCursor: z.string().trim().min(1).nullable().default(null),
   nextStartOffset: z.coerce.number().int().min(0).nullable().default(null),
+  providerCursor: z.string().trim().min(1).nullable().default(null),
+  highWatermarkAt: z.string().datetime().nullable().default(null),
+  highWatermarkId: z.string().trim().min(1).nullable().default(null),
+  lastCompleteSnapshotId: z.string().trim().min(1).nullable().default(null),
+  nextAllowedSyncAt: z.string().datetime().nullable().default(null),
+  backoffReason: z.string().trim().min(1).nullable().default(null),
+  syncTrustStatus: inboundSurfaceSyncTrustStatusSchema.nullable().default(null),
   lastObservationCount: z.coerce.number().int().min(0).nullable().default(null),
   lastItemizationGapCount: z.coerce.number().int().min(0).nullable().default(null),
   lastCountDiscrepancyCount: z.coerce.number().int().min(0).nullable().default(null),
@@ -227,6 +235,13 @@ export const inboundSyncRunSurfaceInputSchema = z.object({
   continuationStartedAt: z.string().datetime().nullable().default(null),
   nextCursor: z.string().trim().min(1).nullable().default(null),
   nextStartOffset: z.coerce.number().int().min(0).nullable().default(null),
+  providerCursor: z.string().trim().min(1).nullable().default(null),
+  highWatermarkAt: z.string().datetime().nullable().default(null),
+  highWatermarkId: z.string().trim().min(1).nullable().default(null),
+  lastCompleteSnapshotId: z.string().trim().min(1).nullable().default(null),
+  nextAllowedSyncAt: z.string().datetime().nullable().default(null),
+  backoffReason: z.string().trim().min(1).nullable().default(null),
+  syncTrustStatus: inboundSurfaceSyncTrustStatusSchema.nullable().default(null),
   error: z.string().trim().min(1).nullable().default(null),
   observations: z.array(inboundSyncRunObservationInputSchema).default([])
 });

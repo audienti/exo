@@ -10,6 +10,8 @@ import {
   buildInboundAutomationStatus,
   buildUserInboundSyncPlan,
   classifyInboundSurfaceFreshness,
+  computeInboundAutomationNextDueAt,
+  recordUserInboundSyncRun,
 } from "../src/core/user-inbound-sync.js";
 
 function disabledLinkedinSurfaces() {
@@ -85,6 +87,93 @@ test("classifyInboundSurfaceFreshness does not immediately requeue bounded quick
       dueAt: observedAt,
     },
   );
+});
+
+test("classifyInboundSurfaceFreshness respects explicit provider sync backoff", () => {
+  const surface = {
+    key: "linkedin-sent-invitations",
+    lastRunStatus: "warning",
+    lastObservedAt: "2026-06-03T02:00:00.000Z",
+    lastExhaustionStatus: "incomplete",
+    lastExhaustionReason: "provider_rate_limited",
+    nextAllowedSyncAt: "2026-06-03T16:00:00.000Z",
+  };
+
+  assert.equal(
+    classifyInboundSurfaceFreshness(surface, "2026-06-03T12:00:00.000Z"),
+    null,
+  );
+  assert.equal(
+    computeInboundAutomationNextDueAt(surface),
+    "2026-06-03T16:00:00.000Z",
+  );
+  assert.deepEqual(
+    classifyInboundSurfaceFreshness(surface, "2026-06-03T16:00:01.000Z"),
+    {
+      reason: "warning",
+      dueAt: "2026-06-03T02:00:00.000Z",
+    },
+  );
+});
+
+test("recordUserInboundSyncRun persists provider trust and next allowed sync state", () => {
+  const updated = recordUserInboundSyncRun({
+    id: "user-1",
+    createdAt: "2026-06-03T00:00:00.000Z",
+    updatedAt: "2026-06-03T00:00:00.000Z",
+    label: "William",
+    owner: "William",
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-03T00:00:00.000Z",
+        updatedAt: "2026-06-03T00:00:00.000Z",
+        capability: "linkedin",
+        handle: "omalab-main",
+        label: "LinkedIn",
+        sourceType: "harness-connection",
+        harnessConnectionId: "harness-linkedin",
+        preferred: true,
+      },
+    ],
+    harnessConnections: [],
+  }, {
+    accountId: "account-1",
+    surfaceKey: "linkedin-sent-invitations",
+    status: "warning",
+    observedAt: "2026-06-03T12:00:00.000Z",
+    itemCount: 10,
+    visibleTotalCount: 74,
+    captureCompleteness: "partial_visible_slice",
+    requestedMode: "full",
+    actualMode: "full",
+    reconcileRequired: true,
+    reconcileReason: "provider_rate_limited",
+    exhaustionStatus: "incomplete",
+    exhaustionReason: "provider_rate_limited",
+    nextCursor: "cursor-1",
+    nextAllowedSyncAt: "2026-06-03T16:00:00.000Z",
+    providerCursor: "cursor-1",
+    highWatermarkAt: "2026-06-03T12:00:00.000Z",
+    highWatermarkId: "invite-74",
+    lastCompleteSnapshotId: "snapshot-previous",
+    backoffReason: "provider_rate_limited",
+    syncTrustStatus: "degraded",
+    observationCount: 10,
+  });
+
+  const surface = updated.accounts[0].inboundSync.surfaces.find((candidate) =>
+    candidate.surfaceKey === "linkedin-sent-invitations"
+  );
+  assert.ok(surface);
+  assert.equal(surface.nextCursor, "cursor-1");
+  assert.equal(surface.nextAllowedSyncAt, "2026-06-03T16:00:00.000Z");
+  assert.equal(surface.providerCursor, "cursor-1");
+  assert.equal(surface.highWatermarkAt, "2026-06-03T12:00:00.000Z");
+  assert.equal(surface.highWatermarkId, "invite-74");
+  assert.equal(surface.lastCompleteSnapshotId, "snapshot-previous");
+  assert.equal(surface.backoffReason, "provider_rate_limited");
+  assert.equal(surface.syncTrustStatus, "degraded");
 });
 
 test("classifyInboundSurfaceFreshness skips connector-unsupported failures", () => {

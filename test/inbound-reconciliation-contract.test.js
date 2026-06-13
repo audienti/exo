@@ -558,6 +558,90 @@ test("inbound sync run normalizes visible totals below itemized follower rows", 
   assert.equal(storedSurface.lastVisibleTotalCount, 2);
 }));
 
+test("inbound sync run persists provider cursor, high watermark, snapshot, trust, and backoff metadata", () => withIsolatedExoState(() => {
+  const rawUser = {
+    id: "user-1",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    label: "william-main",
+    owner: "William",
+    accounts: [
+      {
+        id: "linkedin-account-1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        capability: "linkedin",
+        handle: "william-main",
+        sourceType: "harness-connection",
+        harnessConnectionId: "harness-linkedin",
+        providerAccountId: "provider-linkedin-1",
+        preferred: true
+      }
+    ],
+    harnessConnections: []
+  };
+
+  const result = prepareUserInboundSyncRun(rawUser, {
+    mode: "full",
+    accounts: [
+      {
+        accountId: "linkedin-account-1",
+        surfaces: [
+          {
+            surfaceKey: "linkedin-sent-invitations",
+            status: "warning",
+            observedAt: timestamp,
+            itemCount: 10,
+            visibleTotalCount: 74,
+            captureCompleteness: "partial_visible_slice",
+            requestedMode: "full",
+            actualMode: "full",
+            reconcileRequired: true,
+            reconcileReason: "provider_rate_limited",
+            exhaustionStatus: "incomplete",
+            exhaustionReason: "provider_rate_limited",
+            paginationAttempted: true,
+            terminalSignalSeen: false,
+            stalledPassCount: 0,
+            nextCursor: "cursor-1",
+            providerCursor: "cursor-1",
+            highWatermarkAt: timestamp,
+            highWatermarkId: "invite-74",
+            lastCompleteSnapshotId: "snapshot-previous",
+            nextAllowedSyncAt: "2026-06-03T16:00:00.000Z",
+            backoffReason: "provider_rate_limited",
+            syncTrustStatus: "degraded",
+            error: "Unipile asked Exo to slow this surface down.",
+            observations: [
+              {
+                kind: "connection_request_pending",
+                observedAt: timestamp,
+                summary: "Jordan Cipolla is still pending.",
+                externalId: "invite-1",
+                actorName: "Jordan Cipolla",
+                actorProfileUrl: "https://www.linkedin.com/in/jordan-cipolla/"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  });
+
+  const surface = result.updatedUser.accounts[0].inboundSync.surfaces.find((candidate) =>
+    candidate.surfaceKey === "linkedin-sent-invitations"
+  );
+  assert.ok(surface);
+  assert.equal(surface.nextCursor, "cursor-1");
+  assert.equal(surface.providerCursor, "cursor-1");
+  assert.equal(surface.highWatermarkAt, timestamp);
+  assert.equal(surface.highWatermarkId, "invite-74");
+  assert.equal(surface.lastCompleteSnapshotId, "snapshot-previous");
+  assert.equal(surface.nextAllowedSyncAt, "2026-06-03T16:00:00.000Z");
+  assert.equal(surface.backoffReason, "provider_rate_limited");
+  assert.equal(surface.syncTrustStatus, "degraded");
+}));
+
 test("full authoritative sent-invitation reconciliation can complete after terminal exhaustion even when the visible count badge is slightly higher", () => {
   const rawUser = {
     id: "user-1",

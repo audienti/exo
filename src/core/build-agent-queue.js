@@ -292,6 +292,9 @@ export function buildAgentQueue(input) {
             .filter(Boolean)
             .sort()[0] ?? now,
         ) ?? now;
+        const fullSyncDueAt = computeItemizationGapSyncDueAt(gapSurface, oldestDueAt, {
+          workingHoursStatus: retrievalWindowStatus,
+        });
 
         placeTask(buildInboundSyncTask({
           user: syncView.user,
@@ -307,7 +310,7 @@ export function buildAgentQueue(input) {
           }),
           dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
             ? retrievalWindowStatus.nextOpenAt
-            : oldestDueAt,
+            : fullSyncDueAt,
           resumeCursor: normalizeNullableString(gapSurface?.nextCursor) ?? null,
           resumeStartOffset: Number.isInteger(gapSurface?.nextStartOffset) ? gapSurface.nextStartOffset : null,
           ...resolveAutonomousInboundPaginationConfig(surfaceKey),
@@ -1578,6 +1581,34 @@ function buildSurfaceSeamsForQueue(account, surfaceKeys, now, options = {}) {
       });
     })
     .filter(Boolean);
+}
+
+/**
+ * Itemization gaps represent incomplete reconciliation debt, so they usually
+ * stay immediately due. Provider safety windows and failed-retry cooldowns are
+ * the exceptions: those boundaries exist to avoid bot-like repeated polling.
+ *
+ * @param {Record<string, any> | null} surface
+ * @param {string} baseDueAt
+ * @param {{ workingHoursStatus?: { openNow: boolean, nextOpenAt: string | null } | null }} [options]
+ */
+function computeItemizationGapSyncDueAt(surface, baseDueAt, options = {}) {
+  let dueAt = normalizeOptionalIso(baseDueAt) ?? baseDueAt;
+  const explicitProviderDueAt = normalizeOptionalIso(surface?.nextAllowedSyncAt);
+  if (explicitProviderDueAt && explicitProviderDueAt > dueAt) {
+    dueAt = explicitProviderDueAt;
+  }
+
+  if (surface?.lastRunStatus === "failed") {
+    const failedRetryDueAt = computeInboundAutomationNextDueAt(surface, {
+      workingHoursStatus: options.workingHoursStatus ?? undefined,
+    });
+    if (failedRetryDueAt && failedRetryDueAt > dueAt) {
+      dueAt = failedRetryDueAt;
+    }
+  }
+
+  return dueAt;
 }
 
 /**

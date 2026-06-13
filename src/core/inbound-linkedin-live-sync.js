@@ -1523,7 +1523,7 @@ async function captureUnipileLinkedinCollectionSurface(input) {
       }
     }
 
-    const nextCursor = normalizeUnipileCursor(page.parsed?.cursor);
+    const nextCursor = extractUnipileCursor(page.parsed);
     const paginationAttempted = pageCount > 1 || Boolean(input.resumeCursor);
     if (!nextCursor) {
       return {
@@ -2747,11 +2747,29 @@ function isUnipileUnsupportedSurfaceFailure(status, parsed) {
 }
 
 /**
+ * @param {any} parsed
+ */
+function extractUnipileCursor(parsed) {
+  return normalizeUnipileCursor(parsed?.cursor)
+    ?? normalizeUnipileCursor(parsed?.next_cursor)
+    ?? normalizeUnipileCursor(parsed?.nextCursor)
+    ?? normalizeUnipileCursor(parsed?.paging?.cursor)
+    ?? normalizeUnipileCursor(parsed?.paging?.next_cursor)
+    ?? normalizeUnipileCursor(parsed?.pagination?.cursor)
+    ?? normalizeUnipileCursor(parsed?.pagination?.next_cursor);
+}
+
+/**
  * @param {unknown} raw
  */
 function normalizeUnipileCursor(raw) {
   if (typeof raw === "string") {
     return normalizeNullableString(raw);
+  }
+  if (raw && typeof raw === "object") {
+    return normalizeUnipileCursor(raw.cursor)
+      ?? normalizeUnipileCursor(raw.next_cursor)
+      ?? normalizeUnipileCursor(raw.value);
   }
   return null;
 }

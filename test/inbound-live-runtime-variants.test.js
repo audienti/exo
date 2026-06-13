@@ -1915,6 +1915,124 @@ test("inbound sync linkedin-live can stop a full sent-invitations reconciliation
   }
 });
 
+test("inbound sync linkedin-live treats Unipile next_cursor as a continuation cursor", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-next-cursor-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const timestamp = "2026-06-04T12:00:00.000Z";
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ""
+  ].join("\n"));
+
+  try {
+    const result = await buildLiveLinkedinInboundSyncPayload({
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "linkedin-live-unipile-user",
+      owner: "william",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00"
+      },
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "linkedin-live-unipile-user",
+          label: "LinkedIn via Unipile",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-1",
+          providerAccountId: "unipile-linkedin-1",
+          preferred: true,
+          automationControls: {
+            weeklyQuotas: {
+              profileVisits: null,
+              invitations: null,
+              messages: null
+            }
+          },
+          notes: null,
+          inboundSync: {
+            surfaces: []
+          }
+        }
+      ],
+      harnessConnections: [
+        {
+          id: "harness-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          runtime: "codex",
+          connector: "unipile",
+          label: "codex:unipile",
+          status: "available",
+          notes: null
+        }
+      ],
+      inboundIgnoreRules: []
+    }, [], {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      limit: 500,
+      surfaceKeys: ["linkedin-sent-invitations"],
+      maxPages: 1,
+      pageSize: 1,
+      codexHome,
+      unipileHttpGetImpl: (url) => {
+        const requestUrl = new URL(url);
+        if (!requestUrl.pathname.endsWith("/api/v1/users/invite/sent")) {
+          return {
+            status: 404,
+            bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+          };
+        }
+
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            items: [
+              {
+                id: "invitation-1",
+                invited_user: "Page One Pending",
+                invited_user_public_id: "page-one-pending",
+                date: timestamp
+              }
+            ],
+            next_cursor: "cursor-2"
+          })
+        };
+      }
+    });
+
+    const sentInvitations = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-sent-invitations");
+    assert.ok(sentInvitations);
+    assert.equal(sentInvitations.status, "warning");
+    assert.equal(sentInvitations.captureCompleteness, "partial_visible_slice");
+    assert.equal(sentInvitations.exhaustionStatus, "incomplete");
+    assert.equal(sentInvitations.reconcileRequired, true);
+    assert.equal(sentInvitations.reconcileReason, "page_budget_stopped_early");
+    assert.equal(sentInvitations.nextCursor, "cursor-2");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound sync linkedin-live can stop a full received-invitations reconciliation at a page budget and resume from the next cursor", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-received-invitations-page-budget-"));
   const codexHome = path.join(tempDir, ".codex");

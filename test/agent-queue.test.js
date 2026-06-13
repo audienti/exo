@@ -1882,6 +1882,111 @@ test("buildAgentQueue carries paginated full-sync continuation metadata for Link
   assert.match(task.contractCommand, /--page-size 10/);
 });
 
+test("buildAgentQueue defers itemization-gap full sync until provider backoff expires", () => {
+  const queue = buildAgentQueue({
+    motions: [],
+    companies: [],
+    users: [
+      {
+        id: "user-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        label: "Operator",
+        owner: "operator",
+        notes: null,
+        workingHours: {
+          mode: "always",
+          timezone: "America/New_York",
+          weekdays: ["mon", "tue", "wed", "thu", "fri"],
+          startLocalTime: "09:00",
+          endLocalTime: "17:00",
+        },
+        accounts: [
+          {
+            id: "account-1",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            capability: "linkedin",
+            handle: "operator-linkedin",
+            label: null,
+            sourceType: "harness-connection",
+            browserProfileId: null,
+            harnessConnectionId: "harness-1",
+            providerAccountId: "provider-1",
+            preferred: true,
+            notes: null,
+            inboundSync: {
+              surfaces: [
+                { surfaceKey: "linkedin-sent-invitations", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-received-invitations", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-messaging-inbox", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-profile-views", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-followers-list", enabled: false, lastRunStatus: "never" },
+                {
+                  surfaceKey: "linkedin-following-list",
+                  enabled: true,
+                  lastSyncedAt: "2026-06-03T08:30:00.000Z",
+                  lastObservedAt: "2026-06-03T08:30:00.000Z",
+                  lastRunStatus: "warning",
+                  lastItemCount: 10,
+                  lastVisibleTotalCount: 25,
+                  lastCaptureCompleteness: "partial_visible_slice",
+                  lastRequestedMode: "full",
+                  lastActualMode: "full",
+                  lastReconcileRequired: true,
+                  lastReconcileReason: "page_budget_stopped_early",
+                  lastExhaustionStatus: "incomplete",
+                  lastExhaustionReason: "provider_rate_limited",
+                  lastPaginationAttempted: true,
+                  lastTerminalSignalSeen: false,
+                  lastStalledPassCount: 0,
+                  continuationStartedAt: "2026-06-03T08:30:00.000Z",
+                  nextStartOffset: 10,
+                  nextAllowedSyncAt: "2026-06-03T16:00:00.000Z",
+                  backoffReason: "provider_rate_limited",
+                  syncTrustStatus: "degraded",
+                  lastObservationCount: 10,
+                  lastItemizationGapCount: 0,
+                  lastCountDiscrepancyCount: 15,
+                  lastError: "Unipile asked Exo to slow this surface down.",
+                },
+                { surfaceKey: "linkedin-comment-replies", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-catch-up-updates", enabled: false, lastRunStatus: "never" },
+              ],
+            },
+          },
+        ],
+        harnessConnections: [
+          {
+            id: "harness-1",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            runtime: "codex",
+            connector: "unipile",
+            label: "codex:unipile",
+            status: "available",
+            notes: null,
+          },
+        ],
+      },
+    ],
+    observations: [],
+    cues: [],
+    now: "2026-06-03T13:00:00.000Z",
+  });
+
+  assert.equal(queue.tasks.some((item) => item.kind === "run_inbound_sync"), false);
+  const task = queue.waiting.find((item) => item.kind === "run_inbound_sync");
+  assert.ok(task);
+  assert.equal(task.mode, "full");
+  assert.equal(task.reason, "itemization_gap");
+  assert.equal(task.dueAt, "2026-06-03T16:00:00.000Z");
+  assert.equal(task.queueState, "waiting");
+  assert.equal(task.waitingReason, null);
+  assert.equal(task.resumeStartOffset, 10);
+  assert.match(task.contractCommand, /--resume-start-offset 10/);
+});
+
 test("buildAgentQueue skips unsupported Gmail live-sync accounts and keeps the runnable Gmail connector task", () => {
   const queue = buildAgentQueue({
     motions: [],
