@@ -47,7 +47,7 @@
       "commit": "2acfed988706e8c3f97ea6f08baa84e8bf2d361f",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T13:05:50.000Z"
+    "updatedAt": "2026-06-13T13:13:13.000Z"
   },
   "tasks": [
     {
@@ -131,7 +131,7 @@
     {
       "id": "T3",
       "title": "Add Gmail email and thread seam owner",
-      "status": "running",
+      "status": "verify",
       "priority": 90,
       "dependsOn": [
         "T1",
@@ -158,9 +158,13 @@
       ],
       "worktree": "native-subagent:019ec116-8a69-77c2-9a1c-0d46f59bb9e1",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:12:05.000Z",
       "resolvedModel": "inherit",
-      "outputs": [],
+      "outputs": [
+        "Worker added src/core/hubspot-capability-reconciliation.js.",
+        "Worker added test/hubspot-capability-reconciliation.test.js.",
+        "Worker reported targeted verification passed: npm test -- test/hubspot-capability-reconciliation.test.js and git diff --check."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
@@ -169,7 +173,7 @@
     {
       "id": "T4",
       "title": "Add LinkedIn private messaging and InMail seam owner",
-      "status": "running",
+      "status": "verify",
       "priority": 85,
       "dependsOn": [
         "T1",
@@ -196,9 +200,13 @@
       ],
       "worktree": "native-subagent:019ec116-8b7e-7791-8839-98fe3b48f5ec",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:13:13.000Z",
       "resolvedModel": "inherit",
-      "outputs": [],
+      "outputs": [
+        "Worker added src/core/public-engagement-reconciliation.js.",
+        "Worker added test/public-engagement-reconciliation.test.js.",
+        "Worker reported targeted verification passed: npm test -- test/public-engagement-reconciliation.test.js and git diff --check."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
@@ -274,7 +282,7 @@
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-8e83-73e2-89a0-51e69bed71a4 (Mendel). Owns only public engagement seam files."
+      "notes": "Dispatched to native subagent 019ec116-8e83-73e2-89a0-51e69bed71a4 (Mendel). Controller verification pending because other native subagents still have in-flight dirty files in the shared checkout."
     },
     {
       "id": "T7",
@@ -310,7 +318,7 @@
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-9079-7d03-8cc1-0930e330b910 (Kepler). Owns only HubSpot support seam files."
+      "notes": "Dispatched to native subagent 019ec116-9079-7d03-8cc1-0930e330b910 (Kepler). Controller verification pending because other native subagents still have in-flight dirty files in the shared checkout."
     },
     {
       "id": "T8",
@@ -434,5 +442,30 @@
       "notes": "Final verification and board closeout."
     }
   ],
-  "messages": []
+  "messages": [
+    {
+      "id": "M1",
+      "fromTask": "T7",
+      "toTasks": [
+        "T8"
+      ],
+      "type": "interface-note",
+      "subject": "Register HubSpot capability support seam",
+      "body": "T7 owns only the HubSpot seam files. T8 should add shared registry integration for capabilityKey hubspot with owner src/core/hubspot-capability-reconciliation.js, proof surfaces hubspot-managed-account and hubspot-runtime-probe, and configured/runtime state keys.",
+      "createdAt": "2026-06-13T13:12:05.000Z",
+      "status": "open"
+    },
+    {
+      "id": "M2",
+      "fromTask": "T6",
+      "toTasks": [
+        "T8"
+      ],
+      "type": "interface-note",
+      "subject": "Wire public engagement reconciliation into action-result writeback",
+      "body": "T6 added the pure public engagement owner, but shared record-action-result integration is outside its write set. T8 should route public engagement action writeback through src/core/public-engagement-reconciliation.js.",
+      "createdAt": "2026-06-13T13:13:13.000Z",
+      "status": "open"
+    }
+  ]
 }
