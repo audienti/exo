@@ -1,0 +1,221 @@
+{
+  "plan": {
+    "slug": "backend-sync-reconcile-mutate",
+    "source": "docs/wip/backend-sync-reconcile-mutate-audit.md",
+    "objective": "Stabilize Exo backend sync, reconcile, and mutate contracts so UI and agent queue state read from trustworthy backend facts.",
+    "acceptanceCriteria": [
+      "Every cataloged inbound surface and mutation action has an explicit backend capability row with owners and status.",
+      "Connection-request reconciliation has one backend owner for pending, accepted, withdrawn, no-longer-pending, stale, and quiet decisions.",
+      "Mutations that create external state also create or clear explicit reconciliation debt.",
+      "Account health can report checked, unchecked, stale, failed, unsupported, and unconfigured states from backend facts.",
+      "Agent run history can be queried through a backend command or module without reading raw log files directly."
+    ],
+    "verificationCommands": [
+      "npm test",
+      "git diff --check"
+    ],
+    "constraints": [
+      "Backend first. Do not update UI surfaces until backend contracts exist.",
+      "Use TDD. Write the failing backend test before implementation for behavior changes.",
+      "Do not perform live external sends, withdrawals, accepts, declines, or production deploys.",
+      "Preserve the existing Exo state-store safety boundary. Tests must not write to the live workspace database."
+    ],
+    "nonGoals": [
+      "No frontend redesign in this loop.",
+      "No live LinkedIn, Gmail, HubSpot, or Sales Navigator mutation.",
+      "No broad scraper behavior that repeatedly re-queries full external surfaces."
+    ]
+  },
+  "board": {
+    "status": "active",
+    "controller": "codex",
+    "concurrencyCap": 1,
+    "worktreeRoot": ".worktrees",
+    "models": {
+      "fast": "inherit",
+      "default": "inherit",
+      "max": "inherit"
+    },
+    "base": {
+      "branch": "codex/tdd-sync-status-snapshot",
+      "commit": "a719092aaba2aae0cbf7c8f3b81f8020ce5d0d04",
+      "verifiedGreen": true
+    },
+    "updatedAt": "2026-06-13T11:40:04.000Z"
+  },
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Add backend capability registry",
+      "status": "done",
+      "priority": 100,
+      "dependsOn": [],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/lib/backend-capability-registry.js",
+        "test/backend-capability-registry.test.js",
+        "docs/wip/backend-sync-reconcile-mutate-audit.md"
+      ],
+      "context": "Create a backend registry that turns the audit matrix into code. It should cover all inbound surfaces from src/lib/inbound-surface-catalog.js and all mutation actions from src/lib/action-result-catalog.js. The registry is not the UI. It is a backend contract with service, capability, sync owner, reconcile owner, mutate owner, status, lane, and risk/gap notes.",
+      "doneWhen": [
+        "A new registry module exports rows for every inbound surface and every action-result catalog entry.",
+        "Tests fail if an inbound surface or action-result entry lacks a registry row.",
+        "Rows include enough owner metadata to guide later refactors without parsing docs.",
+        "The audit doc points at the registry as the living backend contract."
+      ],
+      "verification": [
+        "npm test -- test/backend-capability-registry.test.js",
+        "git diff --check"
+      ],
+      "outputs": [
+        "Added src/lib/backend-capability-registry.js as the living backend capability registry.",
+        "Added test/backend-capability-registry.test.js coverage for inbound surface and mutation action registry completeness.",
+        "Updated docs/wip/backend-sync-reconcile-mutate-audit.md to point at the registry."
+      ],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": "Verification passed: npm test -- test/backend-capability-registry.test.js, git diff --check, npm test."
+    },
+    {
+      "id": "T2",
+      "title": "Create connection-request reconciliation owner",
+      "status": "ready",
+      "priority": 95,
+      "dependsOn": [
+        "T1"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "src/core/connection-request-reconciliation.js",
+        "src/core/build-agent-queue.js",
+        "src/lib/linkedin-unipile-maintenance.js",
+        "src/core/inbound-sync-run.js",
+        "src/core/transition-inbound-observation.js",
+        "test/connection-request-reconciliation.test.js",
+        "test/agent-queue.test.js",
+        "test/linkedin-unipile-maintenance.test.js"
+      ],
+      "context": "Connection-request truth is currently spread across sync apply, queue construction, action-result writeback, transition helpers, and LinkedIn maintenance. Introduce one owner module that decides sent, pending, accepted, withdrawn, no-longer-pending, stale, and quiet states. Other modules should call it instead of re-implementing state decisions.",
+      "doneWhen": [
+        "A failing test proves sent invitations cannot be marked quiet while unresolved connection-request reconciliation exists.",
+        "The new owner module centralizes state classification and queue eligibility for connection-request reconciliation.",
+        "Existing queue and maintenance paths call the owner for connection-request decisions.",
+        "Existing connection-request behavior stays green."
+      ],
+      "verification": [
+        "npm test -- test/connection-request-reconciliation.test.js test/agent-queue.test.js test/linkedin-unipile-maintenance.test.js",
+        "git diff --check"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T3",
+      "title": "Record mutation reconciliation debt",
+      "status": "backlog",
+      "priority": 90,
+      "dependsOn": [
+        "T2"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "src/core/record-action-result.js",
+        "src/core/connection-request-reconciliation.js",
+        "src/core/user-inbound-sync.js",
+        "test/action-result.test.js",
+        "test/connection-request-reconciliation.test.js"
+      ],
+      "context": "A mutation should not be considered fully done when Exo records the click or API result. Mutation writeback must create or clear explicit reconciliation debt that sync can later prove. Start with connection_request:sent, withdraw_connection:sent, accept_connection:accepted, decline_connection:declined, and send_email:sent.",
+      "doneWhen": [
+        "Tests show supported mutations create, update, or clear reconciliation debt intentionally.",
+        "Connection-request mutations use the reconciliation owner from T2.",
+        "Email sends are marked as locally recorded but externally unproven until a future Gmail proof surface exists.",
+        "No live external mutation is performed by tests."
+      ],
+      "verification": [
+        "npm test -- test/action-result.test.js test/connection-request-reconciliation.test.js",
+        "git diff --check"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T4",
+      "title": "Add backend account capability health",
+      "status": "ready",
+      "priority": 80,
+      "dependsOn": [
+        "T1"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core/account-capability-health.js",
+        "src/core/user-inbound-sync.js",
+        "test/account-capability-health.test.js",
+        "test/user-inbound-sync.test.js"
+      ],
+      "context": "The user page showed accounts as unchecked. The backend needs a fact model for checked, unchecked, stale, failed, unsupported, disabled, and unconfigured states, derived from account mappings, surface config, and sync state. HubSpot with no surfaces should not look the same as a Gmail account that should have checked but never ran.",
+      "doneWhen": [
+        "Preferred Gmail with enabled gmail-inbox-threads and lastRunStatus=never reports unchecked or stale from backend health.",
+        "HubSpot with no backend surfaces reports unsupported or unconfigured rather than unchecked.",
+        "Disabled surfaces do not make an account unhealthy.",
+        "Health function is independent of UI rendering."
+      ],
+      "verification": [
+        "npm test -- test/account-capability-health.test.js test/user-inbound-sync.test.js",
+        "git diff --check"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    },
+    {
+      "id": "T5",
+      "title": "Add backend agent run log query",
+      "status": "ready",
+      "priority": 70,
+      "dependsOn": [
+        "T1"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core/agent-run-log.js",
+        "src/lib/agent-host-state.js",
+        "src/lib/agent-pass-summary.js",
+        "src/cli/index.js",
+        "test/agent-run-log.test.js",
+        "test/agent-host-pass.test.js"
+      ],
+      "context": "The short-term UI can later show a job log, but this loop starts backend-only. Add a backend query that combines existing agent-host-state.json, agent-last-pass.json, and agent.log concepts into a stable run-log contract. Do not build the UI in this task.",
+      "doneWhen": [
+        "Backend function returns recent agent run entries with run id or timestamp, status, lane, task kind, result counts, and source artifact.",
+        "CLI or core API can query it without directly reading raw files in UI code.",
+        "Tests cover missing artifacts, malformed log lines, and a normal last-pass summary.",
+        "No UI route is added."
+      ],
+      "verification": [
+        "npm test -- test/agent-run-log.test.js test/agent-host-pass.test.js",
+        "git diff --check"
+      ],
+      "outputs": [],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "",
+      "notes": ""
+    }
+  ]
+}
