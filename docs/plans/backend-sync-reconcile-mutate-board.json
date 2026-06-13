@@ -27,7 +27,7 @@
     ]
   },
   "board": {
-    "status": "active",
+    "status": "complete",
     "controller": "codex",
     "concurrencyCap": 2,
     "worktreeRoot": ".worktrees",
@@ -41,7 +41,7 @@
       "commit": "a719092aaba2aae0cbf7c8f3b81f8020ce5d0d04",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T12:01:35.000Z"
+    "updatedAt": "2026-06-13T12:13:28.000Z"
   },
   "tasks": [
     {
@@ -162,7 +162,7 @@
     {
       "id": "T4",
       "title": "Add backend account capability health",
-      "status": "ready",
+      "status": "done",
       "priority": 80,
       "dependsOn": [
         "T1"
@@ -186,16 +186,20 @@
         "npm test -- test/account-capability-health.test.js test/user-inbound-sync.test.js",
         "git diff --check"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added src/core/account-capability-health.js as a pure backend account health model.",
+        "Added coverage for checked, unchecked, stale, failed, unsupported, disabled, and unconfigured account states.",
+        "Kept HubSpot without backend surfaces distinct from Gmail surfaces that should have run but have not."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "ed6439783e9e577d4dab96cf548084b1cdc541e1",
+      "notes": "Parallel worker lane. Controller verification passed: npm test -- test/account-capability-health.test.js test/user-inbound-sync.test.js, git diff --check, npm test."
     },
     {
       "id": "T5",
       "title": "Add backend agent run log query",
-      "status": "ready",
+      "status": "done",
       "priority": 70,
       "dependsOn": [
         "T1"
@@ -221,11 +225,15 @@
         "npm test -- test/agent-run-log.test.js test/agent-host-pass.test.js",
         "git diff --check"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added src/core/agent-run-log.js as a backend run-log query over agent-host-state.json, agent-last-pass*.json, and agent.log.",
+        "Added coverage for missing artifacts, malformed log blocks, normal last-pass summaries, lane entries, and host-state facts.",
+        "Kept the job-log contract backend-only with no UI route."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "e2bb935dbc949c2c0752e12d8322006f68de88eb",
+      "notes": "Parallel worker lane. Controller verification passed: npm test -- test/agent-run-log.test.js test/agent-host-pass.test.js, git diff --check, npm test."
     }
   ]
 }
