@@ -6,6 +6,13 @@ import { listInboundSurfaceCatalog } from "./inbound-surface-catalog.js";
 const SYNC_APPLY_OWNER = "src/core/inbound-sync-run.js";
 const MUTATION_WRITEBACK_OWNER = "src/core/record-action-result.js";
 const CONNECTION_REQUEST_RECONCILIATION_OWNER = "src/core/connection-request-reconciliation.js";
+const EMAIL_SEND_RECONCILIATION_OWNER = "src/core/email-send-reconciliation.js";
+const GMAIL_THREAD_RECONCILIATION_OWNER = "src/core/gmail-thread-reconciliation.js";
+const LINKEDIN_PRIVATE_MESSAGE_RECONCILIATION_OWNER = "src/core/linkedin-private-message-reconciliation.js";
+const INMAIL_RECONCILIATION_OWNER = "src/core/inmail-reconciliation.js";
+const LINKEDIN_SOCIAL_GRAPH_RECONCILIATION_OWNER = "src/core/linkedin-social-graph-reconciliation.js";
+const PUBLIC_ENGAGEMENT_RECONCILIATION_OWNER = "src/core/public-engagement-reconciliation.js";
+const HUBSPOT_CAPABILITY_RECONCILIATION_OWNER = "src/core/hubspot-capability-reconciliation.js";
 const ACCOUNT_HEALTH_OWNER = "src/core/account-capability-health.js";
 const AGENT_RUN_LOG_OWNER = "src/core/agent-run-log.js";
 
@@ -39,7 +46,7 @@ const INBOUND_SURFACE_OVERLAYS = {
       reconcile: "partial",
       mutate: "partial",
     },
-    reconcileOwner: "src/core/private-inbound-message-classification.js",
+    reconcileOwner: LINKEDIN_PRIVATE_MESSAGE_RECONCILIATION_OWNER,
     kanbanLane: "now",
     gap: "Thread count and actionable observations need separate backend semantics.",
   },
@@ -49,7 +56,7 @@ const INBOUND_SURFACE_OVERLAYS = {
       reconcile: "partial",
       mutate: "partial",
     },
-    reconcileOwner: DEFAULT_SURFACE_RECONCILIATION_OWNER,
+    reconcileOwner: LINKEDIN_SOCIAL_GRAPH_RECONCILIATION_OWNER,
     kanbanLane: "next",
     gap: "Visible-total discrepancies should not look equally complete to an operator.",
   },
@@ -59,7 +66,7 @@ const INBOUND_SURFACE_OVERLAYS = {
       reconcile: "partial",
       mutate: "n/a",
     },
-    reconcileOwner: DEFAULT_SURFACE_RECONCILIATION_OWNER,
+    reconcileOwner: LINKEDIN_SOCIAL_GRAPH_RECONCILIATION_OWNER,
     kanbanLane: "now",
     gap: "Continuation exists, but incomplete page-budget runs must resume without broad repeated scraping.",
   },
@@ -69,7 +76,7 @@ const INBOUND_SURFACE_OVERLAYS = {
       reconcile: "partial",
       mutate: "partial",
     },
-    reconcileOwner: "src/core/follow-state-reconciliation.js",
+    reconcileOwner: LINKEDIN_SOCIAL_GRAPH_RECONCILIATION_OWNER,
     kanbanLane: "next",
     gap: "Follow and unfollow state changes need a single reconciliation owner.",
   },
@@ -79,7 +86,7 @@ const INBOUND_SURFACE_OVERLAYS = {
       reconcile: "missing",
       mutate: "partial",
     },
-    reconcileOwner: "src/core/public-engagement-reconciliation.js",
+    reconcileOwner: PUBLIC_ENGAGEMENT_RECONCILIATION_OWNER,
     kanbanLane: "later",
     gap: "Cataloged as disabled browser capture. Autonomous public reply retrieval is not wired.",
   },
@@ -89,7 +96,7 @@ const INBOUND_SURFACE_OVERLAYS = {
       reconcile: "missing",
       mutate: "partial",
     },
-    reconcileOwner: "src/core/public-engagement-reconciliation.js",
+    reconcileOwner: PUBLIC_ENGAGEMENT_RECONCILIATION_OWNER,
     kanbanLane: "later",
     gap: "Public engagement mutations exist, but this truth surface is disabled.",
   },
@@ -99,7 +106,7 @@ const INBOUND_SURFACE_OVERLAYS = {
       reconcile: "partial",
       mutate: "n/a",
     },
-    reconcileOwner: "src/core/inbound-identity-resolution.js",
+    reconcileOwner: GMAIL_THREAD_RECONCILIATION_OWNER,
     kanbanLane: "now",
     gap: "Some Gmail accounts sync, while the preferred Gmail account can remain never checked.",
   },
@@ -147,7 +154,7 @@ const ACTION_OVERLAYS = {
       mutate: "partial",
       reconcile: "missing",
     },
-    reconcileOwner: "src/core/email-send-reconciliation.js",
+    reconcileOwner: EMAIL_SEND_RECONCILIATION_OWNER,
     kanbanLane: "now",
     gap: "Email send writeback exists, but no Gmail sent-mail or delivery-proof surface reconciles it.",
   },
@@ -156,7 +163,7 @@ const ACTION_OVERLAYS = {
       mutate: "partial",
       reconcile: "partial",
     },
-    reconcileOwner: "src/core/private-inbound-message-classification.js",
+    reconcileOwner: LINKEDIN_PRIVATE_MESSAGE_RECONCILIATION_OWNER,
     kanbanLane: "now",
     gap: "Private-message sends need proof through LinkedIn messaging sync.",
   },
@@ -165,7 +172,7 @@ const ACTION_OVERLAYS = {
       mutate: "partial",
       reconcile: "missing",
     },
-    reconcileOwner: "src/core/inmail-reconciliation.js",
+    reconcileOwner: INMAIL_RECONCILIATION_OWNER,
     kanbanLane: "next",
     gap: "Outbound InMail can be recorded, but InMail inbox and sent proof surfaces are missing.",
   },
@@ -174,7 +181,7 @@ const ACTION_OVERLAYS = {
       mutate: "partial",
       reconcile: "partial",
     },
-    reconcileOwner: "src/core/follow-state-reconciliation.js",
+    reconcileOwner: LINKEDIN_SOCIAL_GRAPH_RECONCILIATION_OWNER,
     kanbanLane: "next",
     gap: "Follow writeback should reconcile against the following-list surface.",
   },
@@ -183,7 +190,7 @@ const ACTION_OVERLAYS = {
       mutate: "partial",
       reconcile: "partial",
     },
-    reconcileOwner: "src/core/follow-state-reconciliation.js",
+    reconcileOwner: LINKEDIN_SOCIAL_GRAPH_RECONCILIATION_OWNER,
     kanbanLane: "next",
     gap: "Unfollow writeback should reconcile against the following-list surface.",
   },
@@ -447,6 +454,28 @@ function buildSupportRows() {
       kanbanLane: "now",
       gap: "Agent host artifacts now have one backend query contract before the UI can show job history.",
     },
+    {
+      id: "support:hubspot",
+      kind: "backend_support",
+      service: "hubspot",
+      capabilityKey: "hubspot",
+      label: "HubSpot capability support",
+      sync: { owner: null },
+      reconcile: { owner: HUBSPOT_CAPABILITY_RECONCILIATION_OWNER },
+      mutate: { owner: null },
+      status: {
+        sync: "n/a",
+        reconcile: "partial",
+        mutate: "n/a",
+      },
+      proofSurfaces: ["hubspot-managed-account", "hubspot-runtime-probe"],
+      stateKeys: ["configured", "runtime_probe", "preferred_account", "failed_runtime_probe"],
+      syncStrategy: "runtime-managed-account-and-probe-read",
+      reconciliationStrategy: "hubspot-capability-support-classification",
+      mutationDebtPolicy: "not-applicable",
+      kanbanLane: "now",
+      gap: "HubSpot has managed-account support but no inbound truth surfaces; capability support must not collapse to unchecked.",
+    },
   ];
 }
 
@@ -460,7 +489,7 @@ function inferActionOverlay(actionKey) {
         mutate: "partial",
         reconcile: "missing",
       },
-      reconcileOwner: "src/core/public-engagement-reconciliation.js",
+      reconcileOwner: PUBLIC_ENGAGEMENT_RECONCILIATION_OWNER,
       kanbanLane: "later",
       gap: "Public engagement mutation exists, but public reply and catch-up truth surfaces are disabled.",
     };
@@ -484,7 +513,7 @@ function inferActionOverlay(actionKey) {
         mutate: "partial",
         reconcile: "partial",
       },
-      reconcileOwner: DEFAULT_ACTION_RECONCILIATION_OWNER,
+      reconcileOwner: LINKEDIN_SOCIAL_GRAPH_RECONCILIATION_OWNER,
       kanbanLane: "next",
       gap: "Profile-view writeback exists, but profile-view truth has visible-total discrepancies.",
     };

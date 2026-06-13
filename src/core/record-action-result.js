@@ -2,9 +2,15 @@
 
 import { autoPromoteInboundAccepts } from "./auto-promote-inbound-accepts.js";
 import { buildConnectionRequestMutationReconciliation } from "./connection-request-reconciliation.js";
+import { buildEmailSendMutationReconciliation } from "./email-send-reconciliation.js";
+import { reconcileInmailMutation } from "./inmail-reconciliation.js";
+import { reconcileLinkedinPrivateMessageMutation } from "./linkedin-private-message-reconciliation.js";
+import { reconcileLinkedinSocialGraphMutation } from "./linkedin-social-graph-reconciliation.js";
+import { reconcilePublicEngagementMutation } from "./public-engagement-reconciliation.js";
 import { transitionInboundObservation } from "./transition-inbound-observation.js";
 import { findActionDefinition, normalizeActionKey } from "../lib/action-catalog.js";
 import { findSupportedActionResult, normalizeActionResultKey } from "../lib/action-result-catalog.js";
+import { findBackendCapability } from "../lib/backend-capability-registry.js";
 import { isSendableDraftStatus } from "../lib/draft-policy.js";
 import {
   appendActivityEvent,
@@ -117,16 +123,19 @@ export function recordActionResult(input) {
 
   let { rawMotion, prospect } = loadTargetContext(ids);
   const surface = resolveSurface({ action, result, explicitSurface: input.surface ?? null, prospect });
+  const sentDraft = surface && result.markDraftSent
+    ? findSendableDraftForSurface(prospect, surface)
+    : null;
   const reconciliation = buildActionResultReconciliation({
     actionKey: action.key,
     resultKey: result.key,
     surface,
     observationId: ids.observationId,
     inboundObservationTransitionedTo,
+    prospect,
+    occurredAt,
+    body: input.body ?? sentDraft?.body ?? null,
   });
-  const sentDraft = surface && result.markDraftSent
-    ? findSendableDraftForSurface(prospect, surface)
-    : null;
 
   const nextAction = input.nextAction !== undefined ? input.nextAction : result.defaultNextAction;
   const needsCadenceUpdate =
@@ -437,6 +446,9 @@ function deriveCadenceChannel(surface) {
  *   surface: string | null,
  *   observationId: string | null,
  *   inboundObservationTransitionedTo: string | null,
+ *   prospect?: any,
+ *   occurredAt?: string | null,
+ *   body?: string | null,
  * }} input
  */
 function buildActionResultReconciliation(input) {
@@ -445,23 +457,113 @@ function buildActionResultReconciliation(input) {
     return connectionRequestReconciliation;
   }
 
-  if (input.actionKey === "send_email" && input.resultKey === "sent") {
-    return {
-      state: "pending_external_proof",
-      owner: "src/core/record-action-result.js",
+  const row = findBackendCapability(input.actionKey);
+  if (!row) return null;
+
+  const emailReconciliation = buildEmailSendMutationReconciliation(input);
+  if (emailReconciliation) {
+    return emailReconciliation;
+  }
+
+  if (input.resultKey !== "sent") {
+    return null;
+  }
+
+  if (input.actionKey === "send_direct_message") {
+    return reconcileLinkedinPrivateMessageMutation({
+      row,
       actionKey: input.actionKey,
       resultKey: input.resultKey,
-      surface: input.surface ?? "email",
-      proofSurface: null,
-      missingProofSurface: "gmail-sent-mail",
-      externalState: "email_sent",
-      reason: "send_email_has_no_provider_proof_surface",
-      observationId: input.observationId,
-      clearedBy: null,
-    };
+      surface: input.surface,
+      prospectId: input.prospect?.id ?? null,
+      actorLinkedinPublicId: input.prospect?.linkedinPublicId ?? null,
+      actorLinkedinMemberId: input.prospect?.linkedinMemberId ?? null,
+      actorHandle: input.prospect?.linkedinHandle ?? null,
+      actorProfileUrl: input.prospect?.linkedinProfileUrl ?? null,
+      occurredAt: input.occurredAt,
+      body: input.body,
+      observations: [],
+    });
+  }
+
+  if (input.actionKey === "in_mail_message") {
+    return reconcileInmailMutation({
+      row,
+      actionKey: input.actionKey,
+      resultKey: input.resultKey,
+      surface: input.surface,
+      occurredAt: input.occurredAt,
+      missingProofSurfaces: findUnavailableProofSurfaces(row),
+    });
+  }
+
+  if (input.actionKey === "follow" || input.actionKey === "unfollow" || input.actionKey === "profile_view") {
+    return reconcileLinkedinSocialGraphMutation({
+      row,
+      actionKey: input.actionKey,
+      resultKey: input.resultKey,
+      surface: input.surface,
+      target: buildLinkedinTarget(input.prospect),
+      touchedAt: input.occurredAt,
+      actionAt: input.occurredAt,
+      followingSurface: buildUncheckedProofSurface("linkedin-following-list"),
+      profileViewSurface: buildUncheckedProofSurface("linkedin-profile-views"),
+    });
+  }
+
+  const publicEngagementReconciliation = reconcilePublicEngagementMutation({
+    row,
+    actionKey: input.actionKey,
+    resultKey: input.resultKey,
+    surface: input.surface,
+    unsupportedProofSurfaces: findUnavailableProofSurfaces(row),
+  });
+  if (publicEngagementReconciliation) {
+    return publicEngagementReconciliation;
   }
 
   return null;
+}
+
+/**
+ * @param {any} row
+ * @returns {string[]}
+ */
+function findUnavailableProofSurfaces(row) {
+  return (row.proofSurfaces ?? []).filter((surfaceKey) => {
+    const surface = findBackendCapability(surfaceKey);
+    return !surface
+      || surface.status?.sync === "missing"
+      || surface.status?.reconcile === "missing"
+      || String(surface.syncStrategy ?? "").includes("unsupported");
+  });
+}
+
+/**
+ * @param {any} prospect
+ */
+function buildLinkedinTarget(prospect) {
+  return {
+    prospectId: prospect?.id ?? null,
+    actorName: prospect?.name ?? null,
+    linkedinPublicId: prospect?.linkedinPublicId ?? null,
+    linkedinMemberId: prospect?.linkedinMemberId ?? null,
+    linkedinProfileUrl: prospect?.linkedinProfileUrl ?? null,
+    actorProfileUrl: prospect?.linkedinProfileUrl ?? null,
+  };
+}
+
+/**
+ * @param {string} surfaceKey
+ */
+function buildUncheckedProofSurface(surfaceKey) {
+  return {
+    surfaceKey,
+    status: "unchecked",
+    captureCompleteness: "unknown",
+    exhaustionStatus: "unknown",
+    observations: [],
+  };
 }
 
 /**

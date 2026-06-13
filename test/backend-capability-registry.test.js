@@ -82,9 +82,31 @@ test("backend capability registry names proof paths for non-connection seams", (
   assert.match(byCapability.get("send_email")?.mutationDebtPolicy ?? "", /pending/i);
 
   assert.ok(byCapability.get("send_direct_message")?.proofSurfaces.includes("linkedin-messaging-inbox"));
+  assert.equal(byCapability.get("send_direct_message")?.reconcile.owner, "src/core/linkedin-private-message-reconciliation.js");
+  assert.equal(byCapability.get("in_mail_message")?.reconcile.owner, "src/core/inmail-reconciliation.js");
+  assert.equal(byCapability.get("profile_view")?.reconcile.owner, "src/core/linkedin-social-graph-reconciliation.js");
   assert.ok(byCapability.get("follow")?.proofSurfaces.includes("linkedin-following-list"));
+  assert.equal(byCapability.get("follow")?.reconcile.owner, "src/core/linkedin-social-graph-reconciliation.js");
+  assert.equal(byCapability.get("unfollow")?.reconcile.owner, "src/core/linkedin-social-graph-reconciliation.js");
+  assert.equal(byCapability.get("linkedin-profile-views")?.reconcile.owner, "src/core/linkedin-social-graph-reconciliation.js");
+  assert.equal(byCapability.get("linkedin-followers-list")?.reconcile.owner, "src/core/linkedin-social-graph-reconciliation.js");
+  assert.equal(byCapability.get("linkedin-following-list")?.reconcile.owner, "src/core/linkedin-social-graph-reconciliation.js");
   assert.ok(byCapability.get("like_post")?.proofSurfaces.includes("linkedin-catch-up-updates"));
   assert.ok(byCapability.get("agent-run-log")?.proofSurfaces.includes("agent-last-pass"));
+});
+
+test("backend capability registry exposes HubSpot support as a capability seam", () => {
+  const rows = listBackendCapabilityRegistry();
+  const hubspot = rows.find((row) => row.capabilityKey === "hubspot");
+
+  assert.ok(hubspot);
+  assert.equal(hubspot.kind, "backend_support");
+  assert.equal(hubspot.service, "hubspot");
+  assert.equal(hubspot.reconcile.owner, "src/core/hubspot-capability-reconciliation.js");
+  assert.deepEqual(hubspot.proofSurfaces, ["hubspot-managed-account", "hubspot-runtime-probe"]);
+  assert.ok(hubspot.stateKeys.includes("configured"));
+  assert.ok(hubspot.stateKeys.includes("runtime_probe"));
+  assert.equal(hubspot.status.reconcile, "partial");
 });
 
 test("backend capability registry exposes the high-risk connection request seam explicitly", () => {

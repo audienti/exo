@@ -269,15 +269,116 @@ test("recordActionResult marks email sends as locally recorded but externally un
   assert.equal(result.actionResult.draftMarkedSent, true);
   assert.equal(result.actionResult.surface, "email");
   assert.equal(result.actionResult.reconciliation?.state, "pending_external_proof");
+  assert.equal(result.actionResult.reconciliation?.owner, "src/core/email-send-reconciliation.js");
   assert.equal(result.actionResult.reconciliation?.proofSurface, null);
   assert.equal(result.actionResult.reconciliation?.missingProofSurface, "gmail-sent-mail");
+  assert.equal(result.actionResult.reconciliation?.reason, "send_email_recorded_waiting_for_gmail_proof");
 
   const rowTouch = listActivityEvents({ prospectId: prospect.id }).find((event) =>
     event.surface === "email" && event.outcome === "sent"
   );
   assert.ok(rowTouch, "email touch event was written as an activity_events row");
   assert.equal(rowTouch.payload?.reconciliation?.state, "pending_external_proof");
+  assert.equal(rowTouch.payload?.reconciliation?.owner, "src/core/email-send-reconciliation.js");
   assert.equal(rowTouch.payload?.reconciliation?.missingProofSurface, "gmail-sent-mail");
+});
+
+test("recordActionResult delegates non-connection mutation debt to seam owners", () => {
+  const motion = cliJson([
+    "motion", "add",
+    "--url", "https://example.com/result-seam-owners",
+    "--premise", "This offer matters when mutation writeback needs owner-shaped reconciliation debt.",
+    "--audience", "Revenue operators",
+    "--signal", "company::Are outbound actions missing external proof?",
+  ]);
+  cli(["motion", "restart", motion.id]);
+
+  const company = cliJson([
+    "companies", "add",
+    "--name", "Seam Owner Systems",
+    "--domain", "seam-owner.example",
+    "--motion", motion.id,
+  ]);
+  const prospect = cliJson([
+    "companies", "prospects", "add", company.id,
+    "--motion", motion.id,
+    "--name", "Nora Normalize",
+    "--title", "VP Revenue",
+    "--email", "nora@seam-owner.example",
+    "--linkedin-profile-url", "https://www.linkedin.com/in/nora-normalize",
+    "--buying-committee-role", "primary_business_owner",
+    "--decision-authority", "buys",
+    "--fit-confidence", "high",
+    "--why-relevant", "Owns proof-backed mutation reconciliation.",
+  ]).prospects[0];
+
+  const cases = [
+    {
+      actionKey: "send_direct_message",
+      surface: "post_accept_message",
+      owner: "src/core/linkedin-private-message-reconciliation.js",
+      state: "pending_proof",
+      proofSurfaces: ["linkedin-messaging-inbox"],
+      externalState: "direct_message_sent",
+    },
+    {
+      actionKey: "in_mail_message",
+      owner: "src/core/inmail-reconciliation.js",
+      state: "missing_proof",
+      proofSurfaces: ["linkedin-inmail-sent", "linkedin-inmail-inbox"],
+      missingProofSurfaces: ["linkedin-inmail-sent", "linkedin-inmail-inbox"],
+      externalState: "inmail_sent",
+    },
+    {
+      actionKey: "profile_view",
+      owner: "src/core/linkedin-social-graph-reconciliation.js",
+      state: "pending_proof",
+      proofSurfaces: ["linkedin-profile-views"],
+      externalState: "profile_view_after_touch",
+    },
+    {
+      actionKey: "follow",
+      owner: "src/core/linkedin-social-graph-reconciliation.js",
+      state: "pending_proof",
+      proofSurfaces: ["linkedin-following-list"],
+      externalState: "followed",
+    },
+    {
+      actionKey: "unfollow",
+      owner: "src/core/linkedin-social-graph-reconciliation.js",
+      state: "pending_proof",
+      proofSurfaces: ["linkedin-following-list"],
+      externalState: "unfollowed",
+    },
+    {
+      actionKey: "like_post",
+      owner: "src/core/public-engagement-reconciliation.js",
+      state: "missing_proof",
+      proofSurfaces: ["linkedin-catch-up-updates"],
+      missingProofSurfaces: ["linkedin-catch-up-updates"],
+      externalState: "post_reaction_created",
+    },
+  ];
+
+  for (const item of cases) {
+    const result = recordActionResult({
+      actionKey: item.actionKey,
+      resultKey: "sent",
+      motionId: motion.id,
+      companyId: company.id,
+      prospectId: prospect.id,
+      surface: item.surface,
+      occurredAt: "2026-06-02T14:45:00.000Z",
+    });
+
+    const reconciliation = result.actionResult.reconciliation;
+    assert.equal(reconciliation?.owner, item.owner, `${item.actionKey} should delegate to its seam owner`);
+    assert.equal(reconciliation?.state, item.state, `${item.actionKey} should expose owner state`);
+    assert.deepEqual(reconciliation?.proofSurfaces, item.proofSurfaces);
+    assert.deepEqual(reconciliation?.missingProofSurfaces ?? [], item.missingProofSurfaces ?? []);
+    assert.equal(reconciliation?.debt?.externalState, item.externalState);
+    assert.equal(reconciliation?.requiresAction, true);
+  }
 });
 
 test("recordActionResult blocks stale outbound send when another motion owns the person", () => {
