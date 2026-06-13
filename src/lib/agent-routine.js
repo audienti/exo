@@ -153,7 +153,7 @@ export function buildDrainPrompt(input) {
     "      → this is the governed message-send contract (pinned identity, recipient, verbatim message, executionPolicy).",
     "   b. Use native connector tools only. For LinkedIn send and maintenance tasks, use the governed Unipile MCP path, not Chrome, browser automation, curl, or shell scraping.",
     "      For send_message, do exactly what the governed send contract says. For accept/withdraw/reject/reconcile tasks, perform that literal Unipile MCP action and nothing broader.",
-    "      Do not drift to another LinkedIn identity. If the MCP connector cannot perform the action, stop that task immediately, record the exact blocked reason, and continue to the next task.",
+    "      Do not drift to another LinkedIn identity. If the MCP tool is unavailable, report that exact availability gap so the host can apply same-credential HTTP fallback; do not run that fallback yourself.",
     "      Do not run diagnostics, open Chrome windows, use browser tools, or switch to Playwriter in this unattended lane.",
     input.sendMode === "verify"
       ? "      This routine is in verification-only send mode. Reach a real writable composer and exact governed message, then stop before the final click and do not run writeback."

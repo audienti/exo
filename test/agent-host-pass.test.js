@@ -50,6 +50,7 @@ import {
   shouldAbortPassAfterTaskProblem,
   shouldIgnoreCodexUserConfig,
   shouldPreferBackfillSlice,
+  shouldUseSameCredentialUnipileHttpFallback,
   runSendTask,
 } from "../scripts/run-agent-host-pass.js";
 import {
@@ -3079,9 +3080,46 @@ test("buildLinkedinMaintenancePrompt requires Unipile MCP execute_request and fo
   assert.match(prompt, /HAR request/i);
   assert.match(prompt, /Do not use curl/i);
   assert.match(prompt, /Do not use shell/i);
+  assert.match(prompt, /If the MCP tool is unavailable/i);
+  assert.match(prompt, /same-credential HTTP fallback/i);
   assert.match(prompt, /DELETE/);
   assert.match(prompt, /api14\.unipile\.com:14465/);
   assert.match(prompt, /Return only JSON/i);
+});
+
+test("same-credential Unipile HTTP fallback is only allowed for MCP tool availability gaps", () => {
+  assert.equal(
+    shouldUseSameCredentialUnipileHttpFallback(new Error("Unipile MCP execute_request tool is unavailable in this runtime")),
+    true,
+  );
+  assert.equal(
+    shouldUseSameCredentialUnipileHttpFallback({ status: "blocked", reason: "MCP server unipile is not configured" }),
+    true,
+  );
+  assert.equal(
+    shouldUseSameCredentialUnipileHttpFallback({ status: "blocked", reason: "MCP does not support this Unipile endpoint" }),
+    true,
+  );
+  assert.equal(
+    shouldUseSameCredentialUnipileHttpFallback({
+      status: "blocked",
+      reason: "GET /api/v1/accounts returned errors/no_client_session.",
+      responseStatus: 503,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldUseSameCredentialUnipileHttpFallback({
+      status: "blocked",
+      reason: "Unipile returned HTTP 404 for this endpoint.",
+      httpStatus: 404,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldUseSameCredentialUnipileHttpFallback(new Error("Codex is out of messages until tomorrow.")),
+    false,
+  );
 });
 
 test("preflight task gate can allow maintenance work even when Chrome debug-instance warnings exist", () => {

@@ -165,6 +165,9 @@ test("buildLinkedinMaintenanceHandoff emits a connector-native HAR request for s
   assert.deepEqual(result.harRequest.headers, [
     { name: "accept", value: "application/json" },
   ]);
+  assert.equal(result.executionPolicy.sameCredentialHttpFallbackAllowed, true);
+  assert.equal(result.executionPolicy.sameCredentialHttpFallbackCredentialSource, "codex_unipile_config");
+  assert.equal(result.executionPolicy.sameCredentialHttpFallbackAccountId, "provider-linkedin-1");
 });
 
 test("runLinkedinMaintenanceWithUnipile blocks unstubbed direct HTTP by default", () => {

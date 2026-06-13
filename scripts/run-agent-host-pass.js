@@ -77,6 +77,7 @@ import { getTaskExecutionLane, normalizeAgentExecutionLane } from "../src/lib/ag
 import {
   applyLinkedinMaintenanceConnectorResult,
   buildLinkedinMaintenanceHandoff,
+  runLinkedinMaintenanceWithUnipile,
 } from "../src/lib/linkedin-unipile-maintenance.js";
 import { extractUsableDraftBody } from "../src/lib/draft-policy.js";
 import { extractLinkedinPublicId } from "../src/lib/prospect-contacts.js";
@@ -2723,6 +2724,9 @@ function runBrowserActionTask(task, executionContext = null) {
       enabledMcpServers: ["unipile"],
     });
   } catch (error) {
+    if (handoff.executionPolicy?.sameCredentialHttpFallbackAllowed === true && shouldUseSameCredentialUnipileHttpFallback(error)) {
+      return runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, error);
+    }
     return buildBlockedCodexTaskResult(error, {
       action: task.kind,
       recipientUrl: task.recipientUrl ?? null,
@@ -2732,6 +2736,9 @@ function runBrowserActionTask(task, executionContext = null) {
 
   const result = applyLinkedinMaintenanceConnectorResult(task, connectorResult);
   if (result.status !== "completed") {
+    if (handoff.executionPolicy?.sameCredentialHttpFallbackAllowed === true && shouldUseSameCredentialUnipileHttpFallback(result)) {
+      return runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, result);
+    }
     return {
       status: "blocked",
       detail: {
@@ -2757,6 +2764,131 @@ function runBrowserActionTask(task, executionContext = null) {
       profileStatus: result.profileStatus ?? null,
     }
   };
+}
+
+function runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, problem) {
+  const fallbackReason = extractSameCredentialFallbackReason(problem) ?? "Unipile MCP tool was unavailable.";
+  const result = runLinkedinMaintenanceWithUnipile(task, {
+    codexHome: CODEX_HOME,
+    allowDirectUnipileHttp: true,
+  });
+
+  if (result.status !== "completed") {
+    return {
+      status: "blocked",
+      detail: {
+        reason: `Unipile MCP was unavailable (${fallbackReason}); same-credential HTTP fallback blocked: ${result.reason ?? "unknown failure"}`,
+        action: task.kind,
+        recipientUrl: task.recipientUrl ?? null,
+        transport: "unipile_http_same_credentials_fallback",
+        fallbackFrom: "unipile_mcp",
+      },
+    };
+  }
+
+  if (handoff.writebackMode === "task_writeback_after_completion" && normalizeNullableString(task.writeback)) {
+    runShellText(task.writeback);
+  }
+  return {
+    status: "completed",
+    detail: {
+      action: task.kind,
+      recipientUrl: task.recipientUrl ?? null,
+      transport: "unipile_http_same_credentials_fallback",
+      fallbackFrom: "unipile_mcp",
+      fallbackReason,
+      responseStatus: result.responseStatus ?? null,
+      resolvedKind: result.resolvedKind ?? null,
+      profileStatus: result.profileStatus ?? null,
+    },
+  };
+}
+
+/** @param {unknown} problem */
+export function shouldUseSameCredentialUnipileHttpFallback(problem) {
+  const httpStatus = extractSameCredentialFallbackHttpStatus(problem);
+  if (httpStatus !== null && httpStatus > 0) {
+    return false;
+  }
+
+  const reason = extractSameCredentialFallbackReason(problem);
+  if (!reason) {
+    return false;
+  }
+
+  const normalized = reason.toLowerCase();
+  if (
+    normalized.includes("out of messages")
+    || normalized.includes("usage limit")
+    || normalized.includes("rate limit")
+    || normalized.includes("quota")
+    || normalized.includes("timed out")
+    || normalized.includes("timeout")
+    || normalized.includes("errors/no_client_session")
+    || normalized.includes("no_client_session")
+    || normalized.includes("unauthorized")
+    || normalized.includes("forbidden")
+    || normalized.includes("non-2xx")
+    || normalized.includes("api returned")
+    || normalized.includes("unipile returned")
+    || /\bhttp\s+\d{3}\b/.test(normalized)
+    || /\bstatus\s+\d{3}\b/.test(normalized)
+  ) {
+    return false;
+  }
+
+  const mentionsMcp = normalized.includes("mcp") || normalized.includes("execute_request");
+  const availabilityGap = [
+    "unavailable",
+    "not available",
+    "not configured",
+    "not enabled",
+    "disabled",
+    "unknown tool",
+    "tool not found",
+    "no such tool",
+    "no tool",
+    "does not provide",
+    "does not support",
+    "not supported",
+    "unsupported",
+    "not exposed",
+    "server not found",
+    "server missing",
+  ].some((pattern) => normalized.includes(pattern));
+
+  return mentionsMcp && availabilityGap;
+}
+
+/** @param {unknown} problem */
+function extractSameCredentialFallbackReason(problem) {
+  if (problem instanceof Error) {
+    return normalizeNullableString(problem.message);
+  }
+  if (typeof problem === "string") {
+    return normalizeNullableString(problem);
+  }
+  if (!problem || typeof problem !== "object") {
+    return null;
+  }
+  return normalizeNullableString(problem.reason)
+    ?? normalizeNullableString(problem.message)
+    ?? normalizeNullableString(problem.error)
+    ?? null;
+}
+
+/** @param {unknown} problem */
+function extractSameCredentialFallbackHttpStatus(problem) {
+  if (!problem || typeof problem !== "object") {
+    return null;
+  }
+  for (const key of ["httpStatus", "responseStatus", "statusCode"]) {
+    const value = problem[key];
+    if (Number.isInteger(value)) {
+      return value;
+    }
+  }
+  return null;
 }
 
 /** @param {any} task */
@@ -3516,6 +3648,7 @@ export function buildLinkedinMaintenancePrompt(handoff) {
     "Do not switch LinkedIn identities, do not broaden to other invitations or profiles, and do not perform any action not represented by this contract.",
     "Return only JSON with fields: status, reason, httpStatus, responseBody.",
     "If the MCP request returns a 2xx response, return status=\"completed\", reason=null, httpStatus=<status>, responseBody=<parsed JSON body>.",
+    "If the MCP tool is unavailable, return status=\"blocked\" with the concrete tool availability reason; the Exo host may apply a same-credential HTTP fallback.",
     "If the MCP request fails or returns a non-2xx response, return status=\"blocked\" with the concrete reason, httpStatus if known, and responseBody if available.",
     "",
     "Maintenance contract JSON:",

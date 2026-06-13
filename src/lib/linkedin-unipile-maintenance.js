@@ -241,6 +241,10 @@ export function buildLinkedinMaintenanceHandoff(task, options = {}) {
       browserFallbackAllowed: false,
       disallowedFallbacks: ["curl", "shell_subprocess", "browser_tools", "another_linkedin_identity"],
       writeBackOnlyAfterRealAction: true,
+      sameCredentialHttpFallbackAllowed: true,
+      sameCredentialHttpFallbackCredentialSource: "codex_unipile_config",
+      sameCredentialHttpFallbackAccountId: providerAccountId,
+      sameCredentialHttpFallbackBaseUrl: baseUrl,
     },
   };
 
