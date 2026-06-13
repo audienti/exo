@@ -64,7 +64,8 @@ function buildInvitationInboundSurface(surfaceKey, result) {
   const itemCount = result.status === "failed"
     ? result.itemCount ?? 0
     : result.itemCount ?? result.items.length;
-  const visibleTotalCount = result.visibleTotalCount ?? itemCount;
+  const visibleTotalCount = result.visibleTotalCount
+    ?? (result.exhaustionStatus === "complete" || result.captureCompleteness === "complete" ? itemCount : null);
   const surfaceError = result.error?.message
     ?? (result.status !== "success" ? result.diagnostics?.hints?.[0] ?? null : null);
 

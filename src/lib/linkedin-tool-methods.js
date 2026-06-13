@@ -157,7 +157,7 @@ function buildCanonicalReceivedSurfaceFromLegacyCapture(capture, mode, session) 
     requestedMode: normalizeMode(capture.requestedMode, mode),
     actualMode: normalizeMode(capture.actualMode, mode),
     itemCount: capture.status === "failed" ? capture.itemCount : capture.itemCount ?? capture.items.length,
-    visibleTotalCount: capture.visibleTotalCount ?? capture.itemCount ?? capture.items.length,
+    visibleTotalCount: normalizeLegacyVisibleTotalCount(capture),
     exhaustionStatus: normalizeExhaustionStatus(capture),
     captureCompleteness: normalizeCaptureCompleteness(capture),
     reconcileRequired: capture.reconcileRequired ?? false,
@@ -231,7 +231,7 @@ function buildCanonicalSentSurfaceFromLegacyCapture(capture, mode, session) {
     requestedMode: normalizeMode(capture.requestedMode, mode),
     actualMode: normalizeMode(capture.actualMode, mode),
     itemCount: capture.status === "failed" ? capture.itemCount : capture.itemCount ?? capture.items.length,
-    visibleTotalCount: capture.visibleTotalCount ?? capture.itemCount ?? capture.items.length,
+    visibleTotalCount: normalizeLegacyVisibleTotalCount(capture),
     exhaustionStatus: normalizeExhaustionStatus(capture),
     captureCompleteness: normalizeCaptureCompleteness(capture),
     reconcileRequired: capture.reconcileRequired ?? false,
@@ -568,6 +568,24 @@ function normalizeCaptureCompleteness(capture) {
     return capture.captureCompleteness;
   }
   return capture.status === "failed" ? "failed" : null;
+}
+
+/**
+ * @param {{ status: string, itemCount?: number | null, visibleTotalCount?: number | null, captureCompleteness?: string | null, exhaustionStatus?: string | null, items: unknown[] }} capture
+ */
+function normalizeLegacyVisibleTotalCount(capture) {
+  if (capture.visibleTotalCount !== null && capture.visibleTotalCount !== undefined) {
+    return capture.visibleTotalCount;
+  }
+  const exhaustionStatus = normalizeExhaustionStatus(capture);
+  const captureCompleteness = normalizeCaptureCompleteness(capture);
+  if (exhaustionStatus === "complete" || captureCompleteness === "complete") {
+    return capture.itemCount ?? capture.items.length;
+  }
+  if (capture.status === "failed") {
+    return capture.itemCount ?? 0;
+  }
+  return null;
 }
 
 /**

@@ -932,6 +932,7 @@ async function captureUnipileSentInvitationsSurface(input) {
     resumeCursor: input.resumeCursor ?? null,
     maxPageSize: LINKEDIN_COLLECTION_MAX_PAGE_SIZE,
     partialError: "Unipile returned more pending sent invitations than this quick pass itemized.",
+    protectEmptyTerminalResume: true,
     httpGetImpl: input.httpGetImpl,
     mapItem: (item, fallbackObservedAt) => {
       const invitationId = normalizeNullableString(item?.id);
@@ -1463,6 +1464,7 @@ async function captureUnipileFollowingSurface(input) {
  *   maxPageSize: number,
  *   partialError: string,
  *   acceptTrailingEmptyCursor?: boolean,
+ *   protectEmptyTerminalResume?: boolean,
  *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   extraQuery?: Record<string, string> | null,
  *   mapItem: (item: any, fallbackObservedAt: string) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null
@@ -1526,6 +1528,28 @@ async function captureUnipileLinkedinCollectionSurface(input) {
     const nextCursor = extractUnipileCursor(page.parsed);
     const paginationAttempted = pageCount > 1 || Boolean(input.resumeCursor);
     if (!nextCursor) {
+      if (input.protectEmptyTerminalResume && input.resumeCursor && items.length === 0) {
+        return {
+          status: "warning",
+          checkedAt,
+          itemCount: 0,
+          visibleTotalCount: null,
+          captureCompleteness: "partial_visible_slice",
+          requestedMode: input.mode,
+          actualMode: input.mode,
+          reconcileRequired: true,
+          reconcileReason: "resume_terminal_empty_without_baseline",
+          exhaustionStatus: "incomplete",
+          exhaustionReason: "resume_terminal_empty_without_baseline",
+          paginationAttempted,
+          terminalSignalSeen: true,
+          stalledPassCount: 0,
+          nextCursor: null,
+          nextStartOffset: null,
+          error: `Unipile ${input.routeLabel} returned an empty terminal page while resuming from a cursor. Restart a full reconciliation from the beginning before trusting this surface.`,
+          items
+        };
+      }
       return {
         status: "success",
         checkedAt,
