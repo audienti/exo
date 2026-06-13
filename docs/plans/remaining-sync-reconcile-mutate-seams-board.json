@@ -36,7 +36,7 @@
     "viewer": {
       "htmlPath": "docs/plans/remaining-sync-reconcile-mutate-seams-board.html"
     },
-    "parallelismNote": "T3-T7 are running in parallel through native subagents; capacity is fully used at 5/5.",
+    "parallelismNote": "All five service seam lanes returned from native subagents. Controller verification is running before any lane is marked done.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -47,7 +47,7 @@
       "commit": "2acfed988706e8c3f97ea6f08baa84e8bf2d361f",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T13:13:13.000Z"
+    "updatedAt": "2026-06-13T13:16:36.000Z"
   },
   "tasks": [
     {
@@ -158,17 +158,18 @@
       ],
       "worktree": "native-subagent:019ec116-8a69-77c2-9a1c-0d46f59bb9e1",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:12:05.000Z",
+      "updatedAt": "2026-06-13T13:15:35.000Z",
       "resolvedModel": "inherit",
       "outputs": [
-        "Worker added src/core/hubspot-capability-reconciliation.js.",
-        "Worker added test/hubspot-capability-reconciliation.test.js.",
-        "Worker reported targeted verification passed: npm test -- test/hubspot-capability-reconciliation.test.js and git diff --check."
+        "Worker added src/core/email-send-reconciliation.js.",
+        "Worker added src/core/gmail-thread-reconciliation.js.",
+        "Worker added test/email-send-reconciliation.test.js and test/gmail-thread-reconciliation.test.js.",
+        "Worker reported targeted verification passed: npm test -- test/email-send-reconciliation.test.js test/gmail-thread-reconciliation.test.js and git diff --check."
       ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-8a69-77c2-9a1c-0d46f59bb9e1 (Sartre). Owns only Gmail seam files."
+      "notes": "Dispatched to native subagent 019ec116-8a69-77c2-9a1c-0d46f59bb9e1 (Sartre). Controller verification pending."
     },
     {
       "id": "T4",
@@ -200,22 +201,23 @@
       ],
       "worktree": "native-subagent:019ec116-8b7e-7791-8839-98fe3b48f5ec",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:13:13.000Z",
+      "updatedAt": "2026-06-13T13:15:16.000Z",
       "resolvedModel": "inherit",
       "outputs": [
-        "Worker added src/core/public-engagement-reconciliation.js.",
-        "Worker added test/public-engagement-reconciliation.test.js.",
-        "Worker reported targeted verification passed: npm test -- test/public-engagement-reconciliation.test.js and git diff --check."
+        "Worker added src/core/linkedin-private-message-reconciliation.js.",
+        "Worker added src/core/inmail-reconciliation.js.",
+        "Worker added test/linkedin-private-message-reconciliation.test.js and test/inmail-reconciliation.test.js.",
+        "Worker reported targeted verification passed: npm test -- test/linkedin-private-message-reconciliation.test.js test/inmail-reconciliation.test.js and git diff --check."
       ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-8b7e-7791-8839-98fe3b48f5ec (Newton). Owns private-message and InMail seam files."
+      "notes": "Dispatched to native subagent 019ec116-8b7e-7791-8839-98fe3b48f5ec (Newton). Controller verification pending."
     },
     {
       "id": "T5",
       "title": "Add LinkedIn social graph and profile-view seam owner",
-      "status": "running",
+      "status": "verify",
       "priority": 80,
       "dependsOn": [
         "T1",
@@ -240,18 +242,22 @@
       ],
       "worktree": "native-subagent:019ec116-8ce4-71f0-89ac-139d6cec3ee6",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:16:36.000Z",
       "resolvedModel": "inherit",
-      "outputs": [],
+      "outputs": [
+        "Worker added src/core/linkedin-social-graph-reconciliation.js.",
+        "Worker added test/linkedin-social-graph-reconciliation.test.js.",
+        "Worker reported targeted verification passed: npm test -- test/linkedin-social-graph-reconciliation.test.js and git diff --check."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-8ce4-71f0-89ac-139d6cec3ee6 (Pascal). Owns only social graph seam files."
+      "notes": "Dispatched to native subagent 019ec116-8ce4-71f0-89ac-139d6cec3ee6 (Pascal). Controller verification pending."
     },
     {
       "id": "T6",
       "title": "Add LinkedIn public engagement seam owner",
-      "status": "running",
+      "status": "verify",
       "priority": 75,
       "dependsOn": [
         "T1",
@@ -276,18 +282,22 @@
       ],
       "worktree": "native-subagent:019ec116-8e83-73e2-89a0-51e69bed71a4",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:13:13.000Z",
       "resolvedModel": "inherit",
-      "outputs": [],
+      "outputs": [
+        "Worker added src/core/public-engagement-reconciliation.js.",
+        "Worker added test/public-engagement-reconciliation.test.js.",
+        "Worker reported targeted verification passed: npm test -- test/public-engagement-reconciliation.test.js and git diff --check."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-8e83-73e2-89a0-51e69bed71a4 (Mendel). Controller verification pending because other native subagents still have in-flight dirty files in the shared checkout."
+      "notes": "Dispatched to native subagent 019ec116-8e83-73e2-89a0-51e69bed71a4 (Mendel). Controller verification pending."
     },
     {
       "id": "T7",
       "title": "Add HubSpot capability support seam",
-      "status": "running",
+      "status": "verify",
       "priority": 70,
       "dependsOn": [
         "T1",
@@ -312,13 +322,17 @@
       ],
       "worktree": "native-subagent:019ec116-9079-7d03-8cc1-0930e330b910",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:12:05.000Z",
       "resolvedModel": "inherit",
-      "outputs": [],
+      "outputs": [
+        "Worker added src/core/hubspot-capability-reconciliation.js.",
+        "Worker added test/hubspot-capability-reconciliation.test.js.",
+        "Worker reported targeted verification passed: npm test -- test/hubspot-capability-reconciliation.test.js and git diff --check."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-9079-7d03-8cc1-0930e330b910 (Kepler). Controller verification pending because other native subagents still have in-flight dirty files in the shared checkout."
+      "notes": "Dispatched to native subagent 019ec116-9079-7d03-8cc1-0930e330b910 (Kepler). Controller verification pending."
     },
     {
       "id": "T8",
@@ -465,6 +479,55 @@
       "subject": "Wire public engagement reconciliation into action-result writeback",
       "body": "T6 added the pure public engagement owner, but shared record-action-result integration is outside its write set. T8 should route public engagement action writeback through src/core/public-engagement-reconciliation.js.",
       "createdAt": "2026-06-13T13:13:13.000Z",
+      "status": "open"
+    },
+    {
+      "id": "M3",
+      "fromTask": "T3",
+      "toTasks": [
+        "T8",
+        "T9"
+      ],
+      "type": "interface-note",
+      "subject": "Wire Gmail seam owners into shared writeback and sync paths",
+      "body": "T3 added pure Gmail owner functions, but shared record-action-result and user-inbound-sync integration is outside its write set. T8 should delegate send_email writeback debt to buildEmailSendMutationReconciliation. T9 should decide whether Gmail thread truth reads reconcileGmailThreadTruth.",
+      "createdAt": "2026-06-13T13:15:35.000Z",
+      "status": "open"
+    },
+    {
+      "id": "M4",
+      "fromTask": "T4",
+      "toTasks": [
+        "T8"
+      ],
+      "type": "interface-note",
+      "subject": "Update direct-message registry owner",
+      "body": "T4 added src/core/linkedin-private-message-reconciliation.js, but shared registry integration is outside its lane. T8 should update send_direct_message to point at the new owner.",
+      "createdAt": "2026-06-13T13:15:16.000Z",
+      "status": "open"
+    },
+    {
+      "id": "M5",
+      "fromTask": "T4",
+      "toTasks": [
+        "T8"
+      ],
+      "type": "interface-note",
+      "subject": "Wire direct-message and InMail writeback debt",
+      "body": "T4 added pure DM and InMail owners, but record-action-result integration is outside its write set. T8 should delegate send_direct_message and in_mail_message reconciliation debt to those owners.",
+      "createdAt": "2026-06-13T13:15:16.000Z",
+      "status": "open"
+    },
+    {
+      "id": "M6",
+      "fromTask": "T5",
+      "toTasks": [
+        "T8"
+      ],
+      "type": "interface-note",
+      "subject": "Wire social graph owner into shared registry and action-result seams",
+      "body": "T5 added src/core/linkedin-social-graph-reconciliation.js, but shared registry/action-result integration is outside its write set. T8 should point linkedin-profile-views, linkedin-followers-list, linkedin-following-list, follow, unfollow, and profile_view at this owner where applicable.",
+      "createdAt": "2026-06-13T13:16:36.000Z",
       "status": "open"
     }
   ]
