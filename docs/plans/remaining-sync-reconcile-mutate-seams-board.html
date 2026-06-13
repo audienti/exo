@@ -138,13 +138,13 @@
     <h1>Define and implement tested backend seam owners for the remaining sync, reconcile, and mutate surfaces so Exo can distinguish truth, local intent, external proof, and reconciliation debt.</h1>
     <div class="topline">
       <span class="chip"><b>plan</b>remaining-sync-reconcile-mutate-seams</span>
-      <span class="chip"><b>status</b>active</span>
-      <span class="chip"><b>progress</b>9/10</span>
+      <span class="chip"><b>status</b>complete</span>
+      <span class="chip"><b>progress</b>10/10</span>
       <span class="chip"><b>controller</b>codex</span>
       <span class="chip"><b>worktrees</b>.worktrees</span>
       <span class="chip"><b>open messages</b>0</span>
-      <span class="chip"><b>board updated</b>2026-06-13T13:44:54.000Z</span>
-      <span class="chip"><b>rendered</b>2026-06-13T13:45:22Z</span>
+      <span class="chip"><b>board updated</b>2026-06-13T13:48:41.000Z</span>
+      <span class="chip"><b>rendered</b>2026-06-13T13:48:59Z</span>
     </div>
     <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
   </header>
@@ -158,7 +158,7 @@
         </div>
         <p><b>Running or verifying:</b> none</p>
         <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
-        <p><b>Controller note:</b> T9 is done after targeted tests, git diff --check, and npm test. T10 is ready for final verification and board closeout.</p>
+        <p><b>Controller note:</b> Board complete. Final verification passed with npm test, git diff --check, board validation, and HTML render. Attempts per tier: max 6 tasks with 0 retries, default 4 tasks with 0 retries, fast 0 tasks.</p>
       </section>
 
 
@@ -266,17 +266,8 @@
           </section>
 
           <section class="column">
-            <h2>Ready <span>1</span></h2>
-
-      <article class="task task-ready">
-        <header>
-          <div class="task-id">T10</div>
-          <h3>Close board with final verification</h3>
-        </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>50</span></div>
-        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T9</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li><li>docs/plans/remaining-sync-reconcile-mutate-seams-board.html</li><li>docs/wip/remaining-sync-reconcile-mutate-seams.md</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test</li><li>git diff --check</li><li>python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/validate_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li><li>python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/render_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All preceding tasks are done or intentionally deferred with reason.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board validates and HTML snapshot renders.</li><li>board.status is complete only when acceptance criteria pass.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Final verification and board closeout.</div></div>
-      </article>
-
+            <h2>Ready <span>0</span></h2>
+            <div class="empty">No tasks</div>
           </section>
 
           <section class="column">
@@ -290,7 +281,16 @@
           </section>
 
           <section class="column">
-            <h2>Done <span>9</span></h2>
+            <h2>Done <span>10</span></h2>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T10</div>
+          <h3>Close board with final verification</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>50</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified; no commit recorded.</div></div><div class="field"><div class="label">Depends on</div><div>T9</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li><li>docs/plans/remaining-sync-reconcile-mutate-seams-board.html</li><li>docs/wip/remaining-sync-reconcile-mutate-seams.md</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test</li><li>git diff --check</li><li>python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/validate_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li><li>python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/render_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All preceding tasks are done or intentionally deferred with reason.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board validates and HTML snapshot renders.</li><li>board.status is complete only when acceptance criteria pass.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Final verification passed. Attempts by model tier: max 6 tasks with 0 retries, default 4 tasks with 0 retries, fast 0 tasks.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Final npm test passed with 875 tests, 875 pass, 0 fail.</li><li>git diff --check passed.</li><li>Board validation passed and the HTML snapshot was regenerated.</li><li>All ten board tasks are done with no blocked or deferred items.</li></ul></div></div>
+      </article>
 
       <article class="task task-done">
         <header>
