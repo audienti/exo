@@ -5,6 +5,10 @@
 
 import { ensureTransitionMotion, isTransitionMotion } from "./ensure-transition-motion.js";
 import { inboundObservationsSharePersonIdentity } from "./inbound-observations.js";
+import {
+  needsInboundIdentityResolution,
+  resolveManagedLinkedinAccount,
+} from "./inbound-identity-resolution.js";
 import { resolveLinkedinActorCompanyProfile } from "./inbound-linkedin-live-sync.js";
 import { promoteInboundPersonToProspect } from "./promote-inbound-person.js";
 import { warmImageProxies } from "../lib/image-proxy.js";
@@ -57,6 +61,10 @@ export async function runTransitionPromote(input) {
   }
 
   const rawUser = findUserById(userId);
+  if (requiresLinkedinResolutionBeforePromote(seed)) {
+    throw new Error(buildLinkedinResolutionBeforePromoteMessage(seed, rawUser));
+  }
+
   const resolvedCompanyProfile = await resolveTransitionObservationCompanyProfile(rawUser, seed);
 
   const result = promoteInboundPersonToProspect({
@@ -84,6 +92,34 @@ export async function runTransitionPromote(input) {
 }
 
 /**
+ * Email-only inbound relationships need a real LinkedIn identity before Exo
+ * turns them into governed prospect state. Without that, the transition path
+ * loses the person-first execution contract the user expects.
+ *
+ * @param {any} observation
+ */
+function requiresLinkedinResolutionBeforePromote(observation) {
+  return needsInboundIdentityResolution(observation);
+}
+
+/**
+ * @param {any} observation
+ * @param {unknown | null} rawUser
+ */
+function buildLinkedinResolutionBeforePromoteMessage(observation, rawUser) {
+  const senderName = (observation?.actorName ?? observation?.actorHandle ?? "this sender").trim() || "this sender";
+  const managedLinkedinAccount = resolveManagedLinkedinAccount(rawUser, {
+    runtime: "codex",
+    connector: "unipile",
+    availableOnly: true,
+  });
+  if (managedLinkedinAccount?.providerAccountId) {
+    return `Exo is still resolving ${senderName}'s LinkedIn identity in background. Email-first inbound people cannot be claimed into transition backlog or queued for send until that governed identity is resolved.`;
+  }
+  return `Exo cannot resolve ${senderName}'s LinkedIn identity automatically right now because no managed LinkedIn connector path is available for this user. Email-first inbound people stay blocked until that execution path is repaired.`;
+}
+
+/**
  * @param {unknown | null} rawUser
  * @param {any} observation
  */
@@ -98,9 +134,7 @@ async function resolveTransitionObservationCompanyProfile(rawUser, observation) 
     return observation.actorCompanyProfile;
   }
 
-  const linkedinAccount = rawUser.accounts?.find(
-    (account) => account.id === observation.accountId && account.capability === "linkedin",
-  ) ?? null;
+  const linkedinAccount = resolveManagedLinkedinAccount(rawUser);
   if (!linkedinAccount?.providerAccountId) {
     return null;
   }

@@ -72,6 +72,7 @@ const catalog = [
     observationKinds: [
       "connection_request_received",
       "connection_request_received_no_longer_pending",
+      "connection_request_accept_requested",
       "connection_request_accepted",
       "connection_request_decline_requested",
       "connection_request_declined"

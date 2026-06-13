@@ -9,17 +9,29 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { buildAgentQueue, isBackfillInboundSyncTask } from "../src/core/build-agent-queue.js";
 import { buildStalePacketReviewWarnings } from "../src/core/build-stale-packet-review-warnings.js";
+import {
+  applyInboundIdentityResolutionResult,
+  buildInboundIdentityResolutionCompanyProfile,
+  needsInboundIdentityResolution,
+  resolveManagedLinkedinAccount,
+} from "../src/core/inbound-identity-resolution.js";
+import { inboundObservationsSharePersonIdentity } from "../src/core/inbound-observations.js";
 import { buildInboundAutomationHealthWarnings, buildInboundAutomationWarnings } from "../src/core/user-inbound-sync.js";
 import {
+  findInboundObservationById,
+  findUserById,
   findCompanyById,
   findMotionById,
+  insertCompany,
   listAgentQueueProspectBranches,
   listCompanies,
   listInboundCues,
   listInboundObservations,
   listMotions,
   listUsers,
+  updateCompany,
   updateMotion,
+  upsertInboundObservation,
 } from "../src/db/database.js";
 import { updateMotionProspect } from "../src/core/record-prospect.js";
 import { setMotionProspectCadence } from "../src/core/set-prospect-cadence.js";
@@ -94,6 +106,10 @@ const BROWSER_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_BROWSE
 const INBOUND_CAPTURE_TIMEOUT_MS = normalizePositiveInteger(
   process.env.EXO_AGENT_INBOUND_CAPTURE_TIMEOUT_MS,
   Math.max(BROWSER_TIMEOUT_MS, 6 * 60 * 1000),
+);
+const INBOUND_IDENTITY_RESOLUTION_TIMEOUT_MS = normalizePositiveInteger(
+  process.env.EXO_AGENT_INBOUND_IDENTITY_RESOLUTION_TIMEOUT_MS,
+  3 * 60 * 1000,
 );
 const COMPANY_RESEARCH_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_COMPANY_RESEARCH_TIMEOUT_MS, 10 * 60 * 1000);
 const PROSPECT_RESEARCH_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_PROSPECT_RESEARCH_TIMEOUT_MS, 15 * 60 * 1000);
@@ -318,7 +334,8 @@ function runUnlockedAgentHostPass() {
         }
       }
 
-      const blockedBrowserTask = result.status === "blocked" && BROWSER_TRANSPORT_TASK_KINDS.has(executableTask.kind);
+      const prospectScopedBlockedSend = isProspectScopedBlockedSendResult(executableTask, result);
+      const blockedBrowserTask = shouldApplyBrowserTaskBackoff(executableTask, result);
       const selectedMode = typeof executableTask?._selectedSendMode === "string" ? executableTask._selectedSendMode : getSendMode();
       const liveSendAttempt = executableTask.kind === "send_message"
         && (selectedMode === "live" || selectedMode === "canary_live" || selectedMode === "operator_live");
@@ -334,7 +351,7 @@ function runUnlockedAgentHostPass() {
 
       const dispatchGateHeld = result.detail?.dispatchGate?.status === "block"
         || result.detail?.dispatchGate?.status === "wait";
-      if ((result.status === "blocked" || result.status === "failed") && liveSendAttempt && !dispatchGateHeld) {
+      if ((result.status === "blocked" || result.status === "failed") && liveSendAttempt && !dispatchGateHeld && !prospectScopedBlockedSend) {
         const failureAt = result.finishedAt ?? new Date().toISOString();
         hostState = mutateHostState((state) => {
           const breakerBefore = getSendCircuitBreaker(state, failureAt);
@@ -526,12 +543,66 @@ export function shouldAbortPassAfterTaskProblem(task, result) {
     return false;
   }
 
-  return task?.kind !== "run_inbound_sync";
+  if (isProspectScopedBlockedSendResult(task, result)) {
+    return false;
+  }
+
+  return task?.kind !== "run_inbound_sync" && task?.kind !== "resolve_inbound_identity";
+}
+
+/**
+ * Prospect-specific send blocks should not poison the whole transport lane.
+ * They mean this exact recipient or governed branch is not currently sendable,
+ * not that the connector/browser session is globally broken.
+ *
+ * @param {any} task
+ * @param {any} result
+ */
+export function isProspectScopedBlockedSendResult(task, result) {
+  if (task?.kind !== "send_message" || result?.status !== "blocked") {
+    return false;
+  }
+
+  const dispatchGateStatus = normalizeNullableString(result?.detail?.dispatchGate?.status)?.toLowerCase() ?? null;
+  if (dispatchGateStatus === "block" || dispatchGateStatus === "wait") {
+    return true;
+  }
+
+  const reason = normalizeNullableString(result?.detail?.reason)?.toLowerCase() ?? "";
+  if (!reason) {
+    return false;
+  }
+
+  return reason.includes("already pending")
+    || reason.includes("already connected")
+    || reason.includes("connection request is already pending");
+}
+
+/**
+ * Only transport-scoped failures should trigger browser backoff. Prospect-
+ * scoped send blocks are branch-state problems and should let the pass keep
+ * draining later sync work.
+ *
+ * @param {any} task
+ * @param {any} result
+ */
+function shouldApplyBrowserTaskBackoff(task, result) {
+  if (result?.status !== "blocked") {
+    return false;
+  }
+  if (!BROWSER_TRANSPORT_TASK_KINDS.has(task?.kind)) {
+    return false;
+  }
+  if (isProspectScopedBlockedSendResult(task, result)) {
+    return false;
+  }
+  return true;
 }
 
 /** @param {string | null | undefined} taskKind */
 export function isBrowserMaintenanceTaskKind(taskKind) {
   return taskKind === "reconcile_connection_request_status"
+    || taskKind === "accept_connection_request"
     || taskKind === "withdraw_connection"
     || taskKind === "reject_connection_request";
 }
@@ -689,10 +760,12 @@ export function createTaskVerificationFingerprint(task) {
 /** @param {string | null | undefined} taskKind */
 function supportsGenericTaskCheckout(taskKind) {
   return taskKind === "run_inbound_sync"
+    || taskKind === "resolve_inbound_identity"
     || taskKind === "company_discovery"
     || taskKind === "write_draft"
     || taskKind === "send_message"
     || taskKind === "reconcile_connection_request_status"
+    || taskKind === "accept_connection_request"
     || taskKind === "reject_connection_request"
     || taskKind === "withdraw_connection";
 }
@@ -774,6 +847,7 @@ function resolveTaskLeaseDurationMs(task) {
   switch (task?.kind) {
     case "send_message":
     case "reconcile_connection_request_status":
+    case "accept_connection_request":
     case "reject_connection_request":
     case "withdraw_connection":
       baseDurationMs = BROWSER_TIMEOUT_MS;
@@ -820,6 +894,11 @@ function isOperatorControlledSendTask(task) {
     || task?.approvedByOperator === true;
 }
 
+/** @param {any} task */
+function shouldBypassAutomationRolloutGate(task) {
+  return isOperatorControlledSendTask(task);
+}
+
 /**
  * @param {ReturnType<typeof loadQueue>} queue
  * @param {boolean} browserReady
@@ -846,6 +925,8 @@ export function chooseNextQueueTask(
 ) {
   /** @type {any | null} */
   let canaryFallback = null;
+  /** @type {any | null} */
+  let verifyFallback = null;
   const sendCircuitBreaker = getSendCircuitBreaker(hostState, now);
   const canaryCooldown = getCanaryCooldown(hostState, now);
   const automationBlockReason = getInboundAutomationRolloutBlockReason(automationWarnings, sendMode, automationHealthWarnings);
@@ -863,6 +944,13 @@ export function chooseNextQueueTask(
   const candidateTasks = shouldPreferBackfillSlice(passState)
     ? [...orderedTasks.filter(isBackfillInboundSyncTask), ...orderedTasks.filter((task) => !isBackfillInboundSyncTask(task))]
     : orderedTasks;
+  const verifyModePrefersRetrievalRecovery = sendMode === "verify"
+    && candidateTasks.some((task) => task?.kind === "run_inbound_sync"
+      && taskMatchesPassLane(task, passState)
+      && (
+        isBackfillInboundSyncTask(task)
+        || (Array.isArray(automationHealthWarnings) && automationHealthWarnings.length > 0)
+      ));
   for (const task of candidateTasks) {
     if (!taskMatchesPassLane(task, passState)) {
       continue;
@@ -895,10 +983,14 @@ export function chooseNextQueueTask(
     }
 
     if (task.kind === "send_message") {
-      if (automationBlockReason) {
+      const operatorControlled = isOperatorControlledSendTask(task);
+      if (verifyModePrefersRetrievalRecovery && !operatorControlled) {
         continue;
       }
-      if (sendMode !== "verify" && sendCircuitBreaker.active) {
+      if (automationBlockReason && !operatorControlled) {
+        continue;
+      }
+      if ((sendMode !== "verify" || operatorControlled) && sendCircuitBreaker.active) {
         continue;
       }
       const verification = getRecentTaskVerification(
@@ -908,14 +1000,10 @@ export function chooseNextQueueTask(
         now,
       );
       if (sendMode === "verify") {
-        if (isOperatorControlledSendTask(task)) {
-          // Selection must mirror execution: operator-controlled sends escalate
-          // to live delivery, so apply the live rollout gate here too. Otherwise
-          // the pass selects a send that executeTask refuses, aborts, and the
-          // inbound syncs that would heal the gate never run.
-          if (getInboundAutomationRolloutBlockReason(automationWarnings, "operator_live", automationHealthWarnings)) {
-            continue;
-          }
+        if (operatorControlled) {
+          // Operator review is the explicit send authorization signal. Once a
+          // human authored, edited, or approved the draft, proof-only rollout
+          // gates should not keep it queued.
           return {
             ...task,
             _selectedSendMode: "operator_live",
@@ -925,10 +1013,13 @@ export function chooseNextQueueTask(
         if (verification) {
           continue;
         }
-        return {
-          ...task,
-          _selectedSendMode: "verify",
-        };
+        if (!verifyFallback) {
+          verifyFallback = {
+            ...task,
+            _selectedSendMode: "verify",
+          };
+        }
+        continue;
       }
       if (sendMode === "canary") {
         if (verification) {
@@ -955,9 +1046,15 @@ export function chooseNextQueueTask(
       };
     }
 
+    if (verifyFallback) {
+      return verifyFallback;
+    }
     return task;
   }
 
+  if (sendMode === "verify") {
+    return verifyFallback;
+  }
   return sendMode === "canary" ? canaryFallback : null;
 }
 
@@ -1011,16 +1108,18 @@ function sortQueueTasksForExecution(tasks, options = {}) {
   // slices interleaved by the pass loop (see shouldPreferBackfillSlice).
   const rank = {
     send_message: 0,
-    write_draft: 1,
-    reconcile_connection_request_status: 2,
-    reject_connection_request: 2,
-    withdraw_connection: 2,
-    run_inbound_sync_quick: forceRetrieval ? -1 : 3,
-    company_research: 4,
-    prospect_selection: 5,
-    prospect_research: 6,
-    company_discovery: 7,
-    run_inbound_sync_full: forceRetrieval ? -1 : 8,
+    resolve_inbound_identity: 1,
+    write_draft: 2,
+    reconcile_connection_request_status: 3,
+    accept_connection_request: 3,
+    reject_connection_request: 3,
+    withdraw_connection: 3,
+    run_inbound_sync_quick: forceRetrieval ? -1 : 4,
+    company_research: 5,
+    prospect_selection: 6,
+    prospect_research: 7,
+    company_discovery: 8,
+    run_inbound_sync_full: forceRetrieval ? -1 : 9,
   };
 
   return [...(tasks ?? [])].sort((left, right) => {
@@ -1162,7 +1261,8 @@ export function explainNoopPass(
   const sendTasks = tasks.filter((task) => task.kind === "send_message");
   if (sendTasks.length > 0) {
     const automationBlockReason = getInboundAutomationRolloutBlockReason(automationWarnings, sendMode, automationHealthWarnings);
-    if (automationBlockReason) {
+    const rolloutGatedSendTasks = sendTasks.filter((task) => !shouldBypassAutomationRolloutGate(task));
+    if (automationBlockReason && rolloutGatedSendTasks.length > 0) {
       return automationBlockReason;
     }
     const verificationRequiredSendTasks = sendTasks.filter((task) => !isOperatorControlledSendTask(task));
@@ -1172,19 +1272,6 @@ export function explainNoopPass(
       createTaskVerificationFingerprint(task),
       now,
     ));
-    if (sendMode === "verify") {
-      // Operator-controlled sends escalate to live delivery, so selection
-      // defers them while the live rollout gate is closed. Surface that gate
-      // instead of a generic noop when they are the only sends left.
-      const operatorSendTasks = sendTasks.filter((task) => isOperatorControlledSendTask(task));
-      if (operatorSendTasks.length > 0
-        && verifiedSendTasks.length === verificationRequiredSendTasks.length) {
-        const operatorBlockReason = getInboundAutomationRolloutBlockReason(automationWarnings, "operator_live", automationHealthWarnings);
-        if (operatorBlockReason) {
-          return `Operator-approved sends stay queued while the live rollout gate is closed: ${operatorBlockReason}`;
-        }
-      }
-    }
     if (sendMode === "verify"
       && verificationRequiredSendTasks.length > 0
       && verifiedSendTasks.length === verificationRequiredSendTasks.length) {
@@ -1334,12 +1421,24 @@ function executeTask(task, preflight, options = {}, executionContext = null) {
       };
     }
 
+    if (task.kind === "resolve_inbound_identity") {
+      const resolution = runInboundIdentityResolutionTask(task);
+      return {
+        ...base,
+        status: resolution.status,
+        finishedAt: new Date().toISOString(),
+        detail: resolution.detail,
+      };
+    }
+
     if (task.kind === "send_message") {
-      const rolloutBlockReason = getInboundAutomationRolloutBlockReason(
-        options.automationWarnings ?? [],
-        typeof task?._selectedSendMode === "string" ? task._selectedSendMode : options.sendMode ?? "live",
-        options.automationHealthWarnings ?? [],
-      );
+      const rolloutBlockReason = shouldBypassAutomationRolloutGate(task)
+        ? null
+        : getInboundAutomationRolloutBlockReason(
+          options.automationWarnings ?? [],
+          typeof task?._selectedSendMode === "string" ? task._selectedSendMode : options.sendMode ?? "live",
+          options.automationHealthWarnings ?? [],
+        );
       if (rolloutBlockReason) {
         return {
           ...base,
@@ -1553,6 +1652,123 @@ function runInboundSyncTask(task, preflight) {
       verification,
       stageTimingsMs,
     }
+  };
+}
+
+/** @param {any} task */
+function runInboundIdentityResolutionTask(task) {
+  const observation = task?.observationId ? findInboundObservationById(task.observationId) : null;
+  if (!observation) {
+    return {
+      status: "discarded",
+      detail: {
+        reason: `Inbound observation ${task?.observationId ?? "unknown"} no longer exists.`,
+      },
+    };
+  }
+  if (!needsInboundIdentityResolution(observation)) {
+    return {
+      status: "discarded",
+      detail: {
+        reason: "Inbound sender already has a governed LinkedIn identity.",
+      },
+    };
+  }
+
+  const rawUser = findUserById(observation.userId);
+  const managedLinkedinAccount = resolveManagedLinkedinAccount(rawUser, {
+    runtime: "codex",
+    connector: "unipile",
+    availableOnly: true,
+  });
+  const relatedObservations = listInboundObservations({ userId: observation.userId }).filter(
+    (candidate) => candidate.id === observation.id || inboundObservationsSharePersonIdentity(candidate, observation),
+  );
+  if (!managedLinkedinAccount?.providerAccountId) {
+    const applied = applyInboundIdentityResolutionResult({
+      seedObservation: observation,
+      relatedObservations,
+      rawCompanies: listCompanies(),
+      resolution: {
+        status: "blocked",
+        reason: "No managed LinkedIn connector path is currently available for automatic identity resolution.",
+      },
+    });
+    for (const updatedObservation of applied.updatedObservations) {
+      upsertInboundObservation(updatedObservation);
+    }
+    return {
+      status: "blocked",
+      detail: {
+        reason: "No managed LinkedIn connector path is currently available for automatic identity resolution.",
+        identityResolutionStatus: "blocked",
+      },
+    };
+  }
+
+  let rawResolution;
+  try {
+    rawResolution = runCodexTask({
+      prompt: buildInboundIdentityResolutionPrompt(observation, relatedObservations, managedLinkedinAccount),
+      schema: buildInboundIdentityResolutionOutputSchema(),
+      outputName: `resolve-inbound-identity-${observation.id}.json`,
+      browserRequired: false,
+      connectorRequired: true,
+      enabledPlugins: ["gmail@openai-curated"],
+      enabledMcpServers: ["unipile"],
+      timeoutMs: INBOUND_IDENTITY_RESOLUTION_TIMEOUT_MS,
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const applied = applyInboundIdentityResolutionResult({
+      seedObservation: observation,
+      relatedObservations,
+      rawCompanies: listCompanies(),
+      resolution: {
+        status: "blocked",
+        reason,
+      },
+    });
+    for (const updatedObservation of applied.updatedObservations) {
+      upsertInboundObservation(updatedObservation);
+    }
+    return {
+      status: "blocked",
+      detail: {
+        reason,
+        identityResolutionStatus: "blocked",
+      },
+    };
+  }
+
+  const resolution = normalizeInboundIdentityResolutionResult(rawResolution);
+  const applied = applyInboundIdentityResolutionResult({
+    seedObservation: observation,
+    relatedObservations,
+    rawCompanies: listCompanies(),
+    resolution,
+    companyProfile: buildInboundIdentityResolutionCompanyProfile(resolution),
+  });
+  for (const company of applied.companiesToCreate) {
+    insertCompany(company);
+  }
+  for (const company of applied.companiesToUpdate) {
+    updateCompany(company);
+  }
+  for (const updatedObservation of applied.updatedObservations) {
+    upsertInboundObservation(updatedObservation);
+  }
+
+  return {
+    status: resolution.status === "blocked" ? "blocked" : "completed",
+    detail: {
+      reason: resolution.reason ?? null,
+      identityResolutionStatus: resolution.status,
+      matchedObservationCount: applied.updatedObservations.length,
+      linkedinProfileUrl: resolution.linkedinProfileUrl ?? null,
+      linkedinPublicId: resolution.linkedinPublicId ?? null,
+      companyDomain: resolution.companyDomain ?? null,
+    },
   };
 }
 
@@ -2140,6 +2356,11 @@ export function runSendTask(task) {
     };
   }
 
+  const handledAlreadyPending = maybeHandleAlreadyPendingLinkedinConnectionRequestTask(task, handoff, result, { dryRun });
+  if (handledAlreadyPending) {
+    return handledAlreadyPending;
+  }
+
   const handledUnavailable = maybeHandleUnavailableLinkedinReplyTask(task, handoff, result, { dryRun });
   if (handledUnavailable) {
     return handledUnavailable;
@@ -2316,6 +2537,48 @@ function maybeHandleUnavailableLinkedinReplyTask(task, handoff, result, options 
         resultKey: actionResult.actionResult.result.key,
         surface: actionResult.actionResult.surface,
       },
+    },
+  };
+}
+
+/**
+ * If LinkedIn already shows the invite as pending on the governed account,
+ * the external state is already in the desired outbound state. Reconcile that
+ * into Exo instead of retrying the same cold send forever.
+ *
+ * @param {any} task
+ * @param {any} handoff
+ * @param {any} result
+ * @param {{ dryRun?: boolean }} [options]
+ */
+function maybeHandleAlreadyPendingLinkedinConnectionRequestTask(task, handoff, result, options = {}) {
+  if (options.dryRun === true) {
+    return null;
+  }
+  if (task?.surface !== "connection_request") {
+    return null;
+  }
+  if (handoff?.channel !== "linkedin" || handoff?.action !== "send_connection_request") {
+    return null;
+  }
+  if (result?.status !== "blocked") {
+    return null;
+  }
+
+  const reason = normalizeNullableString(result?.reason);
+  if (!reason || !/already pending/i.test(reason)) {
+    return null;
+  }
+
+  runShellText(resolveSendTaskWriteback(task, result));
+  return {
+    status: "completed",
+    detail: {
+      action: handoff.action,
+      recipient: describeHandoffRecipient(handoff),
+      inviteAlreadyPending: true,
+      handledException: true,
+      reason,
     },
   };
 }
@@ -3108,6 +3371,131 @@ export function buildInboundCapturePrompt(captureRequest, connector = null) {
     "",
     captureRequest.prompt,
   ].join("\n");
+}
+
+export function buildInboundIdentityResolutionOutputSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "status",
+      "reason",
+      "actorName",
+      "actorTitle",
+      "actorCompanyName",
+      "linkedinProfileUrl",
+      "linkedinPublicId",
+      "linkedinMemberId",
+      "companyDomain",
+      "companyWebsiteUrl",
+      "linkedinCompanyUrl",
+    ],
+    properties: {
+      status: {
+        type: "string",
+        enum: ["resolved", "no_match", "blocked"],
+      },
+      reason: { type: ["string", "null"] },
+      actorName: { type: ["string", "null"] },
+      actorTitle: { type: ["string", "null"] },
+      actorCompanyName: { type: ["string", "null"] },
+      linkedinProfileUrl: { type: ["string", "null"] },
+      linkedinPublicId: { type: ["string", "null"] },
+      linkedinMemberId: { type: ["string", "null"] },
+      companyDomain: { type: ["string", "null"] },
+      companyWebsiteUrl: { type: ["string", "null"] },
+      linkedinCompanyUrl: { type: ["string", "null"] },
+    },
+  };
+}
+
+/**
+ * @param {any} observation
+ * @param {any[]} relatedObservations
+ * @param {{ handle?: string | null, providerAccountId?: string | null }} managedLinkedinAccount
+ */
+export function buildInboundIdentityResolutionPrompt(observation, relatedObservations, managedLinkedinAccount) {
+  const latestMessages = relatedObservations
+    .flatMap((candidate) => Array.isArray(candidate?.messages) ? candidate.messages : [])
+    .slice(-4)
+    .map((message) => ({
+      direction: message.direction ?? "unknown",
+      fromName: message.fromName ?? null,
+      fromHandle: message.fromHandle ?? null,
+      sentAt: message.sentAt ?? null,
+      body: typeof message.body === "string" ? message.body.slice(0, 1200) : "",
+    }));
+
+  return [
+    "This is one bounded Exo inbound identity-resolution task.",
+    "Do not inspect the repo, do not read arbitrary Exo state, do not run exo what-is-this, and do not narrate.",
+    "Use the existing runtime connectors first.",
+    "First use the Gmail connector for sender and thread context.",
+    "Then use the Unipile MCP LinkedIn path for company and person resolution.",
+    "Only if connector evidence is still insufficient, use public web or the sender domain as supporting evidence.",
+    "Do not use Chrome or browser tools.",
+    "Do not guess. If multiple LinkedIn people are plausible or confidence is not high, return status=no_match.",
+    "Resolve exactly one governed LinkedIn person identity for this sender if you can do so confidently.",
+    managedLinkedinAccount?.handle
+      ? `The governed LinkedIn account handle for this workspace is ${managedLinkedinAccount.handle}.`
+      : "Use the governed LinkedIn account already mapped in this runtime.",
+    managedLinkedinAccount?.providerAccountId
+      ? `If the Unipile tools require account selection, prefer providerAccountId ${managedLinkedinAccount.providerAccountId}.`
+      : null,
+    "Return only JSON that matches the schema.",
+    "",
+    "Observation JSON:",
+    JSON.stringify({
+      id: observation.id,
+      actorName: observation.actorName ?? null,
+      actorHandle: observation.actorHandle ?? null,
+      actorCompanyName: observation.actorCompanyName ?? null,
+      subject: observation.subject ?? null,
+      summary: observation.summary ?? null,
+      threadUrl: observation.threadUrl ?? observation.sourceUrl ?? null,
+      relatedObservationCount: relatedObservations.length,
+      recentMessages: latestMessages,
+    }, null, 2),
+  ].filter(Boolean).join("\n");
+}
+
+/**
+ * @param {any} rawResult
+ */
+function normalizeInboundIdentityResolutionResult(rawResult) {
+  const status = normalizeNullableString(rawResult?.status)?.toLowerCase() ?? "blocked";
+  const linkedinProfileUrl = normalizeNullableString(rawResult?.linkedinProfileUrl);
+  const linkedinPublicId = normalizeNullableString(rawResult?.linkedinPublicId) ?? extractLinkedinPublicId(linkedinProfileUrl);
+  const linkedinMemberId = normalizeNullableString(rawResult?.linkedinMemberId);
+  const normalized = {
+    status: status === "resolved" || status === "no_match" || status === "blocked" ? status : "blocked",
+    reason: normalizeNullableString(rawResult?.reason),
+    checkedAt: new Date().toISOString(),
+    actorName: normalizeNullableString(rawResult?.actorName),
+    actorTitle: normalizeNullableString(rawResult?.actorTitle),
+    actorCompanyName: normalizeNullableString(rawResult?.actorCompanyName),
+    linkedinProfileUrl,
+    linkedinPublicId,
+    linkedinMemberId,
+    companyDomain: normalizeNullableString(rawResult?.companyDomain),
+    companyWebsiteUrl: normalizeNullableString(rawResult?.companyWebsiteUrl),
+    linkedinCompanyUrl: normalizeNullableString(rawResult?.linkedinCompanyUrl),
+  };
+
+  if (
+    normalized.status === "resolved"
+    && !normalized.linkedinProfileUrl
+    && !normalized.linkedinPublicId
+    && !normalized.linkedinMemberId
+  ) {
+    return {
+      ...normalized,
+      status: "blocked",
+      reason: "Inbound identity resolution returned resolved without a LinkedIn identity.",
+    };
+  }
+
+  return normalized;
 }
 
 /** @param {any} brief @param {any} task */

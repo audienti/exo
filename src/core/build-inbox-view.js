@@ -4,7 +4,7 @@ import { inboundObservationSchema } from "../schema/inbound.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
 import { isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
-import { buildUserInboundSyncView } from "./user-inbound-sync.js";
+import { buildUserInboundSyncView, hasMixedInboundBaseline } from "./user-inbound-sync.js";
 import {
   classifyPrivateInboundMessage,
   describePrivateInboundResponse,
@@ -399,6 +399,13 @@ function classifyObservation(observation, messageContext) {
         status: "needs-triage",
         whyItMatters: "The connection state changed, which can unlock or require the next private move."
       };
+    case "connection_request_accept_requested":
+    case "connection_request_decline_requested":
+      return {
+        priority: "low",
+        status: "queued",
+        whyItMatters: "The operator already decided this invite. The agent now needs to perform the live LinkedIn action and write back the final state."
+      };
     case "connection_request_not_accepted":
       return {
         priority: "low",
@@ -479,6 +486,10 @@ function recommendAction(observation, prospect, messageContext) {
       return `Decide whether to accept or decline the inbound connection request.`;
     case "connection_request_received_no_longer_pending":
       return `Review whether the inbound connection request was accepted, declined, withdrawn, or otherwise resolved before continuing from stale assumptions.`;
+    case "connection_request_accept_requested":
+      return `Acceptance is already queued. The agent should accept the invite on LinkedIn and write back the connected state.`;
+    case "connection_request_decline_requested":
+      return `Rejection is already queued. The agent should decline the invite on LinkedIn and write back the final declined state.`;
     case "thread_updated":
     case "email_thread_updated":
       return `Review the updated thread and decide whether it now needs a reply, a state change, or no action.`;
@@ -695,6 +706,10 @@ export function summarizeSurfaceState(surface) {
     return `${surface.label} completed with warnings on the last sync.`;
   }
 
+  if (hasMixedInboundBaseline(surface)) {
+    return `${surface.label} has newer row-level reconciliation than the last full surface sync. Trust the itemized rows, but not silence or total counts, until the next full sync lands.`;
+  }
+
   const count = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;
   if (count === 0) {
     return `${surface.label} was checked and is currently quiet.`;
@@ -738,6 +753,10 @@ export function recommendSurfaceAction(surface) {
 
   if (surface.lastRunStatus === "failed" || surface.lastRunStatus === "warning") {
     return "Rerun this surface check and fix the capture path before trusting silence.";
+  }
+
+  if (hasMixedInboundBaseline(surface)) {
+    return "Keep operating from the itemized rows, but do not trust silence or total counts until the next full surface sync lands.";
   }
 
   const count = surface.lastVisibleTotalCount ?? surface.lastItemCount ?? 0;

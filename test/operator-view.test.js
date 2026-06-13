@@ -79,6 +79,7 @@ test("operator moves agent status into the header dropdown instead of a blocking
 
   const html = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
   assert.match(html, /data-agent-health="yellow"/);
+  assert.match(html, /<b>0<\/b> in operator queue/i);
   assert.match(html, /1 queued/i);
   assert.match(html, /Agent work queued/i);
   assert.match(html, /Run agent now/i);
@@ -481,7 +482,7 @@ test("operator detail links preserve a return path back to operator", () => {
   }, { interactive: true });
 
   assert.match(html, /href="\/people\/obs-1\?return=%2Foperator"/);
-  assert.match(html, /href="\/people\/obs-1\?return=%2Foperator#compose-obs-1"/);
+  assert.match(html, /href="\/people\/obs-1\?return=%2Foperator&amp;compose=1#compose-obs-1"/);
   assert.match(html, /Latest message/);
   assert.match(html, /Subject · Strategic partnership fit/);
   assert.match(html, /Would be good to compare notes on partnerships\./);
@@ -596,7 +597,7 @@ test("operator renders wired accept and reject actions when an inbound invite ne
       actionMode: "detail",
       actionStatus: "needs decision",
       actionWriter: "recordInboundObservation",
-      actionArgs: { observationId: "obs-rizwan", nextKind: "connection_request_accepted" },
+      actionArgs: { observationId: "obs-rizwan", nextKind: "connection_request_accept_requested" },
       actionHref: "https://www.linkedin.com/in/rizwan-i/",
       why: "Inbound connection requests are explicit asks for access. They need a yes or no, not passive drift.",
       previewLabel: null,
@@ -609,7 +610,7 @@ test("operator renders wired accept and reject actions when an inbound invite ne
           mode: "detail",
           href: "https://www.linkedin.com/in/rizwan-i/",
           writer: "recordInboundObservation",
-          args: { observationId: "obs-rizwan", nextKind: "connection_request_accepted" },
+          args: { observationId: "obs-rizwan", nextKind: "connection_request_accept_requested" },
           variant: "primary",
           icon: "check",
         },
@@ -655,7 +656,7 @@ test("operator renders wired accept and reject actions when an inbound invite ne
             mode: "detail",
             href: "https://www.linkedin.com/in/alicia-buyer/",
             writer: "recordInboundObservation",
-            args: { observationId: "obs-rizwan-2", nextKind: "connection_request_accepted" },
+            args: { observationId: "obs-rizwan-2", nextKind: "connection_request_accept_requested" },
             variant: "primary",
             icon: "check",
           },
@@ -679,7 +680,7 @@ test("operator renders wired accept and reject actions when an inbound invite ne
 
   assert.match(html, />Accept</);
   assert.match(html, />Reject</);
-  assert.match(html, /nextKind&quot;:&quot;connection_request_accepted&quot;/);
+  assert.match(html, /nextKind&quot;:&quot;connection_request_accept_requested&quot;/);
   assert.match(html, /nextKind&quot;:&quot;connection_request_decline_requested&quot;/);
   assert.equal((html.match(/data-exo-writer="recordInboundObservation"/g) ?? []).length, 4);
 });
@@ -889,10 +890,10 @@ test("queue page shows the same run-now runtime bar when the background agent is
 
   const html = renderQueuePage(model, { interactive: true, agentRuntime: runtime });
   const introStart = html.indexOf("<h1>Agent queue</h1>");
-  const runtimeBarStart = html.indexOf('<details class="agent-bar"');
+  const runtimeBarStart = html.indexOf('<details class="agent-bar');
   const introHtml = html.slice(introStart, runtimeBarStart);
   assert.ok(runtimeBarStart > -1, "queue page should render the runtime disclosure bar");
-  assert.match(html, /<details class="agent-bar" open>/);
+  assert.match(html, /<details class="agent-bar(?: agent-bar-embedded)?" open>/);
   assert.doesNotMatch(html, /next-move agent-runtime/);
   assert.match(html, /data-agent-health="yellow"/);
   assert.match(html, /Agent work queued/i);
@@ -1064,9 +1065,19 @@ test("queue page folds agent status into a strip and tabs the full surface list"
   });
 
   // Runtime bar: collapsed by default when the scheduler is on, status side chip present.
-  assert.match(html, /<details class="agent-bar">/);
+  assert.match(html, /<section class="op-sec queue-runtime-panel" data-sec="agent-status">/);
+  assert.match(html, /<details class="agent-bar agent-bar-embedded">/);
   assert.match(html, /Queued · checked just now/);
   assert.doesNotMatch(html, /next-move agent-runtime/);
+
+  // Runtime + strip share one shell instead of rendering as two stacked panels.
+  const panelStart = html.indexOf('<section class="op-sec queue-runtime-panel" data-sec="agent-status">');
+  const tabsStart = html.indexOf('data-tabset="queue-views"');
+  const panelHtml = html.slice(panelStart, tabsStart);
+  assert.ok(panelStart > -1, "queue page should render a combined runtime/status panel");
+  assert.equal((panelHtml.match(/data-sec="agent-status"/g) ?? []).length, 1);
+  assert.equal((panelHtml.match(/class="agent-bar/g) ?? []).length, 1);
+  assert.equal((panelHtml.match(/class="ws-strip/g) ?? []).length, 1);
 
   // Status strip replaces the panel grid.
   assert.match(html, /Current work/);
@@ -1378,6 +1389,54 @@ test("agent runtime summarizes Codex timeout failures without dumping the bounde
   assert.doesNotMatch(html, /This is one bounded Exo connector send task/i);
 });
 
+test("agent runtime focuses failed status on the real timed out lane instead of a noop lane", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    cadence: {
+      overdue: true,
+      overdueBySeconds: 734,
+    },
+    lastPass: {
+      status: "failed",
+      reason: "research: No due tasks were available. | transport: Command failed: exo next --user user-1 --json\nspawnSync zsh ETIMEDOUT",
+      endedAt: "2026-06-12T23:33:08.402Z",
+    },
+    queueCount: 12,
+    blockerCount: 0,
+  };
+
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-12T23:45:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "task-1",
+          subject: "Inbound truth",
+          action: "run_inbound_sync",
+          why: "Refresh stale truth.",
+          dueAt: "2026-06-12T23:40:00.000Z",
+          sourceType: "inbound_itemization_gap",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+
+  const html = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
+  assert.match(html, /The transport lane timed out while asking Exo for the next governed task\./i);
+  assert.match(html, /12m behind its every 15m cadence/i);
+  assert.doesNotMatch(html, /No due tasks were available/i);
+  assert.doesNotMatch(html, /spawnSync zsh ETIMEDOUT/i);
+});
+
 test("agent runtime spells out that verify mode will not send already-proved drafts", () => {
   const runtime = {
     scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
@@ -1425,23 +1484,24 @@ test("agent runtime spells out that verify mode will not send already-proved dra
   });
 
   const operatorHtml = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
-  assert.match(operatorHtml, /Approved drafts are waiting in review only/i);
+  assert.match(operatorHtml, /Agent-authored drafts are waiting in review only/i);
   assert.match(operatorHtml, /2 queued agent-authored sends already have fresh proof/i);
-  assert.match(operatorHtml, /Review only will not send them\./i);
-  assert.match(operatorHtml, /Switch the agent out of review only when you want the next pass to send approved drafts\./i);
+  assert.match(operatorHtml, /Review only will not auto-send those agent-authored drafts\./i);
+  assert.match(operatorHtml, /Operator-authored, edited, or approved drafts still send live\./i);
+  assert.match(operatorHtml, /Switch the agent out of review only when you want the next pass to auto-send proved agent-authored drafts\./i);
   assert.match(operatorHtml, />Run review pass</i);
   assert.match(operatorHtml, /Installed: yes/i);
   assert.doesNotMatch(operatorHtml, />Run agent now</i);
 
   const queueHtml = renderQueuePage(model, { interactive: true, agentRuntime: runtime });
   const introStart = queueHtml.indexOf("<h1>Agent queue</h1>");
-  const runtimeBarStart = queueHtml.indexOf('<details class="agent-bar"');
+  const runtimeBarStart = queueHtml.indexOf('<details class="agent-bar');
   const introHtml = queueHtml.slice(introStart, runtimeBarStart);
-  assert.match(queueHtml, /Approved drafts are waiting in review only/i);
+  assert.match(queueHtml, /Agent-authored drafts are waiting in review only/i);
   assert.match(queueHtml, /2 queued agent-authored sends already have fresh proof/i);
-  assert.match(queueHtml, /Review only will not send them\./i);
+  assert.match(queueHtml, /Review only will not auto-send those agent-authored drafts\./i);
   assert.match(queueHtml, />Run review pass</i);
-  assert.match(queueHtml, /Next action: Switch the agent out of review only when you want the next pass to send approved drafts\./i);
+  assert.match(queueHtml, /Next action: Switch the agent out of review only when you want the next pass to auto-send proved agent-authored drafts\./i);
   assert.doesNotMatch(queueHtml, />Run agent now</i);
   assert.match(introHtml, /Run review pass/i);
   assert.match(introHtml, /Review only/i);
@@ -1545,6 +1605,7 @@ test("operator hides empty blocked and stale lanes instead of rendering empty st
 
   const html = renderOperatorPage(model, { interactive: true });
   assert.match(html, /Action queue/i);
+  assert.match(html, /Background agent work is separate\./i);
   assert.match(html, /What needs action right now\./i);
   assert.doesNotMatch(html, /<h2>Blocked<\/h2>/i);
   assert.doesNotMatch(html, /<h2>Stale or incomplete<\/h2>/i);

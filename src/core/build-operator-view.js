@@ -188,6 +188,7 @@ export function buildOperatorViewModel(input) {
   // queue feel incoherent — handled people sitting as live next moves. (These
   // states are all set upstream in buildReviewItem / classifyReviewObservation.)
   const HANDLED_STATES = new Set([
+    "accept_queued",
     "agent_draft_due",
     "queued_for_send",
     "post_accept_sent",
@@ -461,7 +462,7 @@ function shapeDecisionAction(option, item) {
             mode: "detail",
             href: fallbackHref,
             writer: "recordInboundObservation",
-            args: { observationId: String(item.id), nextKind: "connection_request_accepted" },
+            args: { observationId: String(item.id), nextKind: "connection_request_accept_requested" },
             variant: "primary",
             icon: "check",
           }
@@ -1047,13 +1048,13 @@ function shapeAgentRuntime(runtime, queueCount, checkedAt = null) {
     const queueLabel = `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"}`;
     return {
       state: scheduler?.loaded ? "on" : "off",
-      headline: "Approved drafts are waiting in review only",
-      detail: `${queueLabel} already have fresh proof. Review only will not send them. Switch the agent to send one or send all when you want the next pass to send.`,
+      headline: "Agent-authored drafts are waiting in review only",
+      detail: `${queueLabel} already have fresh proof. Review only will not auto-send those agent-authored drafts. Operator-authored, edited, or approved drafts still send live.`,
       cadenceLabel,
       sendMode,
       lastPassSummary,
       statusFacts,
-      nextAction: "Switch the agent out of review only when you want the next pass to send approved drafts.",
+      nextAction: "Switch the agent out of review only when you want the next pass to auto-send proved agent-authored drafts.",
       queueCount,
       verificationSendCount,
       canRunNow: true,

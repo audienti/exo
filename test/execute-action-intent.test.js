@@ -30,7 +30,7 @@ process.env.EXO_STATE_DIR = stateDir;
 process.env.EXO_AGENT_RUN_LOCK_TEMP_DIR = path.join(stateDir, "run-lock");
 
 const { executeActionIntent } = await import("../src/core/execute-action-intent.js");
-const { findCompanyById, findMotionById, insertMotion, listInboundObservations, listMotions, updateMotion } = await import("../src/db/database.js");
+const { findCompanyById, findMotionAccountByMotionAndCompany, findMotionById, insertMotion, listInboundObservations, listMotions, updateMotion } = await import("../src/db/database.js");
 const { TRANSITION_MOTION_MARKER_URL } = await import("../src/core/ensure-transition-motion.js");
 const { reconcileConnectionDegreesFromAccepts } = await import("../src/core/reconcile-connection-degrees.js");
 const { buildAgentRunLockDir } = await import("../src/lib/agent-run-lock.js");
@@ -529,6 +529,19 @@ test("executeActionIntent drives every operator writer against governed state", 
     assert.equal(acceptedObservation?.notes, "Would love to connect about GTM operating systems.");
   });
 
+  await t.test("recordInboundObservation queues inbound accepts for live LinkedIn handling", async () => {
+    const res = await executeActionIntent({
+      writer: "recordInboundObservation",
+      args: { observationId: observationIdByActor("Mona Motion"), nextKind: "connection_request_accept_requested" },
+    });
+    assert.equal(res.ok, true);
+    assert.match(res.message, /Queued the agent to accept Mona Motion/i);
+    assert.equal(
+      listInboundObservations().find((item) => item.actorName === "Mona Motion")?.kind,
+      "connection_request_accept_requested",
+    );
+  });
+
   // --- 5b. reconcileConnectionDegreesFromAccepts backfills existing accepts ---
   await t.test("reconcileConnectionDegreesFromAccepts backfills unset degrees idempotently", () => {
     assert.equal(reProspect(backfillProspect.id)?.prospect.linkedinProfileSnapshot?.connectionDegree ?? null, null);
@@ -555,6 +568,12 @@ test("executeActionIntent drives every operator writer against governed state", 
   });
 
   await t.test("claimInboundPersonToMotion promotes into the backlog and re-homes into the chosen motion", async () => {
+    const assigned = await executeActionIntent({
+      writer: "assignMotionUser",
+      args: { motionId: destMotion.id, userId: user.id },
+    });
+    assert.equal(assigned.ok, true);
+
     const res = await executeActionIntent({
       writer: "claimInboundPersonToMotion",
       args: {
@@ -571,6 +590,12 @@ test("executeActionIntent drives every operator writer against governed state", 
       (account.prospects ?? []).some((candidate) => candidate.name === "Mona Motion"),
     );
     assert.equal(destinationHasProspect, true);
+    const destinationAccount = (findMotionById(destMotion.id).targetMap?.accounts ?? []).find((account) =>
+      (account.prospects ?? []).some((candidate) => candidate.name === "Mona Motion"),
+    );
+    assert.ok(destinationAccount, "rehomed company should exist on destination motion");
+    assert.equal(findCompanyById(destinationAccount.companyId)?.engagementUserAssignment?.userId, user.id);
+    assert.equal(findMotionAccountByMotionAndCompany(destMotion.id, destinationAccount.companyId)?.executionUserId, user.id);
 
     const otherMotionsStillHaveMona = listMotions()
       .filter((candidate) => candidate.id !== destMotion.id)
@@ -626,16 +651,29 @@ test("executeActionIntent drives every operator writer against governed state", 
   });
 
   // --- 8. rehomeProspect (move Pat from its motion into the destination) ---
-  await t.test("rehomeProspect moves a prospect between motions", async () => {
+  await t.test("rehomeProspect moves a prospect between motions and inherits the destination owner", async () => {
+    const rehomeCompany = cliJson([
+      "companies", "add", "--name", "Rehome Intent Co", "--domain", "rehome-intent.example", "--motion", motion.id,
+    ]);
+    const rehomeProspect = cliJson([
+      "companies", "prospects", "add", rehomeCompany.id, "--motion", motion.id,
+      "--name", "Rhea Rehome", "--title", "COO",
+      "--buying-committee-role", "primary_business_owner",
+      "--decision-authority", "buys", "--fit-confidence", "high",
+      "--why-relevant", "Fresh transition re-home coverage.",
+    ]).prospects[0];
+
     const res = await executeActionIntent({
       writer: "rehomeProspect",
-      args: { prospectId: prospect.id, toMotionId: destMotion.id, userId: user.id },
+      args: { prospectId: rehomeProspect.id, toMotionId: destMotion.id, userId: user.id },
     });
     assert.equal(res.ok, true);
     const moved = (findMotionById(destMotion.id).targetMap?.accounts ?? []).some((a) =>
-      (a.prospects ?? []).some((p) => p.id === prospect.id),
+      (a.prospects ?? []).some((p) => p.id === rehomeProspect.id),
     );
     assert.ok(moved, "prospect now lives in the destination motion");
+    assert.equal(findCompanyById(rehomeCompany.id)?.engagementUserAssignment?.userId, user.id);
+    assert.equal(findMotionAccountByMotionAndCompany(destMotion.id, rehomeCompany.id)?.executionUserId, user.id);
   });
 
   // --- 9. error handling: unknown / missing writer must reject, not corrupt ---

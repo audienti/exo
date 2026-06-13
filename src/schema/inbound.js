@@ -36,6 +36,7 @@ export const inboundCueSourceSchema = z.enum(["action_glance", "manual_hint", "r
 export const inboundCueStatusSchema = z.enum(["open", "resolved", "dismissed"]);
 export const inboundThreadMessageDirectionSchema = z.enum(["inbound", "outbound", "unknown"]);
 export const inboundThreadCaptureCompletenessSchema = z.enum(["complete", "partial_visible_slice"]);
+export const inboundIdentityResolutionStatusSchema = z.enum(["pending", "resolved", "no_match", "blocked"]);
 
 export const inboundThreadMessageSchema = z.object({
   id: z.string().trim().min(1).nullable().default(null),
@@ -49,6 +50,7 @@ export const inboundThreadMessageSchema = z.object({
 export const inboundObservationKindSchema = z.enum([
   "connection_request_pending",
   "connection_request_no_longer_pending",
+  "connection_request_accept_requested",
   "connection_request_accepted",
   "connection_request_not_accepted",
   "connection_request_withdraw_requested",
@@ -107,6 +109,14 @@ export const inboundSyncPolicySchema = z.object({
   surfaces: z.array(inboundSurfaceStateSchema).default([])
 });
 
+export const inboundObservationCompanyProfileSchema = z.object({
+  name: z.string().trim().min(1).nullable().default(null),
+  domain: z.string().trim().min(1).nullable().default(null),
+  websiteUrl: z.string().url().nullable().default(null),
+  linkedinCompanyUrl: z.string().url().nullable().default(null),
+  logoSourceUrl: z.string().url().nullable().default(null),
+});
+
 export const inboundObservationSchema = z.object({
   id: z.string().min(1),
   dedupeKey: z.string().min(1),
@@ -143,6 +153,10 @@ export const inboundObservationSchema = z.object({
   prospectId: z.string().min(1).nullable().default(null),
   personId: z.string().min(1).nullable().default(null),
   providerSharedSecret: z.string().trim().min(1).nullable().default(null),
+  actorCompanyProfile: inboundObservationCompanyProfileSchema.nullable().default(null),
+  identityResolutionStatus: inboundIdentityResolutionStatusSchema.nullable().default(null),
+  identityResolutionCheckedAt: z.string().datetime().nullable().default(null),
+  identityResolutionReason: z.string().trim().min(1).nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null),
   messages: z.array(inboundThreadMessageSchema).default([])
 });
@@ -166,14 +180,6 @@ export const inboundCueSchema = z.object({
   companyId: z.string().min(1).nullable().default(null),
   prospectId: z.string().min(1).nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null)
-});
-
-export const inboundObservationCompanyProfileSchema = z.object({
-  name: z.string().trim().min(1).nullable().default(null),
-  domain: z.string().trim().min(1).nullable().default(null),
-  websiteUrl: z.string().url().nullable().default(null),
-  linkedinCompanyUrl: z.string().url().nullable().default(null),
-  logoSourceUrl: z.string().url().nullable().default(null),
 });
 
 export const inboundSyncRunObservationInputSchema = z.object({

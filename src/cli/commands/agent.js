@@ -59,9 +59,9 @@ How the loop works (runs in EITHER Codex or Claude — the contract is runtime-a
   5. repeat
 
 Only no-input work appears here. That includes inbound truth refresh, governed
-research packets, send-ready drafts, and mechanical cleanup like rejecting
-inbound invites or withdrawing stale outbound invites. Nothing in this queue
-needs operator input.
+research packets, background identity resolution, send-ready drafts, and
+mechanical cleanup like rejecting inbound invites or withdrawing stale outbound
+invites. Nothing in this queue needs operator input.
 `,
     );
 
@@ -95,6 +95,12 @@ needs operator input.
             console.log(`    surfaces:  ${(task.surfaceLabels ?? []).join(", ") || task.surface}`);
             console.log(`    contract:  ${task.contractCommand}`);
             console.log(`    apply:     ${task.applyCommand}`);
+          } else if (task.kind === "resolve_inbound_identity") {
+            console.log(`• resolve_inbound_identity → ${task.prospectName}`);
+            console.log(`    why:       ${task.whyItMatters ?? "email-first sender still needs a governed LinkedIn identity"}`);
+            console.log(`    due:       ${task.dueAt ?? "now"}`);
+            if (task.senderEmail) console.log(`    sender:    ${task.senderEmail}`);
+            if (task.subject) console.log(`    subject:   ${task.subject}`);
           } else if (task.kind === "company_discovery") {
             console.log(`• company_discovery → ${task.motionName}`);
             console.log(`    why:       ${task.whyItMatters ?? "motion inventory needs more companies"}`);
@@ -125,6 +131,12 @@ needs operator input.
             console.log(`    due:       ${task.dueAt ?? "now"}`);
             console.log(`    brief:     ${task.briefCommand}`);
             console.log(`    on write:  ${task.writeback}`);
+          } else if (task.kind === "accept_connection_request") {
+            console.log(`• accept_connection_request → ${task.prospectName}${task.companyName ? ` · ${task.companyName}` : ""}`);
+            console.log(`    do:        accept this inbound invite on LinkedIn`);
+            console.log(`    due:       ${task.dueAt ?? "now"}`);
+            if (task.recipientUrl) console.log(`    invite:    ${task.recipientUrl}`);
+            console.log(`    on accept: ${task.writeback}`);
           } else if (task.kind === "reject_connection_request") {
             console.log(`• reject_connection_request → ${task.prospectName}${task.companyName ? ` · ${task.companyName}` : ""}`);
             console.log(`    do:        decline this inbound invite on LinkedIn`);
@@ -652,7 +664,8 @@ needs operator input.
         console.log(`  - the '${plan.runtime}' CLI installed and authenticated`);
       }
       if (plan.sendMode === "verify") {
-        console.log("  - verification-only send mode is enabled, so send tasks will stop at ready_to_send and will not write back");
+        console.log("  - verification-only send mode is enabled for agent-authored sends, so those tasks will stop at ready_to_send until you switch modes");
+        console.log("  - operator-authored, edited, or approved drafts still count as explicit send authorization and can send live");
       } else if (plan.sendMode === "canary") {
         console.log("  - canary send mode is enabled, so each pass will send at most one previously verified send, or prove one new send-ready task");
       }
@@ -1022,7 +1035,7 @@ export function formatAgentDoctorReport(report) {
   const scheduler = report.scheduler ?? null;
   const routine = report.routine ?? null;
   const taskReadiness = browser.taskReadiness ?? {};
-  const taskKinds = ["run_inbound_sync", "send_message", "reconcile_connection_request_status", "reject_connection_request", "withdraw_connection"];
+  const taskKinds = ["run_inbound_sync", "send_message", "reconcile_connection_request_status", "accept_connection_request", "reject_connection_request", "withdraw_connection"];
   const shownKinds = taskKinds.filter((taskKind) => taskReadiness[taskKind]);
   const dueTaskKinds = [...new Set(Array.isArray(queue.browserTaskKinds) ? queue.browserTaskKinds : [])];
   const blockedDueTaskKinds = dueTaskKinds.filter((taskKind) => taskReadiness[taskKind]?.ready === false);
@@ -1064,7 +1077,7 @@ export function formatAgentDoctorReport(report) {
   }
   if (routine?.exists) {
     if (routine.sendMode === "verify") {
-      lines.push("Send mode: verify. Send tasks stop before the final send, so they will not drain.");
+      lines.push("Send mode: verify. Agent-authored sends stop at ready_to_send, but operator-authored, edited, or approved drafts can still send live.");
     } else if (routine.sendMode === "canary") {
       lines.push("Send mode: canary. Each pass may send at most one previously verified send. Unverified due sends stop at ready_to_send first.");
     } else if (routine.sendMode === "live") {
@@ -1537,6 +1550,8 @@ function humanizeWaitingReason(reason) {
       return "scheduled for a later cadence checkpoint";
     case "held_in_reserve":
       return "held in reserve behind a stronger branch";
+    case "identity_retry_backoff":
+      return "waiting before the next background identity-resolution retry";
     default:
       return "not due yet";
   }

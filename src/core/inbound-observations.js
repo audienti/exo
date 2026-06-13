@@ -40,6 +40,16 @@ import { resolveInboundObservationLinks } from "./resolve-inbound-observation-li
  *   companyId?: string | null,
  *   prospectId?: string | null,
  *   providerSharedSecret?: string | null,
+ *   actorCompanyProfile?: {
+ *     name?: string | null,
+ *     domain?: string | null,
+ *     websiteUrl?: string | null,
+ *     linkedinCompanyUrl?: string | null,
+ *     logoSourceUrl?: string | null,
+ *   } | null,
+ *   identityResolutionStatus?: "pending" | "resolved" | "no_match" | "blocked" | null,
+ *   identityResolutionCheckedAt?: string | null,
+ *   identityResolutionReason?: string | null,
  *   notes?: string | null,
  *   messages?: Array<{
  *     id?: string | null,
@@ -134,6 +144,10 @@ export function recordInboundObservation(rawUser, input, options = {}) {
     companyId: resolvedLinks.companyId,
     prospectId: resolvedLinks.prospectId,
     providerSharedSecret: normalizeNullableString(input.providerSharedSecret),
+    actorCompanyProfile: normalizeInboundObservationCompanyProfile(input.actorCompanyProfile),
+    identityResolutionStatus: normalizeNullableString(input.identityResolutionStatus),
+    identityResolutionCheckedAt: normalizeNullableString(input.identityResolutionCheckedAt),
+    identityResolutionReason: normalizeNullableString(input.identityResolutionReason),
     notes: normalizeNullableString(input.notes),
     messages: normalizeInboundMessages(input.messages)
   });
@@ -183,16 +197,21 @@ export function mergeInboundObservation(rawExisting, nextObservation) {
     return nextObservation;
   }
 
+  const preserveDecisionState = shouldPreserveReceivedInvitationDecision(existing, nextObservation);
+
   return inboundObservationSchema.parse({
     ...existing,
     ...nextObservation,
     id: existing.id,
     dedupeKey: existing.dedupeKey,
+    kind: preserveDecisionState ? existing.kind : nextObservation.kind,
+    observedAt: preserveDecisionState ? existing.observedAt : nextObservation.observedAt,
     // Preserve the earliest eventAt we ever derived. LinkedIn's "X ago" labels
     // round to coarser buckets as a row ages (1 day → 2 weeks → 1 month), so an
     // eventAt computed at the first sighting sits closer to the real moment than
     // one computed weeks later.
     eventAt: existing.eventAt ?? nextObservation.eventAt ?? null,
+    summary: preserveDecisionState ? existing.summary : nextObservation.summary,
     actorName: nextObservation.actorName ?? existing.actorName,
     actorTitle: nextObservation.actorTitle ?? existing.actorTitle,
     actorCompanyName: nextObservation.actorCompanyName ?? existing.actorCompanyName,
@@ -209,9 +228,102 @@ export function mergeInboundObservation(rawExisting, nextObservation) {
     companyId: nextObservation.companyId ?? existing.companyId,
     prospectId: nextObservation.prospectId ?? existing.prospectId,
     providerSharedSecret: nextObservation.providerSharedSecret ?? existing.providerSharedSecret,
-    notes: nextObservation.notes ?? existing.notes,
+    actorCompanyProfile: mergeInboundObservationCompanyProfile(existing.actorCompanyProfile, nextObservation.actorCompanyProfile),
+    identityResolutionStatus: nextObservation.identityResolutionStatus ?? existing.identityResolutionStatus,
+    identityResolutionCheckedAt: nextObservation.identityResolutionCheckedAt ?? existing.identityResolutionCheckedAt,
+    identityResolutionReason: nextObservation.identityResolutionReason ?? existing.identityResolutionReason,
+    notes: preserveDecisionState ? (existing.notes ?? nextObservation.notes) : (nextObservation.notes ?? existing.notes),
     messages: nextObservation.messages.length ? nextObservation.messages : existing.messages
   });
+}
+
+const RECEIVED_INVITATION_DECISION_KINDS = new Set([
+  "connection_request_accept_requested",
+  "connection_request_accepted",
+  "connection_request_decline_requested",
+  "connection_request_declined",
+]);
+
+/**
+ * Preserve operator/agent decisions when the authoritative received-invitations
+ * sync re-sees the same invite before the live action disappears from LinkedIn.
+ * A fresh "received" row is newer evidence of presence, not permission to
+ * downgrade a queued or final decision on the same invite.
+ *
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} existing
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} nextObservation
+ */
+function shouldPreserveReceivedInvitationDecision(existing, nextObservation) {
+  return existing.surfaceKey === "linkedin-received-invitations"
+    && nextObservation.surfaceKey === "linkedin-received-invitations"
+    && nextObservation.kind === "connection_request_received"
+    && RECEIVED_INVITATION_DECISION_KINDS.has(existing.kind);
+}
+
+/**
+ * @param {{
+ *   name?: string | null,
+ *   domain?: string | null,
+ *   websiteUrl?: string | null,
+ *   linkedinCompanyUrl?: string | null,
+ *   logoSourceUrl?: string | null,
+ * } | null | undefined} profile
+ */
+function normalizeInboundObservationCompanyProfile(profile) {
+  if (!profile || typeof profile !== "object") {
+    return null;
+  }
+
+  const normalized = {
+    name: normalizeNullableString(profile.name),
+    domain: normalizeNullableString(profile.domain),
+    websiteUrl: normalizeNullableString(profile.websiteUrl),
+    linkedinCompanyUrl: normalizeNullableString(profile.linkedinCompanyUrl),
+    logoSourceUrl: normalizeNullableString(profile.logoSourceUrl),
+  };
+
+  return normalized.name
+    || normalized.domain
+    || normalized.websiteUrl
+    || normalized.linkedinCompanyUrl
+    || normalized.logoSourceUrl
+    ? normalized
+    : null;
+}
+
+/**
+ * @param {{
+ *   name?: string | null,
+ *   domain?: string | null,
+ *   websiteUrl?: string | null,
+ *   linkedinCompanyUrl?: string | null,
+ *   logoSourceUrl?: string | null,
+ * } | null | undefined} left
+ * @param {{
+ *   name?: string | null,
+ *   domain?: string | null,
+ *   websiteUrl?: string | null,
+ *   linkedinCompanyUrl?: string | null,
+ *   logoSourceUrl?: string | null,
+ * } | null | undefined} right
+ */
+export function mergeInboundObservationCompanyProfile(left, right) {
+  const normalizedLeft = normalizeInboundObservationCompanyProfile(left);
+  const normalizedRight = normalizeInboundObservationCompanyProfile(right);
+  if (!normalizedLeft) {
+    return normalizedRight;
+  }
+  if (!normalizedRight) {
+    return normalizedLeft;
+  }
+
+  return {
+    name: normalizedRight.name ?? normalizedLeft.name,
+    domain: normalizedRight.domain ?? normalizedLeft.domain,
+    websiteUrl: normalizedRight.websiteUrl ?? normalizedLeft.websiteUrl,
+    linkedinCompanyUrl: normalizedRight.linkedinCompanyUrl ?? normalizedLeft.linkedinCompanyUrl,
+    logoSourceUrl: normalizedRight.logoSourceUrl ?? normalizedLeft.logoSourceUrl,
+  };
 }
 
 /**

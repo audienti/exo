@@ -9,6 +9,7 @@ import { classifyWorkingHoursWindow } from "./working-hours.js";
 export const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
 export const INBOUND_SYNC_FAILED_RETRY_MS = 30 * 60 * 1000;
 export const INBOUND_SYNC_LINKEDIN_MESSAGE_OPEN_WINDOW_MS = 15 * 60 * 1000;
+export const INBOUND_SURFACE_MIXED_BASELINE_REASON = "mixed_baseline_due_to_out_of_band_reconciliation";
 const WEEKDAY_ORDER = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DEFAULT_LINKEDIN_RETRIEVAL_WINDOW = {
   weekdays: WEEKDAY_ORDER,
@@ -518,6 +519,77 @@ export function recordUserInboundSyncRun(rawUser, input) {
 }
 
 /**
+ * A full surface sync established a clean baseline, but a later row-level
+ * reconciliation changed one person on that surface. Preserve the stored
+ * baseline timestamps and counts, but mark the surface as mixed so Exo stops
+ * treating silence or totals as fully trustworthy until the next governed full
+ * sync lands.
+ *
+ * @param {unknown} rawUser
+ * @param {{
+ *   accountId: string,
+ *   surfaceKey: string,
+ * }} input
+ * @returns {{ user: import("../schema/user.js").userSchema._type, changed: boolean }}
+ */
+export function markUserInboundSurfaceMixedAfterOutOfBandReconciliation(rawUser, input) {
+  const user = userSchema.parse(rawUser);
+  const account = user.accounts.find((candidate) => candidate.id === input.accountId);
+  if (!account) {
+    throw new Error(`User account not found: ${input.accountId}`);
+  }
+
+  const currentStates = materializeSurfaceStates(account);
+  let changed = false;
+
+  const nextAccounts = user.accounts.map((candidate) => {
+    if (candidate.id !== input.accountId) {
+      return candidate;
+    }
+
+    const surfaces = currentStates.map((surface) => {
+      if (surface.surfaceKey !== input.surfaceKey) {
+        return surface;
+      }
+
+      const alreadyMixed = hasMixedInboundBaseline(surface);
+      const hadTrustedFullBaseline = surface.lastRunStatus === "success"
+        && surface.lastCaptureCompleteness === "complete"
+        && surface.lastExhaustionStatus === "complete";
+      if (alreadyMixed || !hadTrustedFullBaseline) {
+        return surface;
+      }
+
+      changed = true;
+      return inboundSurfaceStateSchema.parse({
+        ...surface,
+        lastReconcileReason: INBOUND_SURFACE_MIXED_BASELINE_REASON,
+        lastExhaustionReason: INBOUND_SURFACE_MIXED_BASELINE_REASON,
+      });
+    });
+
+    return {
+      ...candidate,
+      updatedAt: changed ? new Date().toISOString() : candidate.updatedAt,
+      inboundSync: {
+        surfaces
+      }
+    };
+  });
+
+  return {
+    user: changed
+      ? userSchema.parse({
+        ...user,
+        updatedAt: new Date().toISOString(),
+        accounts: nextAccounts,
+      })
+      : user,
+    changed,
+  };
+}
+
+/**
  * @param {{
  *   key?: string | null,
  *   lastRunStatus: "never" | "success" | "warning" | "failed",
@@ -820,6 +892,17 @@ function materializeSurfaceStates(account) {
       lastError: configuredStates.get(definition.key)?.lastError ?? null
     })
   );
+}
+
+/**
+ * @param {{
+ *   lastReconcileReason?: string | null,
+ *   lastExhaustionReason?: string | null,
+ * }} surface
+ */
+export function hasMixedInboundBaseline(surface) {
+  return normalizeNullableString(surface?.lastReconcileReason) === INBOUND_SURFACE_MIXED_BASELINE_REASON
+    || normalizeNullableString(surface?.lastExhaustionReason) === INBOUND_SURFACE_MIXED_BASELINE_REASON;
 }
 
 /**

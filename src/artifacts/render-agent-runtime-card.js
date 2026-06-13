@@ -81,13 +81,14 @@ export function renderAgentRuntimeCard(runtime, meta = {}, options = {}) {
  * itself when the agent needs attention so problems are never hidden.
  *
  * @param {import("../core/build-operator-view.js").OperatorAgentRuntime | null | undefined} runtime
- * @param {{ side?: string | null, forceOpen?: boolean }} [options]
+ * @param {{ side?: string | null, forceOpen?: boolean, embedded?: boolean }} [options]
  * @returns {string}
  */
 export function renderAgentRuntimeBar(runtime, options = {}) {
   if (!runtime) return "";
   const needsAttention = runtime.state === "off";
   const open = needsAttention || options.forceOpen ? " open" : "";
+  const className = options.embedded ? "agent-bar agent-bar-embedded" : "agent-bar";
   const facts = Array.isArray(runtime.statusFacts) && runtime.statusFacts.length
     ? `<div class="nm-chips">${runtime.statusFacts.map((fact) => `<span class="surface-ref">${escapeHtml(fact)}</span>`).join("")}</div>`
     : "";
@@ -97,7 +98,7 @@ export function renderAgentRuntimeBar(runtime, options = {}) {
   const body = facts || nextAction ? `<div class="ab-body">${facts}${nextAction}</div>` : "";
 
   return (
-    `<details class="agent-bar"${open}>` +
+    `<details class="${className}"${open}>` +
     `<summary>` +
     avatar({
       name: "Agent runtime",

@@ -242,11 +242,12 @@ function resolveLinkedinPublicTarget(prospect, surface) {
 
   const selection = normalizePublicEngagementSelection(prospect?.publicEngagementSelection)
     ?? selectLinkedinPublicEngagementTarget(prospect);
-  if (!selection?.targetUrl) {
+  const targetUrl = normalizeNullableString(selection?.targetUrl ?? selection?.url ?? null);
+  if (!targetUrl) {
     return null;
   }
   return {
-    url: selection.targetUrl,
+    url: targetUrl,
     targetKind: selection.targetKind,
     summary: selection.summary ?? null,
     rationale: selection.selectionReason ?? selection.rationale ?? null,

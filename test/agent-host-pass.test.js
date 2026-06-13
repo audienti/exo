@@ -22,6 +22,7 @@ import {
   createTaskVerificationFingerprint,
   buildDraftPrompt,
   buildInboundCapturePrompt,
+  buildInboundIdentityResolutionPrompt,
   buildSendPrompt,
   canRunTaskInCurrentPass,
   chooseNextQueueTask,
@@ -39,6 +40,7 @@ import {
   isBrowserMaintenanceTaskKind,
   getInboundAutomationRolloutBlockReason,
   isAutonomousPacketRunSuccessful,
+  isProspectScopedBlockedSendResult,
   classifyHandledLinkedinReplyUnavailable,
   normalizeInboundCaptureFailureReason,
   resolveResearchTaskTimeoutMs,
@@ -928,7 +930,50 @@ test("chooseNextQueueTask runs operator-approved sends live even in verify mode"
   assert.equal(selected?._selectedSendMode, "operator_live");
 });
 
-test("chooseNextQueueTask skips operator sends in verify mode when the live rollout gate is closed", () => {
+test("chooseNextQueueTask prefers operator-live sends over proof-only agent sends in verify mode", () => {
+  const agentTask = {
+    kind: "send_message",
+    id: "send-agent",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-2",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-two/",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    body: "Agent wrote this.",
+    authoredBy: "agent",
+    editedByOperator: false,
+    writeback: "exo actions result ...prospect-2",
+  };
+  const operatorTask = {
+    kind: "send_message",
+    id: "send-operator",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "email",
+    recipientUrl: "https://mail.google.com/mail/#all/thread-1",
+    queuedAt: "2026-06-03T05:01:00.000Z",
+    body: "Operator wrote this.",
+    authoredBy: "operator",
+    editedByOperator: true,
+    writeback: "exo actions result ...prospect-1",
+  };
+
+  const selected = chooseNextQueueTask(
+    { tasks: [agentTask, operatorTask] },
+    true,
+    { recentTaskVerifications: [] },
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "verify",
+  );
+
+  assert.equal(selected?.id, "send-operator");
+  assert.equal(selected?._selectedSendMode, "operator_live");
+});
+
+test("chooseNextQueueTask still sends operator-controlled work live in verify mode when inbound retrieval is stale", () => {
   const operatorTask = {
     kind: "send_message",
     id: "send-operator",
@@ -954,9 +999,8 @@ test("chooseNextQueueTask skips operator sends in verify mode when the live roll
     { capability: "linkedin", handle: "aliumairdev", surfaceLabel: "Sent Invitations", freshnessState: "never" },
   ];
 
-  // Operator sends escalate to live delivery; while inbound retrieval health
-  // gates live sends, the pass must move on to the sync work that heals the
-  // gate instead of selecting a send that execution will refuse.
+  // Operator-controlled sends are explicit human-approved work, so stale
+  // inbound retrieval should not keep them in proof-only mode.
   const selected = chooseNextQueueTask(
     { tasks: [operatorTask, quickSyncTask] },
     true,
@@ -968,26 +1012,11 @@ test("chooseNextQueueTask skips operator sends in verify mode when the live roll
     healthWarnings,
   );
 
-  assert.equal(selected?.id, "sync-quick");
-
-  // Once retrieval health recovers, the same queue escalates the operator
-  // send again.
-  const afterHeal = chooseNextQueueTask(
-    { tasks: [operatorTask, quickSyncTask] },
-    true,
-    { recentTaskVerifications: [] },
-    "2026-06-03T05:15:00.000Z",
-    false,
-    "verify",
-    [],
-    [],
-  );
-
-  assert.equal(afterHeal?.id, "send-operator");
-  assert.equal(afterHeal?._selectedSendMode, "operator_live");
+  assert.equal(selected?.id, "send-operator");
+  assert.equal(selected?._selectedSendMode, "operator_live");
 });
 
-test("chooseNextQueueTask still proves agent sends in verify mode while operator sends are gated", () => {
+test("chooseNextQueueTask still prefers operator-controlled sends over proof-only agent sends in verify mode when inbound retrieval is stale", () => {
   const operatorTask = {
     kind: "send_message",
     id: "send-operator",
@@ -1020,8 +1049,9 @@ test("chooseNextQueueTask still proves agent sends in verify mode while operator
     { capability: "linkedin", handle: "aliumairdev", surfaceLabel: "Sent Invitations", freshnessState: "never" },
   ];
 
-  // Verify-mode proofs do not deliver anything, so retrieval health only
-  // gates the operator escalation — not verification of agent sends.
+  // Even with stale inbound retrieval, operator-controlled work outranks
+  // proof-only agent sends in verify mode because the human review already
+  // authorized delivery.
   const selected = chooseNextQueueTask(
     { tasks: [operatorTask, agentTask] },
     true,
@@ -1033,8 +1063,49 @@ test("chooseNextQueueTask still proves agent sends in verify mode while operator
     healthWarnings,
   );
 
-  assert.equal(selected?.id, "send-agent");
-  assert.equal(selected?._selectedSendMode, "verify");
+  assert.equal(selected?.id, "send-operator");
+  assert.equal(selected?._selectedSendMode, "operator_live");
+});
+
+test("chooseNextQueueTask prefers retrieval recovery over proof-only agent sends in verify mode", () => {
+  const agentTask = {
+    kind: "send_message",
+    id: "send-agent",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-2",
+    surface: "create_comment_reaction",
+    recipientUrl: "https://www.linkedin.com/posts/example-two/",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    body: "",
+    authoredBy: "agent",
+    editedByOperator: false,
+    approvedByOperator: false,
+    writeback: "exo actions result ...prospect-2",
+  };
+  const fullSyncTask = {
+    kind: "run_inbound_sync",
+    id: "sync-full",
+    mode: "full",
+    dueAt: "2026-06-03T05:01:00.000Z",
+    queuedAt: "2026-06-03T05:01:00.000Z",
+  };
+  const healthWarnings = [
+    { capability: "linkedin", handle: "operator-linkedin", surfaceLabel: "Messaging Inbox", freshnessState: "warning" },
+  ];
+
+  const selected = chooseNextQueueTask(
+    { tasks: [agentTask, fullSyncTask] },
+    true,
+    { recentTaskVerifications: [] },
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "verify",
+    [],
+    healthWarnings,
+  );
+
+  assert.equal(selected?.id, "sync-full");
 });
 
 test("chooseNextQueueTask prefers send work over due retrieval even if retrieval is older", () => {
@@ -1281,9 +1352,11 @@ test("chooseNextQueueTask prefers send work over cleanup even if cleanup is olde
 
 test("maintenance bursts stay separate from standard task passes", () => {
   assert.equal(isBrowserMaintenanceTaskKind("withdraw_connection"), true);
+  assert.equal(isBrowserMaintenanceTaskKind("accept_connection_request"), true);
   assert.equal(isBrowserMaintenanceTaskKind("write_draft"), false);
 
   assert.equal(canRunTaskInCurrentPass("withdraw_connection", [], 0, 0), true);
+  assert.equal(canRunTaskInCurrentPass("accept_connection_request", [], 0, 0), true);
   assert.equal(canRunTaskInCurrentPass("write_draft", [], 0, 0), true);
 
   assert.equal(
@@ -1833,40 +1906,6 @@ test("explainNoopPass does not claim verify-only hold for operator-authored send
     ),
     "Verify mode had no unverified send_message tasks left to prove.",
   );
-});
-
-test("explainNoopPass surfaces the live rollout gate for deferred operator sends in verify mode", () => {
-  const operatorTask = {
-    kind: "send_message",
-    id: "send-operator",
-    motionId: "motion-1",
-    companyId: "company-1",
-    prospectId: "prospect-1",
-    surface: "follow_up_direct_message",
-    recipientUrl: "https://www.linkedin.com/in/example-one/",
-    queuedAt: "2026-06-03T05:00:00.000Z",
-    body: "Operator wrote this.",
-    authoredBy: "operator",
-    editedByOperator: true,
-    writeback: "exo actions result ...prospect-1",
-  };
-  const healthWarnings = [
-    { capability: "linkedin", handle: "aliumairdev", surfaceLabel: "Sent Invitations", freshnessState: "never" },
-  ];
-
-  const reason = explainNoopPass(
-    { tasks: [operatorTask] },
-    true,
-    { recentTaskVerifications: [] },
-    "2026-06-03T05:15:00.000Z",
-    false,
-    "verify",
-    [],
-    healthWarnings,
-  );
-
-  assert.match(reason, /Operator-approved sends stay queued while the live rollout gate is closed/);
-  assert.match(reason, /autonomous inbound retrieval is healthy again/);
 });
 
 test("chooseNextQueueTask prefers previously verified sends in canary mode before proving new ones", () => {
@@ -2795,8 +2834,58 @@ test("failed retrieval tasks do not abort the host pass, but other failed work s
 
   assert.equal(
     shouldAbortPassAfterTaskProblem(
+      { kind: "send_message", id: "send-2" },
+      { status: "blocked", detail: { reason: "Connection request is already pending for this LinkedIn profile on the pinned williamflanagan account." } },
+    ),
+    false,
+  );
+
+  assert.equal(
+    shouldAbortPassAfterTaskProblem(
       { kind: "write_draft", id: "draft-1" },
       { status: "completed", detail: {} },
+    ),
+    false,
+  );
+});
+
+test("prospect-scoped blocked sends are distinguished from transport-scoped failures", () => {
+  assert.equal(
+    isProspectScopedBlockedSendResult(
+      { kind: "send_message", id: "send-1" },
+      {
+        status: "blocked",
+        detail: {
+          reason: "LinkedIn profile is still reachable, but the connection request is already pending for this recipient on the governed account.",
+        },
+      },
+    ),
+    true,
+  );
+
+  assert.equal(
+    isProspectScopedBlockedSendResult(
+      { kind: "send_message", id: "send-2" },
+      {
+        status: "blocked",
+        detail: {
+          reason: "This draft belongs to another active motion.",
+          dispatchGate: { status: "block" },
+        },
+      },
+    ),
+    true,
+  );
+
+  assert.equal(
+    isProspectScopedBlockedSendResult(
+      { kind: "send_message", id: "send-3" },
+      {
+        status: "blocked",
+        detail: {
+          reason: "Browser preflight failed: Chrome debug socket unavailable.",
+        },
+      },
     ),
     false,
   );
@@ -2806,6 +2895,43 @@ test("connector-native inbound handoffs do not require browser attach", () => {
   assert.equal(requiresBrowserAttachForInboundCapture({ captureTransportMode: "browser_native_only" }), true);
   assert.equal(requiresBrowserAttachForInboundCapture({ captureTransportMode: "connector_native_only" }), false);
   assert.equal(requiresBrowserAttachForInboundCapture(null), true);
+});
+
+test("buildInboundIdentityResolutionPrompt prefers Gmail and Unipile and forbids browser tools", () => {
+  const prompt = buildInboundIdentityResolutionPrompt(
+    {
+      id: "obs-1",
+      actorName: "Matt M",
+      actorHandle: "matthew@coldcrafthqlabs.com",
+      actorCompanyName: null,
+      subject: "William, want 20?",
+      summary: "Matt offered a sample list by email.",
+      threadUrl: "https://mail.google.com/mail/u/0/#thread-1",
+      sourceUrl: "https://mail.google.com/mail/u/0/#thread-1",
+    },
+    [
+      {
+        messages: [
+          {
+            direction: "inbound",
+            fromName: "Matt M",
+            fromHandle: "matthew@coldcrafthqlabs.com",
+            sentAt: "2026-06-12T12:00:00.000Z",
+            body: "Mind if I send the sample?",
+          },
+        ],
+      },
+    ],
+    {
+      handle: "operator-linkedin",
+      providerAccountId: "provider-linkedin-1",
+    },
+  );
+
+  assert.match(prompt, /First use the Gmail connector/i);
+  assert.match(prompt, /Then use the Unipile MCP LinkedIn path/i);
+  assert.match(prompt, /Do not use Chrome or browser tools/i);
+  assert.match(prompt, /providerAccountId provider-linkedin-1/i);
 });
 
 test("preflight task gate can allow maintenance work even when Chrome debug-instance warnings exist", () => {

@@ -7,6 +7,7 @@ import { renderConnectionsPage } from "../src/artifacts/render-connections.js";
 import { buildConnectionsViewModel } from "../src/core/build-connections-view.js";
 import { buildDailyView } from "../src/core/build-daily-view.js";
 import { buildInboundReviewView } from "../src/core/build-inbound-review-view.js";
+import { INBOUND_SURFACE_MIXED_BASELINE_REASON } from "../src/core/user-inbound-sync.js";
 
 const now = "2026-06-05T16:00:00.000Z";
 
@@ -873,6 +874,56 @@ test("connections sent rows expose claim-to-motion and stale-withdraw controls o
   assert.match(html, /Stale/);
   assert.doesNotMatch(html, /data-exo-radio="claim-motion-/);
   assert.doesNotMatch(html, /<span>Profile<\/span>/);
+});
+
+test("connections marks sent invites as mixed when row-level reconciliation is newer than the last full sync baseline", () => {
+  const resurrectedPending = baseReviewItem({
+    id: "obs-mixed-sent",
+    observedAt: "2026-06-05T16:45:00.000Z",
+    eventAt: "2026-06-05T16:45:00.000Z",
+    actorName: "Jordan Example",
+    actorTitle: "VP Revenue Operations",
+    actorCompanyName: "BuyerCo",
+    actorProfileUrl: "https://www.linkedin.com/in/jordan-example/",
+    actorLinkedinPublicId: "jordan-example",
+    actorLinkedinMemberId: "member-jordan",
+    summary: "Jordan Example is still pending on LinkedIn.",
+  });
+
+  const truthAccounts = [{
+    ...baseTruthAccount(),
+    surfaces: [
+      {
+        key: "linkedin-sent-invitations",
+        label: "Sent Invitations",
+        lastRunStatus: "success",
+        lastSyncedAt: "2026-06-05T10:00:00.000Z",
+        lastObservedAt: "2026-06-05T10:00:00.000Z",
+        lastItemCount: 0,
+        lastVisibleTotalCount: 0,
+        lastCaptureCompleteness: "complete",
+        lastRequestedMode: "full",
+        lastActualMode: "full",
+        lastReconcileRequired: false,
+        lastReconcileReason: INBOUND_SURFACE_MIXED_BASELINE_REASON,
+        lastExhaustionStatus: "complete",
+        lastExhaustionReason: INBOUND_SURFACE_MIXED_BASELINE_REASON,
+        meta: {},
+      },
+    ],
+  }];
+
+  const model = buildConnectionsViewModel({
+    reviewItems: [resurrectedPending],
+    truthAccounts,
+  });
+  const sentTab = model.tabs.find((tab) => tab.key === "sent");
+
+  assert.ok(sentTab);
+  assert.equal(model.accounts[0].truth, "partial");
+  assert.equal(sentTab.count, 1);
+  assert.equal(sentTab.gapKind, "mixed_baseline");
+  assert.match(sentTab.gap ?? "", /newer row-level reconciliation changed this surface after the last full sync/i);
 });
 
 test("daily waiting branches tell the operator to move on after a viewed-after-touch signal", () => {

@@ -921,6 +921,8 @@ Use this when the agent needs the chosen people of record before writing or brow
     .option("--enrichment-notes <notes>", "Contact-enrichment notes")
     .option("--queue-status <status>", "Prospect queue status: discovered, queued_for_research, researched, selected, ready, suppressed, exhausted")
     .option("--queue-notes <notes>", "Prospect queue notes")
+    .option("--pre-connect-bypass-reason <text>", "Why a high-signal direct connection request should bypass public warmup")
+    .option("--clear-pre-connect-decision", "Clear a stored manual pre-connect decision")
     .option("--notes <notes>", "Optional notes")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
@@ -1062,6 +1064,8 @@ Rules:
     .option("--enrichment-notes <notes>", "Contact-enrichment notes")
     .option("--queue-status <status>", "Prospect queue status: discovered, queued_for_research, researched, selected, ready, suppressed, exhausted")
     .option("--queue-notes <notes>", "Prospect queue notes")
+    .option("--pre-connect-bypass-reason <text>", "Why a high-signal direct connection request should bypass public warmup")
+    .option("--clear-pre-connect-decision", "Clear a stored manual pre-connect decision")
     .option("--notes <notes>", "Optional notes")
     .option("--json", "Emit machine-readable JSON")
     .addHelpText(
@@ -2514,6 +2518,7 @@ function buildProspectInputFromOptions(options) {
   const contactPoints = parseContactPointOptions(options.contactPoint);
   const contactEnrichmentState = buildContactEnrichmentInput(options);
   const queueState = buildProspectQueueInput(options);
+  const preConnectDecision = buildPreConnectDecisionFromOptions(options);
 
   return {
     name: options.name,
@@ -2563,12 +2568,36 @@ function buildProspectInputFromOptions(options) {
       hookStrength: normalizeNullableConfidence(options.hookStrength),
       engagementRationale: options.engagementRationale
     },
+    preConnectDecision,
     contactPoints: contactPoints.length ? contactPoints : undefined,
     contactEnrichmentState,
     queueState,
     notes: options.notes,
     signalMatchIds: normalizeStringList(options.signalMatch)
   };
+}
+
+/**
+ * @param {Record<string, any>} options
+ */
+function buildPreConnectDecisionFromOptions(options) {
+  const bypassReason = typeof options.preConnectBypassReason === "string"
+    ? options.preConnectBypassReason.trim()
+    : "";
+  const clear = options.clearPreConnectDecision === true;
+  if (clear && bypassReason) {
+    throw new Error("Choose either --pre-connect-bypass-reason or --clear-pre-connect-decision, not both.");
+  }
+  if (clear) {
+    return null;
+  }
+  if (bypassReason) {
+    return {
+      mode: "bypass",
+      reason: bypassReason,
+    };
+  }
+  return undefined;
 }
 
 /**

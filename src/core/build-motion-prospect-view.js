@@ -5,6 +5,7 @@ import { inboundObservationSchema } from "../schema/inbound.js";
 import { withDerivedTargetAccountQueueState } from "../lib/motion-queue.js";
 import { hasUsableEmailFallback, selectBestEmailContactPoint } from "../lib/prospect-contacts.js";
 import {
+  derivePreConnectState,
   listStoredLinkedinPublicActivity,
   selectLinkedinPublicEngagementTarget,
 } from "./select-linkedin-public-engagement.js";
@@ -36,11 +37,13 @@ const PROSPECT_TIMELINE_OBSERVATION_KINDS = new Set([
  * @param {{
  *   companyId?: string | null,
  *   prospectId?: string | null,
- *   rawObservations?: unknown[] | null
+ *   rawObservations?: unknown[] | null,
+ *   now?: string | null,
  * }} [options]
  */
 export function buildMotionProspectView(rawMotion, options = {}) {
   const motion = motionSchema.parse(rawMotion);
+  const now = typeof options.now === "string" && options.now.trim() ? options.now : new Date().toISOString();
   const rawObservations = Array.isArray(options.rawObservations) ? options.rawObservations : [];
   const observations = rawObservations.map((item) => inboundObservationSchema.parse(item));
   const companyAccounts = motion.targetMap.accounts
@@ -52,7 +55,7 @@ export function buildMotionProspectView(rawMotion, options = {}) {
   }
 
   const prospectViews = companyAccounts
-    .flatMap((account) => account.prospects.map((prospect) => buildProspectView(account, prospect, observations)))
+    .flatMap((account) => account.prospects.map((prospect) => buildProspectView(account, prospect, observations, now)))
     .sort(compareProspectViews);
 
   const selectedProspect = options.prospectId
@@ -107,8 +110,9 @@ export function buildMotionProspectView(rawMotion, options = {}) {
  * @param {import("../schema/target-account.js").targetAccountSchema._type} account
  * @param {import("../schema/target-account.js").prospectSchema._type} prospect
  * @param {import("../schema/inbound.js").inboundObservationSchema._type[]} observations
+ * @param {string} now
  */
-function buildProspectView(account, prospect, observations) {
+function buildProspectView(account, prospect, observations, now) {
   const signalMatches = account.signalMatches.filter((match) => prospect.signalMatchIds.includes(match.id));
   const capturedPublicActivity = listStoredLinkedinPublicActivity(prospect);
   const publicEngagementSelection = selectLinkedinPublicEngagementTarget(prospect);
@@ -116,6 +120,7 @@ function buildProspectView(account, prospect, observations) {
     capturedPublicActivity,
     publicEngagementSelection,
   });
+  const preConnect = derivePreConnectState(prospect, now);
   const messageTestReady = prospect.cadenceState.status === "ready";
   const latestSignalMatch = signalMatches[0] ?? null;
   const conversationContext = buildProspectConversationContext(account, prospect, observations);
@@ -159,6 +164,7 @@ function buildProspectView(account, prospect, observations) {
     packetState: prospect.packetState,
     notes: prospect.notes,
     recentPost,
+    preConnect,
     signalMatches,
     signalMatchCount: signalMatches.length,
     latestSignalSummary: latestSignalMatch?.summary ?? null,

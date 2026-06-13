@@ -13,6 +13,7 @@ import {
 } from "../db/database.js";
 
 const SUPPORTED_TRANSITIONS = new Set([
+  "connection_request_accept_requested",
   "connection_request_accepted",
   "connection_request_withdraw_requested",
   "connection_request_withdrawn",
@@ -118,6 +119,8 @@ export function transitionInboundObservation(args) {
 function buildTransitionSummary(actorName, nextKind) {
   const subject = actorName?.trim() || "This inbound invite";
   switch (nextKind) {
+    case "connection_request_accept_requested":
+      return `${subject} is queued for acceptance on LinkedIn.`;
     case "connection_request_accepted":
       return `${subject} is now a LinkedIn connection.`;
     case "connection_request_decline_requested":

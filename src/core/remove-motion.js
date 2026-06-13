@@ -7,11 +7,10 @@ import {
   findMotionById,
   listCompanies,
   listInboundObservations,
-  moveProspectToMotionRows,
   updateCompany,
-  upsertInboundObservation,
 } from "../db/database.js";
 import { ensureTransitionMotion, isTransitionMotion } from "./ensure-transition-motion.js";
+import { persistRehomedProspect } from "./persist-rehomed-prospect.js";
 import { rehomeProspect } from "./rehome-prospect.js";
 import { updateCompanyRecord } from "./update-company.js";
 
@@ -58,9 +57,6 @@ export async function removeMotionGoverned(input) {
   let workingFromMotion = motion;
   /** @type {Array<{ id: string, name: string, companyId: string, companyName: string }>} */
   const migratedProspects = [];
-  /** @type {import("../schema/inbound.js").inboundObservationSchema._type[]} */
-  const relinkedObservations = [];
-
   if (prospectRefs.length > 0) {
     workingTransitionMotion = motionSchema.parse(await ensureTransitionMotion());
 
@@ -79,13 +75,9 @@ export async function removeMotionGoverned(input) {
 
       workingFromMotion = result.fromMotion;
       workingTransitionMotion = result.toMotion;
-      moveProspectToMotionRows({
-        prospectId: ref.prospectId,
-        toMotionId: workingTransitionMotion.id,
-      });
-      companiesById.set(result.company.id, result.company);
+      const persisted = persistRehomedProspect({ result });
+      companiesById.set(persisted.company.id, persisted.company);
       relatedCompanyIds.add(result.company.id);
-      relinkedObservations.push(...result.observations);
       migratedProspects.push({
         id: result.prospectId,
         name: result.prospectName,
@@ -113,10 +105,6 @@ export async function removeMotionGoverned(input) {
 
   if (workingTransitionMotion) {
     transitionMotion = findMotionById(workingTransitionMotion.id);
-  }
-
-  for (const observation of relinkedObservations) {
-    upsertInboundObservation(observation);
   }
 
   deleteMotion(motion.id);

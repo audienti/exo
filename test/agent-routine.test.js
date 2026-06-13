@@ -482,6 +482,14 @@ test("agent install-routine --send-mode canary --json blocks rollout when autono
             sourceType: "browser-profile",
             browserProfileId: "profile-4",
             preferred: true,
+            metadata: {
+              inboundRetrievalWindow: {
+                timezone: "America/New_York",
+                weekdays: ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
+                startLocalTime: "00:00",
+                endLocalTime: "23:59",
+              },
+            },
             inboundSync: {
               surfaces: [
                 {
@@ -800,6 +808,14 @@ test("agent status surfaces current work, partial reason, throughput, and inboun
             sourceType: "browser-profile",
             browserProfileId: "profile-4",
             preferred: true,
+            metadata: {
+              inboundRetrievalWindow: {
+                timezone: "America/New_York",
+                weekdays: ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
+                startLocalTime: "00:00",
+                endLocalTime: "23:59",
+              },
+            },
             inboundSync: {
               surfaces: [
                 {

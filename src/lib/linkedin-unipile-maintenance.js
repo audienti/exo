@@ -6,9 +6,11 @@ import {
   findInboundObservationById,
   findUserById,
   listMotions,
+  updateUser,
   upsertInboundObservation,
 } from "../db/database.js";
 import { mergeInboundObservation, recordInboundObservation } from "../core/inbound-observations.js";
+import { markUserInboundSurfaceMixedAfterOutOfBandReconciliation } from "../core/user-inbound-sync.js";
 import { extractLinkedinPublicId } from "./prospect-contacts.js";
 import { readUnipileConfig } from "./unipile-config.js";
 import { inboundObservationSchema } from "../schema/inbound.js";
@@ -30,6 +32,7 @@ const UNIPILE_HTTP_MAX_TIME_SECONDS = Math.max(1, Math.ceil(UNIPILE_HTTP_TIMEOUT
  *   findObservationByDedupeKey?: ((dedupeKey: string) => unknown | null) | null,
  *   listMotions?: (() => unknown[]) | null,
  *   upsertObservation?: ((observation: any) => void) | null,
+ *   updateUser?: ((user: any) => void) | null,
  *   httpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpDeleteImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpPostImpl?: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null,
@@ -156,6 +159,17 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
       listMotionsImpl: options.listMotions ?? null,
       upsertObservationImpl: options.upsertObservation ?? null,
     });
+    const mixedSurface = markUserInboundSurfaceMixedAfterOutOfBandReconciliation(user, {
+      accountId: observation.accountId,
+      surfaceKey: observation.surfaceKey,
+    });
+    if (mixedSurface.changed) {
+      if (options.updateUser) {
+        options.updateUser(mixedSurface.user);
+      } else {
+        updateUser(mixedSurface.user);
+      }
+    }
     return {
       status: "completed",
       provider: "unipile",
@@ -200,7 +214,7 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
     };
   }
 
-  if (task.kind === "reject_connection_request") {
+  if (task.kind === "accept_connection_request" || task.kind === "reject_connection_request") {
     const invitationId = normalizeNullableString(observation.externalId);
     if (!invitationId) {
       return {
@@ -212,9 +226,10 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
     if (!sharedSecret) {
       return {
         status: "blocked",
-        reason: `reject_connection_request requires a stored Unipile shared_secret on observation ${observation.id}. Re-run LinkedIn invite sync before retrying.`,
+        reason: `${task.kind} requires a stored Unipile shared_secret on observation ${observation.id}. Re-run LinkedIn invite sync before retrying.`,
       };
     }
+    const action = task.kind === "accept_connection_request" ? "accept" : "decline";
     const response = requestUnipileJson({
       method: "POST",
       url: new URL(`/api/v1/users/invite/received/${encodeURIComponent(invitationId)}`, baseUrl).toString(),
@@ -223,14 +238,14 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
         provider: "LINKEDIN",
         account_id: providerAccountId,
         shared_secret: sharedSecret,
-        action: "decline",
+        action,
       }),
       httpPostImpl: options.httpPostImpl ?? null,
     });
     if (!response.ok) {
       return {
         status: "blocked",
-        reason: buildMaintenanceFailureReason("reject_connection_request", response),
+        reason: buildMaintenanceFailureReason(task.kind, response),
       };
     }
     return {
@@ -528,7 +543,7 @@ function normalizeUnipileResponse(response) {
 }
 
 /**
- * @param {"withdraw_connection" | "reject_connection_request" | "reconcile_connection_request_status"} taskKind
+ * @param {"withdraw_connection" | "accept_connection_request" | "reject_connection_request" | "reconcile_connection_request_status"} taskKind
  * @param {{ status?: number | null, error?: string | null, parsed?: any }} response
  */
 function buildMaintenanceFailureReason(taskKind, response) {

@@ -233,3 +233,89 @@ test("buildMotionProspectView preserves the full structured Gmail thread history
   assert.equal(view?.threadMessages.at(-1)?.body, "Thread message 12");
   assert.equal(view?.latestInboundMessage?.body, "Thread message 12");
 });
+
+test("buildMotionProspectView surfaces why pre-connect was skipped when no governed public target exists", () => {
+  const motion = buildMotion();
+  const prospect = motion.targetMap.accounts[0].prospects[0];
+  prospect.linkedinProfileUrl = "https://www.linkedin.com/in/lina-park/";
+  prospect.email = null;
+  prospect.touches = [];
+  prospect.cadenceState = {
+    status: "ready",
+    currentStep: "connection-request",
+    lastTouchChannel: null,
+    lastTouchOutcome: null,
+    lastTouchAt: null,
+    nextAction: "Send the first connection request.",
+    nextActionDueAt: "2026-06-05T00:24:16.523Z",
+    blockedChannels: [],
+    requireNewHook: false,
+    notes: null,
+    updatedAt: "2026-06-05T00:24:16.536Z",
+  };
+  prospect.linkedinProfileSnapshot = {
+    connectionDegree: 2,
+    isOpenProfile: null,
+    recentPosts: [],
+  };
+  prospect.publicEngagementSelection = null;
+
+  const view = buildMotionProspectView(motion, {
+    prospectId: "prospect-1",
+  }).prospect;
+
+  assert.equal(view?.preConnect?.status, "skipped");
+  assert.match(view?.preConnect?.reason ?? "", /skip warmup and move straight to a direct connection request/i);
+});
+
+test("buildMotionProspectView treats authored linkedin posts labeled post as captured public activity", () => {
+  const motion = buildMotion();
+  const prospect = motion.targetMap.accounts[0].prospects[0];
+  prospect.linkedinProfileUrl = "https://www.linkedin.com/in/lina-park/";
+  prospect.email = null;
+  prospect.touches = [];
+  prospect.cadenceState = {
+    status: "ready",
+    currentStep: "connection-request",
+    lastTouchChannel: null,
+    lastTouchOutcome: null,
+    lastTouchAt: null,
+    nextAction: "Warm the account before sending a connection request.",
+    nextActionDueAt: "2026-06-05T00:24:16.523Z",
+    blockedChannels: [],
+    requireNewHook: false,
+    notes: null,
+    updatedAt: "2026-06-05T00:24:16.536Z",
+  };
+  prospect.linkedinProfileSnapshot = {
+    connectionDegree: 2,
+    isOpenProfile: null,
+    recentPosts: [
+      {
+        activityType: "post",
+        url: "https://www.linkedin.com/posts/lina-park_signal-hygiene",
+        postedAt: "2026-06-04T17:14:29.676Z",
+        freshnessBand: "0-14-days",
+        summary: "Lina posted about procurement signal hygiene.",
+        snippet: "Bad signal routing burns operator time.",
+        targetKind: "post",
+        authoredByProspect: true,
+        hasOriginalCommentary: true,
+        businessRelevance: "high",
+        recommendedAction: "comment",
+        rationale: "This is directly tied to the workflow she owns.",
+      },
+    ],
+  };
+  prospect.publicEngagementSelection = null;
+
+  const view = buildMotionProspectView(motion, {
+    prospectId: "prospect-1",
+  }).prospect;
+
+  assert.equal(view?.capturedPublicActivity.length, 1);
+  assert.equal(view?.capturedPublicActivity[0]?.activityType, "own-post");
+  assert.equal(view?.recentPost.available, true);
+  assert.equal(view?.recentPost.engageable, true);
+  assert.equal(view?.publicEngagementSelection?.targetUrl, "https://www.linkedin.com/posts/lina-park_signal-hygiene");
+});

@@ -36,7 +36,7 @@ export function renderOperatorPage(model, meta = {}) {
       "Action queue",
       model.counts.decisions,
       "amber",
-      "One queue of operator work across inbound review and due-now planner actions.",
+      "One queue of operator work across inbound review and due-now planner actions. Background agent work is separate.",
       renderDecisions(model.decisions, meta, { hasPromoted: Boolean(model.nextMove) }),
     ),
   ];
@@ -80,7 +80,7 @@ function renderIntro(model) {
     summaryLine = `${summaryParts.slice(0, -1).join(", ")}, and ${summaryParts.at(-1)}.`;
   }
   const stats = [
-    `<span><b>${c.decisions}</b> queued</span>`,
+    `<span><b>${c.decisions}</b> in operator queue</span>`,
     c.blocked > 0 ? `<span><b>${c.blocked}</b> blocked</span>` : "",
     c.stale > 0 ? `<span><b>${c.stale}</b> stale</span>` : "",
   ].filter(Boolean);
@@ -181,8 +181,10 @@ function composeHref(prospectId, personId, fallbackHref, meta) {
     return `/prospects/${encodeURIComponent(prospectId)}?${ret}#compose-${encodeURIComponent(prospectId)}`;
   }
   if (meta.interactive && personId) {
-    // Opens the person page with the compose panel open (which promotes-on-send).
-    return `/people/${encodeURIComponent(personId)}?${ret}#compose-${encodeURIComponent(personId)}`;
+    // Untracked inbox people draft on demand. Keep the ordinary detail page
+    // cheap, but mark explicit compose routes so the person page can generate
+    // the reply before opening the panel.
+    return `/people/${encodeURIComponent(personId)}?${ret}&compose=1#compose-${encodeURIComponent(personId)}`;
   }
   return fallbackHref ?? undefined;
 }

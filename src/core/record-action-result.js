@@ -1,5 +1,6 @@
 // @ts-check
 
+import { autoPromoteInboundAccepts } from "./auto-promote-inbound-accepts.js";
 import { transitionInboundObservation } from "./transition-inbound-observation.js";
 import { findActionDefinition, normalizeActionKey } from "../lib/action-catalog.js";
 import { findSupportedActionResult, normalizeActionResultKey } from "../lib/action-result-catalog.js";
@@ -66,7 +67,7 @@ export function recordActionResult(input) {
   let inboundObservationTransitionedTo = null;
 
   if (result.inboundTransitionKind && ids.observationId) {
-    transitionInboundObservation({
+    const transitioned = transitionInboundObservation({
       observationId: ids.observationId,
       nextKind: result.inboundTransitionKind,
       observedAt: occurredAt,
@@ -74,6 +75,11 @@ export function recordActionResult(input) {
       notes: input.notes ?? null,
     });
     inboundObservationTransitionedTo = result.inboundTransitionKind;
+    if (result.inboundTransitionKind === "connection_request_accepted") {
+      void autoPromoteInboundAccepts({ userId: transitioned.existing?.userId ?? null }).catch(() => {
+        // Best-effort: the authoritative accept already landed.
+      });
+    }
   }
 
   // Observation-only path: a linked invite with no tracked prospect (a rejected

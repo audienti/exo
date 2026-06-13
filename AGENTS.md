@@ -69,6 +69,7 @@ Use `operatorInterface.currentCall` and `agentUsage.recommendedPath` as the sour
 9. Treat Exo as the system of record. If you find a durable signal, website, stakeholder, or assignment that Exo can store, write it back before you summarize.
 10. If you change the public plugin surface, ship the release bookkeeping in the same change. Bump the version in `package.json`, keep `.codex-plugin/plugin.json` on the same version, and add the matching versioned entry to `CHANGELOG.md`.
 11. Any user-facing copy you produce (outreach drafts, email replies, motion briefs, packet summaries, prospect notes, status lines, planner narration, docs prose) follows `docs/writing-voice.md`. No em dashes, no throat-clearing openers, no AI-jargon, no chatbot artifacts. Read that file before drafting if you have not already.
+12. If a user asks about the UI, whether it is up, or asks to see it, treat that as a live UI request. Start `exo ui` against the pinned `EXO_STATE_DIR` if needed, verify the real listener with direct HTTP on `/status`, and give the user the live URL. When an in-app browser is available, open the live UI there too.
 
 ## What Exo Is Good For Right Now
 

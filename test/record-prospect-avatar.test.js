@@ -157,6 +157,41 @@ test("updateMotionProspect promotes a snapshot avatar without clearing an existi
   });
 });
 
+test("updateMotionProspect stores and clears a pre-connect bypass rationale", () => {
+  withIsolatedExoState(() => {
+    const storedMotion = insertMotion(buildMotionFixture());
+    const seededMotion = recordMotionProspect(storedMotion, buildCompanyFixture(), {
+      name: "Minh Le",
+      title: "Head of Risk",
+      whyRelevant: "Owns lending controls and credit instrumentation.",
+      linkedinProfileUrl: "https://www.linkedin.com/in/minh-le-risk/",
+    });
+    const seededProspect = seededMotion.targetMap.accounts[0].prospects[0];
+
+    const bypassedMotion = updateMotionProspect(seededMotion, buildCompanyFixture(), {
+      prospectId: seededProspect.id,
+      preConnectDecision: {
+        mode: "bypass",
+        reason: "Fresh risk-platform replacement evidence already justifies a direct connection request.",
+      },
+    });
+    const bypassedProspect = bypassedMotion.targetMap.accounts[0].prospects[0];
+    assert.equal(bypassedProspect.preConnectDecision?.mode, "bypass");
+    assert.equal(
+      bypassedProspect.preConnectDecision?.reason,
+      "Fresh risk-platform replacement evidence already justifies a direct connection request.",
+    );
+    assert.ok(bypassedProspect.preConnectDecision?.decidedAt);
+
+    const clearedMotion = updateMotionProspect(bypassedMotion, buildCompanyFixture(), {
+      prospectId: seededProspect.id,
+      preConnectDecision: null,
+    });
+    const clearedProspect = clearedMotion.targetMap.accounts[0].prospects[0];
+    assert.equal(clearedProspect.preConnectDecision, null);
+  });
+});
+
 /**
  * @template T
  * @param {() => T} callback

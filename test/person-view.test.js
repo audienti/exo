@@ -60,6 +60,55 @@ function rawObservation(overrides = {}) {
   };
 }
 
+function managedEmailIdentityResolutionUser() {
+  return {
+    id: "user-1",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    label: "Operator",
+    owner: "operator",
+    notes: null,
+    workingHours: {
+      mode: "always",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "09:00",
+      endLocalTime: "17:00",
+    },
+    accounts: [
+      {
+        id: "account-linkedin-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "linkedin",
+        handle: "operator-linkedin",
+        label: null,
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-unipile-1",
+        providerAccountId: "provider-linkedin-1",
+        preferred: true,
+        notes: null,
+        inboundSync: {
+          surfaces: [],
+        },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-unipile-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+  };
+}
+
 test("buildPersonView lifts stored thread messages into the latest inbound message context", () => {
   const person = buildPersonView({
     observationId: "obs-1",
@@ -99,6 +148,7 @@ test("renderPersonPage shows the actual inbound message context in status and ti
   assert.match(html, /Open thread/);
   assert.match(html, /tl-message/);
   assert.match(html, /Ignore sender/);
+  assert.doesNotMatch(html, /href="\/people\/obs-1\?compose=1#compose-obs-1"/);
   assert.match(html, /data-exo-writer="ignoreInboundObservation"/);
   assert.doesNotMatch(html, /class="exo-action" data-exo-writer="ignoreInboundObservation"/);
   assert.doesNotMatch(html, /Thanks for sending this over\.|Thanks for the note\./);
@@ -180,6 +230,62 @@ test("renderPersonPage blocks promote-and-queue when the inbound identity is sti
   assert.match(html, /Ignore sender/);
   assert.doesNotMatch(html, /Send — add &amp; queue/);
   assert.doesNotMatch(html, />Add to motion</);
+});
+
+test("renderPersonPage blocks email-first claim and queue until LinkedIn is resolved", () => {
+  const person = buildPersonView({
+    observationId: "obs-email-linkedin",
+    rawObservations: [
+      rawObservation({
+        id: "obs-email-linkedin",
+        dedupeKey: "obs-email-linkedin",
+        capability: "gmail",
+        platform: "gmail",
+        surfaceKey: "gmail-inbox-threads",
+        kind: "email_thread_updated",
+        actorName: "Matt M",
+        actorTitle: null,
+        actorCompanyName: null,
+        actorHandle: "matthew@coldcrafthqlabs.com",
+        actorProfileUrl: null,
+        actorLinkedinPublicId: null,
+        actorLinkedinMemberId: null,
+        threadUrl: "https://mail.google.com/mail/u/0/#inbox/thread-2",
+        sourceUrl: "https://mail.google.com/mail/u/0/#inbox/thread-2",
+        subject: "William, want 20?",
+        summary: "Matt offered a free sample list of 20 verified ICP contacts.",
+        notes: null,
+        messages: [
+          {
+            id: "msg-email-linkedin",
+            direction: "inbound",
+            sentAt: "2026-06-04T16:18:00.000Z",
+            fromName: "Matt M",
+            fromHandle: "matthew@coldcrafthqlabs.com",
+            body: "Mind if I send the sample?",
+          },
+        ],
+      }),
+    ],
+    rawMotions: [],
+    rawUsers: [managedEmailIdentityResolutionUser()],
+  });
+
+  assert.ok(person);
+  assert.equal(person?.promotionBlocker?.kind, "resolve_linkedin_identity");
+
+  const html = renderPersonPage(person, { interactive: true, userId: "user-1" });
+
+  assert.match(html, /Resolving LinkedIn in background\./);
+  assert.match(html, /managed Gmail and LinkedIn connectors/i);
+  assert.match(html, /Waiting on background identity resolution/);
+  assert.match(html, />Open thread</);
+  assert.doesNotMatch(html, /href="\/people\/obs-email-linkedin\?compose=1#compose-obs-email-linkedin"/);
+  assert.doesNotMatch(html, />Reply</);
+  assert.doesNotMatch(html, /data-exo-writer="promoteInboundPerson"/);
+  assert.doesNotMatch(html, /data-exo-writer="promoteAndApproveDraft"/);
+  assert.doesNotMatch(html, /Resolving in background<\/span><\/button>/);
+  assert.doesNotMatch(html, /disabled aria-disabled="true"/);
 });
 
 test("buildPersonView treats a received LinkedIn invitation note as inbound message history", () => {
@@ -389,7 +495,7 @@ test("renderPersonPage exposes accept and reject actions for inbound LinkedIn in
 
   assert.match(html, /Accept or decline the invite/);
   assert.match(html, /data-exo-writer="recordInboundObservation"/);
-  assert.match(html, /nextKind&quot;:&quot;connection_request_accepted&quot;/);
+  assert.match(html, /nextKind&quot;:&quot;connection_request_accept_requested&quot;/);
   assert.match(html, /nextKind&quot;:&quot;connection_request_decline_requested&quot;/);
   assert.match(html, />Accept</);
   assert.match(html, />Reject</);

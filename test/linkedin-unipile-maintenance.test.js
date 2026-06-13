@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { runLinkedinMaintenanceWithUnipile } from "../src/lib/linkedin-unipile-maintenance.js";
+import { INBOUND_SURFACE_MIXED_BASELINE_REASON } from "../src/core/user-inbound-sync.js";
 
 const timestamp = "2026-06-06T12:00:00.000Z";
 
@@ -151,6 +152,47 @@ test("runLinkedinMaintenanceWithUnipile blocks a reject without shared_secret", 
   assert.match(result.reason ?? "", /requires a stored Unipile shared_secret/i);
 });
 
+test("runLinkedinMaintenanceWithUnipile accepts a received invite through Unipile", () => {
+  let seenRequest = null;
+  const result = runLinkedinMaintenanceWithUnipile(
+    {
+      kind: "accept_connection_request",
+      observationId: "observation-1",
+    },
+    {
+      findObservationById: () => buildObservation({
+        surfaceKey: "linkedin-received-invitations",
+        kind: "connection_request_accept_requested",
+        providerSharedSecret: "secret-123",
+      }),
+      findUserById: () => buildUser(),
+      httpPostImpl: (url, _headers, bodyText) => {
+        seenRequest = {
+          url,
+          body: JSON.parse(bodyText),
+        };
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            object: "InvitationHandled",
+            status: "ACCEPTED",
+          }),
+        };
+      },
+    },
+  );
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.provider, "unipile");
+  assert.equal(new URL(seenRequest?.url ?? "").pathname, "/api/v1/users/invite/received/invite-1");
+  assert.deepEqual(seenRequest?.body, {
+    provider: "LINKEDIN",
+    account_id: "provider-linkedin-1",
+    shared_secret: "secret-123",
+    action: "accept",
+  });
+});
+
 test("runLinkedinMaintenanceWithUnipile declines a received invite through Unipile", () => {
   let seenRequest = null;
   const result = runLinkedinMaintenanceWithUnipile(
@@ -195,6 +237,7 @@ test("runLinkedinMaintenanceWithUnipile declines a received invite through Unipi
 test("runLinkedinMaintenanceWithUnipile restores a disappeared sent invite when the profile still shows pending", () => {
   let seenUrl = null;
   let storedObservation = null;
+  let storedUser = null;
   const result = runLinkedinMaintenanceWithUnipile(
     {
       kind: "reconcile_connection_request_status",
@@ -204,13 +247,52 @@ test("runLinkedinMaintenanceWithUnipile restores a disappeared sent invite when 
       findObservationById: () => buildObservation({
         kind: "connection_request_no_longer_pending",
       }),
-      findUserById: () => buildUser(),
+      findUserById: () => buildUser({
+        accounts: [
+          {
+            ...buildUser().accounts[0],
+            inboundSync: {
+              surfaces: [
+                {
+                  surfaceKey: "linkedin-sent-invitations",
+                  enabled: true,
+                  lastSyncedAt: "2026-06-06T10:00:00.000Z",
+                  lastObservedAt: "2026-06-06T10:00:00.000Z",
+                  lastRunStatus: "success",
+                  lastItemCount: 0,
+                  lastVisibleTotalCount: 0,
+                  lastCaptureCompleteness: "complete",
+                  lastRequestedMode: "full",
+                  lastActualMode: "full",
+                  lastReconcileRequired: false,
+                  lastReconcileReason: null,
+                  lastExhaustionStatus: "complete",
+                  lastExhaustionReason: null,
+                  lastPaginationAttempted: true,
+                  lastTerminalSignalSeen: true,
+                  lastStalledPassCount: 0,
+                  continuationStartedAt: null,
+                  nextCursor: null,
+                  nextStartOffset: null,
+                  lastObservationCount: 0,
+                  lastItemizationGapCount: 0,
+                  lastCountDiscrepancyCount: 0,
+                  lastError: null,
+                },
+              ],
+            },
+          },
+        ],
+      }),
       findObservationByDedupeKey: () => buildObservation({
         kind: "connection_request_no_longer_pending",
       }),
       listMotions: () => [],
       upsertObservation: (observation) => {
         storedObservation = observation;
+      },
+      updateUser: (user) => {
+        storedUser = user;
       },
       httpGetImpl: (url) => {
         seenUrl = new URL(url);
@@ -240,6 +322,14 @@ test("runLinkedinMaintenanceWithUnipile restores a disappeared sent invite when 
   assert.equal(storedObservation?.kind, "connection_request_pending");
   assert.equal(storedObservation?.summary, "Jordan Example is still pending on LinkedIn.");
   assert.equal(storedObservation?.notes, "LinkedIn still shows the sent connection request as pending.");
+  assert.equal(
+    storedUser?.accounts?.[0]?.inboundSync?.surfaces?.[0]?.lastReconcileReason,
+    INBOUND_SURFACE_MIXED_BASELINE_REASON,
+  );
+  assert.equal(
+    storedUser?.accounts?.[0]?.inboundSync?.surfaces?.[0]?.lastExhaustionReason,
+    INBOUND_SURFACE_MIXED_BASELINE_REASON,
+  );
   assert.equal(seenUrl?.pathname, "/api/v1/users/jordan-example");
   assert.equal(seenUrl?.searchParams.get("account_id"), "provider-linkedin-1");
 });

@@ -15,6 +15,41 @@ const rawUser = {
   label: "william-main",
 };
 
+function managedEmailIdentityResolutionUser() {
+  return {
+    ...rawUser,
+    accounts: [
+      {
+        id: "account-linkedin-1",
+        createdAt: "2026-06-04T16:00:00.000Z",
+        updatedAt: "2026-06-04T16:00:00.000Z",
+        capability: "linkedin",
+        handle: "william-main",
+        label: "William Main",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-unipile-1",
+        providerAccountId: "provider-linkedin-1",
+        preferred: true,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-unipile-1",
+        createdAt: "2026-06-04T16:00:00.000Z",
+        updatedAt: "2026-06-04T16:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+  };
+}
+
 function rawObservation(overrides = {}) {
   return {
     id: "obs-1",
@@ -366,6 +401,52 @@ test("unclaimed private messages with prior outbound history still require claim
   assert.match(reviewItem.recommendedAction, /claim lina park/i);
   assert.equal(reviewItem.previewLabel, "Latest message");
   assert.equal(reviewItem.previewText, "Attached.");
+});
+
+test("email-first inbound threads wait in background instead of surfacing as claim work when managed identity resolution is available", () => {
+  const managedUser = managedEmailIdentityResolutionUser();
+  const observation = rawObservation({
+    id: "obs-email-background",
+    dedupeKey: "obs-email-background",
+    kind: "email_thread_updated",
+    capability: "gmail",
+    platform: "gmail",
+    surfaceKey: "gmail-inbox-threads",
+    actorName: "Matt M",
+    actorHandle: "matthew@coldcrafthqlabs.com",
+    actorProfileUrl: null,
+    actorLinkedinPublicId: null,
+    actorLinkedinMemberId: null,
+    threadUrl: "https://mail.google.com/mail/u/0/#inbox/thread-3",
+    sourceUrl: "https://mail.google.com/mail/u/0/#inbox/thread-3",
+    subject: "William, want 20?",
+    summary: "Matt offered a free sample list by email.",
+    messages: [
+      {
+        id: "msg-email-background",
+        direction: "inbound",
+        sentAt: "2026-06-04T16:18:00.000Z",
+        fromName: "Matt M",
+        fromHandle: "matthew@coldcrafthqlabs.com",
+        body: "Mind if I send the sample?",
+      },
+    ],
+  });
+  const inbox = buildInboxView(managedUser, [observation], [], []);
+  const review = buildInboundReviewView(managedUser, [observation], [], []);
+  const daily = buildDailyView(managedUser, [], [], [], [observation], { rawUsers: [managedUser] });
+
+  const inboxItem = inbox.items[0];
+  assert.equal(inboxItem.status, "global-intake");
+  assert.equal(inboxItem.reviewState, "needs_claim");
+
+  const reviewItem = review.reviewItems[0];
+  assert.equal(reviewItem.state, "waiting");
+  assert.match(reviewItem.whyItMatters, /managed Gmail and LinkedIn connectors/i);
+  assert.match(reviewItem.recommendedAction, /No operator action/i);
+  assert.deepEqual(reviewItem.decisionOptions, []);
+
+  assert.equal(daily.items.some((item) => item.source?.type === "inbound_review" && item.source?.observationId === observation.id), false);
 });
 
 test("received invitation notes become operator preview content", () => {

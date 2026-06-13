@@ -9,6 +9,9 @@
 // Task kinds today:
 //   - run_inbound_sync           — refresh stale or under-itemized inbound truth
 //                                  surfaces with no operator input.
+//   - resolve_inbound_identity  — resolve an email-first sender onto a real
+//                                 LinkedIn identity through the governed
+//                                 connector path before claim/send can unlock.
 //   - company_discovery         — replenish thin motion inventory by finding
 //                                 new companies that match the motion thesis
 //                                 and signal contract.
@@ -30,6 +33,8 @@
 //   - reconcile_connection_request_status
 //                               — verify a disappeared sent invite against
 //                                 live profile relationship/invitation state.
+//   - accept_connection_request — accept an inbound invite the operator
+//                                 already approved in Exo.
 //   - reject_connection_request — decline an inbound invite the operator
 //                                 already rejected in Exo.
 //   - withdraw_connection       — clear a stale outbound invite automatically.
@@ -70,6 +75,12 @@ import {
   classifyInboundSurfaceFreshness,
   computeInboundAutomationNextDueAt,
 } from "./user-inbound-sync.js";
+import {
+  buildInboundIdentityResolutionGroupKey,
+  computeInboundIdentityResolutionDueAt,
+  needsInboundIdentityResolution,
+  resolveManagedLinkedinAccount,
+} from "./inbound-identity-resolution.js";
 import { resolveScopedExecutionAssignment } from "./resolve-scoped-execution-assignment.js";
 import { resolveConnectionNoteCapability } from "./connection-note-capability.js";
 import { evaluateOutboundDispatchGate } from "./outbound-dispatch-gate.js";
@@ -335,6 +346,38 @@ export function buildAgentQueue(input) {
         }), { now, tasks, waiting });
       }
     }
+
+    const identityResolutionCandidates = new Map();
+    const managedLinkedinAccount = resolveManagedLinkedinAccount(rawUser, {
+      runtime: "codex",
+      connector: "unipile",
+      availableOnly: true,
+    });
+    if (managedLinkedinAccount?.providerAccountId) {
+      for (const observation of input.observations ?? []) {
+        if (observation?.userId !== syncView.user.id) {
+          continue;
+        }
+        if (!needsInboundIdentityResolution(observation)) {
+          continue;
+        }
+        const groupKey = buildInboundIdentityResolutionGroupKey(observation) ?? observation.id;
+        const existing = identityResolutionCandidates.get(groupKey) ?? null;
+        if (!existing || String(observation.observedAt ?? "") > String(existing.observedAt ?? "")) {
+          identityResolutionCandidates.set(groupKey, observation);
+        }
+      }
+
+      for (const observation of identityResolutionCandidates.values()) {
+        const dueAt = computeInboundIdentityResolutionDueAt(observation, now) ?? now;
+        placeTask(buildInboundIdentityResolutionTask({
+          user: syncView.user,
+          observation,
+          dueAt,
+          waitingReason: dueAt > now ? "identity_retry_backoff" : null,
+        }), { now, tasks, waiting });
+      }
+    }
   }
 
   // Disappearance deltas from the sent-invitations list are not operator
@@ -361,6 +404,27 @@ export function buildAgentQueue(input) {
       queuedAt: observation.observedAt ?? null,
       dueAt: observation.observedAt ?? now,
     }, { now, tasks, waiting });
+  }
+
+  // Accept tasks: inbound invites the operator queued for approval. The agent
+  // performs the real accept on LinkedIn, then writes back the final connected
+  // state. These need no prospect/motion — they act directly on the invite.
+  for (const observation of input.observations ?? []) {
+    if (observation?.kind !== "connection_request_accept_requested") continue;
+    placeTask({
+      kind: "accept_connection_request",
+      action: "accept_connection",
+      needsOperatorInput: false,
+      observationId: observation.id,
+      prospectName: observation.actorName ?? "inbound invite",
+      companyName: observation.actorCompanyName ?? null,
+      recipientUrl: observation.actorProfileUrl ?? null,
+      surface: "received_invitation",
+      writeback: `exo actions result --action accept_connection --result accepted --observation ${observation.id}`,
+      queuedAt: observation.observedAt ?? null,
+      dueAt: observation.observedAt ?? now,
+    }, { now, tasks, waiting });
+    continue;
   }
 
   // Reject tasks: inbound invites the operator queued for rejection. The agent
@@ -1439,6 +1503,50 @@ function buildInboundSyncTask({
 
 /**
  * @param {{
+ *   user: { id: string, label: string },
+ *   observation: any,
+ *   dueAt: string | null,
+ *   waitingReason?: string | null,
+ * }} input
+ */
+function buildInboundIdentityResolutionTask({ user, observation, dueAt, waitingReason = null }) {
+  const senderEmail = normalizeNullableString(observation?.actorHandle) ?? null;
+  const senderDomain = senderEmail?.includes("@") ? senderEmail.split("@").at(-1) ?? null : null;
+  const senderLabel = observation?.actorName ?? senderEmail ?? "email sender";
+  const subject = normalizeNullableString(observation?.subject) ?? null;
+  return {
+    kind: "resolve_inbound_identity",
+    action: "resolve_inbound_identity",
+    needsOperatorInput: false,
+    reason: normalizeNullableString(observation?.identityResolutionStatus) === "no_match"
+      ? "identity_retry_no_match"
+      : normalizeNullableString(observation?.identityResolutionStatus) === "blocked"
+        ? "identity_retry_blocked"
+        : "email_identity_unresolved",
+    whyItMatters: `${senderLabel} is email-first inbound. Exo still needs a governed LinkedIn identity before this branch can be claimed into transition backlog or queue a governed reply.`,
+    userId: user.id,
+    userLabel: user.label,
+    observationId: observation.id,
+    accountId: observation.accountId ?? null,
+    capability: observation.capability ?? "gmail",
+    motionId: observation.motionId ?? null,
+    companyId: observation.companyId ?? null,
+    companyName: senderDomain ? `domain:${senderDomain}` : (observation.actorCompanyName ?? null),
+    prospectId: observation.prospectId ?? null,
+    prospectName: senderLabel,
+    surface: observation.surfaceKey ?? "gmail-inbox-threads",
+    senderEmail,
+    senderDomain,
+    subject,
+    threadUrl: observation.threadUrl ?? observation.sourceUrl ?? null,
+    queuedAt: dueAt ?? observation.observedAt ?? null,
+    dueAt,
+    waitingReason,
+  };
+}
+
+/**
+ * @param {{
  *   motion: any,
  *   account: any,
  *   prospect: any,
@@ -1653,16 +1761,18 @@ function taskOrder(a, b, hostState = null) {
   // progresses via bounded slices interleaved by the host pass scheduler.
   const rank = {
     run_inbound_sync_quick: 0,
-    company_research: 1,
-    prospect_selection: 2,
-    prospect_research: 3,
-    company_discovery: 4,
-    reconcile_connection_request_status: 5,
-    reject_connection_request: 6,
-    withdraw_connection: 7,
-    send_message: 8,
-    write_draft: 9,
-    run_inbound_sync_full: 10,
+    resolve_inbound_identity: 1,
+    company_research: 2,
+    prospect_selection: 3,
+    prospect_research: 4,
+    company_discovery: 5,
+    reconcile_connection_request_status: 6,
+    accept_connection_request: 7,
+    reject_connection_request: 8,
+    withdraw_connection: 9,
+    send_message: 10,
+    write_draft: 11,
+    run_inbound_sync_full: 12,
   };
   if (isMotionRoundRobinTask(a) && isMotionRoundRobinTask(b)) {
     const motionComparison = compareMotionTaskOrderAcrossKinds(a, b, hostState);

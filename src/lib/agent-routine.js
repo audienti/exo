@@ -152,7 +152,7 @@ export function buildDrainPrompt(input) {
     "   a. If task.kind == send_message, run: exo agent send <companyId> --motion <motionId> --prospect <prospectId> --json",
     "      → this is the governed message-send contract (pinned identity, recipient, verbatim message, executionPolicy).",
     "   b. Perform the browser action using your native browser tools on the task.recipientUrl as the pinned identity.",
-    "      For send_message, do exactly what the governed send contract says. For withdraw/reject/unfollow tasks, perform that literal LinkedIn cleanup action and nothing broader.",
+    "      For send_message, do exactly what the governed send contract says. For accept/withdraw/reject/unfollow tasks, perform that literal LinkedIn action and nothing broader.",
     "      Do not drift to another LinkedIn identity. Do not fall back to shell scraping.",
     "      If the Chrome connector cannot attach after one retry, stop that task immediately, record the exact blocked reason, and continue to the next task.",
     "      Do not run diagnostics, open Chrome windows, or switch to Playwriter in this unattended lane.",

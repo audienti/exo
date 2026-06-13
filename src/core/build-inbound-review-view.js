@@ -17,6 +17,10 @@ import {
   classifyPrivateInboundMessage,
   describePrivateInboundResponse,
 } from "./private-inbound-message-classification.js";
+import {
+  needsInboundIdentityResolution,
+  resolveManagedLinkedinAccount,
+} from "./inbound-identity-resolution.js";
 
 /**
  * @param {unknown} rawUser
@@ -33,6 +37,13 @@ import {
  */
 export function buildInboundReviewView(rawUser, rawObservations, rawMotions, rawCompanies, options = {}) {
   const user = userSchema.parse(rawUser);
+  const backgroundIdentityResolutionAvailable = Boolean(
+    resolveManagedLinkedinAccount(user, {
+      runtime: "codex",
+      connector: "unipile",
+      availableOnly: true,
+    }),
+  );
   const observations = rawObservations
     .map((item) => inboundObservationSchema.parse(item))
     .filter((observation) => !shouldSuppressOperationalObservation(observation));
@@ -127,7 +138,13 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
   }));
 
   const reviewItems = filteredObservations
-    .map((observation) => buildReviewItem(observation, motions, companiesById, prospectContextById))
+    .map((observation) => buildReviewItem(
+      observation,
+      motions,
+      companiesById,
+      prospectContextById,
+      { backgroundIdentityResolutionAvailable },
+    ))
     .sort(compareReviewItems);
 
   const itemizationGaps = surfaceState.flatMap((account) =>
@@ -282,8 +299,9 @@ function surfaceNeedsReconciliation(surface, missingObservationCount) {
  * @param {import("../schema/motion.js").motionSchema._type[]} motions
  * @param {Map<string, any>} companiesById
  * @param {Map<string, { motion: import("../schema/motion.js").motionSchema._type, account: any, prospect: any }>} prospectContextById
+ * @param {{ backgroundIdentityResolutionAvailable?: boolean }} [options]
  */
-function buildReviewItem(observation, motions, companiesById, prospectContextById) {
+function buildReviewItem(observation, motions, companiesById, prospectContextById, options = {}) {
   const workspaceContext = resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById);
   const { claimState, motion, account, company, prospect } = workspaceContext;
   const ageDays = calculateAgeDays(observation.observedAt);
@@ -296,6 +314,16 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
     observation.observedAt,
     prospect?.name ?? observation.actorName ?? "this person",
   );
+  if (
+    claimState === "unclaimed"
+    && options.backgroundIdentityResolutionAvailable === true
+    && needsInboundIdentityResolution(observation)
+  ) {
+    triage = buildBackgroundIdentityResolutionWaitingState(
+      observation,
+      prospect?.name ?? observation.actorName ?? "this person",
+    );
+  }
   if (claimState === "unclaimed" && shouldEscalateUnclaimedReviewItem(observation, triage)) {
     triage = buildNeedsClaimReviewState(observation, triage, prospect?.name ?? observation.actorName ?? "this person");
   }
@@ -424,6 +452,46 @@ function buildReviewItem(observation, motions, companiesById, prospectContextByI
 }
 
 /**
+ * When Exo already has the managed Gmail + LinkedIn connector path needed to
+ * resolve an email-first sender, this item should wait in background instead of
+ * surfacing as fake claim/reply work for the operator.
+ *
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {string} actorName
+ */
+function buildBackgroundIdentityResolutionWaitingState(observation, actorName) {
+  const status = normalizeNullableString(observation.identityResolutionStatus);
+  if (status === "blocked") {
+    return {
+      category: "global_intake",
+      priority: "low",
+      state: "waiting",
+      whyItMatters: "Exo still needs a governed LinkedIn identity for this email-first sender, and the background connector path is currently blocked.",
+      recommendedAction: `No operator claim or reply action for ${actorName} yet. Exo must clear the background identity-resolution blocker first.`,
+      decisionOptions: [],
+    };
+  }
+  if (status === "no_match") {
+    return {
+      category: "global_intake",
+      priority: "low",
+      state: "waiting",
+      whyItMatters: "Exo could not match this email-first sender confidently yet, so it is retrying through the managed Gmail and LinkedIn connectors.",
+      recommendedAction: `No operator claim or reply action for ${actorName} yet. Exo will retry the background identity resolution first.`,
+      decisionOptions: [],
+    };
+  }
+  return {
+    category: "global_intake",
+    priority: "low",
+    state: "waiting",
+    whyItMatters: "Exo is already resolving this email-first sender through the managed Gmail and LinkedIn connectors before claim or reply unlocks.",
+    recommendedAction: `No operator action for ${actorName} yet. Wait for Exo to finish the background identity resolution before claiming or replying here.`,
+    decisionOptions: [],
+  };
+}
+
+/**
  * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
  * @param {ReturnType<typeof classifyReviewObservation>} triage
  * @param {string} actorName
@@ -467,6 +535,9 @@ function shouldEscalateUnclaimedReviewItem(observation, triage) {
     return false;
   }
   if (observation.kind === "connection_request_received") {
+    return false;
+  }
+  if (observation.kind === "connection_request_accept_requested") {
     return false;
   }
   if (observation.kind === "connection_request_accepted") {
@@ -725,6 +796,15 @@ function classifyReviewObservation(observation, ageDays, observedAt, actorName) 
         whyItMatters: "A previously visible inbound connection request left the received-invitations list. The operator or the requester changed its state, and Exo needs that reconciled.",
         recommendedAction: `Review whether ${actorName}'s inbound connection request was accepted, declined, withdrawn, or otherwise resolved, then update the governed branch accordingly.`,
         decisionOptions: ["accepted", "declined", "other"]
+      };
+    case "connection_request_accept_requested":
+      return {
+        category: "accepted_invite",
+        priority: "low",
+        state: "accept_queued",
+        whyItMatters: "The operator already approved this invite. The live LinkedIn accept is queued for the agent.",
+        recommendedAction: `Acceptance queued for ${actorName} — the agent will accept the invite on LinkedIn.`,
+        decisionOptions: []
       };
     case "connection_request_accepted":
       return {

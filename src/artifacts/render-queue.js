@@ -37,11 +37,7 @@ export function renderQueuePage(model, meta = {}) {
   const body =
     `<div class="op-wrap feed">` +
     renderIntro(model, oldestWait, runtime) +
-    renderAgentRuntimeBar(runtime, {
-      side: agentStatusSide(agentStatus, meta),
-      forceOpen: agentStatus?.state === "blocked",
-    }) +
-    renderAgentStatusStrip(agentStatus) +
+    renderQueueRuntimePanel(runtime, agentStatus, meta) +
     renderQueueTabs(model, agentStatus, oldestWait, meta) +
     renderFooter(model) +
     `</div>`;
@@ -119,22 +115,54 @@ const AGENT_STATE_TONE = {
 };
 
 /**
+ * Queue page runtime: one panel, two rows. The disclosure bar stays the first
+ * row and the status strip becomes the second row inside the same framed shell.
+ *
+ * @param {import("../core/build-operator-view.js").OperatorAgentRuntime | null | undefined} runtime
+ * @param {any} status
+ * @param {{ generatedAt?: string }} [meta]
+ */
+function renderQueueRuntimePanel(runtime, status, meta = {}) {
+  if (!runtime && (!status || typeof status !== "object")) return "";
+  const runtimeBar = runtime
+    ? renderAgentRuntimeBar(runtime, {
+        side: agentStatusSide(status, meta),
+        forceOpen: status?.state === "blocked",
+        embedded: true,
+      })
+    : "";
+  const strip = renderAgentStatusStrip(status, { embedded: true });
+  return (
+    `<section class="op-sec queue-runtime-panel" data-sec="agent-status">` +
+    runtimeBar +
+    strip +
+    `</section>`
+  );
+}
+
+/**
  * One-row strip: current work / backlog / throughput, plus a partial-reason
  * cell while a pass is parked mid-drain. Replaces the old two-row panel grid.
  *
  * @param {any} status
+ * @param {{ embedded?: boolean }} [options]
  */
-function renderAgentStatusStrip(status) {
+function renderAgentStatusStrip(status, options = {}) {
   if (!status || typeof status !== "object") return "";
   const partial = Boolean(status.partial?.active);
-  return (
-    `<section class="op-sec" data-sec="agent-status">` +
+  const strip =
     `<div class="ws-strip${partial ? " has-partial" : ""}">` +
     renderCurrentWorkCell(status) +
     renderBacklogCell(status) +
     renderThroughputCell(status) +
     (partial ? renderPartialCell(status) : "") +
-    `</div>` +
+    `</div>`;
+  if (options.embedded) {
+    return strip;
+  }
+  return (
+    `<section class="op-sec" data-sec="agent-status">` +
+    strip +
     `</section>`
   );
 }

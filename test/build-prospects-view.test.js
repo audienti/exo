@@ -261,3 +261,44 @@ test("buildProspectsViewModel filters prospects by case-insensitive multi-field 
     totalCompanies: 2,
   });
 });
+
+test("buildProspectsViewModel carries owner labels from motion people and backlog companies", () => {
+  const model = buildProspectsViewModel({
+    prospectPrepLanes: [{
+      key: "selected",
+      items: [buildRawProspect({
+        prospectId: "prospect-1",
+        name: "Anthony Rose",
+        companyName: "The Pitch",
+        motionName: "transition-inbound-backlog",
+      })],
+    }],
+    engagementLanes: [],
+    motionDetails: [{
+      motionId: "motion-1",
+      motionName: "transition-inbound-backlog",
+      motionStatus: "active",
+      premise: { statement: "Reconcile transition relationships.", status: "defined" },
+      signals: [],
+      companies: [],
+      backlogCompanies: [{
+        companyId: "company-1",
+        companyName: "The Pitch",
+        websiteUrl: "https://thepitch.uk/",
+        executionIdentity: {
+          user: {
+            id: "user-1",
+            label: "william-main",
+          },
+        },
+      }],
+      people: [{
+        prospectId: "prospect-1",
+        ownerLabel: "william-main",
+      }],
+    }],
+    now: "2026-06-05T13:00:00Z",
+  });
+
+  assert.equal(model.details[0]?.owner, "william-main");
+});
