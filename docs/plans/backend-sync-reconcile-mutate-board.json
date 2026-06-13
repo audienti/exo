@@ -29,7 +29,7 @@
   "board": {
     "status": "active",
     "controller": "codex",
-    "concurrencyCap": 1,
+    "concurrencyCap": 2,
     "worktreeRoot": ".worktrees",
     "models": {
       "fast": "inherit",
@@ -41,7 +41,7 @@
       "commit": "a719092aaba2aae0cbf7c8f3b81f8020ce5d0d04",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T11:49:58.000Z"
+    "updatedAt": "2026-06-13T12:01:35.000Z"
   },
   "tasks": [
     {
@@ -123,7 +123,7 @@
     {
       "id": "T3",
       "title": "Record mutation reconciliation debt",
-      "status": "ready",
+      "status": "done",
       "priority": 90,
       "dependsOn": [
         "T2"
@@ -148,11 +148,16 @@
         "npm test -- test/action-result.test.js test/connection-request-reconciliation.test.js",
         "git diff --check"
       ],
-      "outputs": [],
+      "outputs": [
+        "Added mutation reconciliation metadata for connection_request:sent, withdraw_connection:sent, accept_connection:accepted, decline_connection:declined, and send_email:sent.",
+        "Persisted reconciliation metadata on prospect-backed activity event payloads.",
+        "Kept connection-request mutation decisions owned by src/core/connection-request-reconciliation.js.",
+        "Marked email sends as locally recorded but pending external Gmail sent-mail proof."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "5a91cb83ef7f64796467746de1a636c42bb7e735",
+      "notes": "Verification passed: npm test -- test/action-result.test.js test/connection-request-reconciliation.test.js, git diff --check, npm test. Raised concurrency cap to 2 for independent T4/T5 follow-up work."
     },
     {
       "id": "T4",
