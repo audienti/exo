@@ -3,6 +3,8 @@
 import { browserProfileCapabilitySchema } from "../schema/browser-profile.js";
 import { userSchema } from "../schema/user.js";
 import { inboundSyncPlanModeSchema, inboundSyncRunStatusSchema, inboundSurfaceStateSchema } from "../schema/inbound.js";
+import { CAPABILITY_SEAM_STATES, buildCapabilitySeamResult } from "./capability-seam-contract.js";
+import { findBackendCapability } from "../lib/backend-capability-registry.js";
 import { findInboundSurfaceDefinition, listInboundSurfaceCatalog } from "../lib/inbound-surface-catalog.js";
 import { classifyWorkingHoursWindow } from "./working-hours.js";
 
@@ -800,6 +802,7 @@ function buildSurfaceSyncPlan(userId, account, surface, input) {
     ? "disabled"
     : freshness?.reason ?? "fresh";
   const freshnessDueAt = freshness?.dueAt ?? null;
+  const seamStatus = buildInboundSurfaceSeamStatus(surface, { freshnessState });
 
   return {
     key: surface.key,
@@ -813,6 +816,7 @@ function buildSurfaceSyncPlan(userId, account, surface, input) {
     catalogOrder: surface.catalogOrder,
     freshnessState,
     freshnessDueAt,
+    seamStatus,
     lastRunStatus: surface.lastRunStatus,
     lastSyncedAt: surface.lastSyncedAt,
     lastObservedAt: surface.lastObservedAt,
@@ -855,6 +859,100 @@ function buildSurfaceSyncPlan(userId, account, surface, input) {
       '--error "<why the surface could not be checked>"'
     ].join(" ")
   };
+}
+
+/**
+ * @param {Record<string, any>} surface
+ * @param {{ freshnessState?: string | null }} [options]
+ */
+export function buildInboundSurfaceSeamStatus(surface, options = {}) {
+  const surfaceKey = normalizeNullableString(surface.key ?? surface.surfaceKey);
+  if (!surfaceKey) return null;
+
+  const row = findBackendCapability(surfaceKey);
+  if (!row) return null;
+
+  const freshnessState = normalizeNullableString(options.freshnessState)
+    ?? deriveSurfaceFreshnessState(surface);
+  const state = mapFreshnessStateToSeamState(freshnessState);
+
+  return buildCapabilitySeamResult({
+    row,
+    state,
+    reason: buildSurfaceSeamReason(surfaceKey, freshnessState),
+    checkedAt: normalizeNullableString(surface.lastSyncedAt ?? surface.lastObservedAt),
+    missingProofSurfaces: state === CAPABILITY_SEAM_STATES.MISSING_PROOF ? row.proofSurfaces : [],
+    debt: {
+      kind: "inbound_surface_sync_review",
+      surfaceKey,
+      freshnessState,
+      lastRunStatus: normalizeNullableString(surface.lastRunStatus),
+      lastReconcileReason: normalizeNullableString(surface.lastReconcileReason),
+      lastExhaustionReason: normalizeNullableString(surface.lastExhaustionReason),
+    },
+  });
+}
+
+/**
+ * @param {Record<string, any>} surface
+ */
+function deriveSurfaceFreshnessState(surface) {
+  if (surface.enabled === false) return "disabled";
+  if (isAutonomousSurfaceUnsupported(surface)) return "unsupported";
+  if (surface.lastRunStatus === "never") return "never";
+  if (surface.lastRunStatus === "failed") return "failed";
+  if (surface.lastRunStatus === "warning") return "warning";
+  return "fresh";
+}
+
+/**
+ * @param {string | null} freshnessState
+ */
+function mapFreshnessStateToSeamState(freshnessState) {
+  switch (freshnessState) {
+    case "fresh":
+    case "checked":
+      return CAPABILITY_SEAM_STATES.QUIET;
+    case "never":
+    case "unchecked":
+      return CAPABILITY_SEAM_STATES.PENDING_PROOF;
+    case "warning":
+    case "stale":
+      return CAPABILITY_SEAM_STATES.STALE;
+    case "failed":
+      return CAPABILITY_SEAM_STATES.CONTRADICTED;
+    case "unsupported":
+    case "disabled":
+      return CAPABILITY_SEAM_STATES.UNSUPPORTED;
+    default:
+      return CAPABILITY_SEAM_STATES.PENDING_PROOF;
+  }
+}
+
+/**
+ * @param {string} surfaceKey
+ * @param {string | null} freshnessState
+ */
+function buildSurfaceSeamReason(surfaceKey, freshnessState) {
+  switch (freshnessState) {
+    case "fresh":
+    case "checked":
+      return `${surfaceKey}_truth_quiet`;
+    case "never":
+    case "unchecked":
+      return `${surfaceKey}_truth_never_checked`;
+    case "warning":
+      return `${surfaceKey}_truth_partial_warning`;
+    case "stale":
+      return `${surfaceKey}_truth_stale`;
+    case "failed":
+      return `${surfaceKey}_truth_check_failed`;
+    case "unsupported":
+    case "disabled":
+      return `${surfaceKey}_truth_unsupported`;
+    default:
+      return `${surfaceKey}_truth_pending`;
+  }
 }
 
 /**

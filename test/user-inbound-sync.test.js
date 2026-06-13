@@ -8,6 +8,7 @@ import {
   INBOUND_SYNC_STALE_MS,
   buildInboundAutomationHealthWarnings,
   buildInboundAutomationStatus,
+  buildUserInboundSyncPlan,
   classifyInboundSurfaceFreshness,
 } from "../src/core/user-inbound-sync.js";
 
@@ -280,6 +281,54 @@ test("buildInboundAutomationStatus reports fresh surfaces, due surfaces, and the
       surfaceLabel: "Received Invitations",
     },
   });
+});
+
+test("buildUserInboundSyncPlan exposes owner seam status for stale Gmail truth surfaces", () => {
+  const plan = buildUserInboundSyncPlan({
+    id: "user-1",
+    createdAt: "2026-06-03T00:00:00.000Z",
+    updatedAt: "2026-06-03T00:00:00.000Z",
+    label: "William",
+    owner: "William",
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-03T00:00:00.000Z",
+        updatedAt: "2026-06-03T00:00:00.000Z",
+        capability: "gmail",
+        handle: "omalab-main",
+        label: "Gmail",
+        sourceType: "harness-connection",
+        harnessConnectionId: "harness-gmail",
+        preferred: true,
+        inboundSync: {
+          surfaces: [
+            {
+              surfaceKey: "gmail-inbox-threads",
+              enabled: true,
+              lastRunStatus: "success",
+              lastSyncedAt: "2026-06-03T04:00:00.000Z",
+              lastObservedAt: "2026-06-03T04:00:00.000Z",
+              lastItemCount: 0,
+              lastCaptureCompleteness: "complete",
+              lastExhaustionStatus: "complete",
+            },
+          ],
+        },
+      },
+    ],
+  }, {
+    mode: "quick",
+    now: "2026-06-03T12:00:00.000Z",
+  });
+
+  const surface = plan.accounts[0].phases[0].surfaces[0];
+  assert.equal(surface.key, "gmail-inbox-threads");
+  assert.equal(surface.freshnessState, "stale");
+  assert.equal(surface.seamStatus.owner, "src/core/gmail-thread-reconciliation.js");
+  assert.equal(surface.seamStatus.state, "stale");
+  assert.equal(surface.seamStatus.requiresAction, true);
+  assert.deepEqual(surface.seamStatus.proofSurfaces, ["gmail-inbox-threads"]);
 });
 
 test("buildInboundAutomationStatus does not keep unsupported or bounded surfaces due immediately", () => {

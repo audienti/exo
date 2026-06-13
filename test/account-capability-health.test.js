@@ -138,6 +138,9 @@ test("buildAccountCapabilityHealth reports HubSpot with no backend surfaces as u
       },
     ],
   );
+  assert.equal(view.accounts[0].seamStatus.owner, "src/core/hubspot-capability-reconciliation.js");
+  assert.equal(view.accounts[0].seamStatus.state, "unsupported");
+  assert.equal(view.accounts[0].seamStatus.supportStatus, "unsupported");
 });
 
 test("buildAccountCapabilityHealth treats explicitly disabled surfaces as non-unhealthy", () => {

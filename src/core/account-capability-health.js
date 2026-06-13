@@ -1,9 +1,11 @@
 // @ts-check
 
 import { listInboundSurfaceCatalog } from "../lib/inbound-surface-catalog.js";
+import { findBackendCapability } from "../lib/backend-capability-registry.js";
 import { inboundSurfaceStateSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
-import { classifyInboundSurfaceFreshness } from "./user-inbound-sync.js";
+import { buildInboundSurfaceSeamStatus, classifyInboundSurfaceFreshness } from "./user-inbound-sync.js";
+import { buildHubSpotCapabilityReconciliation } from "./hubspot-capability-reconciliation.js";
 
 /** @typedef {ReturnType<typeof listInboundSurfaceCatalog>[number]} InboundSurfaceDefinition */
 
@@ -71,11 +73,13 @@ export function buildAccountCapabilityHealth(rawUser, options = {}) {
  */
 function buildConnectedAccountHealth(account, now, definitions) {
   if (definitions.length === 0) {
+    const seamStatus = buildAccountCapabilitySeamStatus(account);
     return buildAccountHealthResult(account, {
       status: "unsupported",
       healthy: true,
       reason: "No backend inbound surfaces are defined for this account capability.",
       surfaces: [],
+      seamStatus,
     });
   }
 
@@ -114,7 +118,7 @@ function buildConnectedAccountHealth(account, now, definitions) {
 
 /**
  * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
- * @param {{ status: string, healthy: boolean, reason: string, surfaces: ReturnType<typeof buildSurfaceHealth>[] }} health
+ * @param {{ status: string, healthy: boolean, reason: string, surfaces: ReturnType<typeof buildSurfaceHealth>[], seamStatus?: any }} health
  */
 function buildAccountHealthResult(account, health) {
   const unhealthySurfaceCount = health.surfaces.filter((surface) => UNHEALTHY_SURFACE_STATUSES.has(surface.status)).length;
@@ -133,6 +137,7 @@ function buildAccountHealthResult(account, health) {
     enabledSurfaceCount: health.surfaces.filter((surface) => surface.enabled).length,
     disabledSurfaceCount: health.surfaces.filter((surface) => surface.status === "disabled").length,
     unhealthySurfaceCount,
+    seamStatus: health.seamStatus ?? null,
     surfaces: health.surfaces,
   };
 }
@@ -159,30 +164,30 @@ function buildSurfaceHealth(definition, state, input) {
   };
 
   if (!state.enabled) {
-    return {
+    return withSurfaceSeamStatus({
       ...base,
       status: "disabled",
       healthy: true,
       reason: "This backend inbound surface is disabled by account policy.",
-    };
+    });
   }
 
   if (definition.autonomousBackgroundRetrieval === false || isBackendSurfaceUnsupported(state)) {
-    return {
+    return withSurfaceSeamStatus({
       ...base,
       status: "unsupported",
       healthy: true,
       reason: "This backend inbound surface is not currently supported for autonomous checking.",
-    };
+    });
   }
 
   if (state.lastRunStatus === "failed") {
-    return {
+    return withSurfaceSeamStatus({
       ...base,
       status: "failed",
       healthy: false,
       reason: "The last backend check failed.",
-    };
+    });
   }
 
   const freshness = classifyInboundSurfaceFreshness({
@@ -197,20 +202,56 @@ function buildSurfaceHealth(definition, state, input) {
       : freshness.reason === "failed"
         ? "failed"
         : "stale";
-    return {
+    return withSurfaceSeamStatus({
       ...base,
       status,
       healthy: false,
       reason: describeSurfaceFreshness(status, freshness.reason),
       dueAt: freshness.dueAt,
-    };
+    });
   }
 
-  return {
+  return withSurfaceSeamStatus({
     ...base,
     status: "checked",
     healthy: true,
     reason: "This backend inbound surface has fresh checked facts.",
+  });
+}
+
+/** @param {ReturnType<typeof buildSurfaceHealth>} surface */
+function withSurfaceSeamStatus(surface) {
+  return {
+    ...surface,
+    seamStatus: buildInboundSurfaceSeamStatus(surface, {
+      freshnessState: surface.status,
+    }),
+  };
+}
+
+/**
+ * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
+ */
+function buildAccountCapabilitySeamStatus(account) {
+  if (account.capability !== "hubspot") {
+    return null;
+  }
+
+  const row = findBackendCapability("hubspot");
+  const reconciliation = buildHubSpotCapabilityReconciliation({
+    row,
+    accounts: [account],
+    backendInboundSurfaces: [],
+    runtimeProbeFacts: [],
+  });
+  const accountReconciliation = reconciliation.accounts[0];
+  if (!accountReconciliation) {
+    return null;
+  }
+
+  return {
+    ...accountReconciliation.seam,
+    supportStatus: accountReconciliation.supportStatus,
   };
 }
 

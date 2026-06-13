@@ -1691,6 +1691,9 @@ test("buildAgentQueue emits a quick inbound sync task when open cues point at st
   assert.equal(task.mode, "quick");
   assert.equal(task.reason, "sync_hint");
   assert.deepEqual(task.surfaceKeys, ["gmail-inbox-threads"]);
+  assert.equal(task.surfaceSeams[0].owner, "src/core/gmail-thread-reconciliation.js");
+  assert.equal(task.surfaceSeams[0].state, "stale");
+  assert.equal(task.surfaceSeams[0].requiresAction, true);
   assert.match(task.contractCommand, /exo inbound sync gmail-live user-1 --account account-1 --mode quick --json/);
 });
 

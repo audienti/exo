@@ -71,6 +71,7 @@ import {
 } from "./select-next-draft-surface.js";
 import {
   buildUserInboundSyncView,
+  buildInboundSurfaceSeamStatus,
   classifyInboundRetrievalWindow,
   classifyInboundSurfaceFreshness,
   computeInboundAutomationNextDueAt,
@@ -256,6 +257,7 @@ export function buildAgentQueue(input) {
             cueCount: 0,
             surfaceKeys: [scheduledSurface.key],
             surfaceLabels: [scheduledSurface.label],
+            surfaceSeams: buildSurfaceSeamsForQueue(account, [scheduledSurface.key], now),
             dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
               ? retrievalWindowStatus.nextOpenAt
               : nextDueAt,
@@ -298,6 +300,9 @@ export function buildAgentQueue(input) {
           cueCount: surfaceCueCount,
           surfaceKeys: [surfaceKey],
           surfaceLabels: [cueLabelForAccount(account, surfaceKey)],
+          surfaceSeams: buildSurfaceSeamsForQueue(account, [surfaceKey], now, {
+            fallbackFreshnessState: staleSurface?.freshness?.reason ?? "warning",
+          }),
           dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
             ? retrievalWindowStatus.nextOpenAt
             : oldestDueAt,
@@ -338,6 +343,9 @@ export function buildAgentQueue(input) {
           cueCount: surfaceCueCount,
           surfaceKeys: [surfaceKey],
           surfaceLabels: [cueLabelForAccount(account, surfaceKey)],
+          surfaceSeams: buildSurfaceSeamsForQueue(account, [surfaceKey], now, {
+            fallbackFreshnessState: staleSurface?.freshness?.reason ?? "stale",
+          }),
           dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
             ? retrievalWindowStatus.nextOpenAt
             : oldestDueAt,
@@ -1412,6 +1420,7 @@ function buildWriteDraftTask({ motion, account, prospect, surface, reason, dueAt
  *   cueCount: number,
  *   surfaceKeys: string[],
  *   surfaceLabels: string[],
+ *   surfaceSeams?: any[],
  *   dueAt: string | null,
  *   resumeCursor?: string | null,
  *   resumeStartOffset?: number | null,
@@ -1430,6 +1439,7 @@ function buildInboundSyncTask({
   cueCount,
   surfaceKeys,
   surfaceLabels,
+  surfaceSeams = [],
   dueAt,
   resumeCursor = null,
   resumeStartOffset = null,
@@ -1473,6 +1483,7 @@ function buildInboundSyncTask({
     surface: surfaceKeys[0] ?? null,
     surfaceKeys,
     surfaceLabels,
+    surfaceSeams,
     mode,
     resumeCursor,
     resumeStartOffset,
@@ -1499,6 +1510,25 @@ function buildInboundSyncTask({
       `exo next --user ${user.id} --json`,
     ],
   };
+}
+
+/**
+ * @param {ReturnType<typeof buildUserInboundSyncView>["accounts"][number]} account
+ * @param {string[]} surfaceKeys
+ * @param {string} now
+ * @param {{ fallbackFreshnessState?: string | null }} [options]
+ */
+function buildSurfaceSeamsForQueue(account, surfaceKeys, now, options = {}) {
+  return surfaceKeys
+    .map((surfaceKey) => {
+      const surface = account.surfaces.find((candidate) => candidate.key === surfaceKey);
+      if (!surface) return null;
+      const freshness = classifyInboundSurfaceFreshness(surface, now);
+      return buildInboundSurfaceSeamStatus(surface, {
+        freshnessState: freshness?.reason ?? options.fallbackFreshnessState ?? null,
+      });
+    })
+    .filter(Boolean);
 }
 
 /**
