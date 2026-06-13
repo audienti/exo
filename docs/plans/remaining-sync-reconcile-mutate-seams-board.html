@@ -139,12 +139,12 @@
     <div class="topline">
       <span class="chip"><b>plan</b>remaining-sync-reconcile-mutate-seams</span>
       <span class="chip"><b>status</b>active</span>
-      <span class="chip"><b>progress</b>7/10</span>
+      <span class="chip"><b>progress</b>8/10</span>
       <span class="chip"><b>controller</b>codex</span>
       <span class="chip"><b>worktrees</b>.worktrees</span>
-      <span class="chip"><b>open messages</b>6</span>
-      <span class="chip"><b>board updated</b>2026-06-13T13:23:24.000Z</span>
-      <span class="chip"><b>rendered</b>2026-06-13T13:24:47Z</span>
+      <span class="chip"><b>open messages</b>0</span>
+      <span class="chip"><b>board updated</b>2026-06-13T13:33:52.000Z</span>
+      <span class="chip"><b>rendered</b>2026-06-13T13:34:16Z</span>
     </div>
     <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
   </header>
@@ -158,12 +158,12 @@
         </div>
         <p><b>Running or verifying:</b> none</p>
         <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
-        <p><b>Controller note:</b> Service seam lanes T3-T7 are done after controller verification and the full integration suite. T8 is ready as a controller-owned shared integration task.</p>
+        <p><b>Controller note:</b> T8 is done after targeted tests, git diff --check, and npm test. T9 is ready as a controller-owned sync review and agent queue integration task.</p>
       </section>
 
 
       <section class="panel">
-        <h2>Coordination Messages <span class="muted">6 open</span></h2>
+        <h2>Coordination Messages <span class="muted">0 open</span></h2>
         <p class="muted">Controller-mediated messages only. These are context artifacts, not workflow state transitions.</p>
         <div class="messages">
           <article class="message message-interface-note">
@@ -173,7 +173,7 @@
             </div>
             <div class="chips">
               <span class="chip"><b>type</b>interface-note</span>
-              <span class="chip"><b>status</b>open</span>
+              <span class="chip"><b>status</b>resolved</span>
               <span class="chip"><b>from</b>T7</span>
               <span class="chip"><b>to</b>T8</span>
               <span class="chip"><b>created</b>2026-06-13T13:12:05.000Z</span>
@@ -188,7 +188,7 @@
             </div>
             <div class="chips">
               <span class="chip"><b>type</b>interface-note</span>
-              <span class="chip"><b>status</b>open</span>
+              <span class="chip"><b>status</b>resolved</span>
               <span class="chip"><b>from</b>T6</span>
               <span class="chip"><b>to</b>T8</span>
               <span class="chip"><b>created</b>2026-06-13T13:13:13.000Z</span>
@@ -203,7 +203,7 @@
             </div>
             <div class="chips">
               <span class="chip"><b>type</b>interface-note</span>
-              <span class="chip"><b>status</b>open</span>
+              <span class="chip"><b>status</b>resolved</span>
               <span class="chip"><b>from</b>T4</span>
               <span class="chip"><b>to</b>T8</span>
               <span class="chip"><b>created</b>2026-06-13T13:15:16.000Z</span>
@@ -218,7 +218,7 @@
             </div>
             <div class="chips">
               <span class="chip"><b>type</b>interface-note</span>
-              <span class="chip"><b>status</b>open</span>
+              <span class="chip"><b>status</b>resolved</span>
               <span class="chip"><b>from</b>T4</span>
               <span class="chip"><b>to</b>T8</span>
               <span class="chip"><b>created</b>2026-06-13T13:15:16.000Z</span>
@@ -233,7 +233,7 @@
             </div>
             <div class="chips">
               <span class="chip"><b>type</b>interface-note</span>
-              <span class="chip"><b>status</b>open</span>
+              <span class="chip"><b>status</b>acknowledged</span>
               <span class="chip"><b>from</b>T3</span>
               <span class="chip"><b>to</b>T8, T9</span>
               <span class="chip"><b>created</b>2026-06-13T13:15:35.000Z</span>
@@ -248,7 +248,7 @@
             </div>
             <div class="chips">
               <span class="chip"><b>type</b>interface-note</span>
-              <span class="chip"><b>status</b>open</span>
+              <span class="chip"><b>status</b>resolved</span>
               <span class="chip"><b>from</b>T5</span>
               <span class="chip"><b>to</b>T8</span>
               <span class="chip"><b>created</b>2026-06-13T13:16:36.000Z</span>
@@ -261,7 +261,7 @@
   <main class="board">
 
           <section class="column">
-            <h2>Backlog <span>2</span></h2>
+            <h2>Backlog <span>1</span></h2>
 
       <article class="task task-backlog">
         <header>
@@ -272,15 +272,6 @@
         <div class="field"><div class="label">Reason</div><div>Waiting on T9</div></div><div class="field"><div class="label">Depends on</div><div>T9</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li><li>docs/plans/remaining-sync-reconcile-mutate-seams-board.html</li><li>docs/wip/remaining-sync-reconcile-mutate-seams.md</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test</li><li>git diff --check</li><li>python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/validate_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li><li>python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/render_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All preceding tasks are done or intentionally deferred with reason.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board validates and HTML snapshot renders.</li><li>board.status is complete only when acceptance criteria pass.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Final verification and board closeout.</div></div>
       </article>
 
-      <article class="task task-backlog">
-        <header>
-          <div class="task-id">T9</div>
-          <h3>Integrate seam status into sync review and agent queue</h3>
-        </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>60</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T8</div></div><div class="field"><div class="label">Depends on</div><div>T8</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/build-agent-queue.js</li><li>src/core/inbound-sync-run.js</li><li>src/core/user-inbound-sync.js</li><li>src/core/account-capability-health.js</li><li>test/agent-queue.test.js</li><li>test/inbound-sync.test.js</li><li>test/user-inbound-sync.test.js</li><li>test/account-capability-health.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-queue.test.js test/inbound-sync.test.js test/user-inbound-sync.test.js test/account-capability-health.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Sync review and queue tests cover at least one non-connection seam reading owner output.</li><li>Unchecked, unsupported, missing-proof, and stale states remain distinct in account health.</li><li>Queue work is not duplicated when owner state is quiet.</li><li>Full suite is green before final closeout.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Shared integration gate. Run full suite after this task.</div></div>
-      </article>
-
           </section>
 
           <section class="column">
@@ -288,11 +279,11 @@
 
       <article class="task task-ready">
         <header>
-          <div class="task-id">T8</div>
-          <h3>Integrate seam owners into mutation reconciliation debt</h3>
+          <div class="task-id">T9</div>
+          <h3>Integrate seam status into sync review and agent queue</h3>
         </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>65</span></div>
-        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T3, T4, T5, T6, T7</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/record-action-result.js</li><li>src/lib/backend-capability-registry.js</li><li>test/action-result.test.js</li><li>test/backend-capability-registry.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/action-result.test.js test/backend-capability-registry.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>send_email, send_direct_message, in_mail_message, follow, unfollow, profile_view, and public engagement actions create owner-shaped reconciliation metadata where applicable.</li><li>Unsupported proof surfaces produce explicit missing-proof or unsupported debt.</li><li>Connection-request mutation reconciliation tests remain green.</li><li>No live external mutation is performed.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Shared integration gate. Do not dispatch in parallel with other shared-file tasks.</div></div>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>60</span></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T8</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/build-agent-queue.js</li><li>src/core/inbound-sync-run.js</li><li>src/core/user-inbound-sync.js</li><li>src/core/account-capability-health.js</li><li>test/agent-queue.test.js</li><li>test/inbound-sync.test.js</li><li>test/user-inbound-sync.test.js</li><li>test/account-capability-health.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-queue.test.js test/inbound-sync.test.js test/user-inbound-sync.test.js test/account-capability-health.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Sync review and queue tests cover at least one non-connection seam reading owner output.</li><li>Unchecked, unsupported, missing-proof, and stale states remain distinct in account health.</li><li>Queue work is not duplicated when owner state is quiet.</li><li>Full suite is green before final closeout.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Shared integration gate. Run full suite after this task.</div></div>
       </article>
 
           </section>
@@ -308,7 +299,16 @@
           </section>
 
           <section class="column">
-            <h2>Done <span>7</span></h2>
+            <h2>Done <span>8</span></h2>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T8</div>
+          <h3>Integrate seam owners into mutation reconciliation debt</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>65</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T3, T4, T5, T6, T7</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/record-action-result.js</li><li>src/lib/backend-capability-registry.js</li><li>test/action-result.test.js</li><li>test/backend-capability-registry.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/action-result.test.js test/backend-capability-registry.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>send_email, send_direct_message, in_mail_message, follow, unfollow, profile_view, and public engagement actions create owner-shaped reconciliation metadata where applicable.</li><li>Unsupported proof surfaces produce explicit missing-proof or unsupported debt.</li><li>Connection-request mutation reconciliation tests remain green.</li><li>No live external mutation is performed.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Verification passed: npm test -- test/action-result.test.js test/backend-capability-registry.test.js, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>record-action-result delegates send_email, send_direct_message, in_mail_message, follow, unfollow, profile_view, and public engagement mutation debt to service seam owners.</li><li>backend capability registry points Gmail, LinkedIn private messaging, social graph, public engagement, InMail, and HubSpot rows at their new owner modules.</li><li>Unsupported or absent proof surfaces now produce explicit missing-proof metadata instead of checked or null reconciliation state.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>9a3a363af90d7fddaa8b61c7d85e3e1cf02caaec</div></div>
+      </article>
 
       <article class="task task-done">
         <header>
