@@ -36,7 +36,7 @@
     "viewer": {
       "htmlPath": "docs/plans/remaining-sync-reconcile-mutate-seams-board.html"
     },
-    "parallelismNote": "All five service seam lanes returned from native subagents. Controller verification is running before any lane is marked done.",
+    "parallelismNote": "Service seam lanes T3-T7 are done after controller verification and the full integration suite. T8 is ready as a controller-owned shared integration task.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -47,7 +47,7 @@
       "commit": "2acfed988706e8c3f97ea6f08baa84e8bf2d361f",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T13:16:36.000Z"
+    "updatedAt": "2026-06-13T13:23:24.000Z"
   },
   "tasks": [
     {
@@ -131,7 +131,7 @@
     {
       "id": "T3",
       "title": "Add Gmail email and thread seam owner",
-      "status": "verify",
+      "status": "done",
       "priority": 90,
       "dependsOn": [
         "T1",
@@ -158,7 +158,7 @@
       ],
       "worktree": "native-subagent:019ec116-8a69-77c2-9a1c-0d46f59bb9e1",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:15:35.000Z",
+      "updatedAt": "2026-06-13T13:23:24.000Z",
       "resolvedModel": "inherit",
       "outputs": [
         "Worker added src/core/email-send-reconciliation.js.",
@@ -168,13 +168,13 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-8a69-77c2-9a1c-0d46f59bb9e1 (Sartre). Controller verification pending."
+      "commit": "b00c6ea97ee7da3aafcb6366b5418b5b5260cc78",
+      "notes": "Dispatched to native subagent 019ec116-8a69-77c2-9a1c-0d46f59bb9e1 (Sartre). Verification passed: targeted service-lane tests, git diff --check, npm test."
     },
     {
       "id": "T4",
       "title": "Add LinkedIn private messaging and InMail seam owner",
-      "status": "verify",
+      "status": "done",
       "priority": 85,
       "dependsOn": [
         "T1",
@@ -201,7 +201,7 @@
       ],
       "worktree": "native-subagent:019ec116-8b7e-7791-8839-98fe3b48f5ec",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:15:16.000Z",
+      "updatedAt": "2026-06-13T13:23:24.000Z",
       "resolvedModel": "inherit",
       "outputs": [
         "Worker added src/core/linkedin-private-message-reconciliation.js.",
@@ -211,13 +211,13 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-8b7e-7791-8839-98fe3b48f5ec (Newton). Controller verification pending."
+      "commit": "22949da853f9c7e71c8e5d156041dc6fab238c9b",
+      "notes": "Dispatched to native subagent 019ec116-8b7e-7791-8839-98fe3b48f5ec (Newton). Verification passed: targeted service-lane tests, git diff --check, npm test."
     },
     {
       "id": "T5",
       "title": "Add LinkedIn social graph and profile-view seam owner",
-      "status": "verify",
+      "status": "done",
       "priority": 80,
       "dependsOn": [
         "T1",
@@ -242,7 +242,7 @@
       ],
       "worktree": "native-subagent:019ec116-8ce4-71f0-89ac-139d6cec3ee6",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:16:36.000Z",
+      "updatedAt": "2026-06-13T13:23:24.000Z",
       "resolvedModel": "inherit",
       "outputs": [
         "Worker added src/core/linkedin-social-graph-reconciliation.js.",
@@ -251,13 +251,13 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-8ce4-71f0-89ac-139d6cec3ee6 (Pascal). Controller verification pending."
+      "commit": "49817a01847f8f0ca05b59a1ebd2f037bfa541db",
+      "notes": "Dispatched to native subagent 019ec116-8ce4-71f0-89ac-139d6cec3ee6 (Pascal). Verification passed: targeted service-lane tests, git diff --check, npm test."
     },
     {
       "id": "T6",
       "title": "Add LinkedIn public engagement seam owner",
-      "status": "verify",
+      "status": "done",
       "priority": 75,
       "dependsOn": [
         "T1",
@@ -282,7 +282,7 @@
       ],
       "worktree": "native-subagent:019ec116-8e83-73e2-89a0-51e69bed71a4",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:13:13.000Z",
+      "updatedAt": "2026-06-13T13:23:24.000Z",
       "resolvedModel": "inherit",
       "outputs": [
         "Worker added src/core/public-engagement-reconciliation.js.",
@@ -291,13 +291,13 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-8e83-73e2-89a0-51e69bed71a4 (Mendel). Controller verification pending."
+      "commit": "0f23c480be0fd15a0d105b9b52f4f53ddb6bdd5a",
+      "notes": "Dispatched to native subagent 019ec116-8e83-73e2-89a0-51e69bed71a4 (Mendel). Verification passed: targeted service-lane tests, git diff --check, npm test."
     },
     {
       "id": "T7",
       "title": "Add HubSpot capability support seam",
-      "status": "verify",
+      "status": "done",
       "priority": 70,
       "dependsOn": [
         "T1",
@@ -322,7 +322,7 @@
       ],
       "worktree": "native-subagent:019ec116-9079-7d03-8cc1-0930e330b910",
       "startedAt": "2026-06-13T13:05:50.000Z",
-      "updatedAt": "2026-06-13T13:12:05.000Z",
+      "updatedAt": "2026-06-13T13:23:24.000Z",
       "resolvedModel": "inherit",
       "outputs": [
         "Worker added src/core/hubspot-capability-reconciliation.js.",
@@ -331,13 +331,13 @@
       ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": "Dispatched to native subagent 019ec116-9079-7d03-8cc1-0930e330b910 (Kepler). Controller verification pending."
+      "commit": "911624100ad43ebaa1fefe1777e712f60759be65",
+      "notes": "Dispatched to native subagent 019ec116-9079-7d03-8cc1-0930e330b910 (Kepler). Verification passed: targeted service-lane tests, git diff --check, npm test."
     },
     {
       "id": "T8",
       "title": "Integrate seam owners into mutation reconciliation debt",
-      "status": "backlog",
+      "status": "ready",
       "priority": 65,
       "dependsOn": [
         "T3",
