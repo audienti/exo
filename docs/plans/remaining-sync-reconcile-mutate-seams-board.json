@@ -36,7 +36,7 @@
     "viewer": {
       "htmlPath": "docs/plans/remaining-sync-reconcile-mutate-seams-board.html"
     },
-    "parallelismNote": "Five independent service seam lanes are ready and can be dispatched in parallel with non-overlapping file ownership.",
+    "parallelismNote": "T3-T7 are running in parallel through native subagents; capacity is fully used at 5/5.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -47,7 +47,7 @@
       "commit": "2acfed988706e8c3f97ea6f08baa84e8bf2d361f",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T13:04:06.000Z"
+    "updatedAt": "2026-06-13T13:05:50.000Z"
   },
   "tasks": [
     {
@@ -131,7 +131,7 @@
     {
       "id": "T3",
       "title": "Add Gmail email and thread seam owner",
-      "status": "ready",
+      "status": "running",
       "priority": 90,
       "dependsOn": [
         "T1",
@@ -156,20 +156,20 @@
         "npm test -- test/email-send-reconciliation.test.js test/gmail-thread-reconciliation.test.js",
         "git diff --check"
       ],
-      "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
+      "worktree": "native-subagent:019ec116-8a69-77c2-9a1c-0d46f59bb9e1",
+      "startedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "resolvedModel": "inherit",
       "outputs": [],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Independent after T2. Owns only Gmail seam files."
+      "notes": "Dispatched to native subagent 019ec116-8a69-77c2-9a1c-0d46f59bb9e1 (Sartre). Owns only Gmail seam files."
     },
     {
       "id": "T4",
       "title": "Add LinkedIn private messaging and InMail seam owner",
-      "status": "ready",
+      "status": "running",
       "priority": 85,
       "dependsOn": [
         "T1",
@@ -194,20 +194,20 @@
         "npm test -- test/linkedin-private-message-reconciliation.test.js test/inmail-reconciliation.test.js",
         "git diff --check"
       ],
-      "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
+      "worktree": "native-subagent:019ec116-8b7e-7791-8839-98fe3b48f5ec",
+      "startedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "resolvedModel": "inherit",
       "outputs": [],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Independent after T2. Owns private-message and InMail seam files."
+      "notes": "Dispatched to native subagent 019ec116-8b7e-7791-8839-98fe3b48f5ec (Newton). Owns private-message and InMail seam files."
     },
     {
       "id": "T5",
       "title": "Add LinkedIn social graph and profile-view seam owner",
-      "status": "ready",
+      "status": "running",
       "priority": 80,
       "dependsOn": [
         "T1",
@@ -230,20 +230,20 @@
         "npm test -- test/linkedin-social-graph-reconciliation.test.js",
         "git diff --check"
       ],
-      "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
+      "worktree": "native-subagent:019ec116-8ce4-71f0-89ac-139d6cec3ee6",
+      "startedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "resolvedModel": "inherit",
       "outputs": [],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Independent after T2. Owns only social graph seam files."
+      "notes": "Dispatched to native subagent 019ec116-8ce4-71f0-89ac-139d6cec3ee6 (Pascal). Owns only social graph seam files."
     },
     {
       "id": "T6",
       "title": "Add LinkedIn public engagement seam owner",
-      "status": "ready",
+      "status": "running",
       "priority": 75,
       "dependsOn": [
         "T1",
@@ -266,20 +266,20 @@
         "npm test -- test/public-engagement-reconciliation.test.js",
         "git diff --check"
       ],
-      "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
+      "worktree": "native-subagent:019ec116-8e83-73e2-89a0-51e69bed71a4",
+      "startedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "resolvedModel": "inherit",
       "outputs": [],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Independent after T2. Owns only public engagement seam files."
+      "notes": "Dispatched to native subagent 019ec116-8e83-73e2-89a0-51e69bed71a4 (Mendel). Owns only public engagement seam files."
     },
     {
       "id": "T7",
       "title": "Add HubSpot capability support seam",
-      "status": "ready",
+      "status": "running",
       "priority": 70,
       "dependsOn": [
         "T1",
@@ -302,15 +302,15 @@
         "npm test -- test/hubspot-capability-reconciliation.test.js",
         "git diff --check"
       ],
-      "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
+      "worktree": "native-subagent:019ec116-9079-7d03-8cc1-0930e330b910",
+      "startedAt": "2026-06-13T13:05:50.000Z",
+      "updatedAt": "2026-06-13T13:05:50.000Z",
+      "resolvedModel": "inherit",
       "outputs": [],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Independent after T2. Owns only HubSpot support seam files."
+      "notes": "Dispatched to native subagent 019ec116-9079-7d03-8cc1-0930e330b910 (Kepler). Owns only HubSpot support seam files."
     },
     {
       "id": "T8",
