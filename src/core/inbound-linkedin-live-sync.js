@@ -354,6 +354,7 @@ const linkedinLiveCaptureOutputSchema = {
  *   codexCli?: string | null,
  *   codexHome?: string | null,
  *   claudeCli?: string | null
+ *   allowDirectUnipileHttp?: boolean | null,
  *   unipileHttpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null
  *   unipileHttpPostImpl?: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null
  * }} [options]
@@ -406,20 +407,22 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
       limit,
       mode
     });
-    const directUnipileCapture = await maybeCaptureLinkedinQuickSurfacesThroughUnipile({
-      account,
-      connector,
-      mode,
-      limit,
-      maxPages,
-      pageSize,
-      resumeCursor,
-      resumeStartOffset,
-      surfaceKeys: requestedSurfaceKeys,
-      codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
-      httpGetImpl: options.unipileHttpGetImpl ?? null,
-      httpPostImpl: options.unipileHttpPostImpl ?? null,
-    });
+    const directUnipileCapture = options.allowDirectUnipileHttp === true
+      ? await maybeCaptureLinkedinQuickSurfacesThroughUnipile({
+          account,
+          connector,
+          mode,
+          limit,
+          maxPages,
+          pageSize,
+          resumeCursor,
+          resumeStartOffset,
+          surfaceKeys: requestedSurfaceKeys,
+          codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
+          httpGetImpl: options.unipileHttpGetImpl ?? null,
+          httpPostImpl: options.unipileHttpPostImpl ?? null,
+        })
+      : null;
     if (directUnipileCapture) {
       rawCapture = directUnipileCapture;
     } else {

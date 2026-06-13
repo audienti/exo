@@ -599,6 +599,7 @@ Rules:
     .option("--page-size <count>", "Override the LinkedIn page size used for full paginated reconciliation")
     .option("--resume-cursor <cursor>", "Resume a cursor-paginated LinkedIn surface from a prior partial result")
     .option("--resume-start-offset <count>", "Resume an offset-paginated LinkedIn surface from a prior partial result")
+    .option("--direct-unipile-http", "Diagnostic only: bypass agent/MCP handoff and call Unipile HTTP directly")
     .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
     .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
     .option("--json", "Emit machine-readable JSON")
@@ -623,6 +624,7 @@ Rules:
           pageSize: options.pageSize !== undefined ? Number.parseInt(options.pageSize, 10) : null,
           resumeCursor: options.resumeCursor ?? null,
           resumeStartOffset: options.resumeStartOffset !== undefined ? Number.parseInt(options.resumeStartOffset, 10) : null,
+          allowDirectUnipileHttp: Boolean(options.directUnipileHttp),
         });
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));

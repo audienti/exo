@@ -399,6 +399,99 @@ test("inbound sync linkedin-live rejects a managed Claude chrome connector accou
   }
 });
 
+test("inbound sync linkedin-live defaults managed Unipile accounts to agent handoff instead of direct HTTP", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-handoff-default-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const timestamp = "2026-06-04T12:00:00.000Z";
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ""
+  ].join("\n"));
+
+  try {
+    const result = await buildLiveLinkedinInboundSyncPayload({
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "linkedin-live-unipile-user",
+      owner: "william",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00"
+      },
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "linkedin-live-unipile-user",
+          label: "LinkedIn via Unipile",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-1",
+          providerAccountId: "unipile-linkedin-1",
+          preferred: true,
+          automationControls: {
+            weeklyQuotas: {
+              profileVisits: null,
+              invitations: null,
+              messages: null
+            }
+          },
+          notes: null,
+          inboundSync: {
+            surfaces: []
+          }
+        }
+      ],
+      harnessConnections: [
+        {
+          id: "harness-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          runtime: "codex",
+          connector: "unipile",
+          label: "codex:unipile",
+          status: "available",
+          notes: null
+        }
+      ],
+      inboundIgnoreRules: []
+    }, [], {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      surfaceKeys: ["linkedin-sent-invitations"],
+      codexHome,
+      unipileHttpGetImpl: () => {
+        throw new Error("direct Unipile HTTP should not run by default");
+      },
+      unipileHttpPostImpl: () => {
+        throw new Error("direct Unipile HTTP should not run by default");
+      }
+    });
+
+    assert.equal(result.transport.kind, "agent_handoff");
+    assert.equal(result.payload, null);
+    assert.equal(result.transport.connector, "unipile");
+    assert.match(result.transport.captureRequest.prompt, /native unipile connector/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound sync linkedin-live captures LinkedIn truth directly through a mapped Unipile account", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-direct-"));
   const codexHome = path.join(tempDir, ".codex");
@@ -475,6 +568,7 @@ test("inbound sync linkedin-live captures LinkedIn truth directly through a mapp
       runtime: "codex",
       connector: "unipile",
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: (url, headers) => {
         const parsed = new URL(url);
         seenRequests.push({
@@ -1031,6 +1125,7 @@ test("inbound sync linkedin-live tolerates malformed Unipile company website URL
       connector: "unipile",
       surfaceKeys: ["linkedin-messaging-inbox", "linkedin-followers-list"],
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: (url) => {
         const parsed = new URL(url);
         seenRequests.push(parsed.pathname);
@@ -1309,6 +1404,7 @@ test("inbound sync linkedin-live caps full followers sync to Unipile's LinkedIn 
       limit: 500,
       surfaceKeys: ["linkedin-followers-list"],
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: (url) => {
         const parsed = new URL(url);
         if (parsed.pathname !== "/api/v1/users/followers") {
@@ -1481,6 +1577,7 @@ test("inbound sync linkedin-live can stop a full following reconciliation at a p
       limit: 500,
       surfaceKeys: ["linkedin-following-list"],
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: () => ({
         status: 404,
         bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
@@ -1684,6 +1781,7 @@ test("inbound sync linkedin-live can stop a full profile-views reconciliation at
       limit: 500,
       surfaceKeys: ["linkedin-profile-views"],
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: () => ({
         status: 404,
         bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
@@ -1830,6 +1928,7 @@ test("inbound sync linkedin-live can stop a full sent-invitations reconciliation
       limit: 500,
       surfaceKeys: ["linkedin-sent-invitations"],
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: (url) => {
         const requestUrl = new URL(url);
         if (!requestUrl.pathname.endsWith("/api/v1/users/invite/sent")) {
@@ -1994,6 +2093,7 @@ test("inbound sync linkedin-live treats Unipile next_cursor as a continuation cu
       maxPages: 1,
       pageSize: 1,
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: (url) => {
         const requestUrl = new URL(url);
         if (!requestUrl.pathname.endsWith("/api/v1/users/invite/sent")) {
@@ -2135,6 +2235,7 @@ test("resumed sent-invitations reconciliation does not claim an empty terminal s
       maxPages: 1,
       pageSize: 10,
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: (url) => {
         const requestUrl = new URL(url);
         if (!requestUrl.pathname.endsWith("/api/v1/users/invite/sent")) {
@@ -2256,6 +2357,7 @@ test("inbound sync linkedin-live can stop a full received-invitations reconcilia
       limit: 500,
       surfaceKeys: ["linkedin-received-invitations"],
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: (url) => {
         const requestUrl = new URL(url);
         if (!requestUrl.pathname.endsWith("/api/v1/users/invite/received")) {
@@ -2425,6 +2527,7 @@ test("inbound sync linkedin-live can stop a full messaging-inbox reconciliation 
       limit: 500,
       surfaceKeys: ["linkedin-messaging-inbox"],
       codexHome,
+      allowDirectUnipileHttp: true,
       unipileHttpGetImpl: (url) => {
         const requestUrl = new URL(url);
         if (!requestUrl.pathname.endsWith("/api/v1/chats")) {
