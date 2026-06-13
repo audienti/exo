@@ -36,7 +36,7 @@
     "viewer": {
       "htmlPath": "docs/plans/remaining-sync-reconcile-mutate-seams-board.html"
     },
-    "parallelismNote": "T2 is the remaining interface gate. Subagent capacity is intentionally unused until the shared seam contract is green.",
+    "parallelismNote": "Five independent service seam lanes are ready and can be dispatched in parallel with non-overlapping file ownership.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -47,7 +47,7 @@
       "commit": "2acfed988706e8c3f97ea6f08baa84e8bf2d361f",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T12:58:02.000Z"
+    "updatedAt": "2026-06-13T13:03:25.000Z"
   },
   "tasks": [
     {
@@ -91,7 +91,7 @@
     {
       "id": "T2",
       "title": "Add shared seam contract harness",
-      "status": "ready",
+      "status": "done",
       "priority": 95,
       "dependsOn": [
         "T1"
@@ -115,19 +115,23 @@
         "git diff --check"
       ],
       "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
-      "outputs": [],
+      "startedAt": "2026-06-13T12:58:37.000Z",
+      "updatedAt": "2026-06-13T13:03:25.000Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Added shared capability seam state constants for quiet, pending_proof, contradicted, stale, reconciled, unsupported, and missing_proof.",
+        "Added buildCapabilitySeamResult to normalize owner decisions into a backend contract with checked, quiet, supported, requiresAction, proof surface, missing-proof, and strategy fields.",
+        "Added fixture helpers for service-specific seam tests without importing live state."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "Second interface gate before fan-out."
+      "notes": "Verification passed: npm test -- test/capability-seam-contract.test.js, git diff --check, npm test."
     },
     {
       "id": "T3",
       "title": "Add Gmail email and thread seam owner",
-      "status": "backlog",
+      "status": "ready",
       "priority": 90,
       "dependsOn": [
         "T1",
@@ -165,7 +169,7 @@
     {
       "id": "T4",
       "title": "Add LinkedIn private messaging and InMail seam owner",
-      "status": "backlog",
+      "status": "ready",
       "priority": 85,
       "dependsOn": [
         "T1",
@@ -203,7 +207,7 @@
     {
       "id": "T5",
       "title": "Add LinkedIn social graph and profile-view seam owner",
-      "status": "backlog",
+      "status": "ready",
       "priority": 80,
       "dependsOn": [
         "T1",
@@ -239,7 +243,7 @@
     {
       "id": "T6",
       "title": "Add LinkedIn public engagement seam owner",
-      "status": "backlog",
+      "status": "ready",
       "priority": 75,
       "dependsOn": [
         "T1",
@@ -275,7 +279,7 @@
     {
       "id": "T7",
       "title": "Add HubSpot capability support seam",
-      "status": "backlog",
+      "status": "ready",
       "priority": 70,
       "dependsOn": [
         "T1",

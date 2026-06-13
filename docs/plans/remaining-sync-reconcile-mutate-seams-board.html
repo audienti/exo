@@ -139,12 +139,12 @@
     <div class="topline">
       <span class="chip"><b>plan</b>remaining-sync-reconcile-mutate-seams</span>
       <span class="chip"><b>status</b>active</span>
-      <span class="chip"><b>progress</b>1/10</span>
+      <span class="chip"><b>progress</b>2/10</span>
       <span class="chip"><b>controller</b>codex</span>
       <span class="chip"><b>worktrees</b>.worktrees</span>
       <span class="chip"><b>open messages</b>0</span>
-      <span class="chip"><b>board updated</b>2026-06-13T12:58:02.000Z</span>
-      <span class="chip"><b>rendered</b>2026-06-13T12:58:16Z</span>
+      <span class="chip"><b>board updated</b>2026-06-13T13:03:25.000Z</span>
+      <span class="chip"><b>rendered</b>2026-06-13T13:03:48Z</span>
     </div>
     <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
   </header>
@@ -154,11 +154,11 @@
         <div class="metrics">
           <div><b>0</b><span>in flight</span></div>
           <div><b>5</b><span>cap</span></div>
-          <div><b>none</b><span>next dispatch candidates</span></div>
+          <div><b>T7, T6, T5, T4, T3</b><span>next dispatch candidates</span></div>
         </div>
         <p><b>Running or verifying:</b> none</p>
-        <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
-        <p><b>Controller note:</b> T2 is the remaining interface gate. Subagent capacity is intentionally unused until the shared seam contract is green.</p>
+        <p><b>Capacity read:</b> Capacity available. Next safe dispatch candidates: T7, T6, T5, T4, T3.</p>
+        <p><b>Controller note:</b> Five independent service seam lanes are ready and can be dispatched in parallel with non-overlapping file ownership.</p>
       </section>
 
 
@@ -171,7 +171,7 @@
   <main class="board">
 
           <section class="column">
-            <h2>Backlog <span>8</span></h2>
+            <h2>Backlog <span>3</span></h2>
 
       <article class="task task-backlog">
         <header>
@@ -200,63 +200,54 @@
         <div class="field"><div class="label">Reason</div><div>Waiting on T3, T4, T5, T6, T7</div></div><div class="field"><div class="label">Depends on</div><div>T3, T4, T5, T6, T7</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/record-action-result.js</li><li>src/lib/backend-capability-registry.js</li><li>test/action-result.test.js</li><li>test/backend-capability-registry.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/action-result.test.js test/backend-capability-registry.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>send_email, send_direct_message, in_mail_message, follow, unfollow, profile_view, and public engagement actions create owner-shaped reconciliation metadata where applicable.</li><li>Unsupported proof surfaces produce explicit missing-proof or unsupported debt.</li><li>Connection-request mutation reconciliation tests remain green.</li><li>No live external mutation is performed.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Shared integration gate. Do not dispatch in parallel with other shared-file tasks.</div></div>
       </article>
 
-      <article class="task task-backlog">
+          </section>
+
+          <section class="column">
+            <h2>Ready <span>5</span></h2>
+
+      <article class="task task-ready">
         <header>
           <div class="task-id">T7</div>
           <h3>Add HubSpot capability support seam</h3>
         </header>
         <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>70</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T2</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/hubspot-capability-reconciliation.js</li><li>test/hubspot-capability-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/hubspot-capability-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover HubSpot with no backend inbound surfaces as unsupported or unconfigured, not unchecked.</li><li>Tests cover runtime probe facts producing checked or failed capability support.</li><li>Tests cover preferred and non-preferred account classification.</li><li>No live HubSpot connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns only HubSpot support seam files.</div></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for dispatch if file ownership and capacity permit.</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/hubspot-capability-reconciliation.js</li><li>test/hubspot-capability-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/hubspot-capability-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover HubSpot with no backend inbound surfaces as unsupported or unconfigured, not unchecked.</li><li>Tests cover runtime probe facts producing checked or failed capability support.</li><li>Tests cover preferred and non-preferred account classification.</li><li>No live HubSpot connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns only HubSpot support seam files.</div></div>
       </article>
 
-      <article class="task task-backlog">
+      <article class="task task-ready">
         <header>
           <div class="task-id">T6</div>
           <h3>Add LinkedIn public engagement seam owner</h3>
         </header>
         <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>75</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T2</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/public-engagement-reconciliation.js</li><li>test/public-engagement-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/public-engagement-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover each public engagement action category producing explicit pending or missing proof.</li><li>Tests cover disabled linkedin-comment-replies and linkedin-catch-up-updates surfaces as unsupported for autonomous checking.</li><li>Tests cover quiet only when an explicit proof fact exists.</li><li>No live LinkedIn connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns only public engagement seam files.</div></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for dispatch if file ownership and capacity permit.</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/public-engagement-reconciliation.js</li><li>test/public-engagement-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/public-engagement-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover each public engagement action category producing explicit pending or missing proof.</li><li>Tests cover disabled linkedin-comment-replies and linkedin-catch-up-updates surfaces as unsupported for autonomous checking.</li><li>Tests cover quiet only when an explicit proof fact exists.</li><li>No live LinkedIn connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns only public engagement seam files.</div></div>
       </article>
 
-      <article class="task task-backlog">
+      <article class="task task-ready">
         <header>
           <div class="task-id">T5</div>
           <h3>Add LinkedIn social graph and profile-view seam owner</h3>
         </header>
         <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>80</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T2</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/linkedin-social-graph-reconciliation.js</li><li>test/linkedin-social-graph-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/linkedin-social-graph-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover follower and following observations without repeated broad polling.</li><li>Tests cover follow and unfollow mutation debt against following-list proof.</li><li>Tests cover profile-view visible-total gaps as not quiet.</li><li>No live LinkedIn connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns only social graph seam files.</div></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for dispatch if file ownership and capacity permit.</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/linkedin-social-graph-reconciliation.js</li><li>test/linkedin-social-graph-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/linkedin-social-graph-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover follower and following observations without repeated broad polling.</li><li>Tests cover follow and unfollow mutation debt against following-list proof.</li><li>Tests cover profile-view visible-total gaps as not quiet.</li><li>No live LinkedIn connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns only social graph seam files.</div></div>
       </article>
 
-      <article class="task task-backlog">
+      <article class="task task-ready">
         <header>
           <div class="task-id">T4</div>
           <h3>Add LinkedIn private messaging and InMail seam owner</h3>
         </header>
         <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>85</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T2</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/linkedin-private-message-reconciliation.js</li><li>src/core/inmail-reconciliation.js</li><li>test/linkedin-private-message-reconciliation.test.js</li><li>test/inmail-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/linkedin-private-message-reconciliation.test.js test/inmail-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover direct-message send debt and proof from messaging inbox observations.</li><li>Tests cover inbound LinkedIn replies overriding outbound waiting state.</li><li>Tests cover InMail as unavailable, missing proof, or pending proof without pretending it is checked.</li><li>No live LinkedIn connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns private-message and InMail seam files.</div></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for dispatch if file ownership and capacity permit.</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/linkedin-private-message-reconciliation.js</li><li>src/core/inmail-reconciliation.js</li><li>test/linkedin-private-message-reconciliation.test.js</li><li>test/inmail-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/linkedin-private-message-reconciliation.test.js test/inmail-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover direct-message send debt and proof from messaging inbox observations.</li><li>Tests cover inbound LinkedIn replies overriding outbound waiting state.</li><li>Tests cover InMail as unavailable, missing proof, or pending proof without pretending it is checked.</li><li>No live LinkedIn connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns private-message and InMail seam files.</div></div>
       </article>
 
-      <article class="task task-backlog">
+      <article class="task task-ready">
         <header>
           <div class="task-id">T3</div>
           <h3>Add Gmail email and thread seam owner</h3>
         </header>
         <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>90</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T2</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/email-send-reconciliation.js</li><li>src/core/gmail-thread-reconciliation.js</li><li>test/email-send-reconciliation.test.js</li><li>test/gmail-thread-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/email-send-reconciliation.test.js test/gmail-thread-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover pending external proof after a local email send.</li><li>Tests cover an inbound Gmail thread resolving or overriding local waiting state.</li><li>Tests cover unsupported or missing Gmail sent-mail proof as explicit debt.</li><li>No live Gmail connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns only Gmail seam files.</div></div>
-      </article>
-
-          </section>
-
-          <section class="column">
-            <h2>Ready <span>1</span></h2>
-
-      <article class="task task-ready">
-        <header>
-          <div class="task-id">T2</div>
-          <h3>Add shared seam contract harness</h3>
-        </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>95</span></div>
-        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/capability-seam-contract.js</li><li>test/capability-seam-contract.test.js</li><li>test/support/capability-seam-fixtures.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/capability-seam-contract.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>A failing test is written first for missing-proof or unsupported seams being explicit.</li><li>The shared helper exports stable outcome constants and a validator or builder for seam reconciliation results.</li><li>Fixture helpers let later service lanes test against the same status vocabulary without importing live state.</li><li>No shared mutation or queue path is integrated yet.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Second interface gate before fan-out.</div></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for dispatch if file ownership and capacity permit.</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/email-send-reconciliation.js</li><li>src/core/gmail-thread-reconciliation.js</li><li>test/email-send-reconciliation.test.js</li><li>test/gmail-thread-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/email-send-reconciliation.test.js test/gmail-thread-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover pending external proof after a local email send.</li><li>Tests cover an inbound Gmail thread resolving or overriding local waiting state.</li><li>Tests cover unsupported or missing Gmail sent-mail proof as explicit debt.</li><li>No live Gmail connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Independent after T2. Owns only Gmail seam files.</div></div>
       </article>
 
           </section>
@@ -272,7 +263,16 @@
           </section>
 
           <section class="column">
-            <h2>Done <span>1</span></h2>
+            <h2>Done <span>2</span></h2>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T2</div>
+          <h3>Add shared seam contract harness</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>95</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified; no commit recorded.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/capability-seam-contract.js</li><li>test/capability-seam-contract.test.js</li><li>test/support/capability-seam-fixtures.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/capability-seam-contract.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>A failing test is written first for missing-proof or unsupported seams being explicit.</li><li>The shared helper exports stable outcome constants and a validator or builder for seam reconciliation results.</li><li>Fixture helpers let later service lanes test against the same status vocabulary without importing live state.</li><li>No shared mutation or queue path is integrated yet.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Verification passed: npm test -- test/capability-seam-contract.test.js, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Added shared capability seam state constants for quiet, pending_proof, contradicted, stale, reconciled, unsupported, and missing_proof.</li><li>Added buildCapabilitySeamResult to normalize owner decisions into a backend contract with checked, quiet, supported, requiresAction, proof surface, missing-proof, and strategy fields.</li><li>Added fixture helpers for service-specific seam tests without importing live state.</li></ul></div></div>
+      </article>
 
       <article class="task task-done">
         <header>
