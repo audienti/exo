@@ -34,80 +34,20 @@ const UNIPILE_HTTP_MAX_TIME_SECONDS = Math.max(1, Math.ceil(UNIPILE_HTTP_TIMEOUT
  *   listMotions?: (() => unknown[]) | null,
  *   upsertObservation?: ((observation: any) => void) | null,
  *   updateUser?: ((user: any) => void) | null,
+ *   baseUrl?: string | null,
+ *   allowDirectUnipileHttp?: boolean | null,
  *   httpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpDeleteImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpPostImpl?: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null,
  * }} [options]
  */
 export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
-  if (!task?.observationId) {
-    return {
-      status: "blocked",
-      reason: `Connector-native ${task?.kind ?? "linkedin_maintenance"} requires an inbound observation id.`,
-    };
+  const context = resolveLinkedinMaintenanceContext(task, options);
+  if (context.status !== "ready") {
+    return context;
   }
-
-  const observation = resolveObservation(task.observationId, options.findObservationById ?? null);
-  if (!observation) {
-    return {
-      status: "blocked",
-      reason: `Could not resolve inbound observation ${task.observationId} for ${task.kind}.`,
-    };
-  }
-
-  const user = resolveUser(observation.userId, options.findUserById ?? null);
-  if (!user) {
-    return {
-      status: "blocked",
-      reason: `Could not resolve execution user ${observation.userId} for ${task.kind}.`,
-    };
-  }
-
-  const account = user.accounts.find((candidate) => candidate.id === observation.accountId) ?? null;
-  if (!account) {
-    return {
-      status: "blocked",
-      reason: `Could not resolve LinkedIn account ${observation.accountId} for ${task.kind}.`,
-    };
-  }
-  if (account.capability !== "linkedin") {
-    return {
-      status: "blocked",
-      reason: `${task.kind} requires a LinkedIn account. Observation ${observation.id} resolves through ${account.capability}.`,
-    };
-  }
-  if (account.sourceType !== "harness-connection") {
-    return {
-      status: "blocked",
-      reason: `${task.kind} requires a managed connector account. Observation ${observation.id} resolves through ${account.sourceType}.`,
-    };
-  }
-
-  const harnessConnection = user.harnessConnections.find((candidate) => candidate.id === account.harnessConnectionId) ?? null;
-  if (!harnessConnection) {
-    return {
-      status: "blocked",
-      reason: `Could not resolve harness connection ${account.harnessConnectionId ?? "unknown"} for ${task.kind}.`,
-    };
-  }
-
-  const connector = normalizeNullableString(harnessConnection.connector)?.toLowerCase() ?? null;
-  if (connector !== "unipile") {
-    return {
-      status: "blocked",
-      reason: `${task.kind} requires a managed Unipile account. Observation ${observation.id} resolves through ${harnessConnection.runtime}:${harnessConnection.connector}.`,
-    };
-  }
-
-  const providerAccountId = normalizeNullableString(account.providerAccountId);
-  if (!providerAccountId) {
-    return {
-      status: "blocked",
-      reason: `${task.kind} requires a providerAccountId on LinkedIn account ${account.id}.`,
-    };
-  }
-
-  const { apiKey, baseUrl } = readUnipileConfig(options.codexHome ?? null);
+  const { observation, user, providerAccountId, baseUrl } = context;
+  const { apiKey } = readUnipileConfig(options.codexHome ?? null);
   if (!apiKey) {
     return {
       status: "blocked",
@@ -131,6 +71,7 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
       method: "GET",
       url: url.toString(),
       apiKey,
+      allowDirectUnipileHttp: options.allowDirectUnipileHttp === true,
       httpGetImpl: options.httpGetImpl ?? null,
     });
     if (!response.ok) {
@@ -198,6 +139,7 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
       method: "DELETE",
       url: url.toString(),
       apiKey,
+      allowDirectUnipileHttp: options.allowDirectUnipileHttp === true,
       httpDeleteImpl: options.httpDeleteImpl ?? null,
     });
     if (!response.ok) {
@@ -241,6 +183,7 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
         shared_secret: sharedSecret,
         action,
       }),
+      allowDirectUnipileHttp: options.allowDirectUnipileHttp === true,
       httpPostImpl: options.httpPostImpl ?? null,
     });
     if (!response.ok) {
@@ -265,12 +208,334 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
 }
 
 /**
+ * @param {any} task
+ * @param {{
+ *   codexHome?: string | null,
+ *   baseUrl?: string | null,
+ *   findObservationById?: ((id: string) => unknown | null) | null,
+ *   findUserById?: ((id: string) => unknown | null) | null,
+ * }} [options]
+ */
+export function buildLinkedinMaintenanceHandoff(task, options = {}) {
+  const context = resolveLinkedinMaintenanceContext(task, options);
+  if (context.status !== "ready") {
+    return context;
+  }
+
+  const { observation, user, harnessConnection, providerAccountId, baseUrl } = context;
+  const connector = `${normalizeNullableString(harnessConnection.runtime) ?? "codex"}:${normalizeNullableString(harnessConnection.connector) ?? "unipile"}`;
+  const common = {
+    status: "ready",
+    provider: "unipile",
+    connector,
+    taskKind: task.kind,
+    observationId: observation.id,
+    userId: user.id,
+    accountId: observation.accountId,
+    providerAccountId,
+    actorName: observation.actorName ?? null,
+    recipientUrl: observation.actorProfileUrl ?? observation.sourceUrl ?? null,
+    executionPolicy: {
+      mode: "native_connector_tools_only",
+      shellFallbackAllowed: false,
+      browserFallbackAllowed: false,
+      disallowedFallbacks: ["curl", "shell_subprocess", "browser_tools", "another_linkedin_identity"],
+      writeBackOnlyAfterRealAction: true,
+    },
+  };
+
+  if (task.kind === "reconcile_connection_request_status") {
+    const profileIdentity = resolveLinkedinProfileIdentity(observation);
+    if (!profileIdentity) {
+      return {
+        status: "blocked",
+        reason: `reconcile_connection_request_status requires a LinkedIn profile identity on observation ${observation.id}.`,
+      };
+    }
+    return {
+      ...common,
+      action: "retrieve_profile_for_connection_request_reconciliation",
+      writebackMode: "profile_status_reconciliation",
+      profileIdentity,
+      harRequest: {
+        method: "GET",
+        url: new URL(`/api/v1/users/${encodeURIComponent(profileIdentity)}`, baseUrl).toString(),
+        headers: [{ name: "accept", value: "application/json" }],
+        queryString: [
+          { name: "account_id", value: providerAccountId },
+          { name: "linkedin_sections", value: "experience" },
+        ],
+      },
+    };
+  }
+
+  if (task.kind === "withdraw_connection") {
+    const invitationId = normalizeNullableString(observation.externalId);
+    if (!invitationId) {
+      return {
+        status: "blocked",
+        reason: `${task.kind} requires a native invitation id on observation ${observation.id}.`,
+      };
+    }
+    return {
+      ...common,
+      action: "cancel_sent_invitation",
+      writebackMode: "task_writeback_after_completion",
+      invitationId,
+      harRequest: {
+        method: "DELETE",
+        url: new URL(`/api/v1/users/invite/sent/${encodeURIComponent(invitationId)}`, baseUrl).toString(),
+        headers: [{ name: "accept", value: "application/json" }],
+        queryString: [
+          { name: "account_id", value: providerAccountId },
+        ],
+      },
+    };
+  }
+
+  if (task.kind === "accept_connection_request" || task.kind === "reject_connection_request") {
+    const invitationId = normalizeNullableString(observation.externalId);
+    if (!invitationId) {
+      return {
+        status: "blocked",
+        reason: `${task.kind} requires a native invitation id on observation ${observation.id}.`,
+      };
+    }
+    const sharedSecret = normalizeNullableString(observation.providerSharedSecret);
+    if (!sharedSecret) {
+      return {
+        status: "blocked",
+        reason: `${task.kind} requires a stored Unipile shared_secret on observation ${observation.id}. Re-run LinkedIn invite sync before retrying.`,
+      };
+    }
+    const action = task.kind === "accept_connection_request" ? "accept" : "decline";
+    return {
+      ...common,
+      action: task.kind === "accept_connection_request" ? "accept_received_invitation" : "decline_received_invitation",
+      writebackMode: "task_writeback_after_completion",
+      invitationId,
+      harRequest: {
+        method: "POST",
+        url: new URL(`/api/v1/users/invite/received/${encodeURIComponent(invitationId)}`, baseUrl).toString(),
+        headers: [
+          { name: "accept", value: "application/json" },
+          { name: "content-type", value: "application/json" },
+        ],
+        postData: {
+          mimeType: "application/json",
+          text: JSON.stringify({
+            provider: "LINKEDIN",
+            account_id: providerAccountId,
+            shared_secret: sharedSecret,
+            action,
+          }),
+        },
+      },
+    };
+  }
+
+  return {
+    status: "blocked",
+    reason: `Unsupported LinkedIn maintenance task kind: ${task.kind ?? "unknown"}.`,
+  };
+}
+
+/**
+ * @param {any} task
+ * @param {any} connectorResult
+ * @param {{
+ *   findObservationById?: ((id: string) => unknown | null) | null,
+ *   findUserById?: ((id: string) => unknown | null) | null,
+ *   findObservationByDedupeKey?: ((dedupeKey: string) => unknown | null) | null,
+ *   listMotions?: (() => unknown[]) | null,
+ *   upsertObservation?: ((observation: any) => void) | null,
+ *   updateUser?: ((user: any) => void) | null,
+ * }} [options]
+ */
+export function applyLinkedinMaintenanceConnectorResult(task, connectorResult, options = {}) {
+  const normalized = normalizeConnectorResult(connectorResult);
+  if (normalized.status !== "completed") {
+    return {
+      status: "blocked",
+      reason: normalized.reason ?? `${task?.kind ?? "linkedin_maintenance"} did not complete through Unipile MCP.`,
+      provider: "unipile",
+      responseStatus: normalized.responseStatus,
+      result: normalized.responseBody,
+    };
+  }
+
+  if (task.kind !== "reconcile_connection_request_status") {
+    return {
+      status: "completed",
+      provider: "unipile",
+      responseStatus: normalized.responseStatus,
+      result: normalized.responseBody,
+    };
+  }
+
+  const observation = resolveObservation(task.observationId, options.findObservationById ?? null);
+  if (!observation) {
+    return {
+      status: "blocked",
+      reason: `Could not resolve inbound observation ${task.observationId} for ${task.kind}.`,
+    };
+  }
+  const user = resolveUser(observation.userId, options.findUserById ?? null);
+  if (!user) {
+    return {
+      status: "blocked",
+      reason: `Could not resolve execution user ${observation.userId} for ${task.kind}.`,
+    };
+  }
+
+  const resolution = classifyConnectionRequestProfileStatus(normalized.responseBody);
+  if (!resolution.nextKind) {
+    return {
+      status: "blocked",
+      reason: `reconcile_connection_request_status could not classify LinkedIn profile state for ${observation.actorName ?? observation.id}.`,
+      provider: "unipile",
+      profileStatus: resolution.profileStatus,
+    };
+  }
+
+  const writeback = writeInboundObservationStatusResolution({
+    observation,
+    user,
+    nextKind: resolution.nextKind,
+    profile: normalized.responseBody,
+    profileStatus: resolution.profileStatus,
+    findObservationByDedupeKeyImpl: options.findObservationByDedupeKey ?? null,
+    listMotionsImpl: options.listMotions ?? null,
+    upsertObservationImpl: options.upsertObservation ?? null,
+  });
+  const mixedSurface = markUserInboundSurfaceMixedAfterOutOfBandReconciliation(user, {
+    accountId: observation.accountId,
+    surfaceKey: observation.surfaceKey,
+  });
+  if (mixedSurface.changed) {
+    if (options.updateUser) {
+      options.updateUser(mixedSurface.user);
+    } else {
+      updateUser(mixedSurface.user);
+    }
+  }
+  return {
+    status: "completed",
+    provider: "unipile",
+    observationId: writeback.observation.id,
+    resolvedKind: writeback.observation.kind,
+    profileStatus: resolution.profileStatus,
+    responseStatus: normalized.responseStatus,
+    result: {
+      observationId: writeback.observation.id,
+    },
+  };
+}
+
+/**
  * @param {string} observationId
  * @param {((id: string) => unknown | null) | null} findObservationById
  */
 function resolveObservation(observationId, findObservationById) {
   const raw = findObservationById ? findObservationById(observationId) : findInboundObservationById(observationId);
   return raw ? inboundObservationSchema.parse(raw) : null;
+}
+
+/**
+ * @param {any} task
+ * @param {{
+ *   codexHome?: string | null,
+ *   baseUrl?: string | null,
+ *   findObservationById?: ((id: string) => unknown | null) | null,
+ *   findUserById?: ((id: string) => unknown | null) | null,
+ * }} [options]
+ */
+function resolveLinkedinMaintenanceContext(task, options = {}) {
+  if (!task?.observationId) {
+    return {
+      status: "blocked",
+      reason: `Connector-native ${task?.kind ?? "linkedin_maintenance"} requires an inbound observation id.`,
+    };
+  }
+
+  const observation = resolveObservation(task.observationId, options.findObservationById ?? null);
+  if (!observation) {
+    return {
+      status: "blocked",
+      reason: `Could not resolve inbound observation ${task.observationId} for ${task.kind}.`,
+    };
+  }
+
+  const user = resolveUser(observation.userId, options.findUserById ?? null);
+  if (!user) {
+    return {
+      status: "blocked",
+      reason: `Could not resolve execution user ${observation.userId} for ${task.kind}.`,
+    };
+  }
+
+  const account = user.accounts.find((candidate) => candidate.id === observation.accountId) ?? null;
+  if (!account) {
+    return {
+      status: "blocked",
+      reason: `Could not resolve LinkedIn account ${observation.accountId} for ${task.kind}.`,
+    };
+  }
+  if (account.capability !== "linkedin") {
+    return {
+      status: "blocked",
+      reason: `${task.kind} requires a LinkedIn account. Observation ${observation.id} resolves through ${account.capability}.`,
+    };
+  }
+  if (account.sourceType !== "harness-connection") {
+    return {
+      status: "blocked",
+      reason: `${task.kind} requires a managed connector account. Observation ${observation.id} resolves through ${account.sourceType}.`,
+    };
+  }
+
+  const harnessConnection = user.harnessConnections.find((candidate) => candidate.id === account.harnessConnectionId) ?? null;
+  if (!harnessConnection) {
+    return {
+      status: "blocked",
+      reason: `Could not resolve harness connection ${account.harnessConnectionId ?? "unknown"} for ${task.kind}.`,
+    };
+  }
+
+  const connector = normalizeNullableString(harnessConnection.connector)?.toLowerCase() ?? null;
+  if (connector !== "unipile") {
+    return {
+      status: "blocked",
+      reason: `${task.kind} requires a managed Unipile account. Observation ${observation.id} resolves through ${harnessConnection.runtime}:${harnessConnection.connector}.`,
+    };
+  }
+
+  const providerAccountId = normalizeNullableString(account.providerAccountId);
+  if (!providerAccountId) {
+    return {
+      status: "blocked",
+      reason: `${task.kind} requires a providerAccountId on LinkedIn account ${account.id}.`,
+    };
+  }
+
+  const config = readUnipileConfig(options.codexHome ?? null);
+  const baseUrl = normalizeNullableString(options.baseUrl) ?? config.baseUrl;
+  if (!baseUrl) {
+    return {
+      status: "blocked",
+      reason: `${task.kind} requires a configured Unipile base URL.`,
+    };
+  }
+
+  return {
+    status: "ready",
+    observation,
+    user,
+    account,
+    harnessConnection,
+    providerAccountId,
+    baseUrl,
+  };
 }
 
 /**
@@ -394,6 +659,7 @@ function buildProfileStatusNotes(profileStatus) {
  *   url: string,
  *   apiKey: string,
  *   bodyText?: string | undefined,
+ *   allowDirectUnipileHttp?: boolean | undefined,
  *   httpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpDeleteImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpPostImpl?: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null,
@@ -424,6 +690,15 @@ function requestUnipileJson(input) {
         "X-API-KEY": input.apiKey,
       }, input.bodyText ?? "");
       return normalizeUnipileResponse(response);
+    }
+
+    if (input.allowDirectUnipileHttp !== true) {
+      return {
+        ok: false,
+        status: 0,
+        parsed: null,
+        error: "Direct Unipile HTTP is disabled. Use the MCP/connector-native maintenance handoff.",
+      };
     }
 
     const curlArgs = [
@@ -515,6 +790,41 @@ function buildMaintenanceFailureReason(taskKind, response) {
   return providerMessage
     ? `${taskKind} through Unipile failed (${status}): ${providerMessage}`
     : `${taskKind} through Unipile failed (${status}).`;
+}
+
+/** @param {any} connectorResult */
+function normalizeConnectorResult(connectorResult) {
+  const status = normalizeNullableString(connectorResult?.status)?.toLowerCase() ?? null;
+  const responseStatus = normalizePositiveInteger(
+    connectorResult?.httpStatus
+      ?? connectorResult?.responseStatus
+      ?? connectorResult?.statusCode
+      ?? connectorResult?.response?.status,
+    null,
+  );
+  const responseBody = connectorResult?.responseBody
+    ?? connectorResult?.body
+    ?? connectorResult?.parsed
+    ?? connectorResult?.result
+    ?? connectorResult?.response?.body
+    ?? null;
+  const completed = status === "completed"
+    || status === "success"
+    || status === "sent"
+    || status === "ok"
+    || (responseStatus !== null && responseStatus >= 200 && responseStatus < 300);
+  const reason = normalizeNullableString(connectorResult?.reason)
+    ?? normalizeNullableString(responseBody?.message)
+    ?? normalizeNullableString(responseBody?.error)
+    ?? normalizeNullableString(responseBody?.detail)
+    ?? normalizeNullableString(responseBody?.title)
+    ?? null;
+  return {
+    status: completed ? "completed" : "blocked",
+    reason,
+    responseStatus,
+    responseBody,
+  };
 }
 
 /** @param {string} value */

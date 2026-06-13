@@ -2,8 +2,15 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-import { runLinkedinMaintenanceWithUnipile } from "../src/lib/linkedin-unipile-maintenance.js";
+import {
+  applyLinkedinMaintenanceConnectorResult,
+  buildLinkedinMaintenanceHandoff,
+  runLinkedinMaintenanceWithUnipile,
+} from "../src/lib/linkedin-unipile-maintenance.js";
 import { INBOUND_SURFACE_MIXED_BASELINE_REASON } from "../src/core/user-inbound-sync.js";
 
 const timestamp = "2026-06-06T12:00:00.000Z";
@@ -131,6 +138,149 @@ test("runLinkedinMaintenanceWithUnipile withdraws a stale invite through Unipile
   assert.equal(result.provider, "unipile");
   assert.equal(seenUrl?.pathname, "/api/v1/users/invite/sent/invite-1");
   assert.equal(seenUrl?.searchParams.get("account_id"), "provider-linkedin-1");
+});
+
+test("buildLinkedinMaintenanceHandoff emits a connector-native HAR request for stale invite withdrawal", () => {
+  const result = buildLinkedinMaintenanceHandoff(
+    {
+      kind: "withdraw_connection",
+      observationId: "observation-1",
+    },
+    {
+      findObservationById: () => buildObservation(),
+      findUserById: () => buildUser(),
+      baseUrl: "https://api14.unipile.com:14465",
+    },
+  );
+
+  assert.equal(result.status, "ready");
+  assert.equal(result.provider, "unipile");
+  assert.equal(result.connector, "codex:unipile");
+  assert.equal(result.writebackMode, "task_writeback_after_completion");
+  assert.equal(result.harRequest.method, "DELETE");
+  assert.equal(result.harRequest.url, "https://api14.unipile.com:14465/api/v1/users/invite/sent/invite-1");
+  assert.deepEqual(result.harRequest.queryString, [
+    { name: "account_id", value: "provider-linkedin-1" },
+  ]);
+  assert.deepEqual(result.harRequest.headers, [
+    { name: "accept", value: "application/json" },
+  ]);
+});
+
+test("runLinkedinMaintenanceWithUnipile blocks unstubbed direct HTTP by default", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-linkedin-maintenance-direct-disabled-"));
+  const codexHome = path.join(tempDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    "",
+  ].join("\n"));
+
+  try {
+    const result = runLinkedinMaintenanceWithUnipile(
+      {
+        kind: "withdraw_connection",
+        observationId: "observation-1",
+      },
+      {
+        codexHome,
+        findObservationById: () => buildObservation(),
+        findUserById: () => buildUser(),
+      },
+    );
+
+    assert.equal(result.status, "blocked");
+    assert.match(result.reason ?? "", /Direct Unipile HTTP is disabled/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("applyLinkedinMaintenanceConnectorResult records profile reconciliation from MCP response payload", () => {
+  let storedObservation = null;
+  let storedUser = null;
+  const result = applyLinkedinMaintenanceConnectorResult(
+    {
+      kind: "reconcile_connection_request_status",
+      observationId: "observation-1",
+    },
+    {
+      status: "completed",
+      responseBody: {
+        object: "UserProfile",
+        first_name: "Jordan",
+        last_name: "Example",
+        public_identifier: "jordan-example",
+        provider_id: "provider-jordan",
+        network_distance: "FIRST_DEGREE",
+        is_relationship: true,
+        invitation: null,
+      },
+    },
+    {
+      findObservationById: () => buildObservation({
+        kind: "connection_request_no_longer_pending",
+      }),
+      findUserById: () => buildUser({
+        accounts: [
+          {
+            ...buildUser().accounts[0],
+            inboundSync: {
+              surfaces: [
+                {
+                  surfaceKey: "linkedin-sent-invitations",
+                  enabled: true,
+                  lastSyncedAt: "2026-06-06T10:00:00.000Z",
+                  lastObservedAt: "2026-06-06T10:00:00.000Z",
+                  lastRunStatus: "success",
+                  lastItemCount: 0,
+                  lastVisibleTotalCount: 0,
+                  lastCaptureCompleteness: "complete",
+                  lastRequestedMode: "full",
+                  lastActualMode: "full",
+                  lastReconcileRequired: false,
+                  lastReconcileReason: null,
+                  lastExhaustionStatus: "complete",
+                  lastExhaustionReason: null,
+                  lastPaginationAttempted: true,
+                  lastTerminalSignalSeen: true,
+                  lastStalledPassCount: 0,
+                  continuationStartedAt: null,
+                  nextCursor: null,
+                  nextStartOffset: null,
+                  lastObservationCount: 0,
+                  lastItemizationGapCount: 0,
+                  lastCountDiscrepancyCount: 0,
+                  lastError: null,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      findObservationByDedupeKey: () => buildObservation({
+        kind: "connection_request_no_longer_pending",
+      }),
+      listMotions: () => [],
+      upsertObservation: (observation) => {
+        storedObservation = observation;
+      },
+      updateUser: (user) => {
+        storedUser = user;
+      },
+    },
+  );
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.resolvedKind, "connection_request_accepted");
+  assert.equal(storedObservation?.kind, "connection_request_accepted");
+  assert.equal(storedObservation?.summary, "Jordan Example is now a LinkedIn connection.");
+  assert.equal(
+    storedUser?.accounts?.[0]?.inboundSync?.surfaces?.[0]?.lastReconcileReason,
+    INBOUND_SURFACE_MIXED_BASELINE_REASON,
+  );
 });
 
 test("runLinkedinMaintenanceWithUnipile blocks a reject without shared_secret", () => {

@@ -23,6 +23,7 @@ import {
   buildDraftPrompt,
   buildInboundCapturePrompt,
   buildInboundIdentityResolutionPrompt,
+  buildLinkedinMaintenancePrompt,
   buildSendPrompt,
   canRunTaskInCurrentPass,
   chooseNextQueueTask,
@@ -3054,6 +3055,35 @@ test("buildInboundIdentityResolutionPrompt prefers Gmail and Unipile and forbids
   assert.match(prompt, /providerAccountId provider-linkedin-1/i);
 });
 
+test("buildLinkedinMaintenancePrompt requires Unipile MCP execute_request and forbids shell fallback", () => {
+  const prompt = buildLinkedinMaintenancePrompt({
+    status: "ready",
+    provider: "unipile",
+    connector: "codex:unipile",
+    taskKind: "withdraw_connection",
+    observationId: "observation-1",
+    writebackMode: "task_writeback_after_completion",
+    harRequest: {
+      method: "DELETE",
+      url: "https://api14.unipile.com:14465/api/v1/users/invite/sent/invite-1",
+      headers: [
+        { name: "accept", value: "application/json" },
+      ],
+      queryString: [
+        { name: "account_id", value: "provider-linkedin-1" },
+      ],
+    },
+  });
+
+  assert.match(prompt, /Unipile MCP execute_request/i);
+  assert.match(prompt, /HAR request/i);
+  assert.match(prompt, /Do not use curl/i);
+  assert.match(prompt, /Do not use shell/i);
+  assert.match(prompt, /DELETE/);
+  assert.match(prompt, /api14\.unipile\.com:14465/);
+  assert.match(prompt, /Return only JSON/i);
+});
+
 test("preflight task gate can allow maintenance work even when Chrome debug-instance warnings exist", () => {
   const preflight = {
     browser: {
@@ -3148,6 +3178,34 @@ test("normalizeInboundCaptureForWriteback synthesizes a failed linkedin surface 
   assert.equal(normalized.messagingInbox.itemCount, 0);
   assert.equal(normalized.profileViews.error, "Browser is not available: extension");
   assert.equal(normalized.error, "Browser is not available: extension");
+});
+
+test("normalizeInboundCaptureForWriteback preserves structured linkedin connector errors", () => {
+  const normalized = normalizeInboundCaptureForWriteback({
+    mode: "quick",
+    status: "failed",
+    checkedAt: "2026-06-13T21:13:38.000Z",
+    account: {
+      intended_handle: "williamflanagan",
+      verified: false,
+      error: {
+        code: "connector_no_client_session",
+        message: "Unipile returned errors/no_client_session while attempting account discovery.",
+      },
+    },
+    errors: [
+      {
+        code: "connector_no_client_session",
+        surface: "account_identity",
+        message: "GET /api/v1/accounts returned {\"status\":503,\"type\":\"errors/no_client_session\",\"title\":\"No client session\"}.",
+      },
+    ],
+  }, "linkedin");
+
+  assert.match(normalized.error, /connector_no_client_session/);
+  assert.match(normalized.error, /errors\/no_client_session/);
+  assert.equal(normalized.sentInvitations.error, normalized.error);
+  assert.equal(normalized.followingList.exhaustionReason, "transport_failure");
 });
 
 test("normalizeInboundCaptureForWriteback keeps top-level warning captures free of invented failure errors", () => {

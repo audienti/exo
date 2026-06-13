@@ -151,17 +151,16 @@ export function buildDrainPrompt(input) {
     "8. For EACH remaining task in the queue where task.kind != run_inbound_sync and task.kind != write_draft:",
     "   a. If task.kind == send_message, run: exo agent send <companyId> --motion <motionId> --prospect <prospectId> --json",
     "      → this is the governed message-send contract (pinned identity, recipient, verbatim message, executionPolicy).",
-    "   b. Perform the browser action using your native browser tools on the task.recipientUrl as the pinned identity.",
-    "      For send_message, do exactly what the governed send contract says. For accept/withdraw/reject/unfollow tasks, perform that literal LinkedIn action and nothing broader.",
-    "      Do not drift to another LinkedIn identity. Do not fall back to shell scraping.",
-    "      If the Chrome connector cannot attach after one retry, stop that task immediately, record the exact blocked reason, and continue to the next task.",
-    "      Do not run diagnostics, open Chrome windows, or switch to Playwriter in this unattended lane.",
+    "   b. Use native connector tools only. For LinkedIn send and maintenance tasks, use the governed Unipile MCP path, not Chrome, browser automation, curl, or shell scraping.",
+    "      For send_message, do exactly what the governed send contract says. For accept/withdraw/reject/reconcile tasks, perform that literal Unipile MCP action and nothing broader.",
+    "      Do not drift to another LinkedIn identity. If the MCP connector cannot perform the action, stop that task immediately, record the exact blocked reason, and continue to the next task.",
+    "      Do not run diagnostics, open Chrome windows, use browser tools, or switch to Playwriter in this unattended lane.",
     input.sendMode === "verify"
       ? "      This routine is in verification-only send mode. Reach a real writable composer and exact governed message, then stop before the final click and do not run writeback."
       : input.sendMode === "canary"
         ? "      This routine is in canary send mode. If this exact task already has a fresh verification proof, perform the real send and write back. Otherwise stop at ready_to_send, record proof, and stop the pass after that one send task."
-        : "      This routine is in live send mode. When the governed browser action succeeds, continue to writeback immediately.",
-    "   c. Only after the browser action actually happened, run the task's writeback command verbatim.",
+        : "      This routine is in live send mode. When the governed connector action succeeds, continue to writeback immediately.",
+    "   c. Only after the connector action actually happened, run the task's writeback command verbatim.",
     "9. Do not act on anyone who is not in the queue. If the queue is empty, do nothing.",
     "",
     "This pass is idempotent: a sent draft leaves the queue, so re-running never double-sends.",

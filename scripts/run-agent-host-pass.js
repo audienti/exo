@@ -74,7 +74,10 @@ import {
 } from "../src/lib/runtime-usage-limit.js";
 import { buildPreflightSummary } from "../src/lib/agent-preflight.js";
 import { getTaskExecutionLane, normalizeAgentExecutionLane } from "../src/lib/agent-task-lanes.js";
-import { runLinkedinMaintenanceWithUnipile } from "../src/lib/linkedin-unipile-maintenance.js";
+import {
+  applyLinkedinMaintenanceConnectorResult,
+  buildLinkedinMaintenanceHandoff,
+} from "../src/lib/linkedin-unipile-maintenance.js";
 import { extractUsableDraftBody } from "../src/lib/draft-policy.js";
 import { extractLinkedinPublicId } from "../src/lib/prospect-contacts.js";
 import { readUnipileConfig } from "../src/lib/unipile-config.js";
@@ -2699,17 +2702,49 @@ function findProspectDraft(rawMotion, companyId, prospectId, surface) {
  * @param {{ linkedinMaintenanceSessions?: Map<string, any> } | null} [executionContext]
  */
 function runBrowserActionTask(task, executionContext = null) {
-  const result = runLinkedinMaintenanceWithUnipile(task, {
+  void executionContext;
+  const handoff = buildLinkedinMaintenanceHandoff(task, {
     codexHome: CODEX_HOME,
   });
-  if (result.status !== "completed") {
+  if (handoff.status !== "ready") {
     return {
       status: "blocked",
-      detail: { reason: result.reason ?? `${task.kind} did not complete.` },
+      detail: { reason: handoff.reason ?? `${task.kind} is not ready for Unipile MCP maintenance.` },
     };
   }
 
-  if (normalizeNullableString(task.writeback)) {
+  let connectorResult;
+  try {
+    connectorResult = runConnectorCodexTask({
+      prompt: buildLinkedinMaintenancePrompt(handoff),
+      outputName: `linkedin-maintenance-${task.kind}-${task.observationId}.json`,
+      timeoutMs: BROWSER_TIMEOUT_MS,
+      enabledPlugins: [],
+      enabledMcpServers: ["unipile"],
+    });
+  } catch (error) {
+    return buildBlockedCodexTaskResult(error, {
+      action: task.kind,
+      recipientUrl: task.recipientUrl ?? null,
+      transport: "unipile_mcp",
+    });
+  }
+
+  const result = applyLinkedinMaintenanceConnectorResult(task, connectorResult);
+  if (result.status !== "completed") {
+    return {
+      status: "blocked",
+      detail: {
+        reason: result.reason ?? `${task.kind} did not complete through Unipile MCP.`,
+        action: task.kind,
+        recipientUrl: task.recipientUrl ?? null,
+        transport: "unipile_mcp",
+        responseStatus: result.responseStatus ?? null,
+      },
+    };
+  }
+
+  if (handoff.writebackMode === "task_writeback_after_completion" && normalizeNullableString(task.writeback)) {
     runShellText(task.writeback);
   }
   return {
@@ -2717,7 +2752,7 @@ function runBrowserActionTask(task, executionContext = null) {
     detail: {
       action: task.kind,
       recipientUrl: task.recipientUrl ?? null,
-      transport: "unipile",
+      transport: "unipile_mcp",
       resolvedKind: result.resolvedKind ?? null,
       profileStatus: result.profileStatus ?? null,
     }
@@ -3471,6 +3506,36 @@ export function buildInboundIdentityResolutionPrompt(observation, relatedObserva
   ].filter(Boolean).join("\n");
 }
 
+/** @param {any} handoff */
+export function buildLinkedinMaintenancePrompt(handoff) {
+  return [
+    "This is one bounded Exo LinkedIn maintenance task.",
+    "Do not inspect the repo, do not read Exo state, do not run exo what-is-this, and do not narrate.",
+    "Use the Unipile MCP execute_request tool exactly once with the HAR request below.",
+    "Do not use curl. Do not use shell commands. Do not use Chrome or browser tools.",
+    "Do not switch LinkedIn identities, do not broaden to other invitations or profiles, and do not perform any action not represented by this contract.",
+    "Return only JSON with fields: status, reason, httpStatus, responseBody.",
+    "If the MCP request returns a 2xx response, return status=\"completed\", reason=null, httpStatus=<status>, responseBody=<parsed JSON body>.",
+    "If the MCP request fails or returns a non-2xx response, return status=\"blocked\" with the concrete reason, httpStatus if known, and responseBody if available.",
+    "",
+    "Maintenance contract JSON:",
+    JSON.stringify({
+      provider: handoff.provider,
+      connector: handoff.connector,
+      taskKind: handoff.taskKind,
+      action: handoff.action,
+      observationId: handoff.observationId,
+      actorName: handoff.actorName ?? null,
+      recipientUrl: handoff.recipientUrl ?? null,
+      writebackMode: handoff.writebackMode,
+      executionPolicy: handoff.executionPolicy,
+    }, null, 2),
+    "",
+    "HAR request JSON:",
+    JSON.stringify(handoff.harRequest, null, 2),
+  ].join("\n");
+}
+
 /**
  * @param {any} rawResult
  */
@@ -4214,14 +4279,6 @@ function normalizeLinkedinCaptureForWriteback(capture) {
   const mode = capture?.mode === "full" ? "full" : "quick";
   const checkedAt = normalizeIsoDatetime(capture?.checkedAt) ?? new Date().toISOString();
   const status = typeof capture?.status === "string" ? capture.status : "failed";
-  const explicitError = typeof capture?.error === "string" && capture.error.trim().length
-    ? capture.error.trim()
-    : (typeof capture?.reason === "string" && capture.reason.trim().length
-      ? capture.reason.trim()
-      : null);
-  const error = status === "failed"
-    ? (explicitError ?? "linkedin capture failed")
-    : explicitError;
   const requiredSurfaces = [
     "sentInvitations",
     "receivedInvitations",
@@ -4230,6 +4287,10 @@ function normalizeLinkedinCaptureForWriteback(capture) {
     "followersList",
     "followingList",
   ];
+  const explicitError = resolveLinkedinCaptureError(capture, status === "failed" ? requiredSurfaces : []);
+  const error = status === "failed"
+    ? (explicitError ?? "linkedin capture failed")
+    : explicitError;
   const hasFullShape = requiredSurfaces.every((key) => capture && typeof capture[key] === "object" && capture[key] !== null);
   if (!hasFullShape) {
     return {
@@ -4258,6 +4319,66 @@ function normalizeLinkedinCaptureForWriteback(capture) {
   return normalized;
 }
 
+function resolveLinkedinCaptureError(capture, surfaceKeys) {
+  const topLevelError = normalizeConnectorErrorValue(capture?.error)
+    ?? normalizeConnectorErrorValue(capture?.reason)
+    ?? normalizeConnectorErrorValue(capture?.errors)
+    ?? normalizeConnectorErrorValue(capture?.account?.error)
+    ?? normalizeConnectorErrorValue(capture?.account?.errors);
+  if (topLevelError) return topLevelError;
+  if (!surfaceKeys.length) return null;
+
+  for (const surfaceKey of surfaceKeys) {
+    const surfaceError = resolveLinkedinSurfaceError(capture?.[surfaceKey]);
+    if (surfaceError) return surfaceError;
+  }
+
+  if (Array.isArray(capture?.surfaces)) {
+    for (const surface of capture.surfaces) {
+      const surfaceError = resolveLinkedinSurfaceError(surface);
+      if (surfaceError) return surfaceError;
+    }
+  }
+
+  return null;
+}
+
+function resolveLinkedinSurfaceError(surface) {
+  return normalizeConnectorErrorValue(surface?.error)
+    ?? normalizeConnectorErrorValue(surface?.reason)
+    ?? normalizeConnectorErrorValue(surface?.errors);
+}
+
+function normalizeConnectorErrorValue(value) {
+  const direct = normalizeNullableString(value);
+  if (direct) return direct;
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const entryError = normalizeConnectorErrorValue(entry);
+      if (entryError) return entryError;
+    }
+    return null;
+  }
+
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const code = normalizeNullableString(value.code) ?? normalizeNullableString(value.type);
+  const message = normalizeNullableString(value.message)
+    ?? normalizeNullableString(value.title)
+    ?? normalizeNullableString(value.reason);
+  if (code && message) return `${code}: ${message}`;
+  if (message) return message;
+  if (code) return code;
+
+  if (value.error && value.error !== value) {
+    return normalizeConnectorErrorValue(value.error);
+  }
+  return null;
+}
+
 function buildFailedLinkedinSurface(mode, checkedAt, error) {
   return {
     status: "failed",
@@ -4283,6 +4404,7 @@ function normalizeLinkedinSurfaceCapture(surface, mode) {
   const checkedAt = normalizeIsoDatetime(surface?.checkedAt) ?? new Date().toISOString();
   const items = Array.isArray(surface?.items) ? surface.items : [];
   const status = typeof surface?.status === "string" ? surface.status : "failed";
+  const error = resolveLinkedinSurfaceError(surface);
   return {
     status,
     checkedAt,
@@ -4300,7 +4422,7 @@ function normalizeLinkedinSurfaceCapture(surface, mode) {
     stalledPassCount: Number.isInteger(surface?.stalledPassCount) ? surface.stalledPassCount : 0,
     error: status === "success"
       ? null
-      : (typeof surface?.error === "string" && surface.error.trim().length ? surface.error.trim() : "linkedin capture failed"),
+      : (error ?? "linkedin capture failed"),
     items,
   };
 }

@@ -119,6 +119,7 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   assert.match(prompt, /Read \/tmp\/exo\/\.exo\/agent-preflight\.json first if it exists/);
   assert.match(prompt, /skip every browser-backed task in this pass/);
   assert.match(prompt, /Do not run connector diagnostics, do not open Chrome/);
+  assert.match(prompt, /use the governed Unipile MCP path, not Chrome, browser automation, curl, or shell scraping/i);
   assert.match(prompt, /verification-only send mode/i);
 
   const plist = plan.launchAgent?.plist ?? "";
