@@ -988,6 +988,12 @@ export function chooseNextQueueTask(
       }
     }
 
+    if (verifyModePrefersRetrievalRecovery
+      && task.kind !== "run_inbound_sync"
+      && !isOperatorControlledSendTask(task)) {
+      continue;
+    }
+
     if (task.kind === "send_message") {
       const operatorControlled = isOperatorControlledSendTask(task);
       if (verifyModePrefersRetrievalRecovery && !operatorControlled) {

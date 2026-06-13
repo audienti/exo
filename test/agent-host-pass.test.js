@@ -2374,6 +2374,82 @@ test("chooseNextQueueTask drains inbound retrieval recovery before sends when in
   );
 });
 
+test("chooseNextQueueTask drains inbound retrieval recovery before bounded connection reconciliation in verify mode", () => {
+  const sendTask = {
+    kind: "send_message",
+    id: "send-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "like_post",
+    recipientUrl: "https://www.linkedin.com/posts/example/",
+    queuedAt: "2026-06-13T17:14:31.776Z",
+    dueAt: "2026-06-13T17:14:31.776Z",
+    body: "",
+    authoredBy: "agent",
+    editedByOperator: false,
+    approvedByOperator: false,
+    writeback: "exo actions result ...prospect-1",
+  };
+  const reconcileTask = {
+    kind: "reconcile_connection_request_status",
+    id: "reconcile-1",
+    observationId: "observation-1",
+    userId: "user-1",
+    accountId: "account-1",
+    capability: "linkedin",
+    companyId: "company-2",
+    prospectId: "prospect-2",
+    recipientUrl: "https://www.linkedin.com/in/example-two/",
+    surface: "connection_request",
+    reason: "sent_invite_status_reconciliation_bounded",
+    queuedAt: "2026-06-13T15:23:45.057Z",
+    dueAt: "2026-06-13T15:23:45.057Z",
+    batch: {
+      totalPending: 72,
+      maxPerPass: 1,
+      remainingAfterThisTask: 71,
+      cooldownMs: 1800000,
+    },
+  };
+  const syncTask = {
+    kind: "run_inbound_sync",
+    mode: "quick",
+    id: "sync-1",
+    userId: "user-1",
+    accountId: "account-1",
+    capability: "linkedin",
+    surface: "linkedin-messaging-inbox",
+    surfaceKeys: ["linkedin-messaging-inbox"],
+    reason: "stale_surface",
+    queuedAt: "2026-06-13T15:25:22.595Z",
+    dueAt: "2026-06-13T15:25:22.595Z",
+  };
+  const healthWarnings = [
+    {
+      capability: "linkedin",
+      handle: "williamflanagan",
+      surfaceKey: "linkedin-messaging-inbox",
+      surfaceLabel: "Messaging Inbox",
+      freshnessState: "stale",
+    },
+  ];
+
+  assert.equal(
+    chooseNextQueueTask(
+      { tasks: [sendTask, reconcileTask, syncTask] },
+      true,
+      {},
+      "2026-06-13T17:15:00.000Z",
+      false,
+      "verify",
+      [],
+      healthWarnings,
+    )?.id,
+    "sync-1",
+  );
+});
+
 test("chooseNextQueueTask respects canary cooldown but still allows proof-only work", () => {
   const verifiedTask = {
     kind: "send_message",
