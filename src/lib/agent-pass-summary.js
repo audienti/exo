@@ -23,10 +23,13 @@ export function mergeLanePassSummaries(laneSummaries) {
 
   const status = PASS_STATUS_SEVERITY.find((candidate) => lanes.some((lane) => lane?.status === candidate))
     ?? "noop";
-  const distinctReasons = [...new Set(lanes.map((lane) => lane?.reason).filter(Boolean))];
+  const reasonLanes = lanes.some((lane) => lane?.status && lane.status !== "noop")
+    ? lanes.filter((lane) => lane?.status !== "noop")
+    : lanes;
+  const distinctReasons = [...new Set(reasonLanes.map((lane) => lane?.reason).filter(Boolean))];
   const reason = distinctReasons.length <= 1
     ? distinctReasons[0] ?? null
-    : lanes
+    : reasonLanes
       .filter((lane) => lane?.reason)
       .map((lane) => `${lane.lane ?? "lane"}: ${lane.reason}`)
       .join(" | ");

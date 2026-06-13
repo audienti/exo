@@ -59,6 +59,7 @@ import {
   releaseAgentRunLock,
   tryAcquireAgentRunLock,
 } from "../src/lib/agent-run-lock.js";
+import { mergeLanePassSummaries } from "../src/lib/agent-pass-summary.js";
 import {
   findUserById,
   getLocalDatabase,
@@ -680,6 +681,39 @@ test("scheduled-style lane pass refreshes the merged legacy summary from lane su
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test("merged lane pass does not let an idle lane reason mask completed work", () => {
+  const merged = mergeLanePassSummaries([
+    {
+      status: "noop",
+      reason: "No due tasks were available.",
+      startedAt: "2026-06-13T16:27:38.602Z",
+      endedAt: "2026-06-13T16:27:39.622Z",
+      lane: "research",
+      results: [],
+      finalQueueCounts: { dueTaskCount: 10, waitingTaskCount: 6, blockerCount: 0 },
+    },
+    {
+      status: "partial",
+      reason: null,
+      startedAt: "2026-06-13T16:27:38.527Z",
+      endedAt: "2026-06-13T16:27:43.126Z",
+      lane: "transport",
+      results: [
+        {
+          kind: "reconcile_connection_request_status",
+          status: "completed",
+        },
+      ],
+      finalQueueCounts: { dueTaskCount: 10, waitingTaskCount: 6, blockerCount: 0 },
+    },
+  ]);
+
+  assert.equal(merged.status, "partial");
+  assert.equal(merged.reason, null);
+  assert.equal(merged.results.length, 1);
+  assert.equal(merged.finalQueueCounts.dueTaskCount, 10);
 });
 
 test("chooseNextQueueTask prefers connector-native send work before retrieval and draft work even when browser preflight is down", () => {
