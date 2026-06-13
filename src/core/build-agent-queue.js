@@ -94,21 +94,18 @@ import { shouldQueueConnectionRequestStatusReconciliation } from "./connection-r
 const LIVE_SYNC_TASK_CAPABILITIES = new Set(["linkedin", "gmail"]);
 const SUBJECT_DRAFT_SURFACES = new Set(["email", "in_mail_message"]);
 const AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG = {
-  "linkedin-followers-list": { maxPages: 1, pageSize: 10 },
-  "linkedin-following-list": { maxPages: 1, pageSize: 10 },
-  "linkedin-profile-views": { maxPages: 1, pageSize: 10 },
-  "linkedin-sent-invitations": { maxPages: 1, pageSize: 10 },
-  "linkedin-received-invitations": { maxPages: 1, pageSize: 10 },
-  "linkedin-messaging-inbox": { maxPages: 1, pageSize: 10 },
+  "linkedin-followers-list": { pageSize: 100 },
+  "linkedin-following-list": { pageSize: 50 },
+  "linkedin-profile-views": { pageSize: 50 },
+  "linkedin-sent-invitations": { pageSize: 100 },
+  "linkedin-received-invitations": { pageSize: 100 },
+  "linkedin-messaging-inbox": { pageSize: 100 },
 };
 const MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD = 1;
 const CONNECTION_REQUEST_STATUS_RECONCILIATION_COOLDOWN_MS = 30 * 60 * 1000;
-// Every full-mode (backfill) sync task runs as a bounded slice: the sync stops
-// at the page budget with `page_budget_stopped_early`, persists `nextCursor`,
-// and the still-open itemization gap requeues the next slice with
-// `resumeCursor`. This keeps backfill interleavable instead of one
-// multi-hour task that starves motion work.
-const DEFAULT_AUTONOMOUS_FULL_SURFACE_MAX_PAGES = 2;
+// Full-mode backfills should follow provider pagination to terminal cursor by
+// default. Set EXO_AGENT_SYNC_SLICE_MAX_PAGES only when intentionally bounding
+// a host during diagnostics or degraded-provider recovery.
 const MOTION_ROUND_ROBIN_TASK_KINDS = new Set([
   "company_discovery",
   "company_research",
@@ -2191,13 +2188,11 @@ function normalizeNullableString(value) {
  * @param {string} surfaceKey
  */
 function resolveAutonomousInboundPaginationConfig(surfaceKey) {
-  const surfaceOverride = AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG[surfaceKey];
-  if (surfaceOverride) return surfaceOverride;
   const envMaxPages = Number.parseInt(process.env.EXO_AGENT_SYNC_SLICE_MAX_PAGES ?? "", 10);
+  const surfaceOverride = AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG[surfaceKey] ?? {};
   return {
-    maxPages: Number.isInteger(envMaxPages) && envMaxPages > 0
-      ? envMaxPages
-      : DEFAULT_AUTONOMOUS_FULL_SURFACE_MAX_PAGES,
+    ...surfaceOverride,
+    maxPages: Number.isInteger(envMaxPages) && envMaxPages > 0 ? envMaxPages : null,
   };
 }
 

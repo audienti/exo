@@ -513,9 +513,10 @@ test("buildAgentQueue emits a full inbound sync task when an itemization gap exi
   assert.equal(task.mode, "full");
   assert.equal(task.reason, "itemization_gap");
   assert.ok(task.surfaceKeys.includes("linkedin-sent-invitations"));
-  assert.match(task.contractCommand, /exo inbound sync linkedin-live user-1 --account account-1 .*--surface linkedin-sent-invitations .*--mode full.* --max-pages 1 --page-size 10 --json/);
-  assert.equal(task.maxPages, 1);
-  assert.equal(task.pageSize, 10);
+  assert.match(task.contractCommand, /exo inbound sync linkedin-live user-1 --account account-1 .*--surface linkedin-sent-invitations .*--mode full.* --page-size 100 --json/);
+  assert.doesNotMatch(task.contractCommand, /--max-pages/);
+  assert.equal(task.maxPages, null);
+  assert.equal(task.pageSize, 100);
   assert.match(task.applyCommand, /exo inbound sync run user-1 --input <combined-inbound-sync\.json> --refresh --json/);
 });
 
@@ -1875,11 +1876,11 @@ test("buildAgentQueue carries paginated full-sync continuation metadata for Link
   assert.ok(task);
   assert.equal(task.mode, "full");
   assert.equal(task.resumeStartOffset, 10);
-  assert.equal(task.maxPages, 1);
-  assert.equal(task.pageSize, 10);
+  assert.equal(task.maxPages, null);
+  assert.equal(task.pageSize, 50);
   assert.match(task.contractCommand, /--resume-start-offset 10/);
-  assert.match(task.contractCommand, /--max-pages 1/);
-  assert.match(task.contractCommand, /--page-size 10/);
+  assert.doesNotMatch(task.contractCommand, /--max-pages/);
+  assert.match(task.contractCommand, /--page-size 50/);
 });
 
 test("buildAgentQueue defers itemization-gap full sync until provider backoff expires", () => {
