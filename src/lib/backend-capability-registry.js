@@ -200,6 +200,61 @@ const PUBLIC_ENGAGEMENT_ACTIONS = new Set([
 
 const OFFLINE_ACTIONS = new Set(["voicemail_outreach", "video_outreach"]);
 
+const ACCOUNT_CAPABILITY_HEALTH_STATE_KEYS = [
+  "checked",
+  "unchecked",
+  "stale",
+  "failed",
+  "unsupported",
+  "disabled",
+  "unconfigured",
+];
+
+const ACTION_PROOF_SURFACES = {
+  connection_request: ["linkedin-sent-invitations"],
+  withdraw_connection: ["linkedin-sent-invitations"],
+  accept_connection: ["linkedin-received-invitations"],
+  decline_connection: ["linkedin-received-invitations"],
+  send_email: ["gmail-sent-mail", "gmail-inbox-threads"],
+  send_direct_message: ["linkedin-messaging-inbox"],
+  in_mail_message: ["linkedin-inmail-sent", "linkedin-inmail-inbox"],
+  follow: ["linkedin-following-list"],
+  unfollow: ["linkedin-following-list"],
+  profile_view: ["linkedin-profile-views"],
+  like_post: ["linkedin-catch-up-updates"],
+  unlike_post: ["linkedin-catch-up-updates"],
+  create_post_comment: ["linkedin-comment-replies", "linkedin-catch-up-updates"],
+  share_post: ["linkedin-catch-up-updates"],
+  create_comment_comment: ["linkedin-comment-replies"],
+  create_comment_reaction: ["linkedin-comment-replies"],
+};
+
+const ACTION_RECONCILIATION_STRATEGIES = {
+  connection_request: "connection-request-sent-invitation-proof",
+  withdraw_connection: "connection-request-withdrawal-proof",
+  accept_connection: "received-invitation-transition-proof",
+  decline_connection: "received-invitation-transition-proof",
+  send_email: "gmail-thread-and-sent-mail-proof",
+  send_direct_message: "linkedin-private-message-thread-proof",
+  in_mail_message: "inmail-entitlement-and-thread-proof",
+  follow: "linkedin-following-list-proof",
+  unfollow: "linkedin-following-list-proof",
+  profile_view: "profile-view-attention-proof",
+};
+
+const ACTION_MUTATION_DEBT_POLICIES = {
+  connection_request: "pending until linkedin-sent-invitations proves pending, accepted, withdrawn, or no-longer-pending",
+  withdraw_connection: "pending until linkedin-sent-invitations proves the invite was withdrawn or disappeared",
+  accept_connection: "clears inbound invitation debt when received-invitation state transitions to accepted",
+  decline_connection: "clears inbound invitation debt when received-invitation state transitions to declined",
+  send_email: "pending external proof until gmail-sent-mail or gmail thread proof is available",
+  send_direct_message: "pending external proof until linkedin-messaging-inbox confirms the thread update",
+  in_mail_message: "pending external proof, but current InMail proof surfaces are missing",
+  follow: "pending external proof until linkedin-following-list confirms followed state",
+  unfollow: "pending external proof until linkedin-following-list confirms removed state",
+  profile_view: "local writeback plus profile-view proof when the surface observes attention after touch",
+};
+
 /**
  * @typedef {{
  *   owner: string | null,
@@ -224,6 +279,11 @@ const OFFLINE_ACTIONS = new Set(["voicemail_outreach", "video_outreach"]);
  *   reconcile: CapabilityOwner,
  *   mutate: CapabilityOwner,
  *   status: CapabilityStatus,
+ *   proofSurfaces: string[],
+ *   stateKeys: string[],
+ *   syncStrategy: string,
+ *   reconciliationStrategy: string,
+ *   mutationDebtPolicy: string,
  *   kanbanLane: "now" | "next" | "later",
  *   gap: string,
  * }} BackendCapabilityRow
@@ -288,6 +348,11 @@ function buildInboundSurfaceRows() {
         owner: status.mutate === "n/a" ? null : MUTATION_WRITEBACK_OWNER,
       },
       status,
+      proofSurfaces: [surface.key],
+      stateKeys: surface.observationKinds.length ? [...surface.observationKinds] : [surface.key],
+      syncStrategy: buildSurfaceSyncStrategy(surface),
+      reconciliationStrategy: buildSurfaceReconciliationStrategy(surface.key),
+      mutationDebtPolicy: buildSurfaceMutationDebtPolicy(status),
       kanbanLane: overlay.kanbanLane ?? "next",
       gap: overlay.gap ?? "Registry row needs a sharper capability-specific gap before the surface can be called working.",
     };
@@ -322,6 +387,11 @@ function buildMutationActionRows() {
         reconcile: overlay.status?.reconcile ?? "partial",
         mutate: overlay.status?.mutate ?? "partial",
       },
+      proofSurfaces: buildActionProofSurfaces(action.key),
+      stateKeys: action.activityKeys.length ? [...action.activityKeys] : [action.key],
+      syncStrategy: "not-applicable-mutation-starts-at-writeback",
+      reconciliationStrategy: buildActionReconciliationStrategy(action.key),
+      mutationDebtPolicy: buildActionMutationDebtPolicy(action.key),
       kanbanLane: overlay.kanbanLane ?? "next",
       gap: overlay.gap ?? "Mutation writeback exists, but external proof and reconciliation semantics still need a dedicated owner.",
     };
@@ -344,11 +414,16 @@ function buildSupportRows() {
       mutate: { owner: null },
       status: {
         sync: "n/a",
-        reconcile: "missing",
+        reconcile: "working",
         mutate: "n/a",
       },
+      proofSurfaces: ["connected-account-inbound-sync-state"],
+      stateKeys: ACCOUNT_CAPABILITY_HEALTH_STATE_KEYS,
+      syncStrategy: "connected-account-sync-state-read",
+      reconciliationStrategy: "account-capability-health-classification",
+      mutationDebtPolicy: "not-applicable",
       kanbanLane: "now",
-      gap: "Backend needs one account health model for checked, unchecked, stale, failed, unsupported, and unconfigured states.",
+      gap: "Backend account health now distinguishes checked, unchecked, stale, failed, unsupported, disabled, and unconfigured states.",
     },
     {
       id: "support:agent-run-log",
@@ -361,11 +436,16 @@ function buildSupportRows() {
       mutate: { owner: null },
       status: {
         sync: "n/a",
-        reconcile: "missing",
+        reconcile: "working",
         mutate: "n/a",
       },
+      proofSurfaces: ["agent-last-pass", "agent-host-state", "agent-log"],
+      stateKeys: ["run-id", "status", "lane", "task-kind"],
+      syncStrategy: "local-runtime-artifact-read",
+      reconciliationStrategy: "agent-run-artifact-normalization",
+      mutationDebtPolicy: "not-applicable",
       kanbanLane: "now",
-      gap: "Existing agent host artifacts need one query contract before the UI can show job history.",
+      gap: "Agent host artifacts now have one backend query contract before the UI can show job history.",
     },
   ];
 }
@@ -414,6 +494,116 @@ function inferActionOverlay(actionKey) {
 }
 
 /**
+ * @param {ReturnType<typeof listInboundSurfaceCatalog>[number]} surface
+ */
+function buildSurfaceSyncStrategy(surface) {
+  if (surface.autonomousBackgroundRetrieval === false) {
+    return `${surface.retrievalMode}-unsupported-autonomous-capture`;
+  }
+
+  return `${surface.retrievalMode}-itemized-truth-sync`;
+}
+
+/**
+ * @param {string} surfaceKey
+ */
+function buildSurfaceReconciliationStrategy(surfaceKey) {
+  switch (surfaceKey) {
+    case "linkedin-sent-invitations":
+      return "connection-request-sent-invitation-owner";
+    case "linkedin-received-invitations":
+      return "connection-request-received-invitation-owner";
+    case "linkedin-messaging-inbox":
+      return "linkedin-private-message-thread-owner";
+    case "linkedin-profile-views":
+      return "profile-view-attention-reconciliation";
+    case "linkedin-followers-list":
+      return "social-graph-follower-reconciliation";
+    case "linkedin-following-list":
+      return "follow-state-reconciliation";
+    case "linkedin-comment-replies":
+    case "linkedin-catch-up-updates":
+      return "public-engagement-proof-reconciliation";
+    case "gmail-inbox-threads":
+      return "gmail-thread-identity-reconciliation";
+    default:
+      return "surface-observation-reconciliation";
+  }
+}
+
+/**
+ * @param {CapabilityStatus} status
+ */
+function buildSurfaceMutationDebtPolicy(status) {
+  if (status.mutate === "n/a") {
+    return "not-applicable";
+  }
+
+  if (status.mutate === "missing") {
+    return "cannot-clear-mutation-debt-until-proof-surface-exists";
+  }
+
+  return "surface-observations-can-confirm-or-clear-related-mutation-debt";
+}
+
+/**
+ * @param {string} actionKey
+ */
+function buildActionProofSurfaces(actionKey) {
+  if (ACTION_PROOF_SURFACES[actionKey]) {
+    return [...ACTION_PROOF_SURFACES[actionKey]];
+  }
+
+  if (PUBLIC_ENGAGEMENT_ACTIONS.has(actionKey)) {
+    return ["linkedin-catch-up-updates", "linkedin-comment-replies"];
+  }
+
+  if (OFFLINE_ACTIONS.has(actionKey)) {
+    return ["local-activity-log"];
+  }
+
+  return ["activity-event-log"];
+}
+
+/**
+ * @param {string} actionKey
+ */
+function buildActionReconciliationStrategy(actionKey) {
+  if (ACTION_RECONCILIATION_STRATEGIES[actionKey]) {
+    return ACTION_RECONCILIATION_STRATEGIES[actionKey];
+  }
+
+  if (PUBLIC_ENGAGEMENT_ACTIONS.has(actionKey)) {
+    return "public-engagement-proof-reconciliation";
+  }
+
+  if (OFFLINE_ACTIONS.has(actionKey)) {
+    return "local-activity-proof-reconciliation";
+  }
+
+  return "action-result-reconciliation";
+}
+
+/**
+ * @param {string} actionKey
+ */
+function buildActionMutationDebtPolicy(actionKey) {
+  if (ACTION_MUTATION_DEBT_POLICIES[actionKey]) {
+    return ACTION_MUTATION_DEBT_POLICIES[actionKey];
+  }
+
+  if (PUBLIC_ENGAGEMENT_ACTIONS.has(actionKey)) {
+    return "pending or missing external proof until public engagement capture is supported";
+  }
+
+  if (OFFLINE_ACTIONS.has(actionKey)) {
+    return "local proof only unless a future external proof surface is added";
+  }
+
+  return "local writeback creates reconciliation metadata when an external proof surface is known";
+}
+
+/**
  * @param {BackendCapabilityRow} row
  * @returns {BackendCapabilityRow}
  */
@@ -427,5 +617,7 @@ function cloneRow(row) {
     reconcile: { ...row.reconcile },
     mutate: { ...row.mutate },
     status: { ...row.status },
+    proofSurfaces: [...row.proofSurfaces],
+    stateKeys: [...row.stateKeys],
   };
 }

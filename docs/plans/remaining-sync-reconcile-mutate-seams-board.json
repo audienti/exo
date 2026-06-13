@@ -36,7 +36,7 @@
     "viewer": {
       "htmlPath": "docs/plans/remaining-sync-reconcile-mutate-seams-board.html"
     },
-    "parallelismNote": "T1 and T2 are interface gates. Subagent capacity is intentionally unused until shared registry metadata and seam contracts are green.",
+    "parallelismNote": "T2 is the remaining interface gate. Subagent capacity is intentionally unused until the shared seam contract is green.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -47,13 +47,13 @@
       "commit": "2acfed988706e8c3f97ea6f08baa84e8bf2d361f",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-13T12:49:08.000Z"
+    "updatedAt": "2026-06-13T12:57:21.000Z"
   },
   "tasks": [
     {
       "id": "T1",
       "title": "Expand capability seam matrix contract",
-      "status": "ready",
+      "status": "done",
       "priority": 100,
       "dependsOn": [],
       "ownerLane": "controller",
@@ -75,19 +75,23 @@
         "git diff --check"
       ],
       "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
-      "outputs": [],
+      "startedAt": "2026-06-13T12:51:47.000Z",
+      "updatedAt": "2026-06-13T12:57:21.000Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Added failing registry tests for proof surfaces, state keys, sync strategy, reconciliation strategy, and mutation debt policy.",
+        "Extended backend capability registry rows with seam metadata for inbound surfaces, mutation actions, and backend support rows.",
+        "Named non-connection proof paths for Gmail, LinkedIn messaging, social graph, public engagement, and agent run-log seams."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",
-      "notes": "First interface gate. Subagent lanes wait for this metadata shape."
+      "notes": "Verification passed: npm test -- test/backend-capability-registry.test.js, git diff --check, npm test."
     },
     {
       "id": "T2",
       "title": "Add shared seam contract harness",
-      "status": "backlog",
+      "status": "ready",
       "priority": 95,
       "dependsOn": [
         "T1"
