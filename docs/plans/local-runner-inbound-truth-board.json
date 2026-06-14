@@ -51,7 +51,7 @@
     "viewer": {
       "htmlPath": "docs/plans/local-runner-inbound-truth-board.html"
     },
-    "parallelismNote": "T2b is done. T3 is the next ready controller task; remaining backlog tasks wait on T3 or later verification gates.",
+    "parallelismNote": "T4 is ready next and remains a controller-lane high-overlap invitation lifecycle task, so no subagent fan-out is safe until that seam completes.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T20:02:41Z"
+    "updatedAt": "2026-06-14T20:08:21Z"
   },
   "tasks": [
     {
@@ -281,7 +281,7 @@
     {
       "id": "T3",
       "title": "Make missing Unipile config loud",
-      "status": "ready",
+      "status": "done",
       "priority": 90,
       "dependsOn": [
         "T1"
@@ -291,6 +291,10 @@
       "files": [
         "src/core/inbound-linkedin-live-sync.js",
         "src/core/inbound-linkedin-sync.js",
+        "src/core/canonical-inbound-sync-adapter.js",
+        "src/lib/linkedin-tool-methods.js",
+        "src/schema/linkedin-capture.js",
+        "src/schema/surfaces/shared.js",
         "scripts/run-agent-host-pass.js",
         "test/inbound-live-runtime-variants.test.js",
         "test/agent-host-pass.test.js"
@@ -307,19 +311,30 @@
         "git diff --check"
       ],
       "worktree": "",
-      "startedAt": "",
-      "updatedAt": "2026-06-14T19:18:34Z",
-      "resolvedModel": "",
-      "outputs": [],
-      "attemptCount": 0,
-      "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "startedAt": "2026-06-14T20:10:12Z",
+      "updatedAt": "2026-06-14T20:08:21Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Wrote failing tests for missing UNIPILE_API_KEY, missing explicit Unipile base URL, missing providerAccountId, provider session or identity failure, and host-pass surfaced config failure.",
+        "Changed managed Unipile direct capture so missing deterministic prerequisites return direct-runtime failed/untrusted payloads instead of falling back to agent_handoff.",
+        "Preserved exhaustionReason, backoffReason, and syncTrustStatus through LinkedIn capture schema, canonical invitation tool results, canonical inbound adapter, legacy surface mapping, and host-pass normalization.",
+        "Verified focused T3 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 126 tests.",
+        "Full npm test failed with 919 pass, 9 fail, 1 skipped because existing handoff-contract tests did not explicitly request diagnostic agent handoff after the direct-first default.",
+        "Updated diagnostic handoff tests to pass --agent-handoff or allowDirectUnipileHttp: false so production default remains direct-first while handoff contract coverage stays explicit.",
+        "Verified handoff contract regression files: npm test -- test/inbound-live-contracts.test.js test/inbound-live-edge-contracts.test.js test/live-agent-handoff.test.js passed with 16 tests.",
+        "Re-verified focused T3 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 126 tests.",
+        "Verified full integration gate: npm test passed with 929 tests, 928 pass, 1 skipped, 0 failures.",
+        "Verified git diff --check."
+      ],
+      "attemptCount": 1,
+      "lastFailure": "Full npm test failed in inbound-live-contracts, inbound-live-edge-contracts, and live-agent-handoff tests because handoff-contract assertions still expected agent_handoff by default. Under the plan, managed Unipile direct capture should now fail loud when config is missing unless diagnostic handoff is explicitly requested.",
+      "commit": "28c2c3a87ef463f898c4111d5da8d66466f2b302",
+      "notes": "Second approach kept direct-first production behavior and made diagnostic handoff tests opt into the fallback contract explicitly."
     },
     {
       "id": "T4",
       "title": "Prove invitation lifecycle end to end",
-      "status": "backlog",
+      "status": "ready",
       "priority": 85,
       "dependsOn": [
         "T1",
@@ -347,7 +362,7 @@
       ],
       "worktree": "",
       "startedAt": "",
-      "updatedAt": "",
+      "updatedAt": "2026-06-14T20:08:21Z",
       "resolvedModel": "",
       "outputs": [],
       "attemptCount": 0,

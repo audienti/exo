@@ -139,12 +139,12 @@
     <div class="topline">
       <span class="chip"><b>plan</b>local-runner-inbound-truth</span>
       <span class="chip"><b>status</b>active</span>
-      <span class="chip"><b>progress</b>5/9</span>
+      <span class="chip"><b>progress</b>6/9</span>
       <span class="chip"><b>controller</b>codex</span>
       <span class="chip"><b>worktrees</b>.worktrees</span>
       <span class="chip"><b>open messages</b>1</span>
-      <span class="chip"><b>board updated</b>2026-06-14T20:02:41Z</span>
-      <span class="chip"><b>rendered</b>2026-06-14T19:46:37Z</span>
+      <span class="chip"><b>board updated</b>2026-06-14T20:08:21Z</span>
+      <span class="chip"><b>rendered</b>2026-06-14T20:09:28Z</span>
     </div>
     <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
   </header>
@@ -158,7 +158,7 @@
         </div>
         <p><b>Running or verifying:</b> none</p>
         <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
-        <p><b>Controller note:</b> T2b is done. T3 is the next ready controller task; remaining backlog tasks wait on T3 or later verification gates.</p>
+        <p><b>Controller note:</b> T4 is ready next and remains a controller-lane high-overlap invitation lifecycle task, so no subagent fan-out is safe until that seam completes.</p>
       </section>
 
 
@@ -186,7 +186,7 @@
   <main class="board">
 
           <section class="column">
-            <h2>Backlog <span>3</span></h2>
+            <h2>Backlog <span>2</span></h2>
 
       <article class="task task-backlog">
         <header>
@@ -206,15 +206,6 @@
         <div class="field"><div class="label">Reason</div><div>Waiting on T4</div></div><div class="field"><div class="label">Depends on</div><div>T4</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/build-agent-queue.js</li><li>src/core/agent-run-log.js</li><li>scripts/run-agent-host-pass.js</li><li>test/agent-queue.test.js</li><li>test/agent-run-log.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Queue counts do not imply non-runnable waiting work is ready.</li><li>Last-pass/run-log output names transport and config reasons.</li><li>Blocked, waiting, partial, and ready are distinct in backend tests.</li></ul></div></div>
       </article>
 
-      <article class="task task-backlog">
-        <header>
-          <div class="task-id">T4</div>
-          <h3>Prove invitation lifecycle end to end</h3>
-        </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>85</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T3</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2, T2b, T3</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/connection-request-reconciliation.js</li><li>test/connection-request-reconciliation.test.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>The invitation tracer bullet passes through send, sync proof, no-longer-pending, and relationship proof without false acceptance.</li><li>Withdraw or received-invite mutation transport is proven to run before proof debt moves.</li><li>connection-request-reconciliation.js remains the owner for pending, accepted, no-longer-pending, and not-accepted decisions.</li></ul></div></div>
-      </article>
-
           </section>
 
           <section class="column">
@@ -222,11 +213,11 @@
 
       <article class="task task-ready">
         <header>
-          <div class="task-id">T3</div>
-          <h3>Make missing Unipile config loud</h3>
+          <div class="task-id">T4</div>
+          <h3>Prove invitation lifecycle end to end</h3>
         </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>90</span></div>
-        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/inbound-linkedin-live-sync.js</li><li>src/core/inbound-linkedin-sync.js</li><li>scripts/run-agent-host-pass.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Missing Unipile config never produces a quiet zero-item success.</li><li>Failed/untrusted payloads include syncTrustStatus, exhaustionStatus, and concrete reason.</li><li>Host-pass output records the concrete reason.</li><li>Identity mismatch is treated as a loud failure.</li></ul></div></div>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>85</span></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2, T2b, T3</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/connection-request-reconciliation.js</li><li>test/connection-request-reconciliation.test.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>The invitation tracer bullet passes through send, sync proof, no-longer-pending, and relationship proof without false acceptance.</li><li>Withdraw or received-invite mutation transport is proven to run before proof debt moves.</li><li>connection-request-reconciliation.js remains the owner for pending, accepted, no-longer-pending, and not-accepted decisions.</li></ul></div></div>
       </article>
 
           </section>
@@ -242,7 +233,7 @@
           </section>
 
           <section class="column">
-            <h2>Done <span>5</span></h2>
+            <h2>Done <span>6</span></h2>
 
       <article class="task task-done">
         <header>
@@ -251,6 +242,15 @@
         </header>
         <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>70</span></div>
         <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>multi_agent_v1:019ec793-2c34-7203-a2a3-bc73e60d1cbb</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>test/unipile-account-smoke.test.js</li><li>src/lib/unipile-config.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/unipile-account-smoke.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Default npm test does not make a live Unipile request.</li><li>An explicit environment opt-in command is documented in the test or board notes.</li><li>When enabled, the test verifies the configured provider account id is present in /api/v1/accounts.</li></ul></div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Subagent Russell added test/unipile-account-smoke.test.js with a default skip gate and documented opt-in command.</li><li>Controller verified npm test -- test/unipile-account-smoke.test.js skips by default without a live request.</li><li>Controller verified EXO_UNIPILE_ACCOUNT_SMOKE=1 npm test -- test/unipile-account-smoke.test.js skips without credentials/provider account id and makes no live request.</li><li>Full npm test included the smoke test as one skipped test.</li><li>Verified git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>70b76d21bf7b52104c9f4ca6d50b8eca52d16547</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T3</div>
+          <h3>Make missing Unipile config loud</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>1</span><span class="chip"><b>priority</b>90</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/inbound-linkedin-live-sync.js</li><li>src/core/inbound-linkedin-sync.js</li><li>src/core/canonical-inbound-sync-adapter.js</li><li>src/lib/linkedin-tool-methods.js</li><li>src/schema/linkedin-capture.js</li><li>src/schema/surfaces/shared.js</li><li>scripts/run-agent-host-pass.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Missing Unipile config never produces a quiet zero-item success.</li><li>Failed/untrusted payloads include syncTrustStatus, exhaustionStatus, and concrete reason.</li><li>Host-pass output records the concrete reason.</li><li>Identity mismatch is treated as a loud failure.</li></ul></div></div><div class="field"><div class="label">Last failure</div><div>Full npm test failed in inbound-live-contracts, inbound-live-edge-contracts, and live-agent-handoff tests because handoff-contract assertions still expected agent_handoff by default. Under the plan, managed Unipile direct capture should now fail loud when config is missing unless diagnostic handoff is explicitly requested.</div></div><div class="field"><div class="label">Notes</div><div>Second approach kept direct-first production behavior and made diagnostic handoff tests opt into the fallback contract explicitly.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Wrote failing tests for missing UNIPILE_API_KEY, missing explicit Unipile base URL, missing providerAccountId, provider session or identity failure, and host-pass surfaced config failure.</li><li>Changed managed Unipile direct capture so missing deterministic prerequisites return direct-runtime failed/untrusted payloads instead of falling back to agent_handoff.</li><li>Preserved exhaustionReason, backoffReason, and syncTrustStatus through LinkedIn capture schema, canonical invitation tool results, canonical inbound adapter, legacy surface mapping, and host-pass normalization.</li><li>Verified focused T3 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 126 tests.</li><li>Full npm test failed with 919 pass, 9 fail, 1 skipped because existing handoff-contract tests did not explicitly request diagnostic agent handoff after the direct-first default.</li><li>Updated diagnostic handoff tests to pass --agent-handoff or allowDirectUnipileHttp: false so production default remains direct-first while handoff contract coverage stays explicit.</li><li>Verified handoff contract regression files: npm test -- test/inbound-live-contracts.test.js test/inbound-live-edge-contracts.test.js test/live-agent-handoff.test.js passed with 16 tests.</li><li>Re-verified focused T3 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 126 tests.</li><li>Verified full integration gate: npm test passed with 929 tests, 928 pass, 1 skipped, 0 failures.</li><li>Verified git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>28c2c3a87ef463f898c4111d5da8d66466f2b302</div></div>
       </article>
 
       <article class="task task-done">
