@@ -594,7 +594,13 @@ export const EXO_CLIENT_JS = `
     var t = document.createElement('div');
     t.className = 'exo-toast ' + (ok ? 'ok' : 'err');
     t.textContent = msg;
+    t.setAttribute('role', 'alert');
     wrap.appendChild(t);
+    if (!ok) {
+      t.title = 'Click to dismiss';
+      t.addEventListener('click', function(){ t.remove(); });
+      return;
+    }
     setTimeout(function(){ t.classList.add('leaving'); setTimeout(function(){ t.remove(); }, 300); }, 3200);
   }
   document.addEventListener('click', async function(e){
@@ -1240,12 +1246,12 @@ function summarizeAgentHeaderRuntime(runtime) {
     return {
       health: "yellow",
       label: "Review only",
-      headline: "Approved drafts are waiting in review only",
-      detail: `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"} already have fresh proof. Review only will not send them. Switch the agent to send one or send all when you want the next pass to send.`,
+      headline: "Agent-authored drafts are waiting in review only",
+      detail: `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"} already have fresh proof. Review only will not auto-send those agent-authored drafts. Operator-authored, edited, or approved drafts still send live.`,
       cadence,
       sendMode,
       statusFacts,
-      nextAction: "Switch the agent out of review only when you want the next pass to send approved drafts.",
+      nextAction: "Switch the agent out of review only when you want the next pass to auto-send proved agent-authored drafts.",
       canRunNow: true,
       runLabel: "Run review pass",
     };
@@ -1358,12 +1364,13 @@ function summarizeAgentFailureReason(runtime, input) {
   if (!rawReason) {
     return null;
   }
+  const primaryReason = pickPrimaryAgentFailureClause(rawReason);
 
-  if (classifyRuntimeUsageLimitFailure(rawReason).limited) {
+  if (classifyRuntimeUsageLimitFailure(primaryReason).limited) {
     return "The last pass stopped because the model runtime hit its usage limit. Queued work held its place and resumes once the limit resets.";
   }
 
-  if (/Codex task failed: .*ETIMEDOUT/i.test(rawReason)) {
+  if (/Codex task failed: .*ETIMEDOUT/i.test(primaryReason)) {
     const taskLabel = normalizeRuntimeText(runtime?.hostState?.sendCircuitBreaker?.lastTaskLabel);
     const overdueBySeconds = Number.isFinite(runtime?.cadence?.overdueBySeconds)
       ? Number(runtime.cadence.overdueBySeconds)
@@ -1374,11 +1381,21 @@ function summarizeAgentFailureReason(runtime, input) {
     return `A bounded background Codex task timed out${taskLabel ? ` on ${taskLabel}` : ""}.${cadenceMiss}`;
   }
 
-  if (/invalid transport in `mcp_servers\.playwriter`/i.test(rawReason)) {
+  if (/Command failed:\s*exo next\b[\s\S]*ETIMEDOUT/i.test(primaryReason)) {
+    const overdueBySeconds = Number.isFinite(runtime?.cadence?.overdueBySeconds)
+      ? Number(runtime.cadence.overdueBySeconds)
+      : 0;
+    const cadenceMiss = runtime?.cadence?.overdue && overdueBySeconds > 0
+      ? ` The pass is ${humanizeDelay(overdueBySeconds)} behind${input.cadence ? ` its ${input.cadence} cadence` : " schedule"}.`
+      : "";
+    return `The transport lane timed out while asking Exo for the next governed task.${cadenceMiss}`;
+  }
+
+  if (/invalid transport in `mcp_servers\.playwriter`/i.test(primaryReason)) {
     return "A background Codex task could not start because the configured Playwriter MCP transport is invalid.";
   }
 
-  return rawReason;
+  return stripAgentFailureLanePrefix(primaryReason);
 }
 
 /** @param {unknown} value */
@@ -1386,6 +1403,29 @@ function normalizeRuntimeText(value) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length ? trimmed : null;
+}
+
+/** @param {string} rawReason */
+function pickPrimaryAgentFailureClause(rawReason) {
+  const clauses = rawReason
+    .split(/\s+\|\s+/)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  if (clauses.length <= 1) {
+    return rawReason;
+  }
+  return clauses.find((clause) => !isAgentNoopClause(clause)) ?? clauses[0];
+}
+
+/** @param {string} clause */
+function isAgentNoopClause(clause) {
+  const normalized = stripAgentFailureLanePrefix(clause);
+  return /^No due tasks were available\.?$/i.test(normalized);
+}
+
+/** @param {string} clause */
+function stripAgentFailureLanePrefix(clause) {
+  return clause.replace(/^[a-z][a-z0-9_-]*:\s*/i, "").trim();
 }
 
 /**
@@ -2073,7 +2113,7 @@ body.view-settings .exec-policy-card{max-width:none}
 .pd-div{width:1px;height:14px;background:var(--border-2)}
 .pd-actions{display:flex;align-items:center;gap:9px;flex:none;justify-self:end}
 .lifecycle-panel{display:flex;flex-direction:column;gap:10px;background:var(--bg-1);border:1px solid var(--border);
-  border-radius:10px;padding:11px 13px;margin:0 0 16px}
+  border-radius:10px;padding:11px 13px;margin:0 0 16px;max-width:none}
 .lifecycle-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .lifecycle-actions,.lifecycle-inline,.packet-review-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .lifecycle-inline{justify-content:flex-end;max-width:560px}
@@ -2222,7 +2262,7 @@ body.view-settings .exec-policy-card{max-width:none}
 
 /* ---------- toasts (interactive) ---------- */
 #exo-toasts{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);display:flex;flex-direction:column;
-  gap:8px;z-index:60;align-items:center}
+  gap:8px;z-index:90;align-items:center}
 .exo-toast{display:inline-flex;align-items:center;gap:8px;background:var(--bg-3);border:1px solid var(--border-2);
   color:var(--text);font-size:12.5px;font-weight:600;padding:9px 15px;border-radius:10px;
   box-shadow:0 8px 28px -8px rgba(0,0,0,.6);max-width:560px;transition:opacity .3s,transform .3s}
@@ -2447,11 +2487,17 @@ a.person-link:hover{color:var(--accent)}
 .ws-cell+.ws-cell{border-left:1px solid var(--border)}
 .ws-cell .pulse-cap{margin-bottom:5px}
 .ws-cell .stat-sub{margin-top:4px}
+.queue-runtime-panel{background:var(--bg-1);border:1px solid var(--border);border-radius:13px;overflow:hidden}
+.queue-runtime-panel .ws-strip{background:transparent;border:none;border-top:1px solid var(--border);border-radius:0}
 .agent-bar{background:var(--bg-1);border:1px solid var(--border);border-radius:13px}
 .agent-bar>summary{list-style:none;display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;border-radius:13px}
 .agent-bar>summary::-webkit-details-marker{display:none}
 .agent-bar>summary:hover{background:var(--bg-2)}
 .agent-bar[open]>summary{border-radius:13px 13px 0 0}
+.queue-runtime-panel .agent-bar{background:transparent;border:none;border-radius:0}
+.queue-runtime-panel .agent-bar>summary{border-radius:0}
+.queue-runtime-panel .agent-bar[open]>summary{border-radius:0}
+.queue-runtime-panel .agent-bar-embedded .ab-body{padding-bottom:14px}
 .ab-title{font-size:13px;font-weight:700;color:var(--text);white-space:nowrap}
 .ab-detail{flex:1;min-width:0;font-size:12px;color:var(--text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ab-side{display:flex;align-items:center;gap:8px;white-space:nowrap}

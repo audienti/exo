@@ -292,7 +292,8 @@ function renderPersonDetail(p, meta = {}) {
   const composeSurface = composeSurfaceFor(p);
   const replyUnavailable = p.handledNotification?.state === "reply_unavailable";
   const showComposeAction = !replyUnavailable && !shouldHideComposeAction(p);
-  const stageBranch = stageBranchFor(p);
+  const showAssignOwnerAction = meta.interactive && p.companyId && !p.owner;
+  const stageBranch = stageBranchFor(p, composeSurface);
   const baseStageIdx = branchStageIndex(stageBranch);
   const stageIdx = reconcileStageIndex(stageBranch, p.connectionDegree);
   const degreeOverride = p.connectionDegree != null && stageIdx !== baseStageIdx;
@@ -322,6 +323,9 @@ function renderPersonDetail(p, meta = {}) {
     // so the main column stays focused on the engagement timeline.
     `<a class="btn btn-secondary btn-sm" href="#context-${escapeAttr(p.id)}" title="Why this prospect — surfacing signal and premise">${iconSvg("target", 14)}<span>Context</span></a>` +
     (p.linkedinProfileUrl ? btn({ variant: "secondary", size: "sm", icon: "link", label: "View profile", href: p.linkedinProfileUrl }) : "") +
+    (showAssignOwnerAction
+      ? `<a class="btn btn-secondary btn-sm" href="#assign-${escapeAttr(p.id)}">${iconSvg("userPlus", 14)}<span>Assign owner</span></a>`
+      : "") +
     (meta.interactive && meta.transitionMotionId && p.motionId === meta.transitionMotionId
       ? `<a class="btn btn-secondary btn-sm" href="#rehome-${escapeAttr(p.id)}">${iconSvg("layers", 14)}<span>Re-home</span></a>`
       : "") +
@@ -379,7 +383,7 @@ function renderPersonDetail(p, meta = {}) {
     `<section class="dom-wrap person-detail" id="p-${escapeAttr(p.id)}">${head}${lifecycle}${pipeline}${handledNotification}${timeline}${colleagues}</section>` +
     renderContextPanel(p, meta) +
     (meta.interactive ? renderTimelineNotePanel(p, meta) : "") +
-    (meta.interactive ? renderComposePanel(p, meta) : "") +
+    (meta.interactive && showComposeAction ? renderComposePanel(p, meta) : "") +
     (meta.interactive ? renderRehomePanel(p, meta) : "") +
     (meta.interactive && !p.owner ? renderAssignPanel(p, meta) : "")
   );
@@ -575,7 +579,7 @@ function branchStageIndex(branch) {
 /**
  * Reconcile pipeline stage against the authoritative LinkedIn connection
  * degree. A 1st-degree connection means the request was accepted (connected,
- * stage ≥ 2); a 2nd/3rd-degree means it has NOT been accepted yet, so the
+ * stage ≥ 3); a 2nd/3rd-degree means it has NOT been accepted yet, so the
  * stage cannot be past "Request sent" — they stay in the sent queue.
  *
  * @param {string} branch
@@ -590,10 +594,29 @@ function reconcileStageIndex(branch, degree) {
 
 /**
  * @param {any} prospect
+ * @param {string | null} [composeSurface]
  * @returns {string}
  */
-function stageBranchFor(prospect) {
-  return isWaitingOnEmailReply(prospect) ? "connection-requested" : prospect?.branch;
+function stageBranchFor(prospect, composeSurface = null) {
+  return hasOutstandingConnectionRequest(prospect) || isWaitingOnEmailReply(prospect)
+    ? "connection-requested"
+    : isActivePreConnectStage(prospect, composeSurface)
+      ? "pre-connect"
+    : prospect?.branch;
+}
+
+/**
+ * Pre-connect should show up as its own stage whenever public warmup is the
+ * current governed branch, even if the persisted branch still says "identified".
+ *
+ * @param {any} prospect
+ * @param {string | null} composeSurface
+ */
+function isActivePreConnectStage(prospect, composeSurface = null) {
+  if (String(prospect?.branch ?? "").trim() === "pre-connect") return true;
+  if (activePublicEngagementQueueItem(prospect)) return true;
+  return PUBLIC_ENGAGEMENT_DRAFT_SURFACES.has(composeSurface ?? "")
+    && draftStateForSurface(prospect, composeSurface) !== "none";
 }
 
 /** @param {number} degree */
@@ -847,6 +870,9 @@ function publicEngagementNextMove(p, composeSurface = null) {
 
 /** @param {any} p */
 function shouldHideComposeAction(p) {
+  if (hasOutstandingConnectionRequest(p)) {
+    return true;
+  }
   const task = activePublicEngagementQueueItem(p);
   const surface = queueTaskSurface(task);
   return Boolean(task?.kind === "send_message" && PUBLIC_ENGAGEMENT_AUTONOMOUS_SURFACES.has(surface ?? ""));
@@ -956,16 +982,24 @@ function nextMoveForStage(idx, p, composeSurface = null) {
         detail: null,
       };
     default:
+      const directConnectDetail = preConnectDirectDetail(p);
       return p.owner
         ? {
             lead: "Send the first connection request",
-            detail: null,
+            detail: directConnectDetail,
           }
         : {
             lead: "Assign an owner",
-            detail: "Then send the first connection request.",
+            detail: [directConnectDetail, "Then send the first connection request."].filter(Boolean).join(" "),
           };
   }
+}
+
+/** @param {any} p */
+function preConnectDirectDetail(p) {
+  return p?.preConnect?.status === "skipped" || p?.preConnect?.status === "bypassed"
+    ? normalizeMessageText(p.preConnect.reason)
+    : null;
 }
 
 /** @param {number} stageIdx */
@@ -1285,6 +1319,57 @@ function isWaitingOnEmailReply(prospect) {
     && prospect?.cadenceState?.lastTouchOutcome === "sent"
     && hasOutboundSurfaceTouch(prospect, "email")
   );
+}
+
+const ACTIVE_CONNECTION_REQUEST_OBSERVATION_KINDS = new Set([
+  "connection_request_pending",
+  "connection_request_withdraw_requested",
+]);
+
+const RESOLVED_CONNECTION_REQUEST_OBSERVATION_KINDS = new Set([
+  "connection_request_accepted",
+  "connection_request_declined",
+  "connection_request_withdrawn",
+  "connection_request_no_longer_pending",
+  "connection_request_not_accepted",
+]);
+
+/**
+ * @param {any} prospect
+ * @returns {any | null}
+ */
+function latestConnectionRequestStateObservation(prospect) {
+  const observations = Array.isArray(prospect?.timelineObservations) ? prospect.timelineObservations : [];
+  let latest = null;
+  let latestAt = Number.NEGATIVE_INFINITY;
+  for (const observation of observations) {
+    const kind = String(observation?.kind ?? "");
+    if (!ACTIVE_CONNECTION_REQUEST_OBSERVATION_KINDS.has(kind) && !RESOLVED_CONNECTION_REQUEST_OBSERVATION_KINDS.has(kind)) {
+      continue;
+    }
+    const at = Date.parse(String(observationEventAt(observation) ?? ""));
+    const rank = Number.isFinite(at) ? at : Number.NEGATIVE_INFINITY;
+    if (!latest || rank >= latestAt) {
+      latest = observation;
+      latestAt = rank;
+    }
+  }
+  return latest;
+}
+
+/**
+ * @param {any} prospect
+ * @returns {boolean}
+ */
+function hasOutstandingConnectionRequest(prospect) {
+  if (prospectConnectionConfirmed(prospect)) {
+    return false;
+  }
+  const latestObservation = latestConnectionRequestStateObservation(prospect);
+  if (latestObservation) {
+    return ACTIVE_CONNECTION_REQUEST_OBSERVATION_KINDS.has(String(latestObservation.kind ?? ""));
+  }
+  return hasOutboundSurfaceTouch(prospect, "connection_request");
 }
 
 /**
@@ -1635,6 +1720,7 @@ function publicActivityTimelineAt(p, activity, selectedTargetUrl) {
 function shouldHideTimelineDraft(p, draft) {
   if (draft?.surface !== "connection_request") return false;
   if (draft?.approvedByOperator || draft?.status === "approved") return false;
+  if (hasOutstandingConnectionRequest(p)) return true;
   const activePublicTask = activePublicEngagementQueueItem(p);
   if (!activePublicTask) return false;
   const surface = queueTaskSurface(activePublicTask);
@@ -2155,11 +2241,13 @@ function composeTriggerLabel(p) {
  * @returns {string | null}
  */
 function resolveDraftedComposeSurface(p) {
+  const hideConnectionRequestDraft = hasOutstandingConnectionRequest(p);
   const drafts = Array.isArray(p?.drafts)
     ? p.drafts.filter((draft) => (
       draft
       && draft.status !== "sent"
       && draft.status !== "discarded"
+      && !(hideConnectionRequestDraft && draft.surface === "connection_request")
       && privateThreadResponseState(p, draft.surface) !== "sent"
       && privateThreadResponseState(p, draft.surface) !== "blocked"
     ))
@@ -2183,6 +2271,9 @@ function resolveDraftedComposeSurface(p) {
  * @returns {"none" | "ready" | "queued" | "drafting"}
  */
 function draftStateForSurface(p, surface) {
+  if (surface === "connection_request" && hasOutstandingConnectionRequest(p)) {
+    return "none";
+  }
   const privateResponseState = privateThreadResponseState(p, surface);
   if (privateResponseState === "sent" || privateResponseState === "blocked") {
     return "none";

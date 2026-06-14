@@ -12,6 +12,7 @@
 import { deriveLinkedinRelativeEventAt } from "../lib/linkedin-relative-time.js";
 import { isStalePendingConnectionRequest } from "../lib/cadence-helpers.js";
 import { isPrivateModeAggregateProfileViewObservation } from "./build-inbox-view.js";
+import { hasMixedInboundBaseline } from "./user-inbound-sync.js";
 
 const TABS = [
   { key: "received", label: "Received", icon: "userPlus", surfaceKey: "linkedin-received-invitations" },
@@ -89,7 +90,7 @@ export function buildConnectionsViewModel(input) {
   const tabs = TABS.map((tab) => {
     const entry = surfaceByKey.get(tab.surfaceKey);
     const surface = entry?.surface ?? null;
-    const truth = surface ? mapSurfaceTruth(surface.lastRunStatus, surface.meta) : "unchecked";
+    const truth = surface ? mapSurfaceTruth(surface) : "unchecked";
     let items = observations.filter((item) =>
       observationAccountId(item) === (selectedAccount?.accountId ?? null)
       && item.surfaceKey === tab.surfaceKey
@@ -577,6 +578,13 @@ function tabTitle(key) {
 function deriveGapState(surface, itemized) {
   if (!surface) return { message: null, kind: null, autoRepairable: false };
   const meta = surface.meta ?? {};
+  if (hasMixedInboundBaseline(surface)) {
+    return {
+      message: "Newer row-level reconciliation changed this surface after the last full sync. Trust the itemized rows, but not silence or total counts, until the next full sync lands.",
+      kind: "mixed_baseline",
+      autoRepairable: false,
+    };
+  }
   const reportedCount = Number.isFinite(surface.lastVisibleTotalCount)
     ? Number(surface.lastVisibleTotalCount)
     : Number.isFinite(surface.lastItemCount)
@@ -642,9 +650,9 @@ function deriveGapState(surface, itemized) {
       autoRepairable: false,
     };
   }
-  if (surface.lastRunStatus === "error" || surface.lastRunStatus === "failure") {
+  if (isFailedRunStatus(surface.lastRunStatus)) {
     return {
-      message: "Last sync failed — this surface cannot be trusted until it is re-run.",
+      message: failedSurfaceMessage(surface),
       kind: "failure",
       autoRepairable: false,
     };
@@ -660,22 +668,36 @@ function freshnessChip(name, surface) {
   if (!surface) return { name, truth: "unchecked", at: null };
   return {
     name,
-    truth: mapSurfaceTruth(surface.lastRunStatus, surface.meta),
+    truth: mapSurfaceTruth(surface),
     at: relative(surface.lastSyncedAt ?? surface.lastObservedAt),
   };
 }
 
 /**
- * @param {string | null | undefined} lastRunStatus
- * @param {any} meta
+ * @param {{ lastRunStatus?: string | null, meta?: any, lastReconcileReason?: string | null, lastExhaustionReason?: string | null } | null | undefined} surface
  * @returns {"unchecked" | "partial" | "failed" | "checked" | "quiet"}
  */
-function mapSurfaceTruth(lastRunStatus, meta) {
-  if (lastRunStatus === "error" || lastRunStatus === "failure") return "failed";
+function mapSurfaceTruth(surface) {
+  const lastRunStatus = surface?.lastRunStatus;
+  const meta = surface?.meta;
+  if (isFailedRunStatus(lastRunStatus)) return "failed";
   if (lastRunStatus === "never" || meta?.unchecked) return "unchecked";
-  if (meta?.itemizationGap || meta?.stale || lastRunStatus === "warning") return "partial";
+  if (hasMixedInboundBaseline(surface) || meta?.itemizationGap || meta?.stale || lastRunStatus === "warning") return "partial";
   if (lastRunStatus === "success") return "checked";
   return "quiet";
+}
+
+/** @param {unknown} status */
+function isFailedRunStatus(status) {
+  return ["error", "failure", "failed"].includes(String(status ?? "").trim().toLowerCase());
+}
+
+/** @param {{ lastError?: unknown }} surface */
+function failedSurfaceMessage(surface) {
+  const error = normalizeDisplayString(surface?.lastError);
+  return error
+    ? `Last sync failed: ${error}`
+    : "Last sync failed — this surface cannot be trusted until it is re-run.";
 }
 
 /**
@@ -705,7 +727,7 @@ function buildConnectionsAccountSubtitle(account) {
 
 /** @param {any[]} surfaces */
 function deriveConnectionsAccountTruth(surfaces) {
-  const truths = (surfaces ?? []).map((surface) => mapSurfaceTruth(surface.lastRunStatus, surface.meta));
+  const truths = (surfaces ?? []).map((surface) => mapSurfaceTruth(surface));
   if (truths.includes("failed")) return "failed";
   if (truths.includes("partial")) return "partial";
   if (truths.includes("unchecked")) return "unchecked";

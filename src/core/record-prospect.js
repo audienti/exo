@@ -103,6 +103,11 @@ import {
  *     hookStrength?: "low" | "moderate" | "high" | "unknown" | null | undefined,
  *     engagementRationale?: string | null | undefined
  *   },
+ *   preConnectDecision?: {
+ *     mode?: "skip" | "bypass" | null | undefined,
+ *     reason?: string | null | undefined,
+ *     decidedAt?: string | null | undefined
+ *   } | null | undefined,
  *   contactPoints?: Array<{
  *     id?: string | null | undefined,
  *     kind: import("../schema/target-account.js").contactPointSchema._type["kind"],
@@ -223,6 +228,7 @@ export function recordMotionProspect(rawMotion, rawCompany, input) {
       engagementRationale: normalizeOptionalNullableString(input.liveSignal?.engagementRationale)
     },
     publicEngagementSelection: buildPublicEngagementSelectionInput(input.publicEngagementSelection),
+    preConnectDecision: buildPreConnectDecisionInput(input.preConnectDecision),
     contactPoints: buildContactPointInputs(input.contactPoints),
     contactEnrichmentState: buildContactEnrichmentStateInput(input.contactEnrichmentState),
     notes: normalizeOptionalNullableString(input.notes),
@@ -508,7 +514,12 @@ function buildMotionAccountId(motionId, companyId) {
  *   queueState?: {
  *     status?: string | null | undefined,
  *     notes?: string | null | undefined
- *   }
+ *   },
+ *   preConnectDecision?: {
+ *     mode?: "skip" | "bypass" | null | undefined,
+ *     reason?: string | null | undefined,
+ *     decidedAt?: string | null | undefined
+ *   } | null | undefined
  * }} input
  */
 export function updateMotionProspect(rawMotion, rawCompany, input) {
@@ -632,6 +643,11 @@ export function updateMotionProspect(rawMotion, rawCompany, input) {
         existing.publicEngagementSelection,
         buildPublicEngagementSelectionInput(input.publicEngagementSelection),
       ),
+      preConnectDecision: buildPreConnectDecisionUpdate(
+        existing.preConnectDecision,
+        buildPreConnectDecisionInput(input.preConnectDecision),
+        now,
+      ),
       contactPoints:
         input.contactPoints === undefined
           ? existing.contactPoints
@@ -713,6 +729,7 @@ function upsertProspect(prospects, nextProspect, limit, now) {
         identityTells: buildIdentityTellsUpdate({}, nextProspect.identityTells),
         linkedinProfileSnapshot: buildLinkedinProfileSnapshotUpdate({}, nextProspect.linkedinProfileSnapshot),
         liveSignal: buildLiveSignalUpdate({}, nextProspect.liveSignal),
+        preConnectDecision: buildPreConnectDecisionUpdate(null, nextProspect.preConnectDecision, now),
         contactPoints: nextProspect.contactPoints,
         contactEnrichmentState: buildContactEnrichmentStateUpdate({}, nextProspect.contactEnrichmentState),
         queueState: nextProspect.queueState ?? {},
@@ -759,6 +776,7 @@ function upsertProspect(prospects, nextProspect, limit, now) {
         nextProspect.linkedinProfileSnapshot
       ),
       liveSignal: buildLiveSignalUpdate(existing.liveSignal, nextProspect.liveSignal),
+      preConnectDecision: buildPreConnectDecisionUpdate(existing.preConnectDecision, nextProspect.preConnectDecision, now),
       contactPoints: mergeContactPointLists(existing.contactPoints, nextProspect.contactPoints),
       contactEnrichmentState: buildContactEnrichmentStateUpdate(existing.contactEnrichmentState, nextProspect.contactEnrichmentState),
       queueState: nextProspect.queueState ?? existing.queueState,
@@ -1082,6 +1100,58 @@ function buildPublicEngagementSelectionUpdate(existing, patch) {
     rationale: patch.rationale ?? existing?.rationale ?? null,
     selectionReason: patch.selectionReason ?? existing?.selectionReason ?? null,
     selectedAt: patch.selectedAt ?? existing?.selectedAt ?? null,
+  };
+}
+
+/**
+ * @param {{
+ *   mode?: "skip" | "bypass" | null | undefined,
+ *   reason?: string | null | undefined,
+ *   decidedAt?: string | null | undefined,
+ * } | null | undefined} decision
+ */
+function buildPreConnectDecisionInput(decision) {
+  if (decision === undefined) {
+    return undefined;
+  }
+  if (decision === null) {
+    return null;
+  }
+  const mode = decision.mode === "skip"
+    ? "skip"
+    : decision.mode === "bypass"
+      ? "bypass"
+      : null;
+  const reason = normalizeOptionalNullableString(decision.reason);
+  if (!mode) {
+    return null;
+  }
+  if (!reason) {
+    throw new Error(`Pre-connect ${mode} decisions require a reason.`);
+  }
+  return {
+    mode,
+    reason,
+    decidedAt: normalizeOptionalNullableString(decision.decidedAt),
+  };
+}
+
+/**
+ * @param {import("../schema/target-account.js").preConnectDecisionSchema._type | null | undefined} existing
+ * @param {ReturnType<typeof buildPreConnectDecisionInput>} patch
+ * @param {string} now
+ */
+function buildPreConnectDecisionUpdate(existing, patch, now) {
+  if (patch === undefined) {
+    return existing ?? null;
+  }
+  if (patch === null) {
+    return null;
+  }
+  return {
+    mode: patch.mode,
+    reason: patch.reason,
+    decidedAt: patch.decidedAt ?? existing?.decidedAt ?? now,
   };
 }
 

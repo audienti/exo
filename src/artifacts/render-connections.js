@@ -353,7 +353,7 @@ function rowActions(p, action, meta = {}) {
       // Pending inbound request — wire the real Accept / Decline writers.
       if (meta.interactive && p.id) {
         return (
-          actionBtn({ writer: "recordInboundObservation", args: { observationId: p.id, nextKind: "connection_request_accepted" }, variant: "primary", icon: "check", label: "Accept" }) +
+          actionBtn({ writer: "recordInboundObservation", args: { observationId: p.id, nextKind: "connection_request_accept_requested" }, variant: "primary", icon: "check", label: "Accept" }) +
           // Reject is NOT a local hide — it queues the agent to actually decline
           // the invite on LinkedIn. decline_requested leaves the operator's list
           // right away; the agent executes the real decline and writes back the

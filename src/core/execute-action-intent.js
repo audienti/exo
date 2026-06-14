@@ -19,6 +19,7 @@ import { acceptMotionProspectPacket, returnMotionProspectPacket } from "./review
 import { recordActionResult } from "./record-action-result.js";
 import { recordMotionProspectTouch } from "./record-prospect-touch.js";
 import { rehomeProspect } from "./rehome-prospect.js";
+import { persistRehomedProspect } from "./persist-rehomed-prospect.js";
 import { runTransitionPromote } from "./run-transition-promote.js";
 import { autoPromoteInboundAccepts } from "./auto-promote-inbound-accepts.js";
 import { runAgentQueuePassAction } from "./run-agent-queue-pass.js";
@@ -46,14 +47,12 @@ import {
   listCompanies,
   listInboundObservations,
   listMotions,
-  moveProspectToMotionRows,
   mutateUserById,
   setAccountDisposition,
   setProspectDisposition,
   updateCompany,
   updateMotion,
   updateMotionWithRetry,
-  upsertInboundObservation,
 } from "../db/database.js";
 
 /**
@@ -881,14 +880,7 @@ function runRehome(args) {
     prospectId: args.prospectId,
     relatedObservations: related,
   });
-  updateCompany(result.company);
-  moveProspectToMotionRows({
-    prospectId: result.prospectId,
-    toMotionId: result.toMotion.id,
-  });
-  for (const observation of result.observations) {
-    upsertInboundObservation(observation);
-  }
+  persistRehomedProspect({ result });
   return { ok: true, writer: "rehomeProspect", message: result.message };
 }
 
@@ -926,10 +918,8 @@ async function runInboundObservation(args) {
   });
   const degreeNote = transitioned.connectionDegreeMarked ? " Marked as a 1st-degree connection." : "";
 
-  // Auto-promote on accept: a fresh connection is a real relationship, not a
-  // manual "promote" decision (the only sane outcome would be promote anyway).
-  // Pulling them into the backlog now means the agent can draft a first message
-  // and the operator's only call is approve-and-send. Non-fatal if it can't.
+  // Legacy direct-accept path: keep auto-promotion for callers that transition
+  // straight to accepted without going through the live maintenance queue.
   let promoteNote = "";
   if (args.nextKind === "connection_request_accepted") {
     try {
@@ -942,6 +932,14 @@ async function runInboundObservation(args) {
     } catch {
       // Promotion is best-effort; recording the accept already succeeded.
     }
+  }
+
+  if (args.nextKind === "connection_request_accept_requested") {
+    return {
+      ok: true,
+      writer: "recordInboundObservation",
+      message: `Queued the agent to accept ${transitioned.existing.actorName ?? "this invite"} on LinkedIn — it will move to connected once the live accept lands.`,
+    };
   }
 
   // A reject is queued for the agent, not done locally — say so plainly.

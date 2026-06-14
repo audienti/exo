@@ -9,6 +9,7 @@
 
 import { buildCompanyExecutionView } from "./build-company-execution-view.js";
 import { extractUsableDraftBody, isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
+import { extractLinkedinPublicId } from "../lib/prospect-contacts.js";
 import { evaluateOutboundDispatchGate } from "./outbound-dispatch-gate.js";
 import {
   buildLinkedinPublicEngagementPlan,
@@ -157,7 +158,14 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
       ? { userId: identity.userId, label: identity.label, owner: identity.owner, accountRefs: identity.accountRefs }
       : null,
     browserProfile,
-    recipient: { name: prospect.name, profileUrl: recipientUrl ?? publicTarget?.url ?? null },
+    senderAccount: buildDeterministicSenderAccount(execution.resolvedAccount, connector),
+    recipient: {
+      name: prospect.name,
+      profileUrl: recipientUrl ?? publicTarget?.url ?? null,
+      providerId: normalizeNullableString(prospect.linkedinProfileSnapshot?.memberId),
+      publicId: normalizeNullableString(prospect.linkedinProfileSnapshot?.publicId)
+        ?? extractLinkedinPublicId(recipientUrl ?? null),
+    },
     publicTarget,
     fallbackTarget,
     dispatchGate,
@@ -177,6 +185,22 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
       hasConnectionNote: Boolean(draft?.body),
     }),
     writeback,
+  };
+}
+
+/**
+ * @param {any} resolvedAccount
+ * @param {string} connector
+ */
+function buildDeterministicSenderAccount(resolvedAccount, connector) {
+  if (!resolvedAccount) return null;
+  return {
+    accountId: resolvedAccount.accountId ?? null,
+    providerAccountId: resolvedAccount.providerAccountId ?? null,
+    handle: resolvedAccount.handle ?? null,
+    label: resolvedAccount.label ?? null,
+    connector,
+    sourceType: resolvedAccount.sourceType ?? null,
   };
 }
 
@@ -242,11 +266,12 @@ function resolveLinkedinPublicTarget(prospect, surface) {
 
   const selection = normalizePublicEngagementSelection(prospect?.publicEngagementSelection)
     ?? selectLinkedinPublicEngagementTarget(prospect);
-  if (!selection?.targetUrl) {
+  const targetUrl = normalizeNullableString(selection?.targetUrl ?? selection?.url ?? null);
+  if (!targetUrl) {
     return null;
   }
   return {
-    url: selection.targetUrl,
+    url: targetUrl,
     targetKind: selection.targetKind,
     summary: selection.summary ?? null,
     rationale: selection.selectionReason ?? selection.rationale ?? null,

@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="cache-control" content="no-store">
+  <title>remaining-sync-reconcile-mutate-seams board</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #17191c;
+      --muted: #636b74;
+      --border: #d7dce2;
+      --accent: #2563eb;
+      --ready: #0f766e;
+      --running: #b45309;
+      --verify: #6d28d9;
+      --done: #15803d;
+      --blocked: #b91c1c;
+      --deferred: #475569;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    header.page {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 24px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    h2 { font-size: 14px; margin: 0 0 12px; }
+    h3 { font-size: 14px; margin: 0; }
+    .subtle, .muted { color: var(--muted); }
+    .topline { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .chip {
+      display: inline-flex;
+      gap: 5px;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 8px;
+      margin: 2px;
+      background: #fff;
+      color: #2f3640;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .panel {
+      margin: 16px 24px 0;
+      padding: 14px 16px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .metrics { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+    .metrics div {
+      min-width: 120px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: #fbfcfd;
+    }
+    .metrics b { display: block; font-size: 18px; }
+    .metrics span { color: var(--muted); font-size: 12px; }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(240px, 1fr));
+      gap: 12px;
+      padding: 16px 24px 24px;
+      overflow-x: auto;
+    }
+    .column {
+      min-width: 240px;
+      background: #eceff3;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .column h2 { display: flex; justify-content: space-between; color: #303741; }
+    .task {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-left: 4px solid #9aa3af;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    .task-ready { border-left-color: var(--ready); }
+    .task-running { border-left-color: var(--running); }
+    .task-verify { border-left-color: var(--verify); }
+    .task-done { border-left-color: var(--done); }
+    .task-blocked { border-left-color: var(--blocked); }
+    .task-deferred { border-left-color: var(--deferred); }
+    .task header { display: flex; gap: 8px; align-items: baseline; }
+    .task-id { font-weight: 700; color: var(--accent); }
+    .messages {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 10px;
+    }
+    .message {
+      border: 1px solid var(--border);
+      border-left: 4px solid #64748b;
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+    }
+    .message-blocker { border-left-color: var(--blocked); }
+    .message-risk { border-left-color: var(--running); }
+    .message-question { border-left-color: var(--verify); }
+    .message-interface-note { border-left-color: var(--accent); }
+    .message-handoff { border-left-color: var(--ready); }
+    .message-discovery { border-left-color: var(--done); }
+    .message-head { display: flex; gap: 8px; align-items: baseline; }
+    .message p { margin: 8px 0 0; }
+    .chips { margin: 7px 0; }
+    .field { border-top: 1px solid #edf0f2; padding-top: 7px; margin-top: 7px; }
+    .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }
+    ul { margin: 4px 0 0 18px; padding: 0; }
+    .empty { color: var(--muted); padding: 14px 4px; text-align: center; }
+    @media (max-width: 900px) {
+      header.page { position: static; }
+      .board { grid-template-columns: repeat(7, minmax(220px, 1fr)); padding: 12px; }
+      .panel { margin: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="page">
+    <h1>Define and implement tested backend seam owners for the remaining sync, reconcile, and mutate surfaces so Exo can distinguish truth, local intent, external proof, and reconciliation debt.</h1>
+    <div class="topline">
+      <span class="chip"><b>plan</b>remaining-sync-reconcile-mutate-seams</span>
+      <span class="chip"><b>status</b>complete</span>
+      <span class="chip"><b>progress</b>10/10</span>
+      <span class="chip"><b>controller</b>codex</span>
+      <span class="chip"><b>worktrees</b>.worktrees</span>
+      <span class="chip"><b>open messages</b>0</span>
+      <span class="chip"><b>board updated</b>2026-06-13T13:48:41.000Z</span>
+      <span class="chip"><b>rendered</b>2026-06-13T13:50:06Z</span>
+    </div>
+    <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
+  </header>
+
+      <section class="panel">
+        <h2>Parallelization Audit</h2>
+        <div class="metrics">
+          <div><b>0</b><span>in flight</span></div>
+          <div><b>5</b><span>cap</span></div>
+          <div><b>none</b><span>next dispatch candidates</span></div>
+        </div>
+        <p><b>Running or verifying:</b> none</p>
+        <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
+        <p><b>Controller note:</b> Board complete. Final verification passed with npm test, git diff --check, board validation, and HTML render. Attempts per tier: max 6 tasks with 0 retries, default 4 tasks with 0 retries, fast 0 tasks.</p>
+      </section>
+
+
+      <section class="panel">
+        <h2>Coordination Messages <span class="muted">0 open</span></h2>
+        <p class="muted">Controller-mediated messages only. These are context artifacts, not workflow state transitions.</p>
+        <div class="messages">
+          <article class="message message-interface-note">
+            <div class="message-head">
+              <span class="task-id">M1</span>
+              <b>Register HubSpot capability support seam</b>
+            </div>
+            <div class="chips">
+              <span class="chip"><b>type</b>interface-note</span>
+              <span class="chip"><b>status</b>resolved</span>
+              <span class="chip"><b>from</b>T7</span>
+              <span class="chip"><b>to</b>T8</span>
+              <span class="chip"><b>created</b>2026-06-13T13:12:05.000Z</span>
+            </div>
+            <p>T7 owns only the HubSpot seam files. T8 should add shared registry integration for capabilityKey hubspot with owner src/core/hubspot-capability-reconciliation.js, proof surfaces hubspot-managed-account and hubspot-runtime-probe, and configured/runtime state keys.</p>
+          </article>
+
+          <article class="message message-interface-note">
+            <div class="message-head">
+              <span class="task-id">M2</span>
+              <b>Wire public engagement reconciliation into action-result writeback</b>
+            </div>
+            <div class="chips">
+              <span class="chip"><b>type</b>interface-note</span>
+              <span class="chip"><b>status</b>resolved</span>
+              <span class="chip"><b>from</b>T6</span>
+              <span class="chip"><b>to</b>T8</span>
+              <span class="chip"><b>created</b>2026-06-13T13:13:13.000Z</span>
+            </div>
+            <p>T6 added the pure public engagement owner, but shared record-action-result integration is outside its write set. T8 should route public engagement action writeback through src/core/public-engagement-reconciliation.js.</p>
+          </article>
+
+          <article class="message message-interface-note">
+            <div class="message-head">
+              <span class="task-id">M4</span>
+              <b>Update direct-message registry owner</b>
+            </div>
+            <div class="chips">
+              <span class="chip"><b>type</b>interface-note</span>
+              <span class="chip"><b>status</b>resolved</span>
+              <span class="chip"><b>from</b>T4</span>
+              <span class="chip"><b>to</b>T8</span>
+              <span class="chip"><b>created</b>2026-06-13T13:15:16.000Z</span>
+            </div>
+            <p>T4 added src/core/linkedin-private-message-reconciliation.js, but shared registry integration is outside its lane. T8 should update send_direct_message to point at the new owner.</p>
+          </article>
+
+          <article class="message message-interface-note">
+            <div class="message-head">
+              <span class="task-id">M5</span>
+              <b>Wire direct-message and InMail writeback debt</b>
+            </div>
+            <div class="chips">
+              <span class="chip"><b>type</b>interface-note</span>
+              <span class="chip"><b>status</b>resolved</span>
+              <span class="chip"><b>from</b>T4</span>
+              <span class="chip"><b>to</b>T8</span>
+              <span class="chip"><b>created</b>2026-06-13T13:15:16.000Z</span>
+            </div>
+            <p>T4 added pure DM and InMail owners, but record-action-result integration is outside its write set. T8 should delegate send_direct_message and in_mail_message reconciliation debt to those owners.</p>
+          </article>
+
+          <article class="message message-interface-note">
+            <div class="message-head">
+              <span class="task-id">M3</span>
+              <b>Wire Gmail seam owners into shared writeback and sync paths</b>
+            </div>
+            <div class="chips">
+              <span class="chip"><b>type</b>interface-note</span>
+              <span class="chip"><b>status</b>resolved</span>
+              <span class="chip"><b>from</b>T3</span>
+              <span class="chip"><b>to</b>T8, T9</span>
+              <span class="chip"><b>created</b>2026-06-13T13:15:35.000Z</span>
+            </div>
+            <p>T3 added pure Gmail owner functions, but shared record-action-result and user-inbound-sync integration is outside its write set. T8 should delegate send_email writeback debt to buildEmailSendMutationReconciliation. T9 should decide whether Gmail thread truth reads reconcileGmailThreadTruth.</p>
+          </article>
+
+          <article class="message message-interface-note">
+            <div class="message-head">
+              <span class="task-id">M6</span>
+              <b>Wire social graph owner into shared registry and action-result seams</b>
+            </div>
+            <div class="chips">
+              <span class="chip"><b>type</b>interface-note</span>
+              <span class="chip"><b>status</b>resolved</span>
+              <span class="chip"><b>from</b>T5</span>
+              <span class="chip"><b>to</b>T8</span>
+              <span class="chip"><b>created</b>2026-06-13T13:16:36.000Z</span>
+            </div>
+            <p>T5 added src/core/linkedin-social-graph-reconciliation.js, but shared registry/action-result integration is outside its write set. T8 should point linkedin-profile-views, linkedin-followers-list, linkedin-following-list, follow, unfollow, and profile_view at this owner where applicable.</p>
+          </article>
+        </div>
+      </section>
+
+  <main class="board">
+
+          <section class="column">
+            <h2>Backlog <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Ready <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Running <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Verify <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Done <span>10</span></h2>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T10</div>
+          <h3>Close board with final verification</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>50</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T9</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li><li>docs/plans/remaining-sync-reconcile-mutate-seams-board.html</li><li>docs/wip/remaining-sync-reconcile-mutate-seams.md</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test</li><li>git diff --check</li><li>python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/validate_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li><li>python3 /Users/williamflanagan/.codex/plugins/cache/audienti/plan-loop-executor/0.4.0/skills/plan-loop-executor/scripts/render_board.py docs/plans/remaining-sync-reconcile-mutate-seams-board.json</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All preceding tasks are done or intentionally deferred with reason.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board validates and HTML snapshot renders.</li><li>board.status is complete only when acceptance criteria pass.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Final verification passed. Attempts by model tier: max 6 tasks with 0 retries, default 4 tasks with 0 retries, fast 0 tasks.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Final npm test passed with 875 tests, 875 pass, 0 fail.</li><li>git diff --check passed.</li><li>Board validation passed and the HTML snapshot was regenerated.</li><li>All ten board tasks are done with no blocked or deferred items.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>dfa7c1c46990130674eea5eae6226b0d86c06899</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T9</div>
+          <h3>Integrate seam status into sync review and agent queue</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>60</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T8</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/build-agent-queue.js</li><li>src/core/inbound-sync-run.js</li><li>src/core/user-inbound-sync.js</li><li>src/core/account-capability-health.js</li><li>test/agent-queue.test.js</li><li>test/inbound-reconciliation-contract.test.js</li><li>test/user-inbound-sync.test.js</li><li>test/account-capability-health.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-queue.test.js test/inbound-reconciliation-contract.test.js test/user-inbound-sync.test.js test/account-capability-health.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Sync review and queue tests cover at least one non-connection seam reading owner output.</li><li>Unchecked, unsupported, missing-proof, and stale states remain distinct in account health.</li><li>Queue work is not duplicated when owner state is quiet.</li><li>Full suite is green before final closeout.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Verification passed: npm test -- test/agent-queue.test.js test/inbound-reconciliation-contract.test.js test/user-inbound-sync.test.js test/account-capability-health.test.js, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>User inbound sync plan surfaces now carry owner-shaped seamStatus for stale, quiet, pending, and unsupported truth surfaces.</li><li>Agent queue run_inbound_sync tasks now expose surfaceSeams for the exact surfaces being refreshed.</li><li>Account capability health exposes HubSpot account seamStatus and per-surface seamStatus without collapsing unsupported to unchecked.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>fe2b6edf997f3431294641fdec94271889135a2b</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T8</div>
+          <h3>Integrate seam owners into mutation reconciliation debt</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>65</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T3, T4, T5, T6, T7</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/record-action-result.js</li><li>src/lib/backend-capability-registry.js</li><li>test/action-result.test.js</li><li>test/backend-capability-registry.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/action-result.test.js test/backend-capability-registry.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>send_email, send_direct_message, in_mail_message, follow, unfollow, profile_view, and public engagement actions create owner-shaped reconciliation metadata where applicable.</li><li>Unsupported proof surfaces produce explicit missing-proof or unsupported debt.</li><li>Connection-request mutation reconciliation tests remain green.</li><li>No live external mutation is performed.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Verification passed: npm test -- test/action-result.test.js test/backend-capability-registry.test.js, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>record-action-result delegates send_email, send_direct_message, in_mail_message, follow, unfollow, profile_view, and public engagement mutation debt to service seam owners.</li><li>backend capability registry points Gmail, LinkedIn private messaging, social graph, public engagement, InMail, and HubSpot rows at their new owner modules.</li><li>Unsupported or absent proof surfaces now produce explicit missing-proof metadata instead of checked or null reconciliation state.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>9a3a363af90d7fddaa8b61c7d85e3e1cf02caaec</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T7</div>
+          <h3>Add HubSpot capability support seam</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>70</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>native-subagent:019ec116-9079-7d03-8cc1-0930e330b910</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/hubspot-capability-reconciliation.js</li><li>test/hubspot-capability-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/hubspot-capability-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover HubSpot with no backend inbound surfaces as unsupported or unconfigured, not unchecked.</li><li>Tests cover runtime probe facts producing checked or failed capability support.</li><li>Tests cover preferred and non-preferred account classification.</li><li>No live HubSpot connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Dispatched to native subagent 019ec116-9079-7d03-8cc1-0930e330b910 (Kepler). Verification passed: targeted service-lane tests, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Worker added src/core/hubspot-capability-reconciliation.js.</li><li>Worker added test/hubspot-capability-reconciliation.test.js.</li><li>Worker reported targeted verification passed: npm test -- test/hubspot-capability-reconciliation.test.js and git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>911624100ad43ebaa1fefe1777e712f60759be65</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T6</div>
+          <h3>Add LinkedIn public engagement seam owner</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>75</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>native-subagent:019ec116-8e83-73e2-89a0-51e69bed71a4</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/public-engagement-reconciliation.js</li><li>test/public-engagement-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/public-engagement-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover each public engagement action category producing explicit pending or missing proof.</li><li>Tests cover disabled linkedin-comment-replies and linkedin-catch-up-updates surfaces as unsupported for autonomous checking.</li><li>Tests cover quiet only when an explicit proof fact exists.</li><li>No live LinkedIn connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Dispatched to native subagent 019ec116-8e83-73e2-89a0-51e69bed71a4 (Mendel). Verification passed: targeted service-lane tests, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Worker added src/core/public-engagement-reconciliation.js.</li><li>Worker added test/public-engagement-reconciliation.test.js.</li><li>Worker reported targeted verification passed: npm test -- test/public-engagement-reconciliation.test.js and git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>0f23c480be0fd15a0d105b9b52f4f53ddb6bdd5a</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T5</div>
+          <h3>Add LinkedIn social graph and profile-view seam owner</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>80</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>native-subagent:019ec116-8ce4-71f0-89ac-139d6cec3ee6</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/linkedin-social-graph-reconciliation.js</li><li>test/linkedin-social-graph-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/linkedin-social-graph-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover follower and following observations without repeated broad polling.</li><li>Tests cover follow and unfollow mutation debt against following-list proof.</li><li>Tests cover profile-view visible-total gaps as not quiet.</li><li>No live LinkedIn connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Dispatched to native subagent 019ec116-8ce4-71f0-89ac-139d6cec3ee6 (Pascal). Verification passed: targeted service-lane tests, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Worker added src/core/linkedin-social-graph-reconciliation.js.</li><li>Worker added test/linkedin-social-graph-reconciliation.test.js.</li><li>Worker reported targeted verification passed: npm test -- test/linkedin-social-graph-reconciliation.test.js and git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>49817a01847f8f0ca05b59a1ebd2f037bfa541db</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T4</div>
+          <h3>Add LinkedIn private messaging and InMail seam owner</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>85</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>native-subagent:019ec116-8b7e-7791-8839-98fe3b48f5ec</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/linkedin-private-message-reconciliation.js</li><li>src/core/inmail-reconciliation.js</li><li>test/linkedin-private-message-reconciliation.test.js</li><li>test/inmail-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/linkedin-private-message-reconciliation.test.js test/inmail-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover direct-message send debt and proof from messaging inbox observations.</li><li>Tests cover inbound LinkedIn replies overriding outbound waiting state.</li><li>Tests cover InMail as unavailable, missing proof, or pending proof without pretending it is checked.</li><li>No live LinkedIn connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Dispatched to native subagent 019ec116-8b7e-7791-8839-98fe3b48f5ec (Newton). Verification passed: targeted service-lane tests, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Worker added src/core/linkedin-private-message-reconciliation.js.</li><li>Worker added src/core/inmail-reconciliation.js.</li><li>Worker added test/linkedin-private-message-reconciliation.test.js and test/inmail-reconciliation.test.js.</li><li>Worker reported targeted verification passed: npm test -- test/linkedin-private-message-reconciliation.test.js test/inmail-reconciliation.test.js and git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>22949da853f9c7e71c8e5d156041dc6fab238c9b</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T3</div>
+          <h3>Add Gmail email and thread seam owner</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>90</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>native-subagent:019ec116-8a69-77c2-9a1c-0d46f59bb9e1</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/email-send-reconciliation.js</li><li>src/core/gmail-thread-reconciliation.js</li><li>test/email-send-reconciliation.test.js</li><li>test/gmail-thread-reconciliation.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/email-send-reconciliation.test.js test/gmail-thread-reconciliation.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests cover pending external proof after a local email send.</li><li>Tests cover an inbound Gmail thread resolving or overriding local waiting state.</li><li>Tests cover unsupported or missing Gmail sent-mail proof as explicit debt.</li><li>No live Gmail connector call is made.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Dispatched to native subagent 019ec116-8a69-77c2-9a1c-0d46f59bb9e1 (Sartre). Verification passed: targeted service-lane tests, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Worker added src/core/email-send-reconciliation.js.</li><li>Worker added src/core/gmail-thread-reconciliation.js.</li><li>Worker added test/email-send-reconciliation.test.js and test/gmail-thread-reconciliation.test.js.</li><li>Worker reported targeted verification passed: npm test -- test/email-send-reconciliation.test.js test/gmail-thread-reconciliation.test.js and git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>b00c6ea97ee7da3aafcb6366b5418b5b5260cc78</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T2</div>
+          <h3>Add shared seam contract harness</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>95</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/capability-seam-contract.js</li><li>test/capability-seam-contract.test.js</li><li>test/support/capability-seam-fixtures.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/capability-seam-contract.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>A failing test is written first for missing-proof or unsupported seams being explicit.</li><li>The shared helper exports stable outcome constants and a validator or builder for seam reconciliation results.</li><li>Fixture helpers let later service lanes test against the same status vocabulary without importing live state.</li><li>No shared mutation or queue path is integrated yet.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Verification passed: npm test -- test/capability-seam-contract.test.js, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Added shared capability seam state constants for quiet, pending_proof, contradicted, stale, reconciled, unsupported, and missing_proof.</li><li>Added buildCapabilitySeamResult to normalize owner decisions into a backend contract with checked, quiet, supported, requiresAction, proof surface, missing-proof, and strategy fields.</li><li>Added fixture helpers for service-specific seam tests without importing live state.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>d99c5b13613dfb892fc63a9359ef4dc1402cbb08</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T1</div>
+          <h3>Expand capability seam matrix contract</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>100</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/lib/backend-capability-registry.js</li><li>test/backend-capability-registry.test.js</li><li>docs/wip/remaining-sync-reconcile-mutate-seams.md</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/backend-capability-registry.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Tests fail if any inbound surface, mutation action, or backend support row lacks required seam metadata.</li><li>Registry rows expose proofSurfaces, stateKeys, syncStrategy, reconciliationStrategy, and mutationDebtPolicy.</li><li>Existing connection-request owner metadata remains intact.</li><li>The plan artifact documents that the registry is the living seam matrix.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Verification passed: npm test -- test/backend-capability-registry.test.js, git diff --check, npm test.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Added failing registry tests for proof surfaces, state keys, sync strategy, reconciliation strategy, and mutation debt policy.</li><li>Extended backend capability registry rows with seam metadata for inbound surfaces, mutation actions, and backend support rows.</li><li>Named non-connection proof paths for Gmail, LinkedIn messaging, social graph, public engagement, and agent run-log seams.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>5f013cd7c4a19489d8cb1e2e2c397c555a77f57d</div></div>
+      </article>
+
+          </section>
+
+          <section class="column">
+            <h2>Blocked <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Deferred <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+  </main>
+</body>
+</html>

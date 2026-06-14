@@ -1,0 +1,531 @@
+{
+  "plan": {
+    "slug": "local-runner-inbound-truth",
+    "source": "docs/wip/local-runner-inbound-truth-plan.md",
+    "objective": "Make local-runner LinkedIn sync and invitation mutation trustworthy by using deterministic same-credential Unipile HTTP first for configured read and supported write paths, making config failures loud, and proving the invitation lifecycle through existing owners.",
+    "acceptanceCriteria": [
+      "A configured scheduled host-pass Unipile list pull does not default to agent_handoff.",
+      "The host-pass test proves the first runInboundContractImpl call carries directUnipileHttp: true for configured managed LinkedIn accounts.",
+      "Supported Unipile maintenance mutations do not default to MCP handoff.",
+      "send_connection_request attempts the deterministic same-credential Unipile send first for configured managed accounts and does not default to MCP handoff.",
+      "Send tasks cannot locally record success or open connection-request proof debt unless the external write path actually returned success.",
+      "Missing Unipile config never produces a quiet zero-item success.",
+      "The pass result includes a clear transport and config or fallback reason.",
+      "Existing surface-state fields carry trust, backoff, continuation, and partial-status information.",
+      "Existing invitation reconciliation owner remains the only place deciding pending, accepted, no-longer-pending, and not-accepted outcomes.",
+      "npm test passes.",
+      "git diff --check passes."
+    ],
+    "verificationCommands": [
+      "npm test -- test/inbound-live-runtime-variants.test.js",
+      "npm test -- test/agent-host-pass.test.js",
+      "npm test -- test/linkedin-unipile-maintenance.test.js",
+      "npm test -- test/build-linkedin-send.test.js",
+      "npm test -- test/connection-request-reconciliation.test.js",
+      "npm test -- test/agent-queue.test.js test/agent-run-log.test.js",
+      "npm test",
+      "git diff --check"
+    ],
+    "constraints": [
+      "Backend first. No frontend redesign in this board.",
+      "Use TDD. Write or update failing tests before implementation changes.",
+      "No live external sends, withdrawals, accepts, declines, replies, or deploys in default tests.",
+      "Tests use fixtures or injected HTTP implementations only unless an env-gated smoke test is explicitly enabled.",
+      "Do not hard-code a tenant Unipile host in product code.",
+      "Do not bypass managed account identity checks.",
+      "Do not rely on webhook triggers in local-runner mode.",
+      "Do not create parallel state primitive files unless a test proves the existing owners cannot express the behavior."
+    ],
+    "nonGoals": [
+      "No browser-profile fallback for governed truth.",
+      "No broad LinkedIn scan loop.",
+      "No Gmail sent-mail proof implementation in this board.",
+      "No LinkedIn entitlements, public engagement retrieval, or HubSpot CRM surfaces in this board."
+    ]
+  },
+  "board": {
+    "status": "complete",
+    "controller": "codex",
+    "concurrencyCap": 3,
+    "worktreeRoot": ".worktrees",
+    "viewer": {
+      "htmlPath": "docs/plans/local-runner-inbound-truth-board.html"
+    },
+    "parallelismNote": "Plan complete. All implementation tasks and final integration verification passed.",
+    "models": {
+      "fast": "inherit",
+      "default": "inherit",
+      "max": "inherit"
+    },
+    "base": {
+      "branch": "codex/remaining-sync-reconcile-mutate-seams",
+      "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
+      "verifiedGreen": true
+    },
+    "updatedAt": "2026-06-14T20:36:03Z"
+  },
+  "tasks": [
+    {
+      "id": "T0",
+      "title": "Reconcile pre-existing dirty working tree",
+      "status": "done",
+      "priority": 110,
+      "dependsOn": [],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "scripts/run-agent-host-pass.js",
+        "src/artifacts/render-prospects.js",
+        "src/artifacts/render-queue.js",
+        "src/cli/commands/agent.js",
+        "src/core/build-agent-queue.js",
+        "src/core/build-connections-view.js",
+        "src/core/build-operator-view.js",
+        "src/core/discover-runtime-account-identities.js",
+        "src/core/inbound-linkedin-live-sync.js",
+        "src/lib/agent-host-state.js",
+        "src/lib/exo-ui-components.js",
+        "src/lib/linkedin-unipile-maintenance.js",
+        "src/lib/unipile-config.js",
+        "test/agent-host-pass.test.js",
+        "test/agent-queue.test.js",
+        "test/agent-run.test.js",
+        "test/cli.test.js",
+        "test/inbound-live-runtime-variants.test.js",
+        "test/linkedin-unipile-maintenance.test.js",
+        "test/operator-view.test.js",
+        "test/prospect-ui.test.js",
+        "test/runtime-account-discovery.test.js",
+        "docs/wip/local-runner-inbound-truth-plan.md",
+        "test/connections-view.test.js"
+      ],
+      "context": "The loop is starting from branch codex/remaining-sync-reconcile-mutate-seams at c670c204aa016545252323b309717d4abf88ddf8, but the working tree already contains substantial uncommitted changes in files this plan will touch. Attribute what already exists, run lightweight verification, and decide whether the dirty changes are a preflight checkpoint, already-completed plan work, or unrelated work that must be left untouched. Do not discard or reset any change.",
+      "doneWhen": [
+        "The board records which dirty changes are related to this plan and which are carryover from earlier work.",
+        "git diff --check passes.",
+        "Focused tests covering the dirty files either pass or any baseline failures are recorded exactly.",
+        "A safe baseline strategy is recorded before T1 starts."
+      ],
+      "verification": [
+        "git diff --check",
+        "npm test -- test/agent-host-pass.test.js test/agent-queue.test.js test/agent-run.test.js test/inbound-live-runtime-variants.test.js test/linkedin-unipile-maintenance.test.js test/operator-view.test.js test/prospect-ui.test.js test/runtime-account-discovery.test.js test/connections-view.test.js"
+      ],
+      "worktree": "",
+      "startedAt": "2026-06-14T18:49:36.000Z",
+      "updatedAt": "2026-06-14T19:04:29Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Attributed the pre-existing dirty tree as carryover runtime, queue, UI, and plan setup work that overlaps this board.",
+        "Verified the dirty tree with git diff --check.",
+        "Verified the focused changed-file test set: 275 passing tests across agent-host-pass, agent-queue, agent-run, inbound-live-runtime-variants, linkedin-unipile-maintenance, operator-view, prospect-ui, runtime-account-discovery, and connections-view.",
+        "Fixed a stale CLI assertion so itemization-gap full sync expects the intended page-sliced command: --max-pages 1 --page-size 100.",
+        "Verified test/cli.test.js after the assertion update: 92 passing tests.",
+        "Verified the full suite: npm test passed with 909 passing tests and 0 failures.",
+        "Verified git diff --check after the full suite."
+      ],
+      "attemptCount": 1,
+      "lastFailure": "Initial full npm test failed because test/cli.test.js still asserted that itemization-gap full sync should omit --max-pages even though the queue contract now intentionally page-slices that autonomous task.",
+      "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
+      "notes": "This is a controller-owned preflight task added because plan-loop green-baseline rules could not be satisfied while overlapping uncommitted changes existed. The verified state will be checkpointed before T1 starts."
+    },
+    {
+      "id": "T1",
+      "title": "Make direct HTTP primary at the read call site",
+      "status": "done",
+      "priority": 100,
+      "dependsOn": [
+        "T0"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "scripts/run-agent-host-pass.js",
+        "src/core/inbound-linkedin-live-sync.js",
+        "src/cli/commands/inbound.js",
+        "src/core/inbound-live-sync.js",
+        "test/inbound-live-runtime-variants.test.js",
+        "test/agent-host-pass.test.js"
+      ],
+      "context": "Plan Phase 1. The production host pass currently decides the first transport. Add or rewrite tests so configured managed Unipile LinkedIn list pulls call runInboundContractImpl(task, { directUnipileHttp: true }) on the first attempt and no longer default to agent_handoff. Keep handoff available for unsupported surfaces, explicit diagnostic mode, or missing deterministic support.",
+      "doneWhen": [
+        "A configured scheduled host-pass Unipile list pull does not default to agent_handoff.",
+        "A host-pass test proves the first runInboundContractImpl call includes directUnipileHttp: true.",
+        "The locked inbound-live runtime test that asserted direct HTTP should not run by default is updated to the new contract.",
+        "The CLI and generic live-sync wrapper do not preserve the old default for configured local-runner LinkedIn pulls unless explicitly requested as diagnostic handoff mode."
+      ],
+      "verification": [
+        "npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "2026-06-14T19:06:09Z",
+      "updatedAt": "2026-06-14T19:16:43Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Wrote red tests proving managed Unipile LinkedIn live sync should default to direct HTTP and host-pass LinkedIn sync should call runInboundContractImpl with directUnipileHttp: true on the first attempt.",
+        "Changed the host pass so LinkedIn inbound sync requests direct same-credential Unipile HTTP first instead of starting with agent_handoff.",
+        "Changed LinkedIn live sync and the generic live-sync wrapper so direct Unipile HTTP is the default for configured managed Unipile accounts, with --agent-handoff retained as an explicit diagnostic override.",
+        "Verified focused T1 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 113 tests.",
+        "Verified integration gate: npm test passed with 909 tests and 0 failures.",
+        "Verified git diff --check."
+      ],
+      "attemptCount": 1,
+      "lastFailure": "Initial implementation still had one stale timeout/fallback test assuming handoff-first behavior; the test was rewritten to cover the remaining fallback timeout only when direct capture is unavailable.",
+      "commit": "f1a3c6910a84383fccc685ed9d03f3c8c226b0af",
+      "notes": ""
+    },
+    {
+      "id": "T2",
+      "title": "Make direct HTTP primary for supported maintenance mutations",
+      "status": "done",
+      "priority": 95,
+      "dependsOn": [
+        "T1"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "scripts/run-agent-host-pass.js",
+        "src/lib/linkedin-unipile-maintenance.js",
+        "test/agent-host-pass.test.js",
+        "test/linkedin-unipile-maintenance.test.js"
+      ],
+      "context": "Plan Phase 2, maintenance half. runBrowserActionTask currently uses MCP first and direct HTTP as fallback. For configured managed Unipile accounts, supported maintenance actions should use runLinkedinMaintenanceWithUnipile(..., { allowDirectUnipileHttp: true }) first. Covered actions: reconcile_connection_request_status, withdraw_connection, accept_connection_request, reject_connection_request.",
+      "doneWhen": [
+        "Host-pass tests prove supported maintenance actions call direct HTTP first.",
+        "An MCP failure does not block a supported direct HTTP maintenance task when direct HTTP is configured.",
+        "Completed maintenance results report a primary direct HTTP transport label rather than fallback.",
+        "Unsupported maintenance still fails closed."
+      ],
+      "verification": [
+        "npm test -- test/agent-host-pass.test.js test/linkedin-unipile-maintenance.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "2026-06-14T19:19:36Z",
+      "updatedAt": "2026-06-14T19:26:48Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Wrote host-pass regression tests proving reconcile_connection_request_status, withdraw_connection, accept_connection_request, and reject_connection_request call runLinkedinMaintenanceWithUnipile with allowDirectUnipileHttp: true before any MCP capture.",
+        "Changed runBrowserActionTask to use same-credential Unipile HTTP first for supported Unipile maintenance actions, while retaining MCP and same-credential fallback for unsupported handoff paths.",
+        "Kept unsupported maintenance kinds fail-closed in the maintenance owner without making HTTP calls.",
+        "Verified focused T2 tests: npm test -- test/agent-host-pass.test.js test/linkedin-unipile-maintenance.test.js passed with 111 tests.",
+        "Verified integration gate: npm test passed with 915 tests, 914 pass, 1 skipped, 0 failures.",
+        "Verified git diff --check."
+      ],
+      "attemptCount": 1,
+      "lastFailure": "Initial focused verification failed while the host-pass maintenance action remained private and MCP-first; the implementation exported and injected runBrowserActionTask, then switched supported Unipile maintenance tasks to direct-first.",
+      "commit": "4e094492da9c935a63b607a5c0feadb1aabed224",
+      "notes": ""
+    },
+    {
+      "id": "T2b",
+      "title": "Add deterministic Unipile send for connection requests",
+      "status": "done",
+      "priority": 92,
+      "dependsOn": [
+        "T2"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "scripts/run-agent-host-pass.js",
+        "src/lib/linkedin-unipile-maintenance.js",
+        "src/core/build-linkedin-send.js",
+        "test/agent-host-pass.test.js",
+        "test/build-linkedin-send.test.js",
+        "test/linkedin-unipile-maintenance.test.js"
+      ],
+      "context": "Plan Phase 2, send half. send_connection_request currently has no deterministic Unipile write path. Add a same-credential Unipile send implementation for POST /api/v1/users/invite after confirming exact request body against existing code/docs/fixtures, with injected HTTP tests only. Wire runSendTask to try this path first for configured managed Unipile accounts, then fall back to the existing agent/MCP handoff only when deterministic send is unsupported or fails. Other send actions stay connector-required in this board.",
+      "doneWhen": [
+        "send_connection_request attempts deterministic same-credential Unipile send first for configured managed accounts.",
+        "Local mutation success and proof debt are recorded only after the external write returns success.",
+        "Other send actions remain connector-required with no local success writeback in this board.",
+        "Tests cover success, provider failure, missing config, and fallback behavior."
+      ],
+      "verification": [
+        "npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "2026-06-14T19:32:17Z",
+      "updatedAt": "2026-06-14T20:02:41Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        {
+          "kind": "test",
+          "summary": "RED: focused T2b tests failed on missing deterministic send export, missing send handoff identifiers, and runSendTask ignoring injected direct-send dependencies.",
+          "command": "npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js"
+        },
+        {
+          "kind": "test",
+          "summary": "GREEN: focused T2b tests passed after adding runLinkedinSendWithUnipile, direct-first runSendTask wiring, handoff sender/recipient identifiers, provider-failure fallback, and no-writeback-on-failure coverage.",
+          "command": "npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js"
+        },
+        {
+          "kind": "test",
+          "summary": "Full suite passed with 923 passing and 1 env-gated smoke test skipped.",
+          "command": "npm test"
+        },
+        {
+          "kind": "test",
+          "summary": "Whitespace check passed.",
+          "command": "git diff --check"
+        }
+      ],
+      "attemptCount": 1,
+      "lastFailure": "",
+      "commit": "d12bd429e0e2e1173d6bcb1aefe03537c2dd30d3",
+      "notes": "Implemented deterministic Unipile POST /api/v1/users/invite for connection requests using configured same-credential Unipile API settings. Handoff now carries sender providerAccountId and recipient providerId from synced profile truth. Host runner attempts this path first for live connection_request sends, preserves connector handoff for unsupported/failing direct sends, and only runs local writeback after a direct or connector external sent result."
+    },
+    {
+      "id": "T3",
+      "title": "Make missing Unipile config loud",
+      "status": "done",
+      "priority": 90,
+      "dependsOn": [
+        "T1"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "src/core/inbound-linkedin-live-sync.js",
+        "src/core/inbound-linkedin-sync.js",
+        "src/core/canonical-inbound-sync-adapter.js",
+        "src/lib/linkedin-tool-methods.js",
+        "src/schema/linkedin-capture.js",
+        "src/schema/surfaces/shared.js",
+        "scripts/run-agent-host-pass.js",
+        "test/inbound-live-runtime-variants.test.js",
+        "test/agent-host-pass.test.js"
+      ],
+      "context": "Plan Phase 3. Missing API key, explicit base URL, providerAccountId, or account identity mismatch must become governed failed/untrusted surface results with concrete reasons. If backoffReason must survive writeback, include inbound-linkedin-sync payload mapping.",
+      "doneWhen": [
+        "Missing Unipile config never produces a quiet zero-item success.",
+        "Failed/untrusted payloads include syncTrustStatus, exhaustionStatus, and concrete reason.",
+        "Host-pass output records the concrete reason.",
+        "Identity mismatch is treated as a loud failure."
+      ],
+      "verification": [
+        "npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "2026-06-14T20:10:12Z",
+      "updatedAt": "2026-06-14T20:08:21Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Wrote failing tests for missing UNIPILE_API_KEY, missing explicit Unipile base URL, missing providerAccountId, provider session or identity failure, and host-pass surfaced config failure.",
+        "Changed managed Unipile direct capture so missing deterministic prerequisites return direct-runtime failed/untrusted payloads instead of falling back to agent_handoff.",
+        "Preserved exhaustionReason, backoffReason, and syncTrustStatus through LinkedIn capture schema, canonical invitation tool results, canonical inbound adapter, legacy surface mapping, and host-pass normalization.",
+        "Verified focused T3 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 126 tests.",
+        "Full npm test failed with 919 pass, 9 fail, 1 skipped because existing handoff-contract tests did not explicitly request diagnostic agent handoff after the direct-first default.",
+        "Updated diagnostic handoff tests to pass --agent-handoff or allowDirectUnipileHttp: false so production default remains direct-first while handoff contract coverage stays explicit.",
+        "Verified handoff contract regression files: npm test -- test/inbound-live-contracts.test.js test/inbound-live-edge-contracts.test.js test/live-agent-handoff.test.js passed with 16 tests.",
+        "Re-verified focused T3 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 126 tests.",
+        "Verified full integration gate: npm test passed with 929 tests, 928 pass, 1 skipped, 0 failures.",
+        "Verified git diff --check."
+      ],
+      "attemptCount": 1,
+      "lastFailure": "Full npm test failed in inbound-live-contracts, inbound-live-edge-contracts, and live-agent-handoff tests because handoff-contract assertions still expected agent_handoff by default. Under the plan, managed Unipile direct capture should now fail loud when config is missing unless diagnostic handoff is explicitly requested.",
+      "commit": "28c2c3a87ef463f898c4111d5da8d66466f2b302",
+      "notes": "Second approach kept direct-first production behavior and made diagnostic handoff tests opt into the fallback contract explicitly."
+    },
+    {
+      "id": "T4",
+      "title": "Prove invitation lifecycle end to end",
+      "status": "done",
+      "priority": 85,
+      "dependsOn": [
+        "T1",
+        "T2",
+        "T2b",
+        "T3"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "max",
+      "files": [
+        "src/core/connection-request-reconciliation.js",
+        "test/connection-request-reconciliation.test.js",
+        "test/inbound-live-runtime-variants.test.js",
+        "test/agent-host-pass.test.js"
+      ],
+      "context": "Plan Phase 4. Use existing injection seams to prove connection_request:sent creates proof debt, sent invitations present keeps pending, sent invitations absent records no_longer_pending without acceptance, acceptance requires relation/profile proof, and supported mutation transport actually ran before proof debt moves.",
+      "doneWhen": [
+        "The invitation tracer bullet passes through send, sync proof, no-longer-pending, and relationship proof without false acceptance.",
+        "Withdraw or received-invite mutation transport is proven to run before proof debt moves.",
+        "connection-request-reconciliation.js remains the owner for pending, accepted, no-longer-pending, and not-accepted decisions."
+      ],
+      "verification": [
+        "npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "2026-06-14T20:10:05Z",
+      "updatedAt": "2026-06-14T20:17:55Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Added a tracer regression that keeps connection_request/sent in pending_reconciliation, treats sent-list disappearance as connection_request_no_longer_pending, and only classifies accepted from first-degree relationship profile proof.",
+        "Verified focused T4 seams: npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed 134/134.",
+        "Verified formatting: git diff --check passed.",
+        "Verified integration gate: npm test passed 929/930 with 1 skipped and 0 failures."
+      ],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "8c4ab120ece7b5d8156f9b05ec496eb4c971a556",
+      "notes": "Behavior was already owned by the existing reconciliation seam; T4 adds a composed tracer regression to prevent false acceptance when a sent invitation disappears before profile proof."
+    },
+    {
+      "id": "T5",
+      "title": "Add env-gated real Unipile account smoke test",
+      "status": "done",
+      "priority": 70,
+      "dependsOn": [
+        "T1"
+      ],
+      "ownerLane": "subagent",
+      "modelTier": "default",
+      "files": [
+        "test/unipile-account-smoke.test.js",
+        "src/lib/unipile-config.js"
+      ],
+      "context": "Plan Phase 5. Add an opt-in smoke test that calls the configured /api/v1/accounts endpoint only when explicit credentials and a provider account id are present. It must skip by default and must not run live external writes.",
+      "doneWhen": [
+        "Default npm test does not make a live Unipile request.",
+        "An explicit environment opt-in command is documented in the test or board notes.",
+        "When enabled, the test verifies the configured provider account id is present in /api/v1/accounts."
+      ],
+      "verification": [
+        "npm test -- test/unipile-account-smoke.test.js",
+        "git diff --check"
+      ],
+      "worktree": "multi_agent_v1:019ec793-2c34-7203-a2a3-bc73e60d1cbb",
+      "startedAt": "2026-06-14T19:19:36Z",
+      "updatedAt": "2026-06-14T19:28:45Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Subagent Russell added test/unipile-account-smoke.test.js with a default skip gate and documented opt-in command.",
+        "Controller verified npm test -- test/unipile-account-smoke.test.js skips by default without a live request.",
+        "Controller verified EXO_UNIPILE_ACCOUNT_SMOKE=1 npm test -- test/unipile-account-smoke.test.js skips without credentials/provider account id and makes no live request.",
+        "Full npm test included the smoke test as one skipped test.",
+        "Verified git diff --check."
+      ],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "70b76d21bf7b52104c9f4ca6d50b8eca52d16547",
+      "notes": ""
+    },
+    {
+      "id": "T6",
+      "title": "Expose runtime truth to queue and run log",
+      "status": "done",
+      "priority": 65,
+      "dependsOn": [
+        "T4"
+      ],
+      "ownerLane": "subagent",
+      "modelTier": "default",
+      "files": [
+        "src/core/build-agent-queue.js",
+        "src/core/agent-run-log.js",
+        "scripts/run-agent-host-pass.js",
+        "test/agent-queue.test.js",
+        "test/agent-run-log.test.js",
+        "test/agent-host-pass.test.js"
+      ],
+      "context": "Plan Phase 6. Queue and run-log outputs must distinguish blocked, waiting, partial, ready, direct transport, fallback transport, and config reasons so the UI can render truth later without inference.",
+      "doneWhen": [
+        "Queue counts do not imply non-runnable waiting work is ready.",
+        "Last-pass/run-log output names transport and config reasons.",
+        "Blocked, waiting, partial, and ready are distinct in backend tests."
+      ],
+      "verification": [
+        "npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js",
+        "git diff --check"
+      ],
+      "worktree": "multi_agent_v1:019ec7c9-a9db-7ce1-b11d-b557d355d480",
+      "startedAt": "2026-06-14T20:19:09Z",
+      "updatedAt": "2026-06-14T20:30:26Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Queue summaries now expose ready, waiting, blocked, partial, and readyIncludesWaiting counts without treating waiting work as runnable.",
+        "Provider-backoff inbound recovery tasks now carry the concrete waitingReason/backoffReason, for example provider_rate_limited.",
+        "Agent run-log entries now preserve runtime truth for transports, fallbackFrom, and config reasons including missing_unipile_base_url, missing_unipile_api_key, and missing_provider_account_id.",
+        "Host-pass finalQueueCounts now include readyTaskCount, partialTaskCount, and normalized statusCounts.",
+        "Verified focused T6 suite: npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js passed 182/182.",
+        "Verified integration gate: npm test passed 932/933 with 1 skipped and 0 failures.",
+        "Verified formatting: git diff --check passed."
+      ],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "d084828d4fdd9796c12f8b7bb5e939e9ae3cee87",
+      "notes": "Subagent Curie returned an incomplete patch after red tests; controller completed the waiting-reason and config-reason contract and verified it."
+    },
+    {
+      "id": "T7",
+      "title": "Run full integration verification and close board",
+      "status": "done",
+      "priority": 10,
+      "dependsOn": [
+        "T4",
+        "T5",
+        "T6"
+      ],
+      "ownerLane": "controller",
+      "modelTier": "default",
+      "files": [
+        "docs/plans/local-runner-inbound-truth-board.json",
+        "docs/plans/local-runner-inbound-truth-board.html"
+      ],
+      "context": "Final integration gate. Run all plan verification commands, ensure acceptance criteria are satisfied, render the board, and mark complete only if everything is green.",
+      "doneWhen": [
+        "All plan acceptance criteria pass.",
+        "npm test passes.",
+        "git diff --check passes.",
+        "Board status is complete with final verification recorded."
+      ],
+      "verification": [
+        "npm test -- test/inbound-live-runtime-variants.test.js",
+        "npm test -- test/agent-host-pass.test.js",
+        "npm test -- test/linkedin-unipile-maintenance.test.js",
+        "npm test -- test/build-linkedin-send.test.js",
+        "npm test -- test/connection-request-reconciliation.test.js",
+        "npm test -- test/agent-queue.test.js test/agent-run-log.test.js",
+        "npm test",
+        "git diff --check"
+      ],
+      "worktree": "",
+      "startedAt": "2026-06-14T20:31:03Z",
+      "updatedAt": "2026-06-14T20:35:27Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Verified npm test -- test/inbound-live-runtime-variants.test.js passed 21/21.",
+        "Verified npm test -- test/agent-host-pass.test.js passed 106/106.",
+        "Verified npm test -- test/linkedin-unipile-maintenance.test.js passed 15/15.",
+        "Verified npm test -- test/build-linkedin-send.test.js passed 2/2.",
+        "Verified npm test -- test/connection-request-reconciliation.test.js passed 8/8.",
+        "Verified npm test -- test/agent-queue.test.js test/agent-run-log.test.js passed 76/76.",
+        "Verified final npm test passed 932/933 with 1 skipped and 0 failures.",
+        "Verified final git diff --check passed."
+      ],
+      "attemptCount": 0,
+      "lastFailure": "",
+      "commit": "d21aa0326dc1e7349f34eafc1a85cd60f591b349",
+      "notes": "Final verification used the plan-level focused commands plus a full suite run after T6 was committed."
+    }
+  ],
+  "messages": [
+    {
+      "id": "M1",
+      "fromTask": "controller",
+      "toTasks": [
+        "T0"
+      ],
+      "type": "risk",
+      "subject": "Dirty tree before loop start",
+      "body": "The loop started with existing uncommitted changes in plan-overlapping files. T0 must attribute and verify them before T1 implementation begins.",
+      "createdAt": "2026-06-14T18:49:36.000Z",
+      "status": "resolved"
+    }
+  ]
+}

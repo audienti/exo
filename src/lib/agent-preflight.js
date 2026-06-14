@@ -159,6 +159,10 @@ function buildBrowserTaskReadiness(input) {
       ready: maintenanceBlockedReasons.length === 0,
       blockedReasons: maintenanceBlockedReasons,
     },
+    accept_connection_request: {
+      ready: maintenanceBlockedReasons.length === 0,
+      blockedReasons: maintenanceBlockedReasons,
+    },
     reject_connection_request: {
       ready: maintenanceBlockedReasons.length === 0,
       blockedReasons: maintenanceBlockedReasons,

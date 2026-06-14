@@ -19,6 +19,7 @@ import { deriveLinkedinRelativeEventAt } from "../lib/linkedin-relative-time.js"
 import { extractLinkedinPublicId } from "../lib/prospect-contacts.js";
 import { motionSchema } from "../schema/motion.js";
 import { deriveLinkedinCompanyName } from "../lib/linkedin-headline.js";
+import { resolveManagedLinkedinAccount } from "./inbound-identity-resolution.js";
 import { classifyPrivateInboundMessage } from "./private-inbound-message-classification.js";
 import { isTransitionMotion } from "./ensure-transition-motion.js";
 import { normalizeCompanyNameKey, normalizeResolvableCompanyName } from "../lib/company-name.js";
@@ -56,7 +57,13 @@ const MESSAGE_OBSERVATION_KINDS = new Set([
 ]);
 
 /**
- * @param {{ observationId: string, rawObservations: unknown[], rawMotions: unknown[], rawCompanies?: unknown[] | undefined }} input
+ * @param {{
+ *   observationId: string,
+ *   rawObservations: unknown[],
+ *   rawMotions: unknown[],
+ *   rawCompanies?: unknown[] | undefined,
+ *   rawUsers?: unknown[] | undefined,
+ * }} input
  * @returns {ReturnType<typeof shapePerson> | null}
  */
 export function buildPersonView(input) {
@@ -71,7 +78,7 @@ export function buildPersonView(input) {
   );
   const motions = (input.rawMotions ?? []).map((raw) => motionSchema.parse(raw));
   const companies = (input.rawCompanies ?? []).map((raw) => companySchema.parse(raw));
-  return shapePerson(seed, related, motions, companies);
+  return shapePerson(seed, related, motions, companies, input.rawUsers ?? []);
 }
 
 /**
@@ -79,8 +86,9 @@ export function buildPersonView(input) {
  * @param {import("../schema/inbound.js").inboundObservationSchema._type[]} related
  * @param {import("../schema/motion.js").motionSchema._type[]} motions
  * @param {import("../schema/company.js").companySchema._type[]} companies
+ * @param {unknown[]} rawUsers
  */
-function shapePerson(seed, related, motions, companies) {
+function shapePerson(seed, related, motions, companies, rawUsers) {
   const observedSorted = related
     .slice()
     .sort((a, b) => (Date.parse(b.observedAt) || 0) - (Date.parse(a.observedAt) || 0));
@@ -119,11 +127,26 @@ function shapePerson(seed, related, motions, companies) {
   const firstSeen = occurredSorted.length ? observationOccurredAt(occurredSorted[occurredSorted.length - 1]) : null;
   const lastSeen = occurredSorted.length ? observationOccurredAt(occurredSorted[0]) : null;
   const relationshipFacts = buildRelationshipFacts(occurredSorted);
+  const identityResolution = resolveIdentityResolutionState(observedSorted);
+  const backgroundIdentityResolutionAvailable = Boolean(
+    resolveManagedLinkedinAccount(
+      (rawUsers ?? []).find((candidate) => candidate?.id === seed.userId) ?? null,
+      { runtime: "codex", connector: "unipile", availableOnly: true },
+    ),
+  );
 
   // The right first message depends on where the relationship stands: an
   // accepted invite → first direct message; a reply → continue the thread;
   // otherwise → a connection request.
   const suggested = suggestSurface(observedSorted, identity, email);
+  const promotionBlocker = resolvePromotionBlocker({
+    matchedProspect,
+    identity,
+    email,
+    suggestedSurface: suggested.surface,
+    identityResolution,
+    backgroundIdentityResolutionAvailable,
+  });
   const connection = resolveConnectionStatus(observedSorted);
   const composeDraft = buildComposeDraft({
     latestMessage,
@@ -138,6 +161,9 @@ function shapePerson(seed, related, motions, companies) {
     matchedCompany,
     motionContext,
     claimState,
+    promotionBlocker,
+    identityResolution,
+    backgroundIdentityResolutionAvailable,
     suggestedSurface: suggested.surface,
     suggestedChannel: suggested.channel,
     connection,
@@ -302,6 +328,30 @@ function resolveConnectionStatus(sorted) {
       nextMove: "Review the message and decide whether to reply.",
     };
   }
+  if (kinds.has("connection_request_accept_requested")) {
+    return {
+      key: "invite-accept-queued",
+      state: "pre-connect",
+      label: "Invite accept queued",
+      nextMove: "The agent will accept their connection request on LinkedIn, then this branch will move to connected.",
+    };
+  }
+  if (kinds.has("connection_request_decline_requested")) {
+    return {
+      key: "invite-decline-queued",
+      state: "pre-connect",
+      label: "Invite decline queued",
+      nextMove: "The agent will decline their connection request on LinkedIn. No further operator move is needed.",
+    };
+  }
+  if (kinds.has("connection_request_declined")) {
+    return {
+      key: "invite-declined",
+      state: "identified",
+      label: "Invite declined",
+      nextMove: "No next move is required unless this decline needs review or audit.",
+    };
+  }
   if (kinds.has("connection_request_received")) {
     return { key: "invite-received", state: "pre-connect", label: "Invited you · not yet accepted", nextMove: "Accept (or decline) their connection request." };
   }
@@ -381,7 +431,12 @@ function hasAnyKind(sorted, kinds) {
  */
 function suggestSurface(sorted, identity, email) {
   const kinds = new Set(sorted.map((observation) => observation.kind));
-  if (kinds.has("connection_request_pending") || kinds.has("connection_request_received")) {
+  if (
+    kinds.has("connection_request_pending")
+    || kinds.has("connection_request_received")
+    || kinds.has("connection_request_accept_requested")
+    || kinds.has("connection_request_decline_requested")
+  ) {
     return { surface: null, channel: "linkedin" };
   }
   if (kinds.has("connection_request_accepted")) {
@@ -397,6 +452,88 @@ function suggestSurface(sorted, identity, email) {
     return { surface: "email", channel: "email" };
   }
   return { surface: "connection_request", channel: "linkedin" };
+}
+
+/**
+ * Email-only inbound contacts are real enough to review, but Exo should not
+ * claim or queue them as governed outreach until their LinkedIn identity is
+ * resolved. That keeps the transition backlog person-first instead of turning
+ * unknown mailbox senders into half-scoped prospects.
+ *
+ * @param {{
+ *   matchedProspect: any,
+ *   identity: { linkedinUrl: string | null, publicId: string | null },
+ *   email: string | null,
+ *   suggestedSurface: string | null,
+ *   identityResolution: { status: string | null, checkedAt: string | null, reason: string | null },
+ *   backgroundIdentityResolutionAvailable: boolean,
+ * }} input
+ */
+function resolvePromotionBlocker(input) {
+  if (input.matchedProspect) {
+    return null;
+  }
+  if (input.suggestedSurface !== "email") {
+    return null;
+  }
+  if (!input.email) {
+    return null;
+  }
+  if (input.identity.linkedinUrl || input.identity.publicId) {
+    return null;
+  }
+  if (input.backgroundIdentityResolutionAvailable) {
+    if (input.identityResolution.status === "blocked") {
+      return {
+        kind: "resolve_linkedin_identity",
+        state: "blocked",
+        title: "LinkedIn resolution is blocked.",
+        detail: input.identityResolution.reason
+          ? `Exo's connector-backed identity resolution is currently blocked: ${input.identityResolution.reason}.`
+          : "Exo's connector-backed identity resolution is currently blocked.",
+        buttonLabel: "Resolution blocked",
+      };
+    }
+    if (input.identityResolution.status === "no_match") {
+      return {
+        kind: "resolve_linkedin_identity",
+        state: "retrying",
+        title: "Resolving LinkedIn in background.",
+        detail: "Exo could not match this sender confidently yet. It will retry through the managed Gmail and LinkedIn connectors before claim or reply unlocks.",
+        buttonLabel: "Resolving in background",
+      };
+    }
+    return {
+      kind: "resolve_linkedin_identity",
+      state: "background",
+      title: "Resolving LinkedIn in background.",
+      detail: "Exo is using the managed Gmail and LinkedIn connectors to resolve this sender before claim or reply unlocks.",
+      buttonLabel: "Resolving in background",
+    };
+  }
+  return {
+    kind: "resolve_linkedin_identity",
+    state: "unavailable",
+    title: "LinkedIn execution path unavailable.",
+    detail: "Exo cannot resolve email-first senders automatically until a managed LinkedIn connector is available for this user.",
+    buttonLabel: "LinkedIn unavailable",
+  };
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type[]} sorted
+ */
+function resolveIdentityResolutionState(sorted) {
+  const observation = sorted.find((candidate) =>
+    candidate.identityResolutionStatus
+    || candidate.identityResolutionCheckedAt
+    || candidate.identityResolutionReason,
+  ) ?? null;
+  return {
+    status: observation?.identityResolutionStatus ?? null,
+    checkedAt: observation?.identityResolutionCheckedAt ?? null,
+    reason: observation?.identityResolutionReason ?? null,
+  };
 }
 
 /**

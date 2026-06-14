@@ -22,7 +22,8 @@ const LIVE_SUPPORTED_CAPABILITIES = new Set(["gmail", "linkedin"]);
  *   since?: string | null,
  *   codexCli?: string | null,
  *   codexHome?: string | null,
- *   claudeCli?: string | null
+ *   claudeCli?: string | null,
+ *   allowDirectUnipileHttp?: boolean | null
  * }} [options]
  */
 export async function buildLiveInboundSyncPayload(rawUser, rawProfiles, options = {}) {
@@ -59,7 +60,8 @@ export async function buildLiveInboundSyncPayload(rawUser, rawProfiles, options 
         limit: options.limit ?? null,
         codexCli: options.codexCli ?? null,
         codexHome: options.codexHome ?? null,
-        claudeCli: options.claudeCli ?? null
+        claudeCli: options.claudeCli ?? null,
+        allowDirectUnipileHttp: options.allowDirectUnipileHttp ?? null
       });
       accountResults.push({
         account: built.account,

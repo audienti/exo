@@ -9,7 +9,7 @@ export const DEFAULT_UNIPILE_V2_BASE_URL = "https://api.unipile.com/v2";
 
 /**
  * @param {string | null | undefined} codexHome
- * @returns {{ apiKey: string | null, baseUrl: string, v2ApiKey: string | null, v2BaseUrl: string }}
+ * @returns {{ apiKey: string | null, baseUrl: string, baseUrlSource: "env" | "codex-config" | "default", v2ApiKey: string | null, v2BaseUrl: string }}
  */
 export function readUnipileConfig(codexHome) {
   const home = normalizeNullableString(codexHome)
@@ -18,13 +18,13 @@ export function readUnipileConfig(codexHome) {
   const configPath = path.join(home, "config.toml");
 
   if (!fs.existsSync(configPath)) {
+    const envBaseUrl = normalizeNullableString(process.env.UNIPILE_DSN)
+      ?? normalizeNullableString(process.env.UNIPILE_BASE_URL)
+      ?? null;
     return {
       apiKey: normalizeNullableString(process.env.UNIPILE_API_KEY) ?? null,
-      baseUrl: normalizeUnipileBaseUrl(
-        normalizeNullableString(process.env.UNIPILE_DSN)
-        ?? normalizeNullableString(process.env.UNIPILE_BASE_URL)
-        ?? null,
-      ),
+      baseUrl: normalizeUnipileBaseUrl(envBaseUrl),
+      baseUrlSource: envBaseUrl ? "env" : "default",
       v2ApiKey: normalizeNullableString(process.env.UNIPILE_V2_API_KEY) ?? null,
       v2BaseUrl: normalizeUnipileV2BaseUrl(
         normalizeNullableString(process.env.UNIPILE_V2_BASE_URL)
@@ -34,16 +34,19 @@ export function readUnipileConfig(codexHome) {
   }
 
   const config = fs.readFileSync(configPath, "utf8");
+  const envBaseUrl = normalizeNullableString(process.env.UNIPILE_DSN)
+    ?? normalizeNullableString(process.env.UNIPILE_BASE_URL)
+    ?? null;
+  const configBaseUrl = normalizeNullableString(config.match(/UNIPILE_DSN\s*=\s*"([^"]+)"/)?.[1] ?? null)
+    ?? normalizeNullableString(config.match(/UNIPILE_BASE_URL\s*=\s*"([^"]+)"/)?.[1] ?? null)
+    ?? null;
   return {
     apiKey: normalizeNullableString(process.env.UNIPILE_API_KEY)
       ?? normalizeNullableString(config.match(/UNIPILE_API_KEY\s*=\s*"([^"]+)"/)?.[1] ?? null),
     baseUrl: normalizeUnipileBaseUrl(
-      normalizeNullableString(process.env.UNIPILE_DSN)
-      ?? normalizeNullableString(process.env.UNIPILE_BASE_URL)
-      ?? normalizeNullableString(config.match(/UNIPILE_DSN\s*=\s*"([^"]+)"/)?.[1] ?? null)
-      ?? normalizeNullableString(config.match(/UNIPILE_BASE_URL\s*=\s*"([^"]+)"/)?.[1] ?? null)
-      ?? null,
+      envBaseUrl ?? configBaseUrl,
     ),
+    baseUrlSource: envBaseUrl ? "env" : configBaseUrl ? "codex-config" : "default",
     v2ApiKey: normalizeNullableString(process.env.UNIPILE_V2_API_KEY)
       ?? normalizeNullableString(config.match(/UNIPILE_V2_API_KEY\s*=\s*"([^"]+)"/)?.[1] ?? null),
     v2BaseUrl: normalizeUnipileV2BaseUrl(

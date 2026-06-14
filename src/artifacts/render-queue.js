@@ -33,16 +33,14 @@ import { renderAgentRuntimeBar, renderAgentRuntimeMeta } from "./render-agent-ru
 export function renderQueuePage(model, meta = {}) {
   const runtime = model.agentRuntime ?? meta.agentRuntime ?? null;
   const agentStatus = meta.agentStatus ?? null;
-  const oldestWait = oldestWaitingLabel(model.queue);
+  const liveSendGate = buildLiveSendGate(agentStatus);
+  const queueGroups = buildQueueGroups(model.queue, liveSendGate);
+  const oldestWait = oldestWaitingLabel(queueGroups.actionable);
   const body =
     `<div class="op-wrap feed">` +
-    renderIntro(model, oldestWait, runtime) +
-    renderAgentRuntimeBar(runtime, {
-      side: agentStatusSide(agentStatus, meta),
-      forceOpen: agentStatus?.state === "blocked",
-    }) +
-    renderAgentStatusStrip(agentStatus) +
-    renderQueueTabs(model, agentStatus, oldestWait, meta) +
+    renderIntro(model, oldestWait, runtime, queueGroups) +
+    renderQueueRuntimePanel(runtime, agentStatus, meta, liveSendGate) +
+    renderQueueTabs(model, agentStatus, oldestWait, meta, liveSendGate, queueGroups) +
     renderFooter(model) +
     `</div>`;
 
@@ -61,9 +59,11 @@ export function renderQueuePage(model, meta = {}) {
  * @param {import("../core/build-operator-view.js").OperatorViewModel} model
  * @param {string | null} oldestWait
  * @param {import("../core/build-operator-view.js").OperatorAgentRuntime | null | undefined} runtime
+ * @param {{ actionable: import("../core/build-operator-view.js").OperatorQueueItem[], waiting: import("../core/build-operator-view.js").OperatorQueueItem[] }} queueGroups
  */
-function renderIntro(model, oldestWait, runtime) {
+function renderIntro(model, oldestWait, runtime, queueGroups) {
   const c = model.counts;
+  const queuedCount = queueGroups.actionable.length;
   const introAction = runtime?.canRunNow
     ? liveActionBtn({
         writer: "runAgentQueuePass",
@@ -82,7 +82,7 @@ function renderIntro(model, oldestWait, runtime) {
     `</div>` +
     `<div class="op-intro-actions">` +
     `<div class="op-stat">` +
-    `<span><b>${c.queue}</b> queued</span><i></i>` +
+    `<span><b>${queuedCount}</b> queued</span><i></i>` +
     `<span><b>${oldestWait ?? "—"}</b> oldest wait</span><i></i>` +
     `<span><b>${c.blocked}</b> blocked</span>` +
     `</div>` +
@@ -119,22 +119,56 @@ const AGENT_STATE_TONE = {
 };
 
 /**
+ * Queue page runtime: one panel, two rows. The disclosure bar stays the first
+ * row and the status strip becomes the second row inside the same framed shell.
+ *
+ * @param {import("../core/build-operator-view.js").OperatorAgentRuntime | null | undefined} runtime
+ * @param {any} status
+ * @param {{ generatedAt?: string }} [meta]
+ * @param {ReturnType<typeof buildLiveSendGate>} [liveSendGate]
+ */
+function renderQueueRuntimePanel(runtime, status, meta = {}, liveSendGate = null) {
+  if (!runtime && (!status || typeof status !== "object")) return "";
+  const runtimeBar = runtime
+    ? renderAgentRuntimeBar(runtime, {
+        side: agentStatusSide(status, meta),
+        forceOpen: status?.state === "blocked",
+        embedded: true,
+      })
+    : "";
+  const strip = renderAgentStatusStrip(status, { embedded: true, liveSendGate });
+  return (
+    `<section class="op-sec queue-runtime-panel" data-sec="agent-status">` +
+    runtimeBar +
+    strip +
+    `</section>`
+  );
+}
+
+/**
  * One-row strip: current work / backlog / throughput, plus a partial-reason
  * cell while a pass is parked mid-drain. Replaces the old two-row panel grid.
  *
  * @param {any} status
+ * @param {{ embedded?: boolean, liveSendGate?: ReturnType<typeof buildLiveSendGate> }} [options]
  */
-function renderAgentStatusStrip(status) {
+function renderAgentStatusStrip(status, options = {}) {
   if (!status || typeof status !== "object") return "";
   const partial = Boolean(status.partial?.active);
-  return (
-    `<section class="op-sec" data-sec="agent-status">` +
+  const liveSendGate = options.liveSendGate ?? null;
+  const strip =
     `<div class="ws-strip${partial ? " has-partial" : ""}">` +
     renderCurrentWorkCell(status) +
-    renderBacklogCell(status) +
+    renderBacklogCell(status, liveSendGate) +
     renderThroughputCell(status) +
-    (partial ? renderPartialCell(status) : "") +
-    `</div>` +
+    (partial ? renderPartialCell(status, liveSendGate) : "") +
+    `</div>`;
+  if (options.embedded) {
+    return strip;
+  }
+  return (
+    `<section class="op-sec" data-sec="agent-status">` +
+    strip +
     `</section>`
   );
 }
@@ -169,8 +203,11 @@ function renderCurrentWorkCell(status) {
   );
 }
 
-/** @param {any} status */
-function renderBacklogCell(status) {
+/**
+ * @param {any} status
+ * @param {ReturnType<typeof buildLiveSendGate>} [liveSendGate]
+ */
+function renderBacklogCell(status, liveSendGate = null) {
   const backlog = status.backlog ?? {};
   const due = numberOrZero(backlog.dueTaskCount);
   const waiting = numberOrZero(backlog.waitingTaskCount);
@@ -183,6 +220,7 @@ function renderBacklogCell(status) {
     `<div class="ws-cell">` +
     `<div class="pulse-cap">Backlog</div>` +
     `<div class="mini-name"><b>${escapeHtml(due)}</b> due · <b>${escapeHtml(waiting)}</b> waiting · <b>${escapeHtml(blockers)}</b> blockers</div>` +
+    (liveSendGate ? `<div class="stat-sub"><b>${escapeHtml(liveSendGate.headline)}</b>: ${escapeHtml(liveSendGate.detail)}</div>` : "") +
     (kinds ? `<div class="mini-sub">${escapeHtml(kinds)}</div>` : "") +
     (waitingGroups ? `<div class="stat-sub">Waiting: ${waitingGroups}</div>` : "") +
     (blockerGroups ? `<div class="stat-sub">Blockers: ${escapeHtml(blockerGroups)}</div>` : "") +
@@ -214,13 +252,18 @@ function renderThroughputCell(status) {
   );
 }
 
-/** @param {any} status */
-function renderPartialCell(status) {
+/**
+ * @param {any} status
+ * @param {ReturnType<typeof buildLiveSendGate>} [liveSendGate]
+ */
+function renderPartialCell(status, liveSendGate = null) {
+  const reason = liveSendGate?.partialReason ?? status.partial.reason ?? "Partial pass";
+  const nextAction = liveSendGate?.partialNextAction ?? status.partial.nextAction ?? null;
   return (
     `<div class="ws-cell">` +
     `<div class="pulse-cap">Partial reason</div>` +
-    `<div class="mini-name">${escapeHtml(status.partial.reason ?? "Partial pass")}</div>` +
-    (status.partial.nextAction ? `<div class="mini-sub">${escapeHtml(status.partial.nextAction)}</div>` : "") +
+    `<div class="mini-name">${escapeHtml(reason)}</div>` +
+    (nextAction ? `<div class="mini-sub">${escapeHtml(nextAction)}</div>` : "") +
     `</div>`
   );
 }
@@ -234,30 +277,46 @@ function renderPartialCell(status) {
  * @param {any} status
  * @param {string | null} oldestWait
  * @param {{ generatedAt?: string }} meta
+ * @param {ReturnType<typeof buildLiveSendGate>} [liveSendGate]
+ * @param {{ actionable: import("../core/build-operator-view.js").OperatorQueueItem[], waiting: import("../core/build-operator-view.js").OperatorQueueItem[] }} [queueGroups]
  */
-function renderQueueTabs(model, status, oldestWait, meta = {}) {
+function renderQueueTabs(model, status, oldestWait, meta = {}, liveSendGate = null, queueGroups = undefined) {
   const surfaces = Array.isArray(status?.inboundSurfaces?.items) ? status.inboundSurfaces.items : [];
+  const groups = queueGroups ?? buildQueueGroups(model.queue, liveSendGate);
+  const tabItems = [
+    {
+      target: "queue",
+      label: "Agent queue",
+      panelId: "queue-views-panel-queue",
+      count: groups.actionable.length,
+      countTone: "blue",
+      active: true,
+    },
+  ];
+  if (groups.waiting.length > 0) {
+    tabItems.push({
+      target: "waiting",
+      label: "Waiting",
+      panelId: "queue-views-panel-waiting",
+      count: groups.waiting.length,
+      countTone: "amber",
+    });
+  }
+  tabItems.push({
+    target: "surfaces",
+    label: "Inbound surfaces",
+    panelId: "queue-views-panel-surfaces",
+    count: surfaces.length,
+  });
   const tabs = segTabs({
     tabsetId: "queue-views",
     ariaLabel: "Queue views",
-    tabs: [
-      {
-        target: "queue",
-        label: "Agent queue",
-        panelId: "queue-views-panel-queue",
-        count: model.queue.length,
-        countTone: "blue",
-        active: true,
-      },
-      {
-        target: "surfaces",
-        label: "Inbound surfaces",
-        panelId: "queue-views-panel-surfaces",
-        count: surfaces.length,
-      },
-    ],
+    tabs: tabItems,
   });
   const sub = oldestWait ? `oldest ${oldestWait}` : "agent can run now";
+  const waitingPanel = groups.waiting.length > 0
+    ? `<div id="queue-views-panel-waiting" class="sec-body" role="tabpanel" aria-labelledby="queue-views-tab-waiting" data-tab-panel="waiting" hidden>${renderQueue(groups.waiting, liveSendGate, "No gated work is waiting right now.")}</div>`
+    : "";
 
   return (
     `<section class="op-sec" data-sec="queue">` +
@@ -266,7 +325,8 @@ function renderQueueTabs(model, status, oldestWait, meta = {}) {
     tabs +
     `<span class="sec-sub">${escapeHtml(sub)}</span>` +
     `</div>` +
-    `<div id="queue-views-panel-queue" class="sec-body" role="tabpanel" aria-labelledby="queue-views-tab-queue" data-tab-panel="queue">${renderQueue(model.queue)}</div>` +
+    `<div id="queue-views-panel-queue" class="sec-body" role="tabpanel" aria-labelledby="queue-views-tab-queue" data-tab-panel="queue">${renderQueue(groups.actionable, liveSendGate)}</div>` +
+    waitingPanel +
     `<div id="queue-views-panel-surfaces" class="sec-body sec-body-list" role="tabpanel" aria-labelledby="queue-views-tab-surfaces" data-tab-panel="surfaces" hidden>${renderSurfacesPanel(surfaces, meta)}</div>` +
     `</section>`
   );
@@ -330,39 +390,110 @@ function renderInboundSurfaceRow(surface, meta = {}) {
   );
 }
 
-/** @param {import("../core/build-operator-view.js").OperatorQueueItem[]} queue */
-function renderQueue(queue) {
+/**
+ * @param {import("../core/build-operator-view.js").OperatorQueueItem[]} queue
+ * @param {ReturnType<typeof buildLiveSendGate>} [liveSendGate]
+ * @param {string} [emptyMessage]
+ */
+function renderQueue(queue, liveSendGate = null, emptyMessage = "Agent queue empty — nothing ready to run.") {
   if (!queue.length) {
-    return emptyState({ icon: "cpu", message: "Agent queue empty — nothing ready to run." });
+    return emptyState({ icon: "cpu", message: emptyMessage });
   }
   // Oldest waits at the top so the operator scans for stuck work first.
   const sorted = [...queue].sort((a, b) => waitMillis(b.dueAtIso) - waitMillis(a.dueAtIso));
-  return sorted.map(renderQueueItem).join("");
+  return sorted.map((item) => renderQueueItem(item, liveSendGate)).join("");
 }
 
-/** @param {import("../core/build-operator-view.js").OperatorQueueItem} q */
-function renderQueueItem(q) {
+/**
+ * @param {import("../core/build-operator-view.js").OperatorQueueItem[]} queue
+ * @param {ReturnType<typeof buildLiveSendGate>} liveSendGate
+ */
+function buildQueueGroups(queue, liveSendGate) {
+  const actionable = [];
+  const waiting = [];
+  for (const item of queue) {
+    if (isLiveSendQueueItem(item, liveSendGate)) {
+      waiting.push(item);
+    } else {
+      actionable.push(item);
+    }
+  }
+  if (liveSendGate && waiting.length > 0 && !actionable.some(isLiveSendPrerequisiteQueueItem)) {
+    actionable.unshift(buildLiveSendPrerequisiteQueueItem(liveSendGate));
+  }
+  return { actionable, waiting };
+}
+
+/** @param {import("../core/build-operator-view.js").OperatorQueueItem} item */
+function isLiveSendPrerequisiteQueueItem(item) {
+  return item.taskKind === "run_inbound_sync" || item.taskKind === "resolve_inbound_identity";
+}
+
+/**
+ * @param {NonNullable<ReturnType<typeof buildLiveSendGate>>} liveSendGate
+ * @returns {import("../core/build-operator-view.js").OperatorQueueItem & { queueRole: string, reviewLabel: string }}
+ */
+function buildLiveSendPrerequisiteQueueItem(liveSendGate) {
+  return {
+    id: "live-send-gate-prerequisite",
+    subject: "Repair LinkedIn inbound sync",
+    motionName: "Prerequisite",
+    action: liveSendGate.prerequisiteAction,
+    note: liveSendGate.detail,
+    capability: "linkedin",
+    taskKind: "run_inbound_sync",
+    dueAt: null,
+    dueAtIso: null,
+    waitingFor: null,
+    checkoutState: null,
+    checkedOutBy: null,
+    checkedOutAt: null,
+    href: "/queue#surfaces",
+    queueRole: "prerequisite",
+    reviewLabel: "Open surfaces",
+  };
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorQueueItem} q
+ * @param {ReturnType<typeof buildLiveSendGate>} [liveSendGate]
+ */
+function renderQueueItem(q, liveSendGate = null) {
+  const gatedSend = isLiveSendQueueItem(q, liveSendGate);
+  const prerequisite = q.queueRole === "prerequisite";
   const waitChip = q.waitingFor
     ? `<span class="surface-ref">${iconSvg("clock", 11)}${escapeHtml(q.waitingFor)}</span>`
     : null;
   const checkoutChip = q.checkoutState === "checked_out"
     ? `<span class="surface-ref">${iconSvg("cpu", 11)}Checked out${q.checkedOutBy ? ` · ${escapeHtml(q.checkedOutBy)}` : ""}</span>`
     : null;
+  const gateChip = gatedSend
+    ? `<span class="surface-ref">${iconSvg("alert", 11)}Live send gated</span>`
+    : null;
   const chips = [
     `<span class="cap-ref">${iconSvg("cpu", 11)}${escapeHtml(q.capability)}</span>`,
     q.motionName ? stateDot("active", q.motionName) : null,
     waitChip,
     checkoutChip,
+    gateChip,
   ]
     .filter(Boolean)
     .join("");
   const review = q.href
-    ? btn({ variant: "secondary", size: "sm", icon: "arrowR", label: "Review", href: q.href })
+    ? btn({ variant: "secondary", size: "sm", icon: "arrowR", label: q.reviewLabel ?? "Review", href: q.href })
     : "";
-  const agentTag = q.checkoutState === "checked_out"
+  const agentTag = gatedSend
+    ? `<span class="q-agent">${iconSvg("clock", 11)}Gated by sync</span>`
+    : prerequisite
+    ? `<span class="q-agent">${iconSvg("alert", 11)}Prerequisite</span>`
+    : q.checkoutState === "checked_out"
     ? `<span class="q-agent">${iconSvg("cpu", 11)}Checked out</span>`
     : `<span class="q-agent">${iconSvg("cpu", 11)}Queued for agent</span>`;
-  const state = q.checkoutState === "checked_out"
+  const state = gatedSend
+    ? stateDot("paused", "Gated")
+    : prerequisite
+    ? stateDot("ready", "Prerequisite")
+    : q.checkoutState === "checked_out"
     ? stateDot("waiting", "Checked out")
     : stateDot("ready");
 
@@ -381,6 +512,78 @@ function renderQueueItem(q) {
       `<div class="row-chips">${chips}</div>` +
       `<div class="row-actions">${agentTag}${review}</div>`,
   });
+}
+
+/**
+ * Live sends are only safe when the inbound truth surfaces they depend on are
+ * healthy. When LinkedIn sync is failed, show the queue as gated instead of
+ * implying every due send is runnable.
+ *
+ * @param {any} status
+ */
+function buildLiveSendGate(status) {
+  if (!status || typeof status !== "object") return null;
+  const backlog = status.backlog ?? {};
+  const sendCount = countGroup(backlog.dueByKind, "kind", "send_message");
+  if (sendCount <= 0) return null;
+  const failedLinkedInSurfaces = unhealthyLinkedInSurfaces(status);
+  if (failedLinkedInSurfaces.length <= 0) return null;
+
+  const syncRepairCount = countGroup(backlog.dueByKind, "kind", "run_inbound_sync");
+  const firstError = normalizeSentence(failedLinkedInSurfaces.find((surface) => surface?.lastError)?.lastError ?? null);
+  const repairSentence = syncRepairCount > 0
+    ? `Run ${countLabel(syncRepairCount, "inbound sync repair task")} first.`
+    : "Repair LinkedIn inbound sync before sending.";
+  const errorSentence = firstError ? ` Latest error: ${firstError}` : "";
+  return {
+    headline: "Live sends gated",
+    detail: `${countLabel(sendCount, "send task")} are paused until LinkedIn inbound sync is healthy. ${repairSentence}${errorSentence}`,
+    prerequisiteAction: repairSentence,
+    partialReason: "Live sends paused until inbound sync is healthy.",
+    partialNextAction: `${repairSentence} Do not send from stale LinkedIn truth.`,
+  };
+}
+
+/** @param {unknown} value */
+function normalizeSentence(value) {
+  const text = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  if (!text) return null;
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
+/**
+ * @param {any} status
+ * @returns {any[]}
+ */
+function unhealthyLinkedInSurfaces(status) {
+  const surfaces = Array.isArray(status?.inboundSurfaces?.items) ? status.inboundSurfaces.items : [];
+  return surfaces.filter((surface) => {
+    const capability = String(surface?.capability ?? "").trim().toLowerCase();
+    const lastRunStatus = String(surface?.lastRunStatus ?? "").trim().toLowerCase();
+    return capability === "linkedin" && (Boolean(surface?.lastError) || lastRunStatus === "failed");
+  });
+}
+
+/**
+ * @param {any[] | null | undefined} groups
+ * @param {string} keyName
+ * @param {string} expected
+ */
+function countGroup(groups, keyName, expected) {
+  if (!Array.isArray(groups)) return 0;
+  return groups.reduce((sum, group) => {
+    const key = String(group?.[keyName] ?? "").trim().toLowerCase();
+    const count = numberOrZero(group?.count);
+    return key === expected ? sum + count : sum;
+  }, 0);
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorQueueItem} q
+ * @param {ReturnType<typeof buildLiveSendGate>} liveSendGate
+ */
+function isLiveSendQueueItem(q, liveSendGate) {
+  return Boolean(liveSendGate) && q.taskKind === "send_message";
 }
 
 /** @param {import("../core/build-operator-view.js").OperatorViewModel} model */

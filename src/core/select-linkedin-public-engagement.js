@@ -21,6 +21,8 @@ const PUBLIC_ENGAGEMENT_TOUCH_SURFACES = new Set([
 const METADATA_PREFIX = "exo-public-engagement.";
 const PUBLIC_REACTION_ACTIONS = new Set(["like_post", "create_comment_reaction"]);
 
+const PRE_CONNECT_SKIP_REASON = "No eligible recent public LinkedIn activity is stored, so Exo should skip warmup and move straight to a direct connection request.";
+
 /**
  * @param {any} prospect
  */
@@ -60,8 +62,32 @@ export function normalizePublicEngagementSelection(rawSelection) {
   }
   return {
     ...normalized,
+    targetUrl: normalized.url,
     selectionReason: normalizeText(rawSelection.selectionReason),
     selectedAt: normalizeIso(rawSelection.selectedAt),
+  };
+}
+
+/**
+ * @param {any} rawDecision
+ */
+export function normalizePreConnectDecision(rawDecision) {
+  if (!rawDecision || typeof rawDecision !== "object") {
+    return null;
+  }
+  const mode = rawDecision.mode === "skip"
+    ? "skip"
+    : rawDecision.mode === "bypass"
+      ? "bypass"
+      : null;
+  const reason = normalizeText(rawDecision.reason);
+  if (!mode || !reason) {
+    return null;
+  }
+  return {
+    mode,
+    reason,
+    decidedAt: normalizeIso(rawDecision.decidedAt),
   };
 }
 
@@ -111,6 +137,7 @@ export function selectLinkedinPublicEngagementTarget(prospect, options = {}) {
  */
 export function buildLinkedinPublicEngagementPlan(prospect, now) {
   const normalizedNow = normalizeIso(now) ?? new Date().toISOString();
+  const preConnectDecision = normalizePreConnectDecision(prospect?.preConnectDecision);
   const reactiveReply = buildReactiveCommentReplyPlan(prospect, normalizedNow);
   if (reactiveReply) {
     return reactiveReply;
@@ -127,6 +154,24 @@ export function buildLinkedinPublicEngagementPlan(prospect, now) {
 
   const latestInviteSentAt = latestConnectionRequestSentAt(prospect);
   if (!latestInviteSentAt) {
+    if (preConnectDecision?.mode === "bypass") {
+      return {
+        kind: "none",
+        mode: "proactive",
+        reason: "pre_connect_bypassed",
+        reasonDetail: preConnectDecision.reason,
+        dueAt: null,
+      };
+    }
+    if (preConnectDecision?.mode === "skip") {
+      return {
+        kind: "skip",
+        mode: "proactive",
+        reason: "pre_connect_skipped",
+        reasonDetail: preConnectDecision.reason,
+        dueAt: normalizedNow,
+      };
+    }
     const forceReactionRecovery = shouldRecoverDiscardedCommentWithReaction(prospect);
     const preInviteTouch = latestPreInviteProactiveTouch(prospect);
     if (preInviteTouch?.occurredAt) {
@@ -146,6 +191,7 @@ export function buildLinkedinPublicEngagementPlan(prospect, now) {
         kind: "skip",
         mode: "proactive",
         reason: "no_eligible_activity",
+        reasonDetail: PRE_CONNECT_SKIP_REASON,
         dueAt: normalizedNow,
       };
     }
@@ -220,6 +266,46 @@ export function buildLinkedinPublicEngagementPlan(prospect, now) {
       excludeUrls: [selection.targetUrl],
     }),
   };
+}
+
+/**
+ * @param {any} prospect
+ * @param {string} [now]
+ */
+export function derivePreConnectState(prospect, now = new Date().toISOString()) {
+  const decision = normalizePreConnectDecision(prospect?.preConnectDecision);
+  if (
+    !decision
+    && !normalizeText(prospect?.linkedinProfileUrl)
+    && !normalizePublicEngagementSelection(prospect?.publicEngagementSelection)
+    && !listStoredLinkedinPublicActivity(prospect).length
+  ) {
+    return null;
+  }
+  if (decision?.mode === "bypass") {
+    return {
+      status: "bypassed",
+      reason: decision.reason,
+      decidedAt: decision.decidedAt,
+    };
+  }
+
+  const plan = buildLinkedinPublicEngagementPlan(prospect, now);
+  if (plan.reason === "pre_connect_skipped") {
+    return {
+      status: "skipped",
+      reason: plan.reasonDetail ?? decision?.reason ?? null,
+      decidedAt: decision?.decidedAt ?? null,
+    };
+  }
+  if (plan.kind === "skip") {
+    return {
+      status: "skipped",
+      reason: plan.reasonDetail ?? PRE_CONNECT_SKIP_REASON,
+      decidedAt: null,
+    };
+  }
+  return null;
 }
 
 /**
@@ -379,18 +465,19 @@ function normalizePublicActivity(item) {
   if (!item || typeof item !== "object") {
     return null;
   }
+  const activityType = normalizeActivityType(item.activityType);
   const targetKind = item.targetKind === "comment"
     ? "comment"
     : item.targetKind === "post"
       ? "post"
-      : inferTargetKind(item.activityType);
+      : inferTargetKind(activityType);
   const recommendedAction = item.recommendedAction === "comment"
     ? "comment"
     : item.recommendedAction === "reaction"
       ? "reaction"
       : inferRecommendedAction(item);
   return {
-    activityType: normalizeText(item.activityType),
+    activityType,
     url: normalizeText(item.url),
     postedAt: normalizeIso(item.postedAt),
     freshnessBand: normalizeText(item.freshnessBand),
@@ -640,6 +727,17 @@ function inferRecommendedAction(item) {
  */
 function isCommentWorthy(item) {
   return businessRelevanceScore(item.businessRelevance) >= 3;
+}
+
+/**
+ * Live LinkedIn enrichment now commonly labels authored posts as `post`
+ * instead of the older `own-post`. Treat them as the same governed activity.
+ *
+ * @param {string | null | undefined} activityType
+ */
+function normalizeActivityType(activityType) {
+  const normalized = normalizeText(activityType);
+  return normalized === "post" ? "own-post" : normalized;
 }
 
 /**

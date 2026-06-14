@@ -147,7 +147,7 @@ test("formatAgentDoctorReport makes the worker diagnosis explicit", () => {
   assert.match(output, /Queue: 6 due, 1 waiting, 2 blockers\./);
   assert.match(output, /Scheduler: launchd installed but not loaded\./);
   assert.match(output, /Scheduler is overdue\. 2026-06-03T02:45:00.000Z \(\d+s late\)\./);
-  assert.match(output, /Send mode: verify\. Send tasks stop before the final send, so they will not drain\./);
+  assert.match(output, /Send mode: verify\. Agent-authored sends stop at ready_to_send, but operator-authored, edited, or approved drafts can still send live\./);
   assert.match(output, /Send proof coverage: 2\/6 due sends already have fresh proof\./);
   assert.match(output, /Verify mode still needs 4 more proofs\. Next likely proof: Georg Steiger at BillEase\./);
   assert.match(output, /Autonomous retrieval: 6\/6 enabled surfaces currently fresh, 0 due now\./);
@@ -1087,7 +1087,7 @@ test("formatAgentDoctorReport shows recent verification-only send proofs", () =>
   assert.match(output, /Recent verification-only send proofs:/);
   assert.match(output, /Taras Mykhalyshyn at BillEase: verified 2026-06-03T05:47:15.929Z \(ready_to_send\)/);
   assert.match(output, /skip-until: 2026-06-03T11:47:15.929Z/);
-  assert.match(output, /Send mode: verify\./);
+  assert.match(output, /Send mode: verify\. Agent-authored sends stop at ready_to_send, but operator-authored, edited, or approved drafts can still send live\./);
   assert.match(output, /All due sends are already proved\. Canary can safely drain next from Taras Mykhalyshyn at BillEase\./);
   assert.match(output, /Recommended rollout step: switch the scheduled worker to canary\. Next canary send: Taras Mykhalyshyn at BillEase\./);
 });

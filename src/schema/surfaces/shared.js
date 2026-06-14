@@ -40,6 +40,7 @@ export const canonicalSurfaceModeSchema = z.enum(["full", "quick"]);
 export const canonicalSurfaceStatusSchema = z.enum(["success", "warning", "failed"]);
 export const canonicalSurfaceExhaustionStatusSchema = z.enum(["complete", "incomplete", "blocked"]);
 export const canonicalSurfaceCaptureCompletenessSchema = z.enum(["complete", "partial_visible_slice", "failed"]);
+export const canonicalSurfaceSyncTrustStatusSchema = z.enum(["trusted", "degraded", "untrusted"]);
 
 export const toolLifecyclePhaseSchema = z.enum([
   "binding",
@@ -139,7 +140,10 @@ export function buildCanonicalSurfaceResultSchema(itemSchema) {
     itemCount: z.coerce.number().int().min(0).nullable().default(null),
     visibleTotalCount: z.coerce.number().int().min(0).nullable().default(null),
     exhaustionStatus: canonicalSurfaceExhaustionStatusSchema.nullable().default(null),
+    exhaustionReason: z.string().trim().min(1).nullable().default(null),
     captureCompleteness: canonicalSurfaceCaptureCompletenessSchema.nullable().default(null),
+    backoffReason: z.string().trim().min(1).nullable().default(null),
+    syncTrustStatus: canonicalSurfaceSyncTrustStatusSchema.nullable().default(null),
     reconcileRequired: z.boolean().nullable().default(null),
     reconcileReason: z.string().trim().min(1).nullable().default(null),
     paginationAttempted: z.boolean().nullable().default(null),

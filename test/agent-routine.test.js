@@ -119,6 +119,8 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   assert.match(prompt, /Read \/tmp\/exo\/\.exo\/agent-preflight\.json first if it exists/);
   assert.match(prompt, /skip every browser-backed task in this pass/);
   assert.match(prompt, /Do not run connector diagnostics, do not open Chrome/);
+  assert.match(prompt, /use the governed Unipile MCP path, not Chrome, browser automation, curl, or shell scraping/i);
+  assert.match(prompt, /same-credential HTTP fallback/i);
   assert.match(prompt, /verification-only send mode/i);
 
   const plist = plan.launchAgent?.plist ?? "";
@@ -482,6 +484,14 @@ test("agent install-routine --send-mode canary --json blocks rollout when autono
             sourceType: "browser-profile",
             browserProfileId: "profile-4",
             preferred: true,
+            metadata: {
+              inboundRetrievalWindow: {
+                timezone: "America/New_York",
+                weekdays: ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
+                startLocalTime: "00:00",
+                endLocalTime: "23:59",
+              },
+            },
             inboundSync: {
               surfaces: [
                 {
@@ -800,6 +810,14 @@ test("agent status surfaces current work, partial reason, throughput, and inboun
             sourceType: "browser-profile",
             browserProfileId: "profile-4",
             preferred: true,
+            metadata: {
+              inboundRetrievalWindow: {
+                timezone: "America/New_York",
+                weekdays: ["sun", "mon", "tue", "wed", "thu", "fri", "sat"],
+                startLocalTime: "00:00",
+                endLocalTime: "23:59",
+              },
+            },
             inboundSync: {
               surfaces: [
                 {

@@ -8,15 +8,15 @@ The first slice does three things:
 - stores which of those surfaces are enabled on each connected user account
 - stores the last known sync result for each enabled surface
 - stores normalized inbound observations that an agent can write back after inspecting a live surface
-- runs the first live retrieval slice for Gmail through supported runtime adapters, including `runtime:gmail` harness-backed accounts and trusted Chrome profiles plus `runtime:chrome` harnesses
-- runs the first live retrieval slice for LinkedIn quick-mode surfaces through a trusted Chrome profile plus a supported `runtime:chrome` harness
+- runs live retrieval for Gmail through supported runtime adapters
+- runs live retrieval for LinkedIn authoritative surfaces through managed Unipile accounts, with legacy browser capture kept as an explicit capture input path
 
 The next management layer is `exo inbound review`, which combines that sync state with the concrete observations so the operator can see what actually needs a decision.
 
 There is now a middle layer too: ambient cues. When an agent is already doing other governed work and notices an unread badge, invite badge, or thread movement, it can record that as smoke without pretending it already checked the canonical truth surface.
 
-It still does **not** do broad live retrieval by itself.
-Right now the built-in live producers are Gmail through supported runtime-backed Gmail harness connections and LinkedIn quick-mode surfaces through a trusted Chrome profile plus a supported runtime-backed Chrome harness.
+It still does **not** treat partial slices as complete truth.
+Built-in live producers now write governed sync metadata for Gmail and managed Unipile LinkedIn paths. Browser-backed LinkedIn capture remains a capture input path, not the preferred autonomous path.
 
 ## Canonical surfaces
 
@@ -93,6 +93,28 @@ Modes:
 - `quick`: enabled authoritative surfaces only
 - `normal`: enabled authoritative surfaces first, then enabled supplementary surfaces
 - `full`: everything in `normal`, plus disabled optional surfaces that may be worth widening into during a reconciliation pass
+
+## Provider sync contract
+
+Unipile-backed surfaces are cursor and webhook oriented. Exo stores provider sync state on each account surface so it can resume work without repeatedly querying the whole external surface.
+
+Per-surface sync state can include:
+
+- `nextCursor` and `nextStartOffset` for an active bounded continuation
+- `providerCursor` for the durable provider cursor or resume token
+- `highWatermarkAt` and `highWatermarkId` for time-windowed fallback syncs
+- `lastCompleteSnapshotId` for the last cursor-exhausted snapshot
+- `nextAllowedSyncAt` and `backoffReason` for provider safety windows
+- `syncTrustStatus`, which is `trusted`, `degraded`, or `untrusted`
+
+Rules:
+
+- Complete snapshots require `captureCompleteness: "complete"` and `exhaustionStatus: "complete"`.
+- Partial slices must remain `warning` with `reconcileRequired: true`.
+- Absence-based diffs only come from complete snapshots.
+- Full reconciliation debt stays queued, but provider backoff and failed-retry windows move it to waiting until the safe time.
+- Cursor variants such as `cursor`, `next_cursor`, and nested paging cursors count as continuation signals.
+- A sent-invitation disappearance means the invite is no longer pending. It does not prove acceptance by itself.
 
 ## Ambient cues and working hours
 

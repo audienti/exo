@@ -15,6 +15,7 @@
 
 import { buildLinkedinProfileUrlFromPublicId } from "../lib/prospect-contacts.js";
 import { buildProspectActionIntents } from "./build-action-intents.js";
+import { derivePreConnectState } from "./select-linkedin-public-engagement.js";
 
 /** engagement-lane key → record-state axis */
 const BRANCH_STATE = {
@@ -46,6 +47,7 @@ const CONTACT_CONFIDENCE_SCORE = {
  */
 export function buildProspectsViewModel(input) {
   const now = input.now ?? new Date().toISOString();
+  const ownerByProspect = new Map();
   const ownerByCompany = new Map();
   const industryByCompany = new Map();
   const premiseByMotion = new Map();
@@ -73,9 +75,15 @@ export function buildProspectsViewModel(input) {
         ]),
       ),
     );
-    for (const company of detail.companies ?? []) {
-      if (company.executionIdentity?.user?.label) {
-        ownerByCompany.set(company.companyId, company.executionIdentity.user.label);
+    for (const person of detail.people ?? []) {
+      if (person.ownerLabel) {
+        ownerByProspect.set(person.prospectId, person.ownerLabel);
+      }
+    }
+    for (const company of [...(detail.companies ?? []), ...(detail.backlogCompanies ?? [])]) {
+      const ownerLabel = company.executionIdentity?.user?.label ?? null;
+      if (ownerLabel) {
+        ownerByCompany.set(company.companyId, ownerLabel);
       }
       if (company.domain || company.websiteUrl) {
         industryByCompany.set(company.companyId, company.domain ?? company.websiteUrl);
@@ -107,7 +115,7 @@ export function buildProspectsViewModel(input) {
   const baseInventory = [...merged.values()]
     .map((raw) => ({
       raw,
-      prospect: shapeProspect(raw, { ownerByCompany, industryByCompany, premiseByMotion, signalMetaByMotion, now }),
+      prospect: shapeProspect(raw, { ownerByProspect, ownerByCompany, industryByCompany, premiseByMotion, signalMetaByMotion, now }),
     }))
     .filter(({ raw, prospect }) => shouldIncludeProspect(raw, prospect))
     .map(({ prospect }) => prospect)
@@ -171,6 +179,7 @@ export function buildProspectsViewModel(input) {
 /**
  * @param {any} raw
  * @param {{
+ *   ownerByProspect: Map<string,string>,
  *   ownerByCompany: Map<string,string>,
  *   industryByCompany: Map<string,string>,
  *   premiseByMotion: Map<string,any>,
@@ -217,7 +226,7 @@ function shapeProspect(raw, ctx) {
     branch,
     branchLabel: normalizeBranchLabel(branch, raw.engagementLane?.label ?? null),
     actionIntents: intents,
-    owner: ctx.ownerByCompany.get(raw.companyId) ?? null,
+    owner: ctx.ownerByProspect.get(raw.prospectId) ?? ctx.ownerByCompany.get(raw.companyId) ?? null,
     ageLabel: relativeDays(raw.profileViewedAt),
     premise: ctx.premiseByMotion.get(raw.motionId) ?? null,
     whyRelevant: raw.whyRelevant ?? null,
@@ -248,6 +257,7 @@ function shapeProspect(raw, ctx) {
         ? raw.linkedinProfileSnapshot.recentPosts.slice(0, 5)
         : [],
     publicEngagementSelection: raw.publicEngagementSelection ?? null,
+    preConnect: derivePreConnectState(raw, ctx.now),
     timelineNotes: Array.isArray(raw.timelineNotes) ? raw.timelineNotes : [],
     handledNotification: raw.handledNotification ?? null,
   };

@@ -32,6 +32,7 @@ import { buildMotionPacketSummary } from "../lib/motion-packets.js";
 import { renderWorkspaceRollupPage } from "../artifacts/render-workspace-rollup.js";
 import { buildConnectionsViewModel } from "../core/build-connections-view.js";
 import { buildAgentQueue } from "../core/build-agent-queue.js";
+import { resolvePersonComposeDraft } from "../core/build-person-compose-draft.js";
 import { buildPersonView } from "../core/build-person-view.js";
 import { findTransitionMotion, isTransitionMotion } from "../core/ensure-transition-motion.js";
 import { buildExecutionViewModel } from "../core/build-execution-view.js";
@@ -163,6 +164,7 @@ export async function startExoUiServer(input) {
  *   listMotions?: typeof listMotions,
  *   listCompanies?: typeof listCompanies,
  *   buildPersonView?: typeof buildPersonView,
+ *   resolvePersonComposeDraft?: typeof resolvePersonComposeDraft,
  *   findTransitionMotion?: typeof findTransitionMotion,
  *   renderPersonPage?: typeof renderPersonPage,
  *   resolveWorkspaceProjectionForUi?: typeof resolveWorkspaceProjectionForUi,
@@ -174,10 +176,12 @@ export async function renderRoute(route, ctx, hooks = {}) {
   const pathname = requestUrl.pathname;
   const searchQuery = normalizeRouteSearchQuery(requestUrl.searchParams.get("q"));
   const selectedAccountId = normalizeRouteAccountId(requestUrl.searchParams.get("account"));
+  const listUsersFn = hooks.listUsers ?? listUsers;
   const listInboundObservationsFn = hooks.listInboundObservations ?? listInboundObservations;
   const listMotionsFn = hooks.listMotions ?? listMotions;
   const listCompaniesFn = hooks.listCompanies ?? listCompanies;
   const buildPersonViewFn = hooks.buildPersonView ?? buildPersonView;
+  const resolvePersonComposeDraftFn = hooks.resolvePersonComposeDraft ?? resolvePersonComposeDraft;
   const findTransitionMotionFn = hooks.findTransitionMotion ?? findTransitionMotion;
   const renderPersonPageFn = hooks.renderPersonPage ?? renderPersonPage;
   const resolveWorkspaceProjectionForUiFn = hooks.resolveWorkspaceProjectionForUi ?? resolveWorkspaceProjectionForUi;
@@ -215,9 +219,9 @@ export async function renderRoute(route, ctx, hooks = {}) {
   // Users roster + per-user detail are sourced from raw state (all users).
   if (pathname === "/users" || pathname.startsWith("/users/")) {
     const model = buildExecutionViewModel({
-      rawUsers: listUsers(),
-      rawMotions: listMotions(),
-      rawCompanies: listCompanies(),
+      rawUsers: listUsersFn(),
+      rawMotions: listMotionsFn(),
+      rawCompanies: listCompaniesFn(),
       rawProfiles: listBrowserProfiles(),
       runtimeAccountDiscovery,
     });
@@ -280,19 +284,33 @@ export async function renderRoute(route, ctx, hooks = {}) {
     const rawObservations = listInboundObservationsFn({ userId: session.userId });
     const rawMotions = listMotionsFn();
     const rawCompanies = listCompaniesFn();
-    const person = buildPersonViewFn({
+    const rawUsers = listUsersFn();
+    const rawPerson = buildPersonViewFn({
       observationId: id,
       rawObservations,
       rawMotions,
       rawCompanies,
+      rawUsers,
     });
-    if (!person) {
+    if (!rawPerson) {
       return renderNotFound("Person", id, "/connections", "Connections");
     }
+    const shouldDraftCompose = shouldResolvePersonCompose(requestUrl)
+      && !rawPerson.matchedProspect
+      && rawPerson.hasDurableIdentity !== false
+      && !rawPerson.promotionBlocker
+      && Boolean(rawPerson.suggestedSurface);
+    const person = shouldDraftCompose
+      ? {
+          ...rawPerson,
+          composeDraft: resolvePersonComposeDraftFn(rawPerson),
+        }
+      : rawPerson;
     const transition = findTransitionMotionFn();
     return renderPersonPageFn(person, {
       interactive: true,
       userId: session.userId,
+      returnTo: normalizeRouteReturnTo(requestUrl.searchParams.get("return")),
       transitionMotionId: transition?.id ?? null,
       // Transition backlog first (the default add target), then real motions.
       motions: buildClaimMotionChoices(rawMotions, transition),
@@ -619,6 +637,27 @@ function normalizeRouteAccountId(value) {
   }
   const trimmed = value.trim();
   return trimmed.length ? trimmed : null;
+}
+
+/**
+ * @param {string | null} value
+ * @returns {string | null}
+ */
+function normalizeRouteReturnTo(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.startsWith("/") ? trimmed : null;
+}
+
+/**
+ * @param {URL} requestUrl
+ * @returns {boolean}
+ */
+function shouldResolvePersonCompose(requestUrl) {
+  const compose = String(requestUrl.searchParams.get("compose") ?? "").trim().toLowerCase();
+  return compose === "1" || compose === "true" || compose === "reply";
 }
 
 /**

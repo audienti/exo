@@ -278,6 +278,7 @@ test("inbound sync live returns a mixed-runtime landing plan when one account st
       "sync",
       "live",
       user.id,
+      "--agent-handoff",
       "--json"
     ], {
       CODEX_HOME: codexHome,

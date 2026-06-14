@@ -183,6 +183,10 @@ test("recordActionResult writes outbound send state to normalized rows", () => {
   assert.equal(result.actionResult.touchRecorded, true);
   assert.equal(result.actionResult.draftMarkedSent, true);
   assert.equal(result.actionResult.cadenceUpdated, true);
+  assert.equal(result.actionResult.reconciliation?.state, "pending_reconciliation");
+  assert.equal(result.actionResult.reconciliation?.owner, "src/core/connection-request-reconciliation.js");
+  assert.equal(result.actionResult.reconciliation?.proofSurface, "linkedin-sent-invitations");
+  assert.equal(result.actionResult.reconciliation?.externalState, "connection_request_pending");
 
   const rowProspect = getLocalDatabase()
     .prepare("SELECT * FROM prospects WHERE id = ?")
@@ -209,6 +213,172 @@ test("recordActionResult writes outbound send state to normalized rows", () => {
   );
   assert.ok(rowTouch, "touch event was written as an activity_events row");
   assert.equal(rowTouch.occurredAt, "2026-06-02T12:45:00.000Z");
+  assert.equal(rowTouch.payload?.reconciliation?.state, "pending_reconciliation");
+  assert.equal(rowTouch.payload?.reconciliation?.proofSurface, "linkedin-sent-invitations");
+});
+
+test("recordActionResult marks email sends as locally recorded but externally unproven", () => {
+  const motion = cliJson([
+    "motion", "add",
+    "--url", "https://example.com/result-email-proof",
+    "--premise", "This offer matters when email send state needs provider proof.",
+    "--audience", "Revenue operators",
+    "--signal", "company::Is email writeback proof missing?",
+  ]);
+  cli(["motion", "restart", motion.id]);
+
+  const company = cliJson([
+    "companies", "add",
+    "--name", "Email Proof Systems",
+    "--domain", "email-proof.example",
+    "--motion", motion.id,
+  ]);
+  const prospect = cliJson([
+    "companies", "prospects", "add", company.id,
+    "--motion", motion.id,
+    "--name", "Eli Email",
+    "--title", "VP Revenue",
+    "--email", "eli@email-proof.example",
+    "--buying-committee-role", "primary_business_owner",
+    "--decision-authority", "buys",
+    "--fit-confidence", "high",
+    "--why-relevant", "Owns email fallback proof.",
+  ]).prospects[0];
+
+  cli([
+    "companies", "prospects", "draft", "set", company.id,
+    "--motion", motion.id,
+    "--prospect", prospect.id,
+    "--surface", "email",
+    "--status", "queued",
+    "--subject", "Proof-backed email",
+    "--body", "Email body needing provider proof.",
+  ]);
+
+  const result = recordActionResult({
+    actionKey: "send_email",
+    resultKey: "sent",
+    motionId: motion.id,
+    companyId: company.id,
+    prospectId: prospect.id,
+    occurredAt: "2026-06-02T13:45:00.000Z",
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.actionResult.touchRecorded, true);
+  assert.equal(result.actionResult.draftMarkedSent, true);
+  assert.equal(result.actionResult.surface, "email");
+  assert.equal(result.actionResult.reconciliation?.state, "pending_external_proof");
+  assert.equal(result.actionResult.reconciliation?.owner, "src/core/email-send-reconciliation.js");
+  assert.equal(result.actionResult.reconciliation?.proofSurface, null);
+  assert.equal(result.actionResult.reconciliation?.missingProofSurface, "gmail-sent-mail");
+  assert.equal(result.actionResult.reconciliation?.reason, "send_email_recorded_waiting_for_gmail_proof");
+
+  const rowTouch = listActivityEvents({ prospectId: prospect.id }).find((event) =>
+    event.surface === "email" && event.outcome === "sent"
+  );
+  assert.ok(rowTouch, "email touch event was written as an activity_events row");
+  assert.equal(rowTouch.payload?.reconciliation?.state, "pending_external_proof");
+  assert.equal(rowTouch.payload?.reconciliation?.owner, "src/core/email-send-reconciliation.js");
+  assert.equal(rowTouch.payload?.reconciliation?.missingProofSurface, "gmail-sent-mail");
+});
+
+test("recordActionResult delegates non-connection mutation debt to seam owners", () => {
+  const motion = cliJson([
+    "motion", "add",
+    "--url", "https://example.com/result-seam-owners",
+    "--premise", "This offer matters when mutation writeback needs owner-shaped reconciliation debt.",
+    "--audience", "Revenue operators",
+    "--signal", "company::Are outbound actions missing external proof?",
+  ]);
+  cli(["motion", "restart", motion.id]);
+
+  const company = cliJson([
+    "companies", "add",
+    "--name", "Seam Owner Systems",
+    "--domain", "seam-owner.example",
+    "--motion", motion.id,
+  ]);
+  const prospect = cliJson([
+    "companies", "prospects", "add", company.id,
+    "--motion", motion.id,
+    "--name", "Nora Normalize",
+    "--title", "VP Revenue",
+    "--email", "nora@seam-owner.example",
+    "--linkedin-profile-url", "https://www.linkedin.com/in/nora-normalize",
+    "--buying-committee-role", "primary_business_owner",
+    "--decision-authority", "buys",
+    "--fit-confidence", "high",
+    "--why-relevant", "Owns proof-backed mutation reconciliation.",
+  ]).prospects[0];
+
+  const cases = [
+    {
+      actionKey: "send_direct_message",
+      surface: "post_accept_message",
+      owner: "src/core/linkedin-private-message-reconciliation.js",
+      state: "pending_proof",
+      proofSurfaces: ["linkedin-messaging-inbox"],
+      externalState: "direct_message_sent",
+    },
+    {
+      actionKey: "in_mail_message",
+      owner: "src/core/inmail-reconciliation.js",
+      state: "missing_proof",
+      proofSurfaces: ["linkedin-inmail-sent", "linkedin-inmail-inbox"],
+      missingProofSurfaces: ["linkedin-inmail-sent", "linkedin-inmail-inbox"],
+      externalState: "inmail_sent",
+    },
+    {
+      actionKey: "profile_view",
+      owner: "src/core/linkedin-social-graph-reconciliation.js",
+      state: "pending_proof",
+      proofSurfaces: ["linkedin-profile-views"],
+      externalState: "profile_view_after_touch",
+    },
+    {
+      actionKey: "follow",
+      owner: "src/core/linkedin-social-graph-reconciliation.js",
+      state: "pending_proof",
+      proofSurfaces: ["linkedin-following-list"],
+      externalState: "followed",
+    },
+    {
+      actionKey: "unfollow",
+      owner: "src/core/linkedin-social-graph-reconciliation.js",
+      state: "pending_proof",
+      proofSurfaces: ["linkedin-following-list"],
+      externalState: "unfollowed",
+    },
+    {
+      actionKey: "like_post",
+      owner: "src/core/public-engagement-reconciliation.js",
+      state: "missing_proof",
+      proofSurfaces: ["linkedin-catch-up-updates"],
+      missingProofSurfaces: ["linkedin-catch-up-updates"],
+      externalState: "post_reaction_created",
+    },
+  ];
+
+  for (const item of cases) {
+    const result = recordActionResult({
+      actionKey: item.actionKey,
+      resultKey: "sent",
+      motionId: motion.id,
+      companyId: company.id,
+      prospectId: prospect.id,
+      surface: item.surface,
+      occurredAt: "2026-06-02T14:45:00.000Z",
+    });
+
+    const reconciliation = result.actionResult.reconciliation;
+    assert.equal(reconciliation?.owner, item.owner, `${item.actionKey} should delegate to its seam owner`);
+    assert.equal(reconciliation?.state, item.state, `${item.actionKey} should expose owner state`);
+    assert.deepEqual(reconciliation?.proofSurfaces, item.proofSurfaces);
+    assert.deepEqual(reconciliation?.missingProofSurfaces ?? [], item.missingProofSurfaces ?? []);
+    assert.equal(reconciliation?.debt?.externalState, item.externalState);
+    assert.equal(reconciliation?.requiresAction, true);
+  }
 });
 
 test("recordActionResult blocks stale outbound send when another motion owns the person", () => {
@@ -466,6 +636,10 @@ test("recordActionResult accepts an inbound connection request and reconciles th
   assert.equal(result.actionResult.touchRecorded, true);
   assert.equal(result.actionResult.inboundObservationTransitionedTo, "connection_request_accepted");
   assert.equal(result.actionResult.surface, "accept_connection");
+  assert.equal(result.actionResult.reconciliation?.state, "reconciled");
+  assert.equal(result.actionResult.reconciliation?.owner, "src/core/connection-request-reconciliation.js");
+  assert.equal(result.actionResult.reconciliation?.proofSurface, "linkedin-received-invitations");
+  assert.equal(result.actionResult.reconciliation?.externalState, "connection_request_accepted");
 
   const stored = reProspect(prospect.id)?.prospect;
   assert.ok(stored, "prospect exists after accept");
@@ -479,6 +653,108 @@ test("recordActionResult accepts an inbound connection request and reconciles th
     item.externalId === observation.externalId && item.kind === "connection_request_accepted"
   );
   assert.ok(acceptedObservation, "accepted observation was written");
+
+  const acceptTouch = listActivityEvents({ prospectId: prospect.id }).find((event) =>
+    event.surface === "accept_connection" && event.outcome === "accepted"
+  );
+  assert.ok(acceptTouch, "accept touch event was written");
+  assert.equal(acceptTouch.payload?.reconciliation?.state, "reconciled");
+  assert.equal(acceptTouch.payload?.reconciliation?.proofSurface, "linkedin-received-invitations");
+});
+
+test("recordActionResult records reconciliation debt for withdraw and clears declined inbound requests", () => {
+  const motion = cliJson([
+    "motion", "add",
+    "--url", "https://example.com/result-withdraw-decline",
+    "--premise", "This offer matters when maintenance mutations need reconciliation proof.",
+    "--audience", "Revenue operators",
+    "--signal", "company::Are LinkedIn maintenance mutations externally proven?",
+  ]);
+  cli(["motion", "restart", motion.id]);
+
+  const company = cliJson([
+    "companies", "add",
+    "--name", "Maintenance Proof Co",
+    "--domain", "maintenance-proof.example",
+    "--motion", motion.id,
+  ]);
+  const prospect = cliJson([
+    "companies", "prospects", "add", company.id,
+    "--motion", motion.id,
+    "--name", "Willa Withdraw",
+    "--title", "VP Revenue",
+    "--linkedin-profile-url", "https://www.linkedin.com/in/willa-withdraw/",
+    "--buying-committee-role", "primary_business_owner",
+    "--decision-authority", "buys",
+    "--fit-confidence", "high",
+    "--why-relevant", "Has an outstanding request to withdraw.",
+  ]).prospects[0];
+
+  const withdrawResult = recordActionResult({
+    actionKey: "withdraw_connection",
+    resultKey: "sent",
+    motionId: motion.id,
+    companyId: company.id,
+    prospectId: prospect.id,
+    occurredAt: "2026-06-02T14:00:00.000Z",
+  });
+
+  assert.equal(withdrawResult.ok, true);
+  assert.equal(withdrawResult.actionResult.touchRecorded, true);
+  assert.equal(withdrawResult.actionResult.reconciliation?.state, "pending_reconciliation");
+  assert.equal(withdrawResult.actionResult.reconciliation?.owner, "src/core/connection-request-reconciliation.js");
+  assert.equal(withdrawResult.actionResult.reconciliation?.proofSurface, "linkedin-sent-invitations");
+  assert.equal(withdrawResult.actionResult.reconciliation?.externalState, "connection_request_withdrawn");
+
+  const withdrawTouch = listActivityEvents({ prospectId: prospect.id }).find((event) =>
+    event.surface === "withdraw_connection" && event.outcome === "sent"
+  );
+  assert.ok(withdrawTouch, "withdraw touch event was written");
+  assert.equal(withdrawTouch.payload?.reconciliation?.state, "pending_reconciliation");
+  assert.equal(withdrawTouch.payload?.reconciliation?.proofSurface, "linkedin-sent-invitations");
+
+  const user = cliJson(["users", "add", "--label", "Decline Action User", "--owner", "Operator"]);
+  const userWithAccount = cliJson([
+    "users", "accounts", "add", user.id,
+    "--capability", "linkedin",
+    "--handle", "decline-action-user",
+    "--runtime", "codex",
+    "--connector", "chrome",
+    "--preferred",
+  ]);
+  const linkedinAccount = userWithAccount.accounts.find((account) => account.capability === "linkedin");
+  assert.ok(linkedinAccount, "seeded linkedin account");
+
+  const observation = cliJson([
+    "inbound", "observations", "add", user.id,
+    "--account", linkedinAccount.id,
+    "--surface", "linkedin-received-invitations",
+    "--kind", "connection_request_received",
+    "--observed-at", "2026-06-02T14:10:00.000Z",
+    "--summary", "Dana Decline sent a connection request",
+    "--actor-name", "Dana Decline",
+    "--actor-profile-url", "https://www.linkedin.com/in/dana-decline/",
+  ]).observation;
+
+  const declineResult = recordActionResult({
+    actionKey: "decline_connection",
+    resultKey: "declined",
+    observationId: observation.id,
+    occurredAt: "2026-06-02T14:20:00.000Z",
+  });
+
+  assert.equal(declineResult.ok, true);
+  assert.equal(declineResult.actionResult.touchRecorded, false);
+  assert.equal(declineResult.actionResult.inboundObservationTransitionedTo, "connection_request_declined");
+  assert.equal(declineResult.actionResult.reconciliation?.state, "reconciled");
+  assert.equal(declineResult.actionResult.reconciliation?.owner, "src/core/connection-request-reconciliation.js");
+  assert.equal(declineResult.actionResult.reconciliation?.proofSurface, "linkedin-received-invitations");
+  assert.equal(declineResult.actionResult.reconciliation?.externalState, "connection_request_declined");
+
+  const declinedObservation = listInboundObservations().find((item) =>
+    item.externalId === observation.externalId && item.kind === "connection_request_declined"
+  );
+  assert.ok(declinedObservation, "declined observation was written");
 });
 
 test("exo actions result lands a direct-message send through the public CLI", () => {

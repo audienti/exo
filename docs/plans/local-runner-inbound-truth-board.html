@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="cache-control" content="no-store">
+  <title>local-runner-inbound-truth board</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #17191c;
+      --muted: #636b74;
+      --border: #d7dce2;
+      --accent: #2563eb;
+      --ready: #0f766e;
+      --running: #b45309;
+      --verify: #6d28d9;
+      --done: #15803d;
+      --blocked: #b91c1c;
+      --deferred: #475569;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    header.page {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 20px 24px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    h1 { font-size: 22px; margin: 0 0 8px; }
+    h2 { font-size: 14px; margin: 0 0 12px; }
+    h3 { font-size: 14px; margin: 0; }
+    .subtle, .muted { color: var(--muted); }
+    .topline { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .chip {
+      display: inline-flex;
+      gap: 5px;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 8px;
+      margin: 2px;
+      background: #fff;
+      color: #2f3640;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .panel {
+      margin: 16px 24px 0;
+      padding: 14px 16px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .metrics { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+    .metrics div {
+      min-width: 120px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      background: #fbfcfd;
+    }
+    .metrics b { display: block; font-size: 18px; }
+    .metrics span { color: var(--muted); font-size: 12px; }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(240px, 1fr));
+      gap: 12px;
+      padding: 16px 24px 24px;
+      overflow-x: auto;
+    }
+    .column {
+      min-width: 240px;
+      background: #eceff3;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+    }
+    .column h2 { display: flex; justify-content: space-between; color: #303741; }
+    .task {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-left: 4px solid #9aa3af;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    .task-ready { border-left-color: var(--ready); }
+    .task-running { border-left-color: var(--running); }
+    .task-verify { border-left-color: var(--verify); }
+    .task-done { border-left-color: var(--done); }
+    .task-blocked { border-left-color: var(--blocked); }
+    .task-deferred { border-left-color: var(--deferred); }
+    .task header { display: flex; gap: 8px; align-items: baseline; }
+    .task-id { font-weight: 700; color: var(--accent); }
+    .messages {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 10px;
+    }
+    .message {
+      border: 1px solid var(--border);
+      border-left: 4px solid #64748b;
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+    }
+    .message-blocker { border-left-color: var(--blocked); }
+    .message-risk { border-left-color: var(--running); }
+    .message-question { border-left-color: var(--verify); }
+    .message-interface-note { border-left-color: var(--accent); }
+    .message-handoff { border-left-color: var(--ready); }
+    .message-discovery { border-left-color: var(--done); }
+    .message-head { display: flex; gap: 8px; align-items: baseline; }
+    .message p { margin: 8px 0 0; }
+    .chips { margin: 7px 0; }
+    .field { border-top: 1px solid #edf0f2; padding-top: 7px; margin-top: 7px; }
+    .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0; }
+    ul { margin: 4px 0 0 18px; padding: 0; }
+    .empty { color: var(--muted); padding: 14px 4px; text-align: center; }
+    @media (max-width: 900px) {
+      header.page { position: static; }
+      .board { grid-template-columns: repeat(7, minmax(220px, 1fr)); padding: 12px; }
+      .panel { margin: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="page">
+    <h1>Make local-runner LinkedIn sync and invitation mutation trustworthy by using deterministic same-credential Unipile HTTP first for configured read and supported write paths, making config failures loud, and proving the invitation lifecycle through existing owners.</h1>
+    <div class="topline">
+      <span class="chip"><b>plan</b>local-runner-inbound-truth</span>
+      <span class="chip"><b>status</b>complete</span>
+      <span class="chip"><b>progress</b>9/9</span>
+      <span class="chip"><b>controller</b>codex</span>
+      <span class="chip"><b>worktrees</b>.worktrees</span>
+      <span class="chip"><b>open messages</b>0</span>
+      <span class="chip"><b>board updated</b>2026-06-14T20:36:03Z</span>
+      <span class="chip"><b>rendered</b>2026-06-14T20:36:14Z</span>
+    </div>
+    <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
+  </header>
+
+      <section class="panel">
+        <h2>Parallelization Audit</h2>
+        <div class="metrics">
+          <div><b>0</b><span>in flight</span></div>
+          <div><b>3</b><span>cap</span></div>
+          <div><b>none</b><span>next dispatch candidates</span></div>
+        </div>
+        <p><b>Running or verifying:</b> none</p>
+        <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
+        <p><b>Controller note:</b> Plan complete. All implementation tasks and final integration verification passed.</p>
+      </section>
+
+
+      <section class="panel">
+        <h2>Coordination Messages <span class="muted">0 open</span></h2>
+        <p class="muted">Controller-mediated messages only. These are context artifacts, not workflow state transitions.</p>
+        <div class="messages">
+          <article class="message message-risk">
+            <div class="message-head">
+              <span class="task-id">M1</span>
+              <b>Dirty tree before loop start</b>
+            </div>
+            <div class="chips">
+              <span class="chip"><b>type</b>risk</span>
+              <span class="chip"><b>status</b>resolved</span>
+              <span class="chip"><b>from</b>controller</span>
+              <span class="chip"><b>to</b>T0</span>
+              <span class="chip"><b>created</b>2026-06-14T18:49:36.000Z</span>
+            </div>
+            <p>The loop started with existing uncommitted changes in plan-overlapping files. T0 must attribute and verify them before T1 implementation begins.</p>
+          </article>
+        </div>
+      </section>
+
+  <main class="board">
+
+          <section class="column">
+            <h2>Backlog <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Ready <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Running <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Verify <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Done <span>9</span></h2>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T7</div>
+          <h3>Run full integration verification and close board</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>10</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T4, T5, T6</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/local-runner-inbound-truth-board.json</li><li>docs/plans/local-runner-inbound-truth-board.html</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js</li><li>npm test -- test/agent-host-pass.test.js</li><li>npm test -- test/linkedin-unipile-maintenance.test.js</li><li>npm test -- test/build-linkedin-send.test.js</li><li>npm test -- test/connection-request-reconciliation.test.js</li><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js</li><li>npm test</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All plan acceptance criteria pass.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board status is complete with final verification recorded.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Final verification used the plan-level focused commands plus a full suite run after T6 was committed.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Verified npm test -- test/inbound-live-runtime-variants.test.js passed 21/21.</li><li>Verified npm test -- test/agent-host-pass.test.js passed 106/106.</li><li>Verified npm test -- test/linkedin-unipile-maintenance.test.js passed 15/15.</li><li>Verified npm test -- test/build-linkedin-send.test.js passed 2/2.</li><li>Verified npm test -- test/connection-request-reconciliation.test.js passed 8/8.</li><li>Verified npm test -- test/agent-queue.test.js test/agent-run-log.test.js passed 76/76.</li><li>Verified final npm test passed 932/933 with 1 skipped and 0 failures.</li><li>Verified final git diff --check passed.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>d21aa0326dc1e7349f34eafc1a85cd60f591b349</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T6</div>
+          <h3>Expose runtime truth to queue and run log</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>65</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>multi_agent_v1:019ec7c9-a9db-7ce1-b11d-b557d355d480</div></div><div class="field"><div class="label">Depends on</div><div>T4</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/build-agent-queue.js</li><li>src/core/agent-run-log.js</li><li>scripts/run-agent-host-pass.js</li><li>test/agent-queue.test.js</li><li>test/agent-run-log.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Queue counts do not imply non-runnable waiting work is ready.</li><li>Last-pass/run-log output names transport and config reasons.</li><li>Blocked, waiting, partial, and ready are distinct in backend tests.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Subagent Curie returned an incomplete patch after red tests; controller completed the waiting-reason and config-reason contract and verified it.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Queue summaries now expose ready, waiting, blocked, partial, and readyIncludesWaiting counts without treating waiting work as runnable.</li><li>Provider-backoff inbound recovery tasks now carry the concrete waitingReason/backoffReason, for example provider_rate_limited.</li><li>Agent run-log entries now preserve runtime truth for transports, fallbackFrom, and config reasons including missing_unipile_base_url, missing_unipile_api_key, and missing_provider_account_id.</li><li>Host-pass finalQueueCounts now include readyTaskCount, partialTaskCount, and normalized statusCounts.</li><li>Verified focused T6 suite: npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js passed 182/182.</li><li>Verified integration gate: npm test passed 932/933 with 1 skipped and 0 failures.</li><li>Verified formatting: git diff --check passed.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>d084828d4fdd9796c12f8b7bb5e939e9ae3cee87</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T5</div>
+          <h3>Add env-gated real Unipile account smoke test</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>70</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>multi_agent_v1:019ec793-2c34-7203-a2a3-bc73e60d1cbb</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>test/unipile-account-smoke.test.js</li><li>src/lib/unipile-config.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/unipile-account-smoke.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Default npm test does not make a live Unipile request.</li><li>An explicit environment opt-in command is documented in the test or board notes.</li><li>When enabled, the test verifies the configured provider account id is present in /api/v1/accounts.</li></ul></div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Subagent Russell added test/unipile-account-smoke.test.js with a default skip gate and documented opt-in command.</li><li>Controller verified npm test -- test/unipile-account-smoke.test.js skips by default without a live request.</li><li>Controller verified EXO_UNIPILE_ACCOUNT_SMOKE=1 npm test -- test/unipile-account-smoke.test.js skips without credentials/provider account id and makes no live request.</li><li>Full npm test included the smoke test as one skipped test.</li><li>Verified git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>70b76d21bf7b52104c9f4ca6d50b8eca52d16547</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T4</div>
+          <h3>Prove invitation lifecycle end to end</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>85</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2, T2b, T3</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/connection-request-reconciliation.js</li><li>test/connection-request-reconciliation.test.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>The invitation tracer bullet passes through send, sync proof, no-longer-pending, and relationship proof without false acceptance.</li><li>Withdraw or received-invite mutation transport is proven to run before proof debt moves.</li><li>connection-request-reconciliation.js remains the owner for pending, accepted, no-longer-pending, and not-accepted decisions.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Behavior was already owned by the existing reconciliation seam; T4 adds a composed tracer regression to prevent false acceptance when a sent invitation disappears before profile proof.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Added a tracer regression that keeps connection_request/sent in pending_reconciliation, treats sent-list disappearance as connection_request_no_longer_pending, and only classifies accepted from first-degree relationship profile proof.</li><li>Verified focused T4 seams: npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed 134/134.</li><li>Verified formatting: git diff --check passed.</li><li>Verified integration gate: npm test passed 929/930 with 1 skipped and 0 failures.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>8c4ab120ece7b5d8156f9b05ec496eb4c971a556</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T3</div>
+          <h3>Make missing Unipile config loud</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>1</span><span class="chip"><b>priority</b>90</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/inbound-linkedin-live-sync.js</li><li>src/core/inbound-linkedin-sync.js</li><li>src/core/canonical-inbound-sync-adapter.js</li><li>src/lib/linkedin-tool-methods.js</li><li>src/schema/linkedin-capture.js</li><li>src/schema/surfaces/shared.js</li><li>scripts/run-agent-host-pass.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Missing Unipile config never produces a quiet zero-item success.</li><li>Failed/untrusted payloads include syncTrustStatus, exhaustionStatus, and concrete reason.</li><li>Host-pass output records the concrete reason.</li><li>Identity mismatch is treated as a loud failure.</li></ul></div></div><div class="field"><div class="label">Last failure</div><div>Full npm test failed in inbound-live-contracts, inbound-live-edge-contracts, and live-agent-handoff tests because handoff-contract assertions still expected agent_handoff by default. Under the plan, managed Unipile direct capture should now fail loud when config is missing unless diagnostic handoff is explicitly requested.</div></div><div class="field"><div class="label">Notes</div><div>Second approach kept direct-first production behavior and made diagnostic handoff tests opt into the fallback contract explicitly.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Wrote failing tests for missing UNIPILE_API_KEY, missing explicit Unipile base URL, missing providerAccountId, provider session or identity failure, and host-pass surfaced config failure.</li><li>Changed managed Unipile direct capture so missing deterministic prerequisites return direct-runtime failed/untrusted payloads instead of falling back to agent_handoff.</li><li>Preserved exhaustionReason, backoffReason, and syncTrustStatus through LinkedIn capture schema, canonical invitation tool results, canonical inbound adapter, legacy surface mapping, and host-pass normalization.</li><li>Verified focused T3 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 126 tests.</li><li>Full npm test failed with 919 pass, 9 fail, 1 skipped because existing handoff-contract tests did not explicitly request diagnostic agent handoff after the direct-first default.</li><li>Updated diagnostic handoff tests to pass --agent-handoff or allowDirectUnipileHttp: false so production default remains direct-first while handoff contract coverage stays explicit.</li><li>Verified handoff contract regression files: npm test -- test/inbound-live-contracts.test.js test/inbound-live-edge-contracts.test.js test/live-agent-handoff.test.js passed with 16 tests.</li><li>Re-verified focused T3 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 126 tests.</li><li>Verified full integration gate: npm test passed with 929 tests, 928 pass, 1 skipped, 0 failures.</li><li>Verified git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>28c2c3a87ef463f898c4111d5da8d66466f2b302</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T2b</div>
+          <h3>Add deterministic Unipile send for connection requests</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>1</span><span class="chip"><b>priority</b>92</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>scripts/run-agent-host-pass.js</li><li>src/lib/linkedin-unipile-maintenance.js</li><li>src/core/build-linkedin-send.js</li><li>test/agent-host-pass.test.js</li><li>test/build-linkedin-send.test.js</li><li>test/linkedin-unipile-maintenance.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>send_connection_request attempts deterministic same-credential Unipile send first for configured managed accounts.</li><li>Local mutation success and proof debt are recorded only after the external write returns success.</li><li>Other send actions remain connector-required with no local success writeback in this board.</li><li>Tests cover success, provider failure, missing config, and fallback behavior.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Implemented deterministic Unipile POST /api/v1/users/invite for connection requests using configured same-credential Unipile API settings. Handoff now carries sender providerAccountId and recipient providerId from synced profile truth. Host runner attempts this path first for live connection_request sends, preserves connector handoff for unsupported/failing direct sends, and only runs local writeback after a direct or connector external sent result.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>{&#x27;kind&#x27;: &#x27;test&#x27;, &#x27;summary&#x27;: &#x27;RED: focused T2b tests failed on missing deterministic send export, missing send handoff identifiers, and runSendTask ignoring injected direct-send dependencies.&#x27;, &#x27;command&#x27;: &#x27;npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js&#x27;}</li><li>{&#x27;kind&#x27;: &#x27;test&#x27;, &#x27;summary&#x27;: &#x27;GREEN: focused T2b tests passed after adding runLinkedinSendWithUnipile, direct-first runSendTask wiring, handoff sender/recipient identifiers, provider-failure fallback, and no-writeback-on-failure coverage.&#x27;, &#x27;command&#x27;: &#x27;npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js&#x27;}</li><li>{&#x27;kind&#x27;: &#x27;test&#x27;, &#x27;summary&#x27;: &#x27;Full suite passed with 923 passing and 1 env-gated smoke test skipped.&#x27;, &#x27;command&#x27;: &#x27;npm test&#x27;}</li><li>{&#x27;kind&#x27;: &#x27;test&#x27;, &#x27;summary&#x27;: &#x27;Whitespace check passed.&#x27;, &#x27;command&#x27;: &#x27;git diff --check&#x27;}</li></ul></div></div><div class="field"><div class="label">Commit</div><div>d12bd429e0e2e1173d6bcb1aefe03537c2dd30d3</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T2</div>
+          <h3>Make direct HTTP primary for supported maintenance mutations</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>1</span><span class="chip"><b>priority</b>95</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>scripts/run-agent-host-pass.js</li><li>src/lib/linkedin-unipile-maintenance.js</li><li>test/agent-host-pass.test.js</li><li>test/linkedin-unipile-maintenance.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-host-pass.test.js test/linkedin-unipile-maintenance.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Host-pass tests prove supported maintenance actions call direct HTTP first.</li><li>An MCP failure does not block a supported direct HTTP maintenance task when direct HTTP is configured.</li><li>Completed maintenance results report a primary direct HTTP transport label rather than fallback.</li><li>Unsupported maintenance still fails closed.</li></ul></div></div><div class="field"><div class="label">Last failure</div><div>Initial focused verification failed while the host-pass maintenance action remained private and MCP-first; the implementation exported and injected runBrowserActionTask, then switched supported Unipile maintenance tasks to direct-first.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Wrote host-pass regression tests proving reconcile_connection_request_status, withdraw_connection, accept_connection_request, and reject_connection_request call runLinkedinMaintenanceWithUnipile with allowDirectUnipileHttp: true before any MCP capture.</li><li>Changed runBrowserActionTask to use same-credential Unipile HTTP first for supported Unipile maintenance actions, while retaining MCP and same-credential fallback for unsupported handoff paths.</li><li>Kept unsupported maintenance kinds fail-closed in the maintenance owner without making HTTP calls.</li><li>Verified focused T2 tests: npm test -- test/agent-host-pass.test.js test/linkedin-unipile-maintenance.test.js passed with 111 tests.</li><li>Verified integration gate: npm test passed with 915 tests, 914 pass, 1 skipped, 0 failures.</li><li>Verified git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>4e094492da9c935a63b607a5c0feadb1aabed224</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T1</div>
+          <h3>Make direct HTTP primary at the read call site</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>1</span><span class="chip"><b>priority</b>100</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T0</div></div><div class="field"><div class="label">Files</div><div><ul><li>scripts/run-agent-host-pass.js</li><li>src/core/inbound-linkedin-live-sync.js</li><li>src/cli/commands/inbound.js</li><li>src/core/inbound-live-sync.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>A configured scheduled host-pass Unipile list pull does not default to agent_handoff.</li><li>A host-pass test proves the first runInboundContractImpl call includes directUnipileHttp: true.</li><li>The locked inbound-live runtime test that asserted direct HTTP should not run by default is updated to the new contract.</li><li>The CLI and generic live-sync wrapper do not preserve the old default for configured local-runner LinkedIn pulls unless explicitly requested as diagnostic handoff mode.</li></ul></div></div><div class="field"><div class="label">Last failure</div><div>Initial implementation still had one stale timeout/fallback test assuming handoff-first behavior; the test was rewritten to cover the remaining fallback timeout only when direct capture is unavailable.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Wrote red tests proving managed Unipile LinkedIn live sync should default to direct HTTP and host-pass LinkedIn sync should call runInboundContractImpl with directUnipileHttp: true on the first attempt.</li><li>Changed the host pass so LinkedIn inbound sync requests direct same-credential Unipile HTTP first instead of starting with agent_handoff.</li><li>Changed LinkedIn live sync and the generic live-sync wrapper so direct Unipile HTTP is the default for configured managed Unipile accounts, with --agent-handoff retained as an explicit diagnostic override.</li><li>Verified focused T1 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 113 tests.</li><li>Verified integration gate: npm test passed with 909 tests and 0 failures.</li><li>Verified git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>f1a3c6910a84383fccc685ed9d03f3c8c226b0af</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T0</div>
+          <h3>Reconcile pre-existing dirty working tree</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>1</span><span class="chip"><b>priority</b>110</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Files</div><div><ul><li>scripts/run-agent-host-pass.js</li><li>src/artifacts/render-prospects.js</li><li>src/artifacts/render-queue.js</li><li>src/cli/commands/agent.js</li><li>src/core/build-agent-queue.js</li><li>src/core/build-connections-view.js</li><li>src/core/build-operator-view.js</li><li>src/core/discover-runtime-account-identities.js</li><li>src/core/inbound-linkedin-live-sync.js</li><li>src/lib/agent-host-state.js</li><li>src/lib/exo-ui-components.js</li><li>src/lib/linkedin-unipile-maintenance.js</li><li>src/lib/unipile-config.js</li><li>test/agent-host-pass.test.js</li><li>test/agent-queue.test.js</li><li>test/agent-run.test.js</li><li>test/cli.test.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/linkedin-unipile-maintenance.test.js</li><li>test/operator-view.test.js</li><li>test/prospect-ui.test.js</li><li>test/runtime-account-discovery.test.js</li><li>docs/wip/local-runner-inbound-truth-plan.md</li><li>test/connections-view.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>git diff --check</li><li>npm test -- test/agent-host-pass.test.js test/agent-queue.test.js test/agent-run.test.js test/inbound-live-runtime-variants.test.js test/linkedin-unipile-maintenance.test.js test/operator-view.test.js test/prospect-ui.test.js test/runtime-account-discovery.test.js test/connections-view.test.js</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>The board records which dirty changes are related to this plan and which are carryover from earlier work.</li><li>git diff --check passes.</li><li>Focused tests covering the dirty files either pass or any baseline failures are recorded exactly.</li><li>A safe baseline strategy is recorded before T1 starts.</li></ul></div></div><div class="field"><div class="label">Last failure</div><div>Initial full npm test failed because test/cli.test.js still asserted that itemization-gap full sync should omit --max-pages even though the queue contract now intentionally page-slices that autonomous task.</div></div><div class="field"><div class="label">Notes</div><div>This is a controller-owned preflight task added because plan-loop green-baseline rules could not be satisfied while overlapping uncommitted changes existed. The verified state will be checkpointed before T1 starts.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Attributed the pre-existing dirty tree as carryover runtime, queue, UI, and plan setup work that overlaps this board.</li><li>Verified the dirty tree with git diff --check.</li><li>Verified the focused changed-file test set: 275 passing tests across agent-host-pass, agent-queue, agent-run, inbound-live-runtime-variants, linkedin-unipile-maintenance, operator-view, prospect-ui, runtime-account-discovery, and connections-view.</li><li>Fixed a stale CLI assertion so itemization-gap full sync expects the intended page-sliced command: --max-pages 1 --page-size 100.</li><li>Verified test/cli.test.js after the assertion update: 92 passing tests.</li><li>Verified the full suite: npm test passed with 909 passing tests and 0 failures.</li><li>Verified git diff --check after the full suite.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>66aecc72b37febda9cc4072673344ce8d7a7d53e</div></div>
+      </article>
+
+          </section>
+
+          <section class="column">
+            <h2>Blocked <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+          <section class="column">
+            <h2>Deferred <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
+
+  </main>
+</body>
+</html>

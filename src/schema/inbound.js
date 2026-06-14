@@ -23,6 +23,7 @@ export const inboundSyncRunStatusSchema = z.enum(["never", "success", "warning",
 export const inboundSyncPlanModeSchema = z.enum(["quick", "normal", "full"]);
 export const inboundCaptureCompletenessSchema = z.enum(["complete", "partial_visible_slice", "failed"]);
 export const inboundSurfaceExhaustionStatusSchema = z.enum(["complete", "incomplete", "blocked"]);
+export const inboundSurfaceSyncTrustStatusSchema = z.enum(["trusted", "degraded", "untrusted"]);
 
 export const inboundSyncWriteStatusSchema = z.enum(["success", "warning", "failed"]);
 export const inboundCueKindSchema = z.enum([
@@ -36,6 +37,7 @@ export const inboundCueSourceSchema = z.enum(["action_glance", "manual_hint", "r
 export const inboundCueStatusSchema = z.enum(["open", "resolved", "dismissed"]);
 export const inboundThreadMessageDirectionSchema = z.enum(["inbound", "outbound", "unknown"]);
 export const inboundThreadCaptureCompletenessSchema = z.enum(["complete", "partial_visible_slice"]);
+export const inboundIdentityResolutionStatusSchema = z.enum(["pending", "resolved", "no_match", "blocked"]);
 
 export const inboundThreadMessageSchema = z.object({
   id: z.string().trim().min(1).nullable().default(null),
@@ -49,6 +51,7 @@ export const inboundThreadMessageSchema = z.object({
 export const inboundObservationKindSchema = z.enum([
   "connection_request_pending",
   "connection_request_no_longer_pending",
+  "connection_request_accept_requested",
   "connection_request_accepted",
   "connection_request_not_accepted",
   "connection_request_withdraw_requested",
@@ -97,6 +100,13 @@ export const inboundSurfaceStateSchema = z.object({
   continuationStartedAt: z.string().datetime().nullable().default(null),
   nextCursor: z.string().trim().min(1).nullable().default(null),
   nextStartOffset: z.coerce.number().int().min(0).nullable().default(null),
+  providerCursor: z.string().trim().min(1).nullable().default(null),
+  highWatermarkAt: z.string().datetime().nullable().default(null),
+  highWatermarkId: z.string().trim().min(1).nullable().default(null),
+  lastCompleteSnapshotId: z.string().trim().min(1).nullable().default(null),
+  nextAllowedSyncAt: z.string().datetime().nullable().default(null),
+  backoffReason: z.string().trim().min(1).nullable().default(null),
+  syncTrustStatus: inboundSurfaceSyncTrustStatusSchema.nullable().default(null),
   lastObservationCount: z.coerce.number().int().min(0).nullable().default(null),
   lastItemizationGapCount: z.coerce.number().int().min(0).nullable().default(null),
   lastCountDiscrepancyCount: z.coerce.number().int().min(0).nullable().default(null),
@@ -105,6 +115,14 @@ export const inboundSurfaceStateSchema = z.object({
 
 export const inboundSyncPolicySchema = z.object({
   surfaces: z.array(inboundSurfaceStateSchema).default([])
+});
+
+export const inboundObservationCompanyProfileSchema = z.object({
+  name: z.string().trim().min(1).nullable().default(null),
+  domain: z.string().trim().min(1).nullable().default(null),
+  websiteUrl: z.string().url().nullable().default(null),
+  linkedinCompanyUrl: z.string().url().nullable().default(null),
+  logoSourceUrl: z.string().url().nullable().default(null),
 });
 
 export const inboundObservationSchema = z.object({
@@ -143,6 +161,10 @@ export const inboundObservationSchema = z.object({
   prospectId: z.string().min(1).nullable().default(null),
   personId: z.string().min(1).nullable().default(null),
   providerSharedSecret: z.string().trim().min(1).nullable().default(null),
+  actorCompanyProfile: inboundObservationCompanyProfileSchema.nullable().default(null),
+  identityResolutionStatus: inboundIdentityResolutionStatusSchema.nullable().default(null),
+  identityResolutionCheckedAt: z.string().datetime().nullable().default(null),
+  identityResolutionReason: z.string().trim().min(1).nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null),
   messages: z.array(inboundThreadMessageSchema).default([])
 });
@@ -166,14 +188,6 @@ export const inboundCueSchema = z.object({
   companyId: z.string().min(1).nullable().default(null),
   prospectId: z.string().min(1).nullable().default(null),
   notes: z.string().trim().min(1).nullable().default(null)
-});
-
-export const inboundObservationCompanyProfileSchema = z.object({
-  name: z.string().trim().min(1).nullable().default(null),
-  domain: z.string().trim().min(1).nullable().default(null),
-  websiteUrl: z.string().url().nullable().default(null),
-  linkedinCompanyUrl: z.string().url().nullable().default(null),
-  logoSourceUrl: z.string().url().nullable().default(null),
 });
 
 export const inboundSyncRunObservationInputSchema = z.object({
@@ -221,6 +235,13 @@ export const inboundSyncRunSurfaceInputSchema = z.object({
   continuationStartedAt: z.string().datetime().nullable().default(null),
   nextCursor: z.string().trim().min(1).nullable().default(null),
   nextStartOffset: z.coerce.number().int().min(0).nullable().default(null),
+  providerCursor: z.string().trim().min(1).nullable().default(null),
+  highWatermarkAt: z.string().datetime().nullable().default(null),
+  highWatermarkId: z.string().trim().min(1).nullable().default(null),
+  lastCompleteSnapshotId: z.string().trim().min(1).nullable().default(null),
+  nextAllowedSyncAt: z.string().datetime().nullable().default(null),
+  backoffReason: z.string().trim().min(1).nullable().default(null),
+  syncTrustStatus: inboundSurfaceSyncTrustStatusSchema.nullable().default(null),
   error: z.string().trim().min(1).nullable().default(null),
   observations: z.array(inboundSyncRunObservationInputSchema).default([])
 });

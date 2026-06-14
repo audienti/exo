@@ -240,12 +240,20 @@ function discoverCodexAppsLinkedAccounts(input) {
  * @returns {RuntimeConnectorAccountIdentity[]}
  */
 function discoverCodexUnipileAccounts(input) {
-  const { apiKey, baseUrl } = readUnipileConfig(input.codexHome ?? null);
+  const { apiKey, baseUrl, baseUrlSource } = readUnipileConfig(input.codexHome ?? null);
   if (!apiKey) {
     return [buildUnipileFallbackIdentity(
       input.capability,
       "unresolved",
       `Unipile is configured in Codex, but no local API key was found to inspect connected ${describeUnipileCapabilityTarget(input.capability)} yet.`,
+      null,
+    )];
+  }
+  if (baseUrlSource === "default") {
+    return [buildUnipileFallbackIdentity(
+      input.capability,
+      "unresolved",
+      `Unipile is configured in Codex, but no tenant Unipile base URL was found to inspect connected ${describeUnipileCapabilityTarget(input.capability)} yet.`,
       null,
     )];
   }

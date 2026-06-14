@@ -136,7 +136,12 @@ test("discoverRuntimeConnectorAccounts surfaces Unipile session-unavailable stat
   const codexHome = path.join(tempDir, ".codex");
 
   fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(path.join(codexHome, "config.toml"), '[mcp_servers.unipile.env]\nUNIPILE_API_KEY = "test-key"\n');
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    '[mcp_servers.unipile.env]',
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    "",
+  ].join("\n"));
 
   try {
     const result = discoverRuntimeConnectorAccounts({
@@ -162,12 +167,47 @@ test("discoverRuntimeConnectorAccounts surfaces Unipile session-unavailable stat
   }
 });
 
+test("discoverRuntimeConnectorAccounts does not probe Unipile without a tenant base URL", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-runtime-account-discovery-unipile-no-base-"));
+  const codexHome = path.join(tempDir, ".codex");
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), '[mcp_servers.unipile.env]\nUNIPILE_API_KEY = "test-key"\n');
+  let probed = false;
+
+  try {
+    const result = discoverRuntimeConnectorAccounts({
+      runtime: "codex",
+      connector: "unipile",
+      capability: "linkedin",
+      codexHome,
+      hints: [],
+      httpGetImpl: () => {
+        probed = true;
+        return null;
+      },
+    });
+
+    assert.equal(probed, false);
+    assert.equal(result.length, 1);
+    assert.equal(result[0].identityState, "unresolved");
+    assert.match(result[0].reason, /tenant Unipile base URL/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("discoverRuntimeConnectorAccounts returns multiple confirmed LinkedIn accounts from Unipile", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-runtime-account-discovery-unipile-live-"));
   const codexHome = path.join(tempDir, ".codex");
 
   fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(path.join(codexHome, "config.toml"), '[mcp_servers.unipile.env]\nUNIPILE_API_KEY = "test-key"\n');
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    '[mcp_servers.unipile.env]',
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    "",
+  ].join("\n"));
 
   try {
     const result = discoverRuntimeConnectorAccounts({
@@ -251,7 +291,12 @@ test("discoverRuntimeConnectorAccounts returns multiple confirmed mail accounts 
   const codexHome = path.join(tempDir, ".codex");
 
   fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(path.join(codexHome, "config.toml"), '[mcp_servers.unipile.env]\nUNIPILE_API_KEY = "test-key"\n');
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    '[mcp_servers.unipile.env]',
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    "",
+  ].join("\n"));
 
   try {
     const result = discoverRuntimeConnectorAccounts({

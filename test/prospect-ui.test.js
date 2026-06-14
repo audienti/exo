@@ -57,6 +57,17 @@ function buildProspect(overrides = {}) {
   };
 }
 
+/**
+ * @param {string} html
+ * @param {string} label
+ */
+function assertCurrentPipelineStage(html, label) {
+  assert.match(
+    html,
+    new RegExp(`pl-step reached current"><div class="pl-dot"><i></i></div><div class="pl-label">${label}</div>`),
+  );
+}
+
 test("prospect detail prefers the active email draft surface over branch-based LinkedIn compose", () => {
   const html = renderProspectDetailPage(buildProspect({
     drafts: [{
@@ -140,6 +151,21 @@ test("prospect detail re-home panel reuses the shared motion chooser cards", () 
   assert.doesNotMatch(html, /Transition backlog/);
 });
 
+test("prospect detail exposes a visible assign-owner action when the owner is still missing", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    owner: null,
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /<span>Assign owner<\/span>/);
+  assert.match(html, /href="#assign-prospect-1"/);
+});
+
 test("prospect detail exposes governed lifecycle and packet review actions", () => {
   const html = renderProspectDetailPage(buildProspect({
     disposition: "active",
@@ -178,6 +204,7 @@ test("prospect detail exposes governed lifecycle and packet review actions", () 
   assert.match(html, /data-exo-writer="resolvePacketReview"/);
   assert.match(html, /Accept packet/);
   assert.match(html, /Return packet/);
+  assert.match(html, /\.lifecycle-panel\{[^}]*max-width:none\}/s);
 });
 
 test("prospect detail keeps the lifecycle panel full width", () => {
@@ -388,6 +415,7 @@ test("prospect detail keeps queued pre-connect warmup in next move and out of th
   });
 
   assert.match(html, /Pre-connect warmup queued/);
+  assertCurrentPipelineStage(html, "Pre-connect");
   assert.match(html, /The agent will react to the stored post on its next pass\./);
   assert.match(html, /Wait 48 hours, then queue the connection-request draft for review\./);
   assert.match(html, /Engagement timeline <span>0<\/span>/);
@@ -1079,6 +1107,119 @@ test("prospect timeline shows a connection request note from linked pending obse
   assert.match(html, /Connection request/);
   assert.match(html, /Short note with invite\./);
   assert.match(html, /tl-status-sent/);
+});
+
+test("prospect detail treats a pending invite observation as authoritative over a stale request draft", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    name: "Abbas Aga",
+    title: "Chief Executive Officer at Reluxe Collection",
+    companyName: "Sleek Analytics",
+    linkedinProfileUrl: "https://www.linkedin.com/in/abbas-aga/",
+    branch: "identified",
+    primaryChannel: "linkedin",
+    channels: ["linkedin"],
+    drafts: [{
+      id: "draft-abbas-request",
+      surface: "connection_request",
+      channel: "linkedin",
+      body: "Hi Abbas, saw the Sleek launch cadence this year and the June update around custom events, API, and payments. I like connecting with founders actively shipping GTM-heavy products.",
+      status: "draft",
+      authoredBy: "agent",
+      createdAt: "2026-06-11T18:26:36.243Z",
+      updatedAt: "2026-06-11T18:26:36.243Z",
+      notes: null,
+    }],
+    timelineObservations: [{
+      id: "obs-abbas-pending",
+      kind: "connection_request_pending",
+      surfaceKey: "linkedin-sent-invitations",
+      observedAt: "2026-06-12T19:26:36.243Z",
+      eventAt: "2026-06-08T14:52:52.348Z",
+      summary: "Abbas Aga is still pending on LinkedIn.",
+      sourceUrl: "https://www.linkedin.com/mynetwork/invitation-manager/sent/",
+      threadUrl: null,
+      notes: "LinkedIn still shows the sent connection request as pending.",
+    }],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Wait on the pending request/);
+  assert.doesNotMatch(html, /Send the first connection request/);
+  assert.doesNotMatch(html, /Compose request/);
+  assert.doesNotMatch(html, /Connection request note · Abbas Aga/);
+  assert.match(html, /LinkedIn still shows the sent connection request as pending\./);
+  assert.doesNotMatch(html, /Hi Abbas, saw the Sleek launch cadence/);
+});
+
+test("prospect detail keeps connected outreach available when a pending invite observation is only historical", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    linkedinProfileUrl: "https://www.linkedin.com/in/lina-park/",
+    branch: "connected",
+    primaryChannel: "linkedin",
+    channels: ["linkedin"],
+    connectionDegree: 1,
+    timelineObservations: [
+      {
+        id: "obs-pending-old",
+        kind: "connection_request_pending",
+        surfaceKey: "linkedin-sent-invitations",
+        observedAt: "2026-06-01T10:00:00.000Z",
+        eventAt: "2026-06-01T10:00:00.000Z",
+        summary: "Lina Park was still pending on LinkedIn.",
+        sourceUrl: "https://www.linkedin.com/mynetwork/invitation-manager/sent/",
+        threadUrl: null,
+        notes: "Older pending invite snapshot.",
+      },
+      {
+        id: "obs-accepted-new",
+        kind: "connection_request_accepted",
+        surfaceKey: "linkedin-sent-invitations",
+        observedAt: "2026-06-03T10:00:00.000Z",
+        eventAt: "2026-06-03T10:00:00.000Z",
+        summary: "Lina Park accepted the connection request.",
+        sourceUrl: "https://www.linkedin.com/in/lina-park/",
+        threadUrl: null,
+        notes: null,
+      },
+    ],
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /Compose message/);
+  assert.match(html, /First message · Lina Park/);
+  assert.match(html, /Connected on LinkedIn/);
+  assertCurrentPipelineStage(html, "Connected");
+});
+
+test("prospect detail caps a stale connected branch at request sent when LinkedIn still shows 2nd-degree", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    linkedinProfileUrl: "https://www.linkedin.com/in/lina-park/",
+    branch: "connected",
+    primaryChannel: "linkedin",
+    channels: ["linkedin"],
+    connectionDegree: 2,
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /LinkedIn shows a <strong>2nd-degree<\/strong> connection/);
+  assert.match(html, /the request is <strong>not accepted yet<\/strong>/);
+  assertCurrentPipelineStage(html, "Request sent");
+  assert.match(html, /Wait on the pending request/);
 });
 
 test("prospects table renders clickable channel anchors with the underlying destination on hover", () => {

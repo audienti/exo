@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { buildLinkedinInboundSyncPayload } from "../src/core/inbound-linkedin-sync.js";
 import { buildInboxView } from "../src/core/build-inbox-view.js";
 import { buildInboundReviewView } from "../src/core/build-inbound-review-view.js";
-import { recordInboundObservation } from "../src/core/inbound-observations.js";
+import { mergeInboundObservation, recordInboundObservation } from "../src/core/inbound-observations.js";
 import { prepareUserInboundSyncRun } from "../src/core/inbound-sync-run.js";
 import { buildBizBridgeImageProxyUrl } from "../src/lib/image-proxy.js";
 import { loadJsonCassette, writeJsonCassette } from "./support/cassettes.js";
@@ -116,6 +116,86 @@ function withIsolatedExoState(callback) {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 }
+
+test("received-invitations sync does not downgrade queued or final invite decisions", () => {
+  const rawUser = {
+    id: "user-1",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    label: "william-main",
+    owner: "William",
+    accounts: [
+      {
+        id: "linkedin-account-1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        capability: "linkedin",
+        handle: "william-main",
+        sourceType: "browser-profile",
+        browserProfileId: "profile-1",
+        preferred: true,
+      },
+    ],
+    harnessConnections: [],
+  };
+
+  const { mergedAccept, mergedReject } = withIsolatedExoState(() => {
+    const existingAccept = recordInboundObservation(rawUser, {
+      accountId: "linkedin-account-1",
+      surfaceKey: "linkedin-received-invitations",
+      kind: "connection_request_accept_requested",
+      externalId: "invite-accept-1",
+      observedAt: "2026-06-12T22:00:00.000Z",
+      actorName: "Avery Accept",
+      actorProfileUrl: "https://www.linkedin.com/in/avery-accept/",
+      summary: "Avery Accept is queued for acceptance on LinkedIn.",
+    });
+    const nextAccept = recordInboundObservation(rawUser, {
+      accountId: "linkedin-account-1",
+      surfaceKey: "linkedin-received-invitations",
+      kind: "connection_request_received",
+      externalId: "invite-accept-1",
+      observedAt: "2026-06-12T22:05:00.000Z",
+      actorName: "Avery Accept",
+      actorProfileUrl: "https://www.linkedin.com/in/avery-accept/",
+      summary: "Avery Accept sent a new inbound LinkedIn connection request.",
+    });
+
+    const existingReject = recordInboundObservation(rawUser, {
+      accountId: "linkedin-account-1",
+      surfaceKey: "linkedin-received-invitations",
+      kind: "connection_request_declined",
+      externalId: "invite-reject-1",
+      observedAt: "2026-06-12T22:10:00.000Z",
+      actorName: "Riley Reject",
+      actorProfileUrl: "https://www.linkedin.com/in/riley-reject/",
+      summary: "Riley Reject's inbound connection request was declined.",
+    });
+    const nextReject = recordInboundObservation(rawUser, {
+      accountId: "linkedin-account-1",
+      surfaceKey: "linkedin-received-invitations",
+      kind: "connection_request_received",
+      externalId: "invite-reject-1",
+      observedAt: "2026-06-12T22:15:00.000Z",
+      actorName: "Riley Reject",
+      actorProfileUrl: "https://www.linkedin.com/in/riley-reject/",
+      summary: "Riley Reject sent a new inbound LinkedIn connection request.",
+    });
+
+    return {
+      mergedAccept: mergeInboundObservation(existingAccept, nextAccept),
+      mergedReject: mergeInboundObservation(existingReject, nextReject),
+    };
+  });
+
+  assert.equal(mergedAccept.kind, "connection_request_accept_requested");
+  assert.equal(mergedAccept.summary, "Avery Accept is queued for acceptance on LinkedIn.");
+  assert.equal(mergedAccept.observedAt, "2026-06-12T22:00:00.000Z");
+
+  assert.equal(mergedReject.kind, "connection_request_declined");
+  assert.equal(mergedReject.summary, "Riley Reject's inbound connection request was declined.");
+  assert.equal(mergedReject.observedAt, "2026-06-12T22:10:00.000Z");
+});
 
 test("linkedin capture payload preserves visible totals and reconcile metadata for partial sent-invitation surfaces", () => {
   const result = buildLinkedinInboundSyncPayload(
@@ -476,6 +556,90 @@ test("inbound sync run normalizes visible totals below itemized follower rows", 
   assert.equal(surface.visibleTotalCount, 2);
   assert.equal(surface.itemizationGapCount, 0);
   assert.equal(storedSurface.lastVisibleTotalCount, 2);
+}));
+
+test("inbound sync run persists provider cursor, high watermark, snapshot, trust, and backoff metadata", () => withIsolatedExoState(() => {
+  const rawUser = {
+    id: "user-1",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    label: "william-main",
+    owner: "William",
+    accounts: [
+      {
+        id: "linkedin-account-1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        capability: "linkedin",
+        handle: "william-main",
+        sourceType: "harness-connection",
+        harnessConnectionId: "harness-linkedin",
+        providerAccountId: "provider-linkedin-1",
+        preferred: true
+      }
+    ],
+    harnessConnections: []
+  };
+
+  const result = prepareUserInboundSyncRun(rawUser, {
+    mode: "full",
+    accounts: [
+      {
+        accountId: "linkedin-account-1",
+        surfaces: [
+          {
+            surfaceKey: "linkedin-sent-invitations",
+            status: "warning",
+            observedAt: timestamp,
+            itemCount: 10,
+            visibleTotalCount: 74,
+            captureCompleteness: "partial_visible_slice",
+            requestedMode: "full",
+            actualMode: "full",
+            reconcileRequired: true,
+            reconcileReason: "provider_rate_limited",
+            exhaustionStatus: "incomplete",
+            exhaustionReason: "provider_rate_limited",
+            paginationAttempted: true,
+            terminalSignalSeen: false,
+            stalledPassCount: 0,
+            nextCursor: "cursor-1",
+            providerCursor: "cursor-1",
+            highWatermarkAt: timestamp,
+            highWatermarkId: "invite-74",
+            lastCompleteSnapshotId: "snapshot-previous",
+            nextAllowedSyncAt: "2026-06-03T16:00:00.000Z",
+            backoffReason: "provider_rate_limited",
+            syncTrustStatus: "degraded",
+            error: "Unipile asked Exo to slow this surface down.",
+            observations: [
+              {
+                kind: "connection_request_pending",
+                observedAt: timestamp,
+                summary: "Jordan Cipolla is still pending.",
+                externalId: "invite-1",
+                actorName: "Jordan Cipolla",
+                actorProfileUrl: "https://www.linkedin.com/in/jordan-cipolla/"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  });
+
+  const surface = result.updatedUser.accounts[0].inboundSync.surfaces.find((candidate) =>
+    candidate.surfaceKey === "linkedin-sent-invitations"
+  );
+  assert.ok(surface);
+  assert.equal(surface.nextCursor, "cursor-1");
+  assert.equal(surface.providerCursor, "cursor-1");
+  assert.equal(surface.highWatermarkAt, timestamp);
+  assert.equal(surface.highWatermarkId, "invite-74");
+  assert.equal(surface.lastCompleteSnapshotId, "snapshot-previous");
+  assert.equal(surface.nextAllowedSyncAt, "2026-06-03T16:00:00.000Z");
+  assert.equal(surface.backoffReason, "provider_rate_limited");
+  assert.equal(surface.syncTrustStatus, "degraded");
 }));
 
 test("full authoritative sent-invitation reconciliation can complete after terminal exhaustion even when the visible count badge is slightly higher", () => {

@@ -445,6 +445,8 @@ test("queue route renders the agent status panel from workspace projection data"
       }),
     });
 
+    assert.match(html, /<section class="op-sec queue-runtime-panel" data-sec="agent-status">/);
+    assert.match(html, /<details class="agent-bar agent-bar-embedded">/);
     assert.match(html, /Current work/);
     assert.match(html, /data-tabset="queue-views"/);
     assert.match(html, /Research: Prospect Research/);
@@ -560,6 +562,92 @@ test("person route preserves the scaffold compose draft instead of overwriting i
       process.env.EXO_HOME_STATE_DIR = previousHomeStateDir;
     }
   }
+});
+
+test("person route resolves a compose draft when the explicit compose flag is present", async () => {
+  await withSeededRouteUser(async () => {
+    const person = {
+      id: "person-1",
+      matchedProspect: false,
+      hasDurableIdentity: true,
+      suggestedSurface: "email",
+      composeDraft: { subject: "Re: William, want 20?", body: "" },
+    };
+
+    const html = await renderRoute("/people/person-1?return=%2Foperator&compose=1", { userId: "user-1", capability: "linkedin" }, {
+      listInboundObservations: () => [],
+      listMotions: () => [],
+      listCompanies: () => [],
+      buildPersonView: () => person,
+      resolvePersonComposeDraft: (receivedPerson) => {
+        assert.equal(receivedPerson, person);
+        return {
+          subject: "Re: William, want 20?",
+          body: "Worth seeing. Send the sample and include two or three RevOps examples.",
+        };
+      },
+      findTransitionMotion: () => null,
+      renderPersonPage: (receivedPerson, meta) => {
+        assert.notEqual(receivedPerson, person);
+        assert.deepEqual(receivedPerson.composeDraft, {
+          subject: "Re: William, want 20?",
+          body: "Worth seeing. Send the sample and include two or three RevOps examples.",
+        });
+        assert.equal(meta.userId, "user-1");
+        assert.equal(meta.returnTo, "/operator");
+        assert.equal(meta.transitionMotionId, null);
+        assert.deepEqual(meta.motions, []);
+        return "<html>person-compose</html>";
+      },
+      resolveWorkspaceProjectionForUi: async () => {
+        throw new Error("person route should return before building the shared workspace projection");
+      },
+    });
+
+    assert.equal(html, "<html>person-compose</html>");
+  });
+});
+
+test("person route does not resolve a compose draft when background identity resolution still blocks reply", async () => {
+  await withSeededRouteUser(async () => {
+    const person = {
+      id: "person-1",
+      matchedProspect: false,
+      hasDurableIdentity: true,
+      suggestedSurface: "email",
+      promotionBlocker: {
+        kind: "resolve_linkedin_identity",
+        state: "background",
+        title: "Resolving LinkedIn in background.",
+        detail: "Exo is using the managed Gmail and LinkedIn connectors to resolve this sender before claim or reply unlocks.",
+        buttonLabel: "Resolving in background",
+      },
+      composeDraft: { subject: "Re: William, want 20?", body: "" },
+    };
+
+    const html = await renderRoute("/people/person-1?return=%2Foperator&compose=1", { userId: "user-1", capability: "linkedin" }, {
+      listInboundObservations: () => [],
+      listMotions: () => [],
+      listCompanies: () => [],
+      buildPersonView: () => person,
+      resolvePersonComposeDraft: () => {
+        throw new Error("blocked person route should not resolve a compose draft");
+      },
+      findTransitionMotion: () => null,
+      renderPersonPage: (receivedPerson, meta) => {
+        assert.equal(receivedPerson, person);
+        assert.deepEqual(receivedPerson.composeDraft, { subject: "Re: William, want 20?", body: "" });
+        assert.equal(meta.userId, "user-1");
+        assert.equal(meta.returnTo, "/operator");
+        return "<html>person-blocked</html>";
+      },
+      resolveWorkspaceProjectionForUi: async () => {
+        throw new Error("person route should return before building the shared workspace projection");
+      },
+    });
+
+    assert.equal(html, "<html>person-blocked</html>");
+  });
 });
 
 test("person route builds claim motion choices with offer, premise, and status detail", async () => {

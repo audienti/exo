@@ -5,6 +5,7 @@ import {
   inboundCaptureCompletenessSchema,
   inboundObservationCompanyProfileSchema,
   inboundSurfaceExhaustionStatusSchema,
+  inboundSurfaceSyncTrustStatusSchema,
   inboundThreadMessageSchema,
   inboundSyncPlanModeSchema,
   inboundSyncWriteStatusSchema
@@ -39,6 +40,8 @@ export const linkedinSurfaceCaptureSchema = z.object({
   reconcileReason: z.string().trim().min(1).nullable().default(null),
   exhaustionStatus: inboundSurfaceExhaustionStatusSchema.nullable().default(null),
   exhaustionReason: z.string().trim().min(1).nullable().default(null),
+  backoffReason: z.string().trim().min(1).nullable().default(null),
+  syncTrustStatus: inboundSurfaceSyncTrustStatusSchema.nullable().default(null),
   paginationAttempted: z.boolean().nullable().default(null),
   terminalSignalSeen: z.boolean().nullable().default(null),
   stalledPassCount: z.coerce.number().int().min(0).nullable().default(null),

@@ -157,9 +157,12 @@ function buildCanonicalReceivedSurfaceFromLegacyCapture(capture, mode, session) 
     requestedMode: normalizeMode(capture.requestedMode, mode),
     actualMode: normalizeMode(capture.actualMode, mode),
     itemCount: capture.status === "failed" ? capture.itemCount : capture.itemCount ?? capture.items.length,
-    visibleTotalCount: capture.visibleTotalCount ?? capture.itemCount ?? capture.items.length,
+    visibleTotalCount: normalizeLegacyVisibleTotalCount(capture),
     exhaustionStatus: normalizeExhaustionStatus(capture),
+    exhaustionReason: capture.exhaustionReason ?? null,
     captureCompleteness: normalizeCaptureCompleteness(capture),
+    backoffReason: capture.backoffReason ?? null,
+    syncTrustStatus: capture.syncTrustStatus ?? null,
     reconcileRequired: capture.reconcileRequired ?? false,
     reconcileReason: capture.reconcileReason ?? null,
     paginationAttempted: capture.paginationAttempted ?? false,
@@ -231,9 +234,12 @@ function buildCanonicalSentSurfaceFromLegacyCapture(capture, mode, session) {
     requestedMode: normalizeMode(capture.requestedMode, mode),
     actualMode: normalizeMode(capture.actualMode, mode),
     itemCount: capture.status === "failed" ? capture.itemCount : capture.itemCount ?? capture.items.length,
-    visibleTotalCount: capture.visibleTotalCount ?? capture.itemCount ?? capture.items.length,
+    visibleTotalCount: normalizeLegacyVisibleTotalCount(capture),
     exhaustionStatus: normalizeExhaustionStatus(capture),
+    exhaustionReason: capture.exhaustionReason ?? null,
     captureCompleteness: normalizeCaptureCompleteness(capture),
+    backoffReason: capture.backoffReason ?? null,
+    syncTrustStatus: capture.syncTrustStatus ?? null,
     reconcileRequired: capture.reconcileRequired ?? false,
     reconcileReason: capture.reconcileReason ?? null,
     paginationAttempted: capture.paginationAttempted ?? false,
@@ -473,7 +479,10 @@ function buildToolContractViolationSurface(input) {
     itemCount: 0,
     visibleTotalCount: 0,
     exhaustionStatus: "blocked",
+    exhaustionReason: "tool_contract_violation",
     captureCompleteness: "failed",
+    backoffReason: "tool_contract_violation",
+    syncTrustStatus: "untrusted",
     reconcileRequired: false,
     reconcileReason: null,
     paginationAttempted: null,
@@ -568,6 +577,24 @@ function normalizeCaptureCompleteness(capture) {
     return capture.captureCompleteness;
   }
   return capture.status === "failed" ? "failed" : null;
+}
+
+/**
+ * @param {{ status: string, itemCount?: number | null, visibleTotalCount?: number | null, captureCompleteness?: string | null, exhaustionStatus?: string | null, items: unknown[] }} capture
+ */
+function normalizeLegacyVisibleTotalCount(capture) {
+  if (capture.visibleTotalCount !== null && capture.visibleTotalCount !== undefined) {
+    return capture.visibleTotalCount;
+  }
+  const exhaustionStatus = normalizeExhaustionStatus(capture);
+  const captureCompleteness = normalizeCaptureCompleteness(capture);
+  if (exhaustionStatus === "complete" || captureCompleteness === "complete") {
+    return capture.itemCount ?? capture.items.length;
+  }
+  if (capture.status === "failed") {
+    return capture.itemCount ?? 0;
+  }
+  return null;
 }
 
 /**

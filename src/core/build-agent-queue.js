@@ -9,6 +9,9 @@
 // Task kinds today:
 //   - run_inbound_sync           — refresh stale or under-itemized inbound truth
 //                                  surfaces with no operator input.
+//   - resolve_inbound_identity  — resolve an email-first sender onto a real
+//                                 LinkedIn identity through the governed
+//                                 connector path before claim/send can unlock.
 //   - company_discovery         — replenish thin motion inventory by finding
 //                                 new companies that match the motion thesis
 //                                 and signal contract.
@@ -30,6 +33,8 @@
 //   - reconcile_connection_request_status
 //                               — verify a disappeared sent invite against
 //                                 live profile relationship/invitation state.
+//   - accept_connection_request — accept an inbound invite the operator
+//                                 already approved in Exo.
 //   - reject_connection_request — decline an inbound invite the operator
 //                                 already rejected in Exo.
 //   - withdraw_connection       — clear a stale outbound invite automatically.
@@ -44,6 +49,7 @@ import { inboundCueSchema } from "../schema/inbound.js";
 import {
   createTaskLeaseFingerprint,
   getActiveTaskLease,
+  getMaintenanceTaskCooldown,
   getRecentMotionRunAt,
 } from "../lib/agent-host-state.js";
 import { isConnectionRequestInFlight, isStalePendingConnectionRequest } from "../lib/cadence-helpers.js";
@@ -66,10 +72,17 @@ import {
 } from "./select-next-draft-surface.js";
 import {
   buildUserInboundSyncView,
+  buildInboundSurfaceSeamStatus,
   classifyInboundRetrievalWindow,
   classifyInboundSurfaceFreshness,
   computeInboundAutomationNextDueAt,
 } from "./user-inbound-sync.js";
+import {
+  buildInboundIdentityResolutionGroupKey,
+  computeInboundIdentityResolutionDueAt,
+  needsInboundIdentityResolution,
+  resolveManagedLinkedinAccount,
+} from "./inbound-identity-resolution.js";
 import { resolveScopedExecutionAssignment } from "./resolve-scoped-execution-assignment.js";
 import { resolveConnectionNoteCapability } from "./connection-note-capability.js";
 import { evaluateOutboundDispatchGate } from "./outbound-dispatch-gate.js";
@@ -77,23 +90,22 @@ import {
   buildLinkedinPublicEngagementPlan,
   buildPublicEngagementMetadata,
 } from "./select-linkedin-public-engagement.js";
+import { shouldQueueConnectionRequestStatusReconciliation } from "./connection-request-reconciliation.js";
 
 const LIVE_SYNC_TASK_CAPABILITIES = new Set(["linkedin", "gmail"]);
 const SUBJECT_DRAFT_SURFACES = new Set(["email", "in_mail_message"]);
 const AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG = {
-  "linkedin-followers-list": { maxPages: 1, pageSize: 10 },
-  "linkedin-following-list": { maxPages: 1, pageSize: 10 },
-  "linkedin-profile-views": { maxPages: 1, pageSize: 10 },
-  "linkedin-sent-invitations": { maxPages: 1, pageSize: 10 },
-  "linkedin-received-invitations": { maxPages: 1, pageSize: 10 },
-  "linkedin-messaging-inbox": { maxPages: 1, pageSize: 10 },
+  "linkedin-followers-list": { pageSize: 100, maxPages: 1 },
+  "linkedin-following-list": { pageSize: 50, maxPages: 1 },
+  "linkedin-profile-views": { pageSize: 50, maxPages: 1 },
+  "linkedin-sent-invitations": { pageSize: 100, maxPages: 1 },
+  "linkedin-received-invitations": { pageSize: 100, maxPages: 1 },
+  "linkedin-messaging-inbox": { pageSize: 100, maxPages: 1 },
 };
-// Every full-mode (backfill) sync task runs as a bounded slice: the sync stops
-// at the page budget with `page_budget_stopped_early`, persists `nextCursor`,
-// and the still-open itemization gap requeues the next slice with
-// `resumeCursor`. This keeps backfill interleavable instead of one
-// multi-hour task that starves motion work.
-const DEFAULT_AUTONOMOUS_FULL_SURFACE_MAX_PAGES = 2;
+const MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD = 1;
+const CONNECTION_REQUEST_STATUS_RECONCILIATION_COOLDOWN_MS = 30 * 60 * 1000;
+// Full-mode backfills are intentionally page-sliced. Each queue task should
+// move one bounded provider page and then let writeback enqueue the next cursor.
 const MOTION_ROUND_ROBIN_TASK_KINDS = new Set([
   "company_discovery",
   "company_research",
@@ -244,6 +256,7 @@ export function buildAgentQueue(input) {
             cueCount: 0,
             surfaceKeys: [scheduledSurface.key],
             surfaceLabels: [scheduledSurface.label],
+            surfaceSeams: buildSurfaceSeamsForQueue(account, [scheduledSurface.key], now),
             dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
               ? retrievalWindowStatus.nextOpenAt
               : nextDueAt,
@@ -276,6 +289,13 @@ export function buildAgentQueue(input) {
             .filter(Boolean)
             .sort()[0] ?? now,
         ) ?? now;
+        const fullSyncDueAt = computeItemizationGapSyncDueAt(gapSurface, oldestDueAt, {
+          workingHoursStatus: retrievalWindowStatus,
+        });
+        const waitingReason = computeItemizationGapSyncWaitingReason(gapSurface, oldestDueAt, fullSyncDueAt, {
+          now,
+          workingHoursStatus: retrievalWindowStatus,
+        });
 
         placeTask(buildInboundSyncTask({
           user: syncView.user,
@@ -286,15 +306,15 @@ export function buildAgentQueue(input) {
           cueCount: surfaceCueCount,
           surfaceKeys: [surfaceKey],
           surfaceLabels: [cueLabelForAccount(account, surfaceKey)],
-          dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
-            ? retrievalWindowStatus.nextOpenAt
-            : oldestDueAt,
+          surfaceSeams: buildSurfaceSeamsForQueue(account, [surfaceKey], now, {
+            fallbackFreshnessState: staleSurface?.freshness?.reason ?? "warning",
+          }),
+          dueAt: fullSyncDueAt,
           resumeCursor: normalizeNullableString(gapSurface?.nextCursor) ?? null,
           resumeStartOffset: Number.isInteger(gapSurface?.nextStartOffset) ? gapSurface.nextStartOffset : null,
           ...resolveAutonomousInboundPaginationConfig(surfaceKey),
-          waitingReason: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
-            ? "outside_retrieval_window"
-            : null,
+          waitingReason,
+          backoffReason: normalizeNullableString(gapSurface?.backoffReason) ?? null,
         }), { now, tasks, waiting });
       }
 
@@ -326,6 +346,9 @@ export function buildAgentQueue(input) {
           cueCount: surfaceCueCount,
           surfaceKeys: [surfaceKey],
           surfaceLabels: [cueLabelForAccount(account, surfaceKey)],
+          surfaceSeams: buildSurfaceSeamsForQueue(account, [surfaceKey], now, {
+            fallbackFreshnessState: staleSurface?.freshness?.reason ?? "stale",
+          }),
           dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
             ? retrievalWindowStatus.nextOpenAt
             : oldestDueAt,
@@ -335,32 +358,66 @@ export function buildAgentQueue(input) {
         }), { now, tasks, waiting });
       }
     }
+
+    const identityResolutionCandidates = new Map();
+    const managedLinkedinAccount = resolveManagedLinkedinAccount(rawUser, {
+      runtime: "codex",
+      connector: "unipile",
+      availableOnly: true,
+    });
+    if (managedLinkedinAccount?.providerAccountId) {
+      for (const observation of input.observations ?? []) {
+        if (observation?.userId !== syncView.user.id) {
+          continue;
+        }
+        if (!needsInboundIdentityResolution(observation)) {
+          continue;
+        }
+        const groupKey = buildInboundIdentityResolutionGroupKey(observation) ?? observation.id;
+        const existing = identityResolutionCandidates.get(groupKey) ?? null;
+        if (!existing || String(observation.observedAt ?? "") > String(existing.observedAt ?? "")) {
+          identityResolutionCandidates.set(groupKey, observation);
+        }
+      }
+
+      for (const observation of identityResolutionCandidates.values()) {
+        const dueAt = computeInboundIdentityResolutionDueAt(observation, now) ?? now;
+        placeTask(buildInboundIdentityResolutionTask({
+          user: syncView.user,
+          observation,
+          dueAt,
+          waitingReason: dueAt > now ? "identity_retry_backoff" : null,
+        }), { now, tasks, waiting });
+      }
+    }
   }
 
-  // Disappearance deltas from the sent-invitations list are not operator
-  // decisions. The agent checks the profile relationship/invitation state via
-  // the governed connector and writes back pending, accepted, or not accepted.
+  queueConnectionRequestStatusReconciliationTasks(input.observations ?? [], {
+    now,
+    tasks,
+    waiting,
+    hostState: input.hostState ?? null,
+  });
+
+  // Accept tasks: inbound invites the operator queued for approval. The agent
+  // performs the real accept on LinkedIn, then writes back the final connected
+  // state. These need no prospect/motion — they act directly on the invite.
   for (const observation of input.observations ?? []) {
-    if (observation?.kind !== "connection_request_no_longer_pending") continue;
-    if (!hasLinkedinProfileIdentity(observation)) continue;
+    if (observation?.kind !== "connection_request_accept_requested") continue;
     placeTask({
-      kind: "reconcile_connection_request_status",
-      action: "reconcile_connection_request_status",
+      kind: "accept_connection_request",
+      action: "accept_connection",
       needsOperatorInput: false,
       observationId: observation.id,
-      userId: observation.userId ?? null,
-      accountId: observation.accountId ?? null,
-      capability: observation.capability ?? "linkedin",
-      companyId: observation.companyId ?? null,
+      prospectName: observation.actorName ?? "inbound invite",
       companyName: observation.actorCompanyName ?? null,
-      prospectId: observation.prospectId ?? null,
-      prospectName: observation.actorName ?? "pending invite",
-      recipientUrl: observation.actorProfileUrl ?? observation.sourceUrl ?? null,
-      surface: "connection_request",
-      reason: "sent_invite_status_reconciliation",
+      recipientUrl: observation.actorProfileUrl ?? null,
+      surface: "received_invitation",
+      writeback: `exo actions result --action accept_connection --result accepted --observation ${observation.id}`,
       queuedAt: observation.observedAt ?? null,
       dueAt: observation.observedAt ?? now,
     }, { now, tasks, waiting });
+    continue;
   }
 
   // Reject tasks: inbound invites the operator queued for rejection. The agent
@@ -735,14 +792,45 @@ export function buildAgentQueue(input) {
   waiting.sort(taskComparator);
   const annotatedTasks = annotateTaskCheckouts(tasks, input.hostState ?? null, now);
   const annotatedWaiting = annotateTaskCheckouts(waiting, input.hostState ?? null, now);
+  const statusCounts = buildQueueStatusCounts(annotatedTasks, annotatedWaiting, blockers);
   return {
     count: annotatedTasks.length,
     itemCount: annotatedTasks.length,
     waitingCount: annotatedWaiting.length,
+    statusCounts,
     tasks: annotatedTasks,
     waiting: annotatedWaiting,
     blockers,
   };
+}
+
+/**
+ * @param {Array<Record<string, any>>} tasks
+ * @param {Array<Record<string, any>>} waiting
+ * @param {Array<Record<string, any>>} blockers
+ */
+function buildQueueStatusCounts(tasks, waiting, blockers) {
+  return {
+    ready: tasks.length,
+    waiting: waiting.length,
+    blocked: blockers.length,
+    partial: [...tasks, ...waiting].filter(isPartialRuntimeTruthTask).length,
+    readyIncludesWaiting: false,
+  };
+}
+
+/** @param {Record<string, any>} task */
+function isPartialRuntimeTruthTask(task) {
+  if (task.kind !== "run_inbound_sync") return false;
+  if (task.reason === "itemization_gap") return true;
+  return (task.surfaceSeams ?? []).some((seam) => {
+    const debt = seam?.debt ?? {};
+    return debt.freshnessState === "warning"
+      || debt.lastReconcileReason === "bounded_capture_stopped_early"
+      || debt.lastReconcileReason === "page_budget_stopped_early"
+      || debt.lastExhaustionReason === "bounded_capture_stopped_early"
+      || debt.lastExhaustionReason === "page_budget_stopped_early";
+  });
 }
 
 /**
@@ -1348,6 +1436,7 @@ function buildWriteDraftTask({ motion, account, prospect, surface, reason, dueAt
  *   cueCount: number,
  *   surfaceKeys: string[],
  *   surfaceLabels: string[],
+ *   surfaceSeams?: any[],
  *   dueAt: string | null,
  *   resumeCursor?: string | null,
  *   resumeStartOffset?: number | null,
@@ -1366,6 +1455,7 @@ function buildInboundSyncTask({
   cueCount,
   surfaceKeys,
   surfaceLabels,
+  surfaceSeams = [],
   dueAt,
   resumeCursor = null,
   resumeStartOffset = null,
@@ -1373,6 +1463,7 @@ function buildInboundSyncTask({
   pageSize = null,
   forceRetrieval = false,
   waitingReason = null,
+  backoffReason = null,
 }) {
   const capabilityLabel = humanizeCapability(account.capability);
   const reason = forceRetrieval
@@ -1409,6 +1500,7 @@ function buildInboundSyncTask({
     surface: surfaceKeys[0] ?? null,
     surfaceKeys,
     surfaceLabels,
+    surfaceSeams,
     mode,
     resumeCursor,
     resumeStartOffset,
@@ -1417,6 +1509,7 @@ function buildInboundSyncTask({
     queuedAt: dueAt,
     dueAt,
     waitingReason,
+    backoffReason,
     contractCommand: buildInboundSyncContractCommand({
       userId: user.id,
       accountId: account.accountId,
@@ -1434,6 +1527,214 @@ function buildInboundSyncTask({
       `exo daily --user ${user.id} --json`,
       `exo next --user ${user.id} --json`,
     ],
+  };
+}
+
+/**
+ * Disappearance deltas from the sent-invitations list are not operator
+ * decisions, but each one can require a live profile lookup. Bound those
+ * lookups per account so one stale surface cannot turn into bot-like fan-out.
+ *
+ * @param {any[]} observations
+ * @param {{ now: string, tasks: Array<Record<string, any>>, waiting: Array<Record<string, any>>, hostState?: any }} queueContext
+ */
+function queueConnectionRequestStatusReconciliationTasks(observations, queueContext) {
+  const candidates = observations.filter((observation) => shouldQueueConnectionRequestStatusReconciliation(observation));
+  const candidatesByAccount = groupBy(candidates, buildConnectionRequestStatusReconciliationGroupKey);
+
+  for (const accountCandidates of candidatesByAccount.values()) {
+    const sortedCandidates = [...accountCandidates].sort(compareObservationQueueOrder);
+    const selectedCandidates = sortedCandidates.slice(0, MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD);
+    const groupKey = buildConnectionRequestStatusReconciliationGroupKey(sortedCandidates[0]);
+    const cooldown = getMaintenanceTaskCooldown(
+      queueContext.hostState ?? null,
+      "reconcile_connection_request_status",
+      groupKey,
+      queueContext.now,
+    );
+
+    for (const observation of selectedCandidates) {
+      const totalPending = sortedCandidates.length;
+      const remainingAfterThisTask = Math.max(0, totalPending - 1);
+      placeTask({
+        kind: "reconcile_connection_request_status",
+        action: "reconcile_connection_request_status",
+        needsOperatorInput: false,
+        observationId: observation.id,
+        userId: observation.userId ?? null,
+        accountId: observation.accountId ?? null,
+        capability: observation.capability ?? "linkedin",
+        companyId: observation.companyId ?? null,
+        companyName: observation.actorCompanyName ?? null,
+        prospectId: observation.prospectId ?? null,
+        prospectName: observation.actorName ?? "pending invite",
+        recipientUrl: observation.actorProfileUrl ?? observation.sourceUrl ?? null,
+        surface: "connection_request",
+        reason: totalPending > 1
+          ? "sent_invite_status_reconciliation_bounded"
+          : "sent_invite_status_reconciliation",
+        queuedAt: observation.observedAt ?? null,
+        dueAt: cooldown.active
+          ? cooldown.unavailableUntil
+          : observation.observedAt ?? queueContext.now,
+        waitingReason: cooldown.active
+          ? "connection_request_status_reconciliation_cooldown"
+          : null,
+        batch: {
+          groupKey,
+          totalPending,
+          maxPerPass: MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD,
+          remainingAfterThisTask,
+          cooldownMs: CONNECTION_REQUEST_STATUS_RECONCILIATION_COOLDOWN_MS,
+          cooldownUntil: cooldown.active ? cooldown.unavailableUntil : null,
+          nextObservationId: sortedCandidates[1]?.id ?? null,
+        },
+      }, queueContext);
+    }
+  }
+}
+
+/** @param {any} observation */
+function buildConnectionRequestStatusReconciliationGroupKey(observation) {
+  return [
+    normalizeNullableString(observation?.userId) ?? "unknown-user",
+    normalizeNullableString(observation?.accountId) ?? "unknown-account",
+    normalizeNullableString(observation?.capability) ?? "linkedin",
+  ].join(":");
+}
+
+/**
+ * @param {any} left
+ * @param {any} right
+ */
+function compareObservationQueueOrder(left, right) {
+  const observedAtComparison = String(left?.observedAt ?? "").localeCompare(String(right?.observedAt ?? ""));
+  if (observedAtComparison !== 0) return observedAtComparison;
+  return String(left?.id ?? "").localeCompare(String(right?.id ?? ""));
+}
+
+/**
+ * @param {ReturnType<typeof buildUserInboundSyncView>["accounts"][number]} account
+ * @param {string[]} surfaceKeys
+ * @param {string} now
+ * @param {{ fallbackFreshnessState?: string | null }} [options]
+ */
+function buildSurfaceSeamsForQueue(account, surfaceKeys, now, options = {}) {
+  return surfaceKeys
+    .map((surfaceKey) => {
+      const surface = account.surfaces.find((candidate) => candidate.key === surfaceKey);
+      if (!surface) return null;
+      const freshness = classifyInboundSurfaceFreshness(surface, now);
+      return buildInboundSurfaceSeamStatus(surface, {
+        freshnessState: freshness?.reason ?? options.fallbackFreshnessState ?? null,
+      });
+    })
+    .filter(Boolean);
+}
+
+/**
+ * Itemization gaps represent incomplete reconciliation debt, so they usually
+ * stay immediately due. Provider safety windows and failed-retry cooldowns are
+ * the exceptions: those boundaries exist to avoid bot-like repeated polling.
+ *
+ * @param {Record<string, any> | null} surface
+ * @param {string} baseDueAt
+ * @param {{ workingHoursStatus?: { openNow: boolean, nextOpenAt: string | null } | null }} [options]
+ */
+function computeItemizationGapSyncDueAt(surface, baseDueAt, options = {}) {
+  let dueAt = normalizeOptionalIso(baseDueAt) ?? baseDueAt;
+  const explicitProviderDueAt = normalizeOptionalIso(surface?.nextAllowedSyncAt);
+  if (explicitProviderDueAt && explicitProviderDueAt > dueAt) {
+    dueAt = explicitProviderDueAt;
+  }
+
+  if (surface?.lastRunStatus === "failed") {
+    const failedRetryDueAt = computeInboundAutomationNextDueAt(surface, {
+      workingHoursStatus: options.workingHoursStatus ?? undefined,
+    });
+    if (failedRetryDueAt && failedRetryDueAt > dueAt) {
+      dueAt = failedRetryDueAt;
+    }
+  }
+
+  return dueAt;
+}
+
+/**
+ * @param {Record<string, any> | null} surface
+ * @param {string} baseDueAt
+ * @param {string} scheduledDueAt
+ * @param {{ now?: string | null, workingHoursStatus?: { openNow: boolean, nextOpenAt: string | null } | null }} [options]
+ */
+function computeItemizationGapSyncWaitingReason(surface, baseDueAt, scheduledDueAt, options = {}) {
+  const now = normalizeOptionalIso(options.now) ?? null;
+  const dueAt = normalizeOptionalIso(scheduledDueAt);
+  if (!dueAt || (now && dueAt <= now)) {
+    return null;
+  }
+
+  const providerDueAt = normalizeOptionalIso(surface?.nextAllowedSyncAt);
+  if (providerDueAt && providerDueAt >= dueAt) {
+    return normalizeNullableString(surface?.backoffReason)
+      ?? normalizeNullableString(surface?.lastExhaustionReason)
+      ?? "provider_backoff";
+  }
+
+  const base = normalizeOptionalIso(baseDueAt);
+  if (surface?.lastRunStatus === "failed" && base && dueAt > base) {
+    return normalizeNullableString(surface?.backoffReason)
+      ?? normalizeNullableString(surface?.lastExhaustionReason)
+      ?? "failed_sync_retry_backoff";
+  }
+
+  if (options.workingHoursStatus?.openNow === false && options.workingHoursStatus.nextOpenAt === dueAt) {
+    return "outside_retrieval_window";
+  }
+
+  return null;
+}
+
+/**
+ * @param {{
+ *   user: { id: string, label: string },
+ *   observation: any,
+ *   dueAt: string | null,
+ *   waitingReason?: string | null,
+ * }} input
+ */
+function buildInboundIdentityResolutionTask({ user, observation, dueAt, waitingReason = null }) {
+  const senderEmail = normalizeNullableString(observation?.actorHandle) ?? null;
+  const senderDomain = senderEmail?.includes("@") ? senderEmail.split("@").at(-1) ?? null : null;
+  const senderLabel = observation?.actorName ?? senderEmail ?? "email sender";
+  const subject = normalizeNullableString(observation?.subject) ?? null;
+  return {
+    kind: "resolve_inbound_identity",
+    action: "resolve_inbound_identity",
+    needsOperatorInput: false,
+    reason: normalizeNullableString(observation?.identityResolutionStatus) === "no_match"
+      ? "identity_retry_no_match"
+      : normalizeNullableString(observation?.identityResolutionStatus) === "blocked"
+        ? "identity_retry_blocked"
+        : "email_identity_unresolved",
+    whyItMatters: `${senderLabel} is email-first inbound. Exo still needs a governed LinkedIn identity before this branch can be claimed into transition backlog or queue a governed reply.`,
+    userId: user.id,
+    userLabel: user.label,
+    observationId: observation.id,
+    accountId: observation.accountId ?? null,
+    capability: observation.capability ?? "gmail",
+    motionId: observation.motionId ?? null,
+    companyId: observation.companyId ?? null,
+    companyName: senderDomain ? `domain:${senderDomain}` : (observation.actorCompanyName ?? null),
+    prospectId: observation.prospectId ?? null,
+    prospectName: senderLabel,
+    surface: observation.surfaceKey ?? "gmail-inbox-threads",
+    senderEmail,
+    senderDomain,
+    subject,
+    threadUrl: observation.threadUrl ?? observation.sourceUrl ?? null,
+    queuedAt: dueAt ?? observation.observedAt ?? null,
+    dueAt,
+    waitingReason,
   };
 }
 
@@ -1653,16 +1954,18 @@ function taskOrder(a, b, hostState = null) {
   // progresses via bounded slices interleaved by the host pass scheduler.
   const rank = {
     run_inbound_sync_quick: 0,
-    company_research: 1,
-    prospect_selection: 2,
-    prospect_research: 3,
-    company_discovery: 4,
-    reconcile_connection_request_status: 5,
-    reject_connection_request: 6,
-    withdraw_connection: 7,
-    send_message: 8,
-    write_draft: 9,
-    run_inbound_sync_full: 10,
+    resolve_inbound_identity: 1,
+    company_research: 2,
+    prospect_selection: 3,
+    prospect_research: 4,
+    company_discovery: 5,
+    reconcile_connection_request_status: 6,
+    accept_connection_request: 7,
+    reject_connection_request: 8,
+    withdraw_connection: 9,
+    send_message: 10,
+    write_draft: 11,
+    run_inbound_sync_full: 12,
   };
   if (isMotionRoundRobinTask(a) && isMotionRoundRobinTask(b)) {
     const motionComparison = compareMotionTaskOrderAcrossKinds(a, b, hostState);
@@ -1967,27 +2270,18 @@ function normalizeNullableString(value) {
   return normalized.length ? normalized : null;
 }
 
-/** @param {any} observation */
-function hasLinkedinProfileIdentity(observation) {
-  return Boolean(
-    normalizeNullableString(observation?.actorLinkedinPublicId)
-      || normalizeNullableString(observation?.actorHandle)
-      || normalizeNullableString(observation?.actorLinkedinMemberId)
-      || normalizeNullableString(observation?.actorProfileUrl)
-  );
-}
-
 /**
  * @param {string} surfaceKey
  */
 function resolveAutonomousInboundPaginationConfig(surfaceKey) {
-  const surfaceOverride = AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG[surfaceKey];
-  if (surfaceOverride) return surfaceOverride;
   const envMaxPages = Number.parseInt(process.env.EXO_AGENT_SYNC_SLICE_MAX_PAGES ?? "", 10);
+  const surfaceOverride = AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG[surfaceKey] ?? {};
+  const defaultMaxPages = Number.isInteger(surfaceOverride.maxPages) && surfaceOverride.maxPages > 0
+    ? surfaceOverride.maxPages
+    : 1;
   return {
-    maxPages: Number.isInteger(envMaxPages) && envMaxPages > 0
-      ? envMaxPages
-      : DEFAULT_AUTONOMOUS_FULL_SURFACE_MAX_PAGES,
+    ...surfaceOverride,
+    maxPages: Number.isInteger(envMaxPages) && envMaxPages > 0 ? envMaxPages : defaultMaxPages,
   };
 }
 

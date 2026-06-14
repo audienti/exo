@@ -3,6 +3,7 @@
 
 import { ensureTransitionMotion, findTransitionMotion } from "../../core/ensure-transition-motion.js";
 import { inboundObservationsShareIdentity } from "../../core/inbound-observations.js";
+import { persistRehomedProspect } from "../../core/persist-rehomed-prospect.js";
 import { rehomeProspect } from "../../core/rehome-prospect.js";
 import { runTransitionPromote } from "../../core/run-transition-promote.js";
 import {
@@ -11,9 +12,6 @@ import {
   listCompanies,
   listInboundObservations,
   listMotions,
-  moveProspectToMotionRows,
-  updateCompany,
-  upsertInboundObservation,
 } from "../../db/database.js";
 
 /**
@@ -156,14 +154,7 @@ Rules:
           prospectId,
           relatedObservations: related,
         });
-        updateCompany(result.company);
-        moveProspectToMotionRows({
-          prospectId: result.prospectId,
-          toMotionId: result.toMotion.id,
-        });
-        for (const observation of result.observations) {
-          upsertInboundObservation(observation);
-        }
+        persistRehomedProspect({ result });
         if (options.json) {
           console.log(JSON.stringify({ prospectId: result.prospectId, message: result.message }, null, 2));
           return;

@@ -251,6 +251,12 @@ export const publicEngagementSelectionSchema = z.object({
   selectedAt: z.string().datetime().nullable().default(null)
 });
 
+export const preConnectDecisionSchema = z.object({
+  mode: z.enum(["skip", "bypass"]),
+  reason: z.string().trim().min(1),
+  decidedAt: z.string().datetime().nullable().default(null),
+});
+
 export const linkedinProfileSnapshotSchema = z.object({
   capturedAt: z.string().datetime().nullable().default(null),
   profileUrl: z.string().url().nullable().default(null),
@@ -423,6 +429,7 @@ export const prospectSchema = z.object({
   linkedinProfileSnapshot: linkedinProfileSnapshotSchema.default({}),
   liveSignal: liveSignalSchema.default({}),
   publicEngagementSelection: publicEngagementSelectionSchema.nullable().default(null),
+  preConnectDecision: preConnectDecisionSchema.nullable().default(null),
   contactPoints: z.array(contactPointSchema).default([]),
   contactEnrichmentState: contactEnrichmentStateSchema.default({}),
   queueState: queueStateSchema.default({ status: "selected" }),

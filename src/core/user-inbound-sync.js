@@ -3,12 +3,15 @@
 import { browserProfileCapabilitySchema } from "../schema/browser-profile.js";
 import { userSchema } from "../schema/user.js";
 import { inboundSyncPlanModeSchema, inboundSyncRunStatusSchema, inboundSurfaceStateSchema } from "../schema/inbound.js";
+import { CAPABILITY_SEAM_STATES, buildCapabilitySeamResult } from "./capability-seam-contract.js";
+import { findBackendCapability } from "../lib/backend-capability-registry.js";
 import { findInboundSurfaceDefinition, listInboundSurfaceCatalog } from "../lib/inbound-surface-catalog.js";
 import { classifyWorkingHoursWindow } from "./working-hours.js";
 
 export const INBOUND_SYNC_STALE_MS = 6 * 60 * 60 * 1000;
 export const INBOUND_SYNC_FAILED_RETRY_MS = 30 * 60 * 1000;
 export const INBOUND_SYNC_LINKEDIN_MESSAGE_OPEN_WINDOW_MS = 15 * 60 * 1000;
+export const INBOUND_SURFACE_MIXED_BASELINE_REASON = "mixed_baseline_due_to_out_of_band_reconciliation";
 const WEEKDAY_ORDER = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const DEFAULT_LINKEDIN_RETRIEVAL_WINDOW = {
   weekdays: WEEKDAY_ORDER,
@@ -368,6 +371,13 @@ export function setUserInboundSyncPolicy(rawUser, input) {
  *   continuationStartedAt?: string | null,
  *   nextCursor?: string | null,
  *   nextStartOffset?: number | null,
+ *   providerCursor?: string | null,
+ *   highWatermarkAt?: string | null,
+ *   highWatermarkId?: string | null,
+ *   lastCompleteSnapshotId?: string | null,
+ *   nextAllowedSyncAt?: string | null,
+ *   backoffReason?: string | null,
+ *   syncTrustStatus?: "trusted" | "degraded" | "untrusted" | null,
  *   observationCount?: number | null,
  *   itemizationGapCount?: number | null,
  *   error?: string | null
@@ -399,6 +409,13 @@ export function recordUserInboundSyncRun(rawUser, input) {
     status,
     captureCompleteness: input.captureCompleteness ?? null
   });
+  const nextAllowedSyncAt = normalizeNullableIso(input.nextAllowedSyncAt);
+  const nextSyncTrustStatus = normalizeSyncTrustStatus(input.syncTrustStatus)
+    ?? inferSyncTrustStatus({
+      status,
+      captureCompleteness: input.captureCompleteness ?? null,
+      exhaustionStatus: nextExhaustionStatus,
+    });
   const nextCountDiscrepancyCount = input.countDiscrepancyCount
     ?? Math.max((nextVisibleTotalCount ?? input.itemCount ?? 0) - (input.itemCount ?? 0), 0);
   const nextItemizationGapCount = input.itemizationGapCount
@@ -427,6 +444,13 @@ export function recordUserInboundSyncRun(rawUser, input) {
       const continuationStartedAt = continuationActive
         ? normalizeNullableString(input.continuationStartedAt) ?? surface.continuationStartedAt ?? input.observedAt ?? now
         : null;
+      const providerCursor = normalizeNullableString(input.providerCursor) ?? surface.providerCursor ?? null;
+      const highWatermarkAt = normalizeNullableIso(input.highWatermarkAt) ?? surface.highWatermarkAt ?? null;
+      const highWatermarkId = normalizeNullableString(input.highWatermarkId) ?? surface.highWatermarkId ?? null;
+      const lastCompleteSnapshotId = normalizeNullableString(input.lastCompleteSnapshotId) ?? surface.lastCompleteSnapshotId ?? null;
+      const backoffReason = normalizeNullableString(input.backoffReason) ?? (
+        nextAllowedSyncAt ? normalizeNullableString(input.exhaustionReason) ?? normalizeNullableString(input.reconcileReason) : null
+      );
 
       return inboundSurfaceStateSchema.parse({
         ...surface,
@@ -451,6 +475,13 @@ export function recordUserInboundSyncRun(rawUser, input) {
         nextStartOffset: continuationActive && Number.isInteger(input.nextStartOffset) && input.nextStartOffset >= 0
           ? input.nextStartOffset
           : null,
+        providerCursor,
+        highWatermarkAt,
+        highWatermarkId,
+        lastCompleteSnapshotId,
+        nextAllowedSyncAt,
+        backoffReason,
+        syncTrustStatus: nextSyncTrustStatus,
         lastObservationCount: nextObservationCount,
         lastItemizationGapCount: nextItemizationGapCount,
         lastCountDiscrepancyCount: nextCountDiscrepancyCount,
@@ -494,6 +525,15 @@ export function recordUserInboundSyncRun(rawUser, input) {
         nextStartOffset: continuationActive && Number.isInteger(input.nextStartOffset) && input.nextStartOffset >= 0
           ? input.nextStartOffset
           : null,
+        providerCursor: normalizeNullableString(input.providerCursor),
+        highWatermarkAt: normalizeNullableIso(input.highWatermarkAt),
+        highWatermarkId: normalizeNullableString(input.highWatermarkId),
+        lastCompleteSnapshotId: normalizeNullableString(input.lastCompleteSnapshotId),
+        nextAllowedSyncAt,
+        backoffReason: normalizeNullableString(input.backoffReason) ?? (
+          nextAllowedSyncAt ? normalizeNullableString(input.exhaustionReason) ?? normalizeNullableString(input.reconcileReason) : null
+        ),
+        syncTrustStatus: nextSyncTrustStatus,
         lastObservationCount: nextObservationCount,
         lastItemizationGapCount: nextItemizationGapCount,
         lastCountDiscrepancyCount: nextCountDiscrepancyCount,
@@ -518,6 +558,77 @@ export function recordUserInboundSyncRun(rawUser, input) {
 }
 
 /**
+ * A full surface sync established a clean baseline, but a later row-level
+ * reconciliation changed one person on that surface. Preserve the stored
+ * baseline timestamps and counts, but mark the surface as mixed so Exo stops
+ * treating silence or totals as fully trustworthy until the next governed full
+ * sync lands.
+ *
+ * @param {unknown} rawUser
+ * @param {{
+ *   accountId: string,
+ *   surfaceKey: string,
+ * }} input
+ * @returns {{ user: import("../schema/user.js").userSchema._type, changed: boolean }}
+ */
+export function markUserInboundSurfaceMixedAfterOutOfBandReconciliation(rawUser, input) {
+  const user = userSchema.parse(rawUser);
+  const account = user.accounts.find((candidate) => candidate.id === input.accountId);
+  if (!account) {
+    throw new Error(`User account not found: ${input.accountId}`);
+  }
+
+  const currentStates = materializeSurfaceStates(account);
+  let changed = false;
+
+  const nextAccounts = user.accounts.map((candidate) => {
+    if (candidate.id !== input.accountId) {
+      return candidate;
+    }
+
+    const surfaces = currentStates.map((surface) => {
+      if (surface.surfaceKey !== input.surfaceKey) {
+        return surface;
+      }
+
+      const alreadyMixed = hasMixedInboundBaseline(surface);
+      const hadTrustedFullBaseline = surface.lastRunStatus === "success"
+        && surface.lastCaptureCompleteness === "complete"
+        && surface.lastExhaustionStatus === "complete";
+      if (alreadyMixed || !hadTrustedFullBaseline) {
+        return surface;
+      }
+
+      changed = true;
+      return inboundSurfaceStateSchema.parse({
+        ...surface,
+        lastReconcileReason: INBOUND_SURFACE_MIXED_BASELINE_REASON,
+        lastExhaustionReason: INBOUND_SURFACE_MIXED_BASELINE_REASON,
+      });
+    });
+
+    return {
+      ...candidate,
+      updatedAt: changed ? new Date().toISOString() : candidate.updatedAt,
+      inboundSync: {
+        surfaces
+      }
+    };
+  });
+
+  return {
+    user: changed
+      ? userSchema.parse({
+        ...user,
+        updatedAt: new Date().toISOString(),
+        accounts: nextAccounts,
+      })
+      : user,
+    changed,
+  };
+}
+
+/**
  * @param {{
  *   key?: string | null,
  *   lastRunStatus: "never" | "success" | "warning" | "failed",
@@ -532,6 +643,14 @@ export function recordUserInboundSyncRun(rawUser, input) {
  */
 export function classifyInboundSurfaceFreshness(surface, now, options = {}) {
   const freshnessWindowMs = inboundSurfaceFreshnessWindowMs(surface, options);
+  const providerBackoffUntil = normalizeNullableIso(surface.nextAllowedSyncAt);
+  const nowMs = Date.parse(now);
+  if (providerBackoffUntil) {
+    const providerBackoffMs = Date.parse(providerBackoffUntil);
+    if (!Number.isNaN(providerBackoffMs) && !Number.isNaN(nowMs) && providerBackoffMs > nowMs) {
+      return null;
+    }
+  }
   const deferDueIfClosedWindow = (candidate) => {
     if (
       !candidate
@@ -562,7 +681,6 @@ export function classifyInboundSurfaceFreshness(surface, now, options = {}) {
       return null;
     }
     const failedAt = surface.lastSyncedAt ? Date.parse(surface.lastSyncedAt) : Number.NaN;
-    const nowMs = Date.parse(now);
     if (!Number.isNaN(failedAt) && !Number.isNaN(nowMs) && nowMs - failedAt < INBOUND_SYNC_FAILED_RETRY_MS) {
       return null;
     }
@@ -581,7 +699,6 @@ export function classifyInboundSurfaceFreshness(surface, now, options = {}) {
   }
 
   const freshnessMs = Date.parse(freshnessTime);
-  const nowMs = Date.parse(now);
   if (Number.isNaN(freshnessMs) || Number.isNaN(nowMs)) {
     return null;
   }
@@ -646,6 +763,13 @@ function buildAccountInboundView(account) {
       continuationStartedAt: state.continuationStartedAt,
       nextCursor: state.nextCursor,
       nextStartOffset: state.nextStartOffset,
+      providerCursor: state.providerCursor,
+      highWatermarkAt: state.highWatermarkAt,
+      highWatermarkId: state.highWatermarkId,
+      lastCompleteSnapshotId: state.lastCompleteSnapshotId,
+      nextAllowedSyncAt: state.nextAllowedSyncAt,
+      backoffReason: state.backoffReason,
+      syncTrustStatus: state.syncTrustStatus,
       lastObservationCount: state.lastObservationCount,
       lastItemizationGapCount: state.lastItemizationGapCount,
       lastCountDiscrepancyCount: state.lastCountDiscrepancyCount,
@@ -728,6 +852,7 @@ function buildSurfaceSyncPlan(userId, account, surface, input) {
     ? "disabled"
     : freshness?.reason ?? "fresh";
   const freshnessDueAt = freshness?.dueAt ?? null;
+  const seamStatus = buildInboundSurfaceSeamStatus(surface, { freshnessState });
 
   return {
     key: surface.key,
@@ -741,12 +866,16 @@ function buildSurfaceSyncPlan(userId, account, surface, input) {
     catalogOrder: surface.catalogOrder,
     freshnessState,
     freshnessDueAt,
+    seamStatus,
     lastRunStatus: surface.lastRunStatus,
     lastSyncedAt: surface.lastSyncedAt,
     lastObservedAt: surface.lastObservedAt,
     lastItemCount: surface.lastItemCount,
     lastObservationCount: surface.lastObservationCount,
     lastItemizationGapCount: surface.lastItemizationGapCount,
+    nextAllowedSyncAt: surface.nextAllowedSyncAt,
+    backoffReason: surface.backoffReason,
+    syncTrustStatus: surface.syncTrustStatus,
     lastError: surface.lastError,
     whyThisPass: describeSurfacePassReason(surface, modePolicy, freshnessState),
     observationKinds: surface.observationKinds,
@@ -786,6 +915,100 @@ function buildSurfaceSyncPlan(userId, account, surface, input) {
 }
 
 /**
+ * @param {Record<string, any>} surface
+ * @param {{ freshnessState?: string | null }} [options]
+ */
+export function buildInboundSurfaceSeamStatus(surface, options = {}) {
+  const surfaceKey = normalizeNullableString(surface.key ?? surface.surfaceKey);
+  if (!surfaceKey) return null;
+
+  const row = findBackendCapability(surfaceKey);
+  if (!row) return null;
+
+  const freshnessState = normalizeNullableString(options.freshnessState)
+    ?? deriveSurfaceFreshnessState(surface);
+  const state = mapFreshnessStateToSeamState(freshnessState);
+
+  return buildCapabilitySeamResult({
+    row,
+    state,
+    reason: buildSurfaceSeamReason(surfaceKey, freshnessState),
+    checkedAt: normalizeNullableString(surface.lastSyncedAt ?? surface.lastObservedAt),
+    missingProofSurfaces: state === CAPABILITY_SEAM_STATES.MISSING_PROOF ? row.proofSurfaces : [],
+    debt: {
+      kind: "inbound_surface_sync_review",
+      surfaceKey,
+      freshnessState,
+      lastRunStatus: normalizeNullableString(surface.lastRunStatus),
+      lastReconcileReason: normalizeNullableString(surface.lastReconcileReason),
+      lastExhaustionReason: normalizeNullableString(surface.lastExhaustionReason),
+    },
+  });
+}
+
+/**
+ * @param {Record<string, any>} surface
+ */
+function deriveSurfaceFreshnessState(surface) {
+  if (surface.enabled === false) return "disabled";
+  if (isAutonomousSurfaceUnsupported(surface)) return "unsupported";
+  if (surface.lastRunStatus === "never") return "never";
+  if (surface.lastRunStatus === "failed") return "failed";
+  if (surface.lastRunStatus === "warning") return "warning";
+  return "fresh";
+}
+
+/**
+ * @param {string | null} freshnessState
+ */
+function mapFreshnessStateToSeamState(freshnessState) {
+  switch (freshnessState) {
+    case "fresh":
+    case "checked":
+      return CAPABILITY_SEAM_STATES.QUIET;
+    case "never":
+    case "unchecked":
+      return CAPABILITY_SEAM_STATES.PENDING_PROOF;
+    case "warning":
+    case "stale":
+      return CAPABILITY_SEAM_STATES.STALE;
+    case "failed":
+      return CAPABILITY_SEAM_STATES.CONTRADICTED;
+    case "unsupported":
+    case "disabled":
+      return CAPABILITY_SEAM_STATES.UNSUPPORTED;
+    default:
+      return CAPABILITY_SEAM_STATES.PENDING_PROOF;
+  }
+}
+
+/**
+ * @param {string} surfaceKey
+ * @param {string | null} freshnessState
+ */
+function buildSurfaceSeamReason(surfaceKey, freshnessState) {
+  switch (freshnessState) {
+    case "fresh":
+    case "checked":
+      return `${surfaceKey}_truth_quiet`;
+    case "never":
+    case "unchecked":
+      return `${surfaceKey}_truth_never_checked`;
+    case "warning":
+      return `${surfaceKey}_truth_partial_warning`;
+    case "stale":
+      return `${surfaceKey}_truth_stale`;
+    case "failed":
+      return `${surfaceKey}_truth_check_failed`;
+    case "unsupported":
+    case "disabled":
+      return `${surfaceKey}_truth_unsupported`;
+    default:
+      return `${surfaceKey}_truth_pending`;
+  }
+}
+
+/**
  * @param {import("../schema/user.js").userConnectedAccountSchema._type} account
  */
 function materializeSurfaceStates(account) {
@@ -814,12 +1037,30 @@ function materializeSurfaceStates(account) {
       continuationStartedAt: configuredStates.get(definition.key)?.continuationStartedAt ?? null,
       nextCursor: configuredStates.get(definition.key)?.nextCursor ?? null,
       nextStartOffset: configuredStates.get(definition.key)?.nextStartOffset ?? null,
+      providerCursor: configuredStates.get(definition.key)?.providerCursor ?? null,
+      highWatermarkAt: configuredStates.get(definition.key)?.highWatermarkAt ?? null,
+      highWatermarkId: configuredStates.get(definition.key)?.highWatermarkId ?? null,
+      lastCompleteSnapshotId: configuredStates.get(definition.key)?.lastCompleteSnapshotId ?? null,
+      nextAllowedSyncAt: configuredStates.get(definition.key)?.nextAllowedSyncAt ?? null,
+      backoffReason: configuredStates.get(definition.key)?.backoffReason ?? null,
+      syncTrustStatus: configuredStates.get(definition.key)?.syncTrustStatus ?? null,
       lastObservationCount: configuredStates.get(definition.key)?.lastObservationCount ?? null,
       lastItemizationGapCount: configuredStates.get(definition.key)?.lastItemizationGapCount ?? null,
       lastCountDiscrepancyCount: configuredStates.get(definition.key)?.lastCountDiscrepancyCount ?? null,
       lastError: configuredStates.get(definition.key)?.lastError ?? null
     })
   );
+}
+
+/**
+ * @param {{
+ *   lastReconcileReason?: string | null,
+ *   lastExhaustionReason?: string | null,
+ * }} surface
+ */
+export function hasMixedInboundBaseline(surface) {
+  return normalizeNullableString(surface?.lastReconcileReason) === INBOUND_SURFACE_MIXED_BASELINE_REASON
+    || normalizeNullableString(surface?.lastExhaustionReason) === INBOUND_SURFACE_MIXED_BASELINE_REASON;
 }
 
 /**
@@ -975,6 +1216,7 @@ export function computeInboundAutomationNextDueAt(surface, options = {}) {
   }
 
   let candidateDueAt = null;
+  const providerBackoffUntil = normalizeNullableIso(surface.nextAllowedSyncAt);
 
   if (surface.lastRunStatus === "failed" && surface.lastSyncedAt) {
     const failedAt = Date.parse(surface.lastSyncedAt);
@@ -995,12 +1237,17 @@ export function computeInboundAutomationNextDueAt(surface, options = {}) {
 
   const nextOpenAt = normalizeNextOpenAt(options.workingHoursStatus);
   if (!candidateDueAt) {
-    return nextOpenAt;
+    candidateDueAt = nextOpenAt;
+  } else if (nextOpenAt) {
+    candidateDueAt = laterIso(candidateDueAt, nextOpenAt);
   }
-  if (!nextOpenAt) {
+  if (!candidateDueAt) {
+    return providerBackoffUntil;
+  }
+  if (!providerBackoffUntil) {
     return candidateDueAt;
   }
-  return laterIso(candidateDueAt, nextOpenAt);
+  return laterIso(candidateDueAt, providerBackoffUntil);
 }
 
 /**
@@ -1162,6 +1409,35 @@ function normalizeNullableString(value) {
 }
 
 /**
+ * @param {string | null | undefined} value
+ */
+function normalizeNullableIso(value) {
+  const normalized = normalizeNullableString(value);
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Date.parse(normalized);
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+  return new Date(parsed).toISOString();
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeSyncTrustStatus(value) {
+  switch (value) {
+    case "trusted":
+    case "degraded":
+    case "untrusted":
+      return value;
+    default:
+      return null;
+  }
+}
+
+/**
  * @param {import("../schema/user.js").userSchema._type} user
  * @param {{ metadata?: Record<string, unknown> | null }} account
  */
@@ -1225,4 +1501,23 @@ function inferExhaustionStatus(input) {
   }
 
   return "incomplete";
+}
+
+/**
+ * @param {{
+ *   status: import("../schema/inbound.js").inboundSyncRunStatusSchema._type,
+ *   captureCompleteness: import("../schema/inbound.js").inboundCaptureCompletenessSchema._type | null,
+ *   exhaustionStatus: import("../schema/inbound.js").inboundSurfaceExhaustionStatusSchema._type | null
+ * }} input
+ */
+function inferSyncTrustStatus(input) {
+  if (input.status === "failed" || input.exhaustionStatus === "blocked" || input.captureCompleteness === "failed") {
+    return "untrusted";
+  }
+
+  if (input.status === "success" && input.captureCompleteness === "complete" && input.exhaustionStatus === "complete") {
+    return "trusted";
+  }
+
+  return "degraded";
 }

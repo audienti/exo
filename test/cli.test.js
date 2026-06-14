@@ -5445,7 +5445,7 @@ test("agent queue owns inbound itemization gaps when sync counts items without o
     assert.ok(syncTask);
     assert.equal(syncTask.mode, "full");
     assert.ok(syncTask.surfaceKeys.includes("linkedin-received-invitations"));
-    assert.match(syncTask.contractCommand, /exo inbound sync linkedin-live .* --mode full.* --max-pages \d+( --page-size \d+)? --json/);
+    assert.match(syncTask.contractCommand, /exo inbound sync linkedin-live .* --mode full.* --max-pages 1 --page-size 100 --json/);
 
     const next = JSON.parse(
       execFileSync("node", [cliPath, "next", "--user", user.id, "--json"], {

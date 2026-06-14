@@ -24,6 +24,7 @@ import {
  * @param {{
  *   interactive?: boolean,
  *   userId?: string | null,
+ *   returnTo?: string | null,
  *   motions?: Array<{ id: string, name: string, offerLabel?: string, premise?: string, status?: string | null, statusLabel?: string | null }>,
  *   transitionMotionId?: string | null
  * }} [meta]
@@ -58,12 +59,17 @@ export function renderPersonPage(person, meta = {}) {
     ? `<div class="pd-matched">${iconSvg("alert", 14)} This person is already claimed in another workspace. Do not add them again here.</div>`
     : "";
   const reviewHref = person.latestMessage?.href ?? person.timeline.find((entry) => entry.href)?.href ?? null;
-  const canPromote = Boolean(person.hasDurableIdentity);
-  const unresolvedNote = !canPromote
+  const promotionBlocker = person.promotionBlocker ?? null;
+  const hasPromotableIdentity = Boolean(person.hasDurableIdentity);
+  const canPromote = hasPromotableIdentity && !promotionBlocker;
+  const unresolvedNote = promotionBlocker
+    ? `<div class="pd-matched">${iconSvg("alert", 14)} <strong>${escapeHtml(promotionBlocker.title)}</strong> ${escapeHtml(promotionBlocker.detail)}</div>`
+    : !hasPromotableIdentity
     ? `<div class="pd-matched">${iconSvg("alert", 14)} Exo does not have a durable identity for this contact yet. Review the thread before you decide whether to ignore it or capture it properly.</div>`
     : "";
   const canClaimHere = canPromote && person.claimState !== "claimed_elsewhere";
-  const canComposeHere = canClaimHere && Boolean(person.suggestedSurface);
+  const canOpenComposePanel = hasPromotableIdentity && person.claimState !== "claimed_elsewhere" && Boolean(person.suggestedSurface);
+  const canComposeHere = canOpenComposePanel && !promotionBlocker;
   const railSegments = [
     person.connection ? stateDot(person.connection.state, person.connection.label) : "",
     renderCompanyMeta(person, knownCompany),
@@ -90,10 +96,10 @@ export function renderPersonPage(person, meta = {}) {
       : meta.interactive
         ? renderIgnoreButton(person) +
           (canClaimHere
-            ? renderPromoteButton(person, meta) +
-              (canComposeHere
-                ? `<a class="btn btn-primary btn-sm" href="#compose-${escapeAttr(person.id)}">${iconSvg("mail", 14)}<span>${escapeHtml(composeLabel(person))}</span></a>`
-                : "")
+            ? renderPromoteButton(person, meta)
+            : "") +
+          (canComposeHere
+            ? `<a class="btn btn-primary btn-sm" href="${escapeAttr(personComposeHref(person, meta))}">${iconSvg("mail", 14)}<span>${escapeHtml(composeLabel(person))}</span></a>`
             : "")
         : (canClaimHere ? renderPromoteButton(person, meta) : "")) +
     `</div>` +
@@ -247,6 +253,22 @@ function composeLabel(person) {
 }
 
 /**
+ * Explicit compose requests for untracked inbox people should ask the route to
+ * generate the reply draft. Plain detail loads stay cheap and skip that work.
+ *
+ * @param {any} person
+ * @param {{ returnTo?: string | null }} meta
+ */
+function personComposeHref(person, meta) {
+  const params = new URLSearchParams();
+  if (typeof meta.returnTo === "string" && meta.returnTo.startsWith("/")) {
+    params.set("return", meta.returnTo);
+  }
+  params.set("compose", "1");
+  return `/people/${encodeURIComponent(person.id)}?${params.toString()}#compose-${encodeURIComponent(person.id)}`;
+}
+
+/**
  * Compose panel for an inbound (not-yet-tracked) person. Sending promotes them
  * to a prospect AND queues the message in one step — so "Send message" actually
  * sends, instead of dead-ending on a profile page.
@@ -263,6 +285,7 @@ function renderPersonComposePanel(person, meta) {
   const panelId = `compose-${person.id}`;
   const args = JSON.stringify({ observationId: person.id, userId: meta.userId ?? null, surface });
   const draft = person.composeDraft ?? { subject: null, body: "" };
+  const promotionBlocker = person.promotionBlocker ?? null;
   const subjectField = sm.subject
     ? `<div class="compose-field"><span class="compose-label">Subject</span><input class="compose-input" name="subject" value="${escapeAttr(draft.subject ?? "")}" placeholder="Subject line"></div>`
     : "";
@@ -273,6 +296,13 @@ function renderPersonComposePanel(person, meta) {
       (person.latestMessage.href ? `<a class="tl-link" href="${escapeAttr(person.latestMessage.href)}" target="_blank" rel="noreferrer">${iconSvg("link", 11)}Open thread</a>` : "") +
       `</div>`
     : "";
+  const statusNote = promotionBlocker
+    ? `<div class="cap-note">${iconSvg("alert", 14)}<div><strong>${escapeHtml(promotionBlocker.title)}</strong> ${escapeHtml(promotionBlocker.detail)}</div></div>`
+    : `<div class="cap-note ok">${iconSvg("userPlus", 14)}<div>Sending claims <strong>${escapeHtml(person.identity.name)}</strong> into this workspace's transition backlog and queues the message for the agent.</div></div>`;
+  const primaryAction = promotionBlocker
+    ? `<button class="btn btn-primary btn-sm" type="button" disabled aria-disabled="true" title="${escapeAttr(promotionBlocker.detail)}">${iconSvg("alert", 14)}<span>${escapeHtml(promotionBlocker.buttonLabel ?? "Resolving in background")}</span></button>`
+    : `<div class="exo-action" data-exo-writer="promoteAndApproveDraft" data-exo-args="${escapeAttr(args)}" data-exo-compose="${escapeAttr(panelId)}" data-exo-return="1">` +
+      `<button class="btn btn-primary btn-sm" type="button">${iconSvg("arrowR", 14)}<span>Send — add &amp; queue</span></button></div>`;
 
   return (
     `<div class="compose-panel" id="${escapeAttr(panelId)}">` +
@@ -284,14 +314,13 @@ function renderPersonComposePanel(person, meta) {
     `<a class="compose-close" href="#person-top" aria-label="Close">${iconSvg("x", 14)}</a>` +
     `</div>` +
     `<span class="compose-chan">${iconSvg(sm.channel === "Email" ? "mail" : "link", 11)}${escapeHtml(sm.channel)}</span>` +
-    `<div class="cap-note ok">${iconSvg("userPlus", 14)}<div>Sending claims <strong>${escapeHtml(person.identity.name)}</strong> into this workspace's transition backlog and queues the message for the agent.</div></div>` +
+    statusNote +
     latestContext +
     subjectField +
     `<div class="compose-field"><span class="compose-label">${surface === "connection_request" ? "Note" : "Message"}</span>` +
     `<textarea class="compose-body" name="body" placeholder="Write the message…">${escapeHtml(draft.body ?? "")}</textarea></div>` +
     `<div class="compose-actions">` +
-    `<div class="exo-action" data-exo-writer="promoteAndApproveDraft" data-exo-args="${escapeAttr(args)}" data-exo-compose="${escapeAttr(panelId)}" data-exo-return="1">` +
-    `<button class="btn btn-primary btn-sm" type="button">${iconSvg("arrowR", 14)}<span>Send — add &amp; queue</span></button></div>` +
+    primaryAction +
     `<a class="btn btn-ghost btn-sm" href="#person-top">Cancel</a>` +
     `</div>` +
     `</div></div>`
@@ -363,7 +392,7 @@ function renderInviteDecisionButtons(person) {
   if (!person?.id) return "";
   const acceptArgs = JSON.stringify({
     observationId: person.id,
-    nextKind: "connection_request_accepted",
+    nextKind: "connection_request_accept_requested",
   });
   const rejectArgs = JSON.stringify({
     observationId: person.id,
@@ -504,6 +533,10 @@ function buildNextMoveBody(person, firstName, canPromote, canComposeHere) {
     return "This person is already claimed in another workspace. Keep them visible here, but do not create a second local branch.";
   }
 
+  if (person.promotionBlocker?.kind === "resolve_linkedin_identity") {
+    return person.promotionBlocker.detail;
+  }
+
   if (!canPromote) {
     return "Exo still does not know who this is in a durable way. Open the thread first. Do not create a tracked prospect from a placeholder identity.";
   }
@@ -547,6 +580,15 @@ function buildNextMoveTitle(person, firstName) {
   }
   if (person.claimState === "claimed_elsewhere") {
     return "Leave this in the other workspace";
+  }
+  if (person.promotionBlocker?.kind === "resolve_linkedin_identity") {
+    if (person.promotionBlocker.state === "blocked") {
+      return "Repair background identity resolution";
+    }
+    if (person.promotionBlocker.state === "unavailable") {
+      return "Repair the LinkedIn execution path";
+    }
+    return "Waiting on background identity resolution";
   }
   if (!person.hasDurableIdentity) {
     return "Review the thread before claiming";
