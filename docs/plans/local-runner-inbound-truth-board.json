@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T19:16:43Z"
+    "updatedAt": "2026-06-14T19:17:27Z"
   },
   "tasks": [
     {
@@ -171,7 +171,7 @@
       ],
       "attemptCount": 1,
       "lastFailure": "Initial implementation still had one stale timeout/fallback test assuming handoff-first behavior; the test was rewritten to cover the remaining fallback timeout only when direct capture is unavailable.",
-      "commit": "",
+      "commit": "f1a3c6910a84383fccc685ed9d03f3c8c226b0af",
       "notes": ""
     },
     {
