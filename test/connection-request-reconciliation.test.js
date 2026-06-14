@@ -241,6 +241,80 @@ test("connection request mutation reconciliation marks inbound accept and declin
   );
 });
 
+test("connection request tracer does not treat sent-list disappearance as acceptance without profile proof", () => {
+  const sendDebt = buildConnectionRequestMutationReconciliation({
+    actionKey: "connection_request",
+    resultKey: "sent",
+    surface: "connection_request",
+    observationId: null,
+    inboundObservationTransitionedTo: null,
+  });
+
+  assert.equal(sendDebt?.state, "pending_reconciliation");
+  assert.equal(sendDebt?.proofSurface, "linkedin-sent-invitations");
+  assert.equal(sendDebt?.externalState, "connection_request_pending");
+
+  const stillPending = buildObservation({
+    kind: "connection_request_pending",
+    actorLinkedinPublicId: "dana-disappeared",
+  });
+  const pendingSummary = summarizeSentInvitationSurfaceReconciliation({
+    surface: {
+      key: "linkedin-sent-invitations",
+      lastRunStatus: "success",
+      lastItemCount: 1,
+      lastVisibleTotalCount: 1,
+      lastCaptureCompleteness: "complete",
+      lastExhaustionStatus: "complete",
+      lastReconcileRequired: false,
+    },
+    observations: [stillPending],
+  });
+
+  assert.equal(shouldQueueConnectionRequestStatusReconciliation(stillPending), false);
+  assert.equal(pendingSummary.reconcileRequired, false);
+  assert.equal(pendingSummary.reason, null);
+
+  const disappeared = buildObservation({
+    kind: "connection_request_no_longer_pending",
+    actorLinkedinPublicId: "dana-disappeared",
+  });
+  const disappearedSummary = summarizeSentInvitationSurfaceReconciliation({
+    surface: {
+      key: "linkedin-sent-invitations",
+      lastRunStatus: "success",
+      lastItemCount: 0,
+      lastVisibleTotalCount: 0,
+      lastCaptureCompleteness: "complete",
+      lastExhaustionStatus: "complete",
+      lastReconcileRequired: false,
+    },
+    observations: [disappeared],
+  });
+
+  assert.equal(shouldQueueConnectionRequestStatusReconciliation(disappeared), true);
+  assert.equal(disappearedSummary.quiet, false);
+  assert.equal(disappearedSummary.reconcileRequired, true);
+  assert.equal(disappearedSummary.reason, CONNECTION_REQUEST_RECONCILIATION_REQUIRED_REASON);
+  assert.notEqual(disappeared.kind, "connection_request_accepted");
+
+  assert.equal(
+    classifyConnectionRequestProfileStatus({
+      network_distance: "FIRST_DEGREE",
+      is_relationship: true,
+    }).nextKind,
+    "connection_request_accepted",
+  );
+  assert.equal(
+    classifyConnectionRequestProfileStatus({
+      network_distance: "THIRD_DEGREE",
+      is_relationship: false,
+      invitation: null,
+    }).nextKind,
+    "connection_request_not_accepted",
+  );
+});
+
 test("inbound review does not summarize sent invitations as quiet with unresolved connection requests", () => {
   const review = buildInboundReviewView(
     buildUser(),
