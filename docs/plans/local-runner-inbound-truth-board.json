@@ -51,7 +51,7 @@
     "viewer": {
       "htmlPath": "docs/plans/local-runner-inbound-truth-board.html"
     },
-    "parallelismNote": "T4 passed focused and full-suite verification. T6 is now the only ready task; T7 remains dependency-gated on T6, so parallel capacity is limited by the graph.",
+    "parallelismNote": "T6 is done and T7 is now ready. T7 is a controller-owned final integration gate, so no subagent fan-out remains.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T20:17:55Z"
+    "updatedAt": "2026-06-14T20:30:26Z"
   },
   "tasks": [
     {
@@ -418,7 +418,7 @@
     {
       "id": "T6",
       "title": "Expose runtime truth to queue and run log",
-      "status": "ready",
+      "status": "done",
       "priority": 65,
       "dependsOn": [
         "T4"
@@ -443,20 +443,28 @@
         "npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js",
         "git diff --check"
       ],
-      "worktree": "",
-      "startedAt": "",
-      "updatedAt": "2026-06-14T20:17:55Z",
-      "resolvedModel": "",
-      "outputs": [],
+      "worktree": "multi_agent_v1:019ec7c9-a9db-7ce1-b11d-b557d355d480",
+      "startedAt": "2026-06-14T20:19:09Z",
+      "updatedAt": "2026-06-14T20:30:26Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Queue summaries now expose ready, waiting, blocked, partial, and readyIncludesWaiting counts without treating waiting work as runnable.",
+        "Provider-backoff inbound recovery tasks now carry the concrete waitingReason/backoffReason, for example provider_rate_limited.",
+        "Agent run-log entries now preserve runtime truth for transports, fallbackFrom, and config reasons including missing_unipile_base_url, missing_unipile_api_key, and missing_provider_account_id.",
+        "Host-pass finalQueueCounts now include readyTaskCount, partialTaskCount, and normalized statusCounts.",
+        "Verified focused T6 suite: npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js passed 182/182.",
+        "Verified integration gate: npm test passed 932/933 with 1 skipped and 0 failures.",
+        "Verified formatting: git diff --check passed."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "d084828d4fdd9796c12f8b7bb5e939e9ae3cee87",
+      "notes": "Subagent Curie returned an incomplete patch after red tests; controller completed the waiting-reason and config-reason contract and verified it."
     },
     {
       "id": "T7",
       "title": "Run full integration verification and close board",
-      "status": "backlog",
+      "status": "ready",
       "priority": 10,
       "dependsOn": [
         "T4",
@@ -488,7 +496,7 @@
       ],
       "worktree": "",
       "startedAt": "",
-      "updatedAt": "",
+      "updatedAt": "2026-06-14T20:30:26Z",
       "resolvedModel": "",
       "outputs": [],
       "attemptCount": 0,

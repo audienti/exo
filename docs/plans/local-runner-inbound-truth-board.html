@@ -139,12 +139,12 @@
     <div class="topline">
       <span class="chip"><b>plan</b>local-runner-inbound-truth</span>
       <span class="chip"><b>status</b>active</span>
-      <span class="chip"><b>progress</b>7/9</span>
+      <span class="chip"><b>progress</b>8/9</span>
       <span class="chip"><b>controller</b>codex</span>
       <span class="chip"><b>worktrees</b>.worktrees</span>
       <span class="chip"><b>open messages</b>1</span>
-      <span class="chip"><b>board updated</b>2026-06-14T20:17:55Z</span>
-      <span class="chip"><b>rendered</b>2026-06-14T20:18:21Z</span>
+      <span class="chip"><b>board updated</b>2026-06-14T20:30:26Z</span>
+      <span class="chip"><b>rendered</b>2026-06-14T20:30:46Z</span>
     </div>
     <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
   </header>
@@ -154,11 +154,11 @@
         <div class="metrics">
           <div><b>0</b><span>in flight</span></div>
           <div><b>3</b><span>cap</span></div>
-          <div><b>T6</b><span>next dispatch candidates</span></div>
+          <div><b>none</b><span>next dispatch candidates</span></div>
         </div>
         <p><b>Running or verifying:</b> none</p>
-        <p><b>Capacity read:</b> Capacity available. Next safe dispatch candidates: T6.</p>
-        <p><b>Controller note:</b> T4 passed focused and full-suite verification. T6 is now the only ready task; T7 remains dependency-gated on T6, so parallel capacity is limited by the graph.</p>
+        <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
+        <p><b>Controller note:</b> T6 is done and T7 is now ready. T7 is a controller-owned final integration gate, so no subagent fan-out remains.</p>
       </section>
 
 
@@ -186,17 +186,8 @@
   <main class="board">
 
           <section class="column">
-            <h2>Backlog <span>1</span></h2>
-
-      <article class="task task-backlog">
-        <header>
-          <div class="task-id">T7</div>
-          <h3>Run full integration verification and close board</h3>
-        </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>10</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T6</div></div><div class="field"><div class="label">Depends on</div><div>T4, T5, T6</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/local-runner-inbound-truth-board.json</li><li>docs/plans/local-runner-inbound-truth-board.html</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js</li><li>npm test -- test/agent-host-pass.test.js</li><li>npm test -- test/linkedin-unipile-maintenance.test.js</li><li>npm test -- test/build-linkedin-send.test.js</li><li>npm test -- test/connection-request-reconciliation.test.js</li><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js</li><li>npm test</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All plan acceptance criteria pass.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board status is complete with final verification recorded.</li></ul></div></div>
-      </article>
-
+            <h2>Backlog <span>0</span></h2>
+            <div class="empty">No tasks</div>
           </section>
 
           <section class="column">
@@ -204,11 +195,11 @@
 
       <article class="task task-ready">
         <header>
-          <div class="task-id">T6</div>
-          <h3>Expose runtime truth to queue and run log</h3>
+          <div class="task-id">T7</div>
+          <h3>Run full integration verification and close board</h3>
         </header>
-        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>65</span></div>
-        <div class="field"><div class="label">Reason</div><div>Ready for dispatch if file ownership and capacity permit.</div></div><div class="field"><div class="label">Depends on</div><div>T4</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/build-agent-queue.js</li><li>src/core/agent-run-log.js</li><li>scripts/run-agent-host-pass.js</li><li>test/agent-queue.test.js</li><li>test/agent-run-log.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Queue counts do not imply non-runnable waiting work is ready.</li><li>Last-pass/run-log output names transport and config reasons.</li><li>Blocked, waiting, partial, and ready are distinct in backend tests.</li></ul></div></div>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>10</span></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T4, T5, T6</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/local-runner-inbound-truth-board.json</li><li>docs/plans/local-runner-inbound-truth-board.html</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js</li><li>npm test -- test/agent-host-pass.test.js</li><li>npm test -- test/linkedin-unipile-maintenance.test.js</li><li>npm test -- test/build-linkedin-send.test.js</li><li>npm test -- test/connection-request-reconciliation.test.js</li><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js</li><li>npm test</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All plan acceptance criteria pass.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board status is complete with final verification recorded.</li></ul></div></div>
       </article>
 
           </section>
@@ -224,7 +215,16 @@
           </section>
 
           <section class="column">
-            <h2>Done <span>7</span></h2>
+            <h2>Done <span>8</span></h2>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T6</div>
+          <h3>Expose runtime truth to queue and run log</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>65</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>multi_agent_v1:019ec7c9-a9db-7ce1-b11d-b557d355d480</div></div><div class="field"><div class="label">Depends on</div><div>T4</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/build-agent-queue.js</li><li>src/core/agent-run-log.js</li><li>scripts/run-agent-host-pass.js</li><li>test/agent-queue.test.js</li><li>test/agent-run-log.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Queue counts do not imply non-runnable waiting work is ready.</li><li>Last-pass/run-log output names transport and config reasons.</li><li>Blocked, waiting, partial, and ready are distinct in backend tests.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Subagent Curie returned an incomplete patch after red tests; controller completed the waiting-reason and config-reason contract and verified it.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Queue summaries now expose ready, waiting, blocked, partial, and readyIncludesWaiting counts without treating waiting work as runnable.</li><li>Provider-backoff inbound recovery tasks now carry the concrete waitingReason/backoffReason, for example provider_rate_limited.</li><li>Agent run-log entries now preserve runtime truth for transports, fallbackFrom, and config reasons including missing_unipile_base_url, missing_unipile_api_key, and missing_provider_account_id.</li><li>Host-pass finalQueueCounts now include readyTaskCount, partialTaskCount, and normalized statusCounts.</li><li>Verified focused T6 suite: npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js passed 182/182.</li><li>Verified integration gate: npm test passed 932/933 with 1 skipped and 0 failures.</li><li>Verified formatting: git diff --check passed.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>d084828d4fdd9796c12f8b7bb5e939e9ae3cee87</div></div>
+      </article>
 
       <article class="task task-done">
         <header>
