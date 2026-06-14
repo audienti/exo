@@ -51,7 +51,7 @@
     "viewer": {
       "htmlPath": "docs/plans/local-runner-inbound-truth-board.html"
     },
-    "parallelismNote": "T1 is verified green. T2 is next and remains controller-owned because maintenance mutation transport touches the host runner, Unipile maintenance owner, and existing mutation tests together; no safe subagent fan-out yet.",
+    "parallelismNote": "T2 is verified green. T2b and T3 are ready but overlap host-runner files, so only one can proceed next. T5 returned from subagent Russell and is in verify pending its own task commit.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T19:17:27Z"
+    "updatedAt": "2026-06-14T19:26:48Z"
   },
   "tasks": [
     {
@@ -177,7 +177,7 @@
     {
       "id": "T2",
       "title": "Make direct HTTP primary for supported maintenance mutations",
-      "status": "ready",
+      "status": "done",
       "priority": 95,
       "dependsOn": [
         "T1"
@@ -202,19 +202,26 @@
         "git diff --check"
       ],
       "worktree": "",
-      "startedAt": "",
-      "updatedAt": "2026-06-14T19:16:43Z",
-      "resolvedModel": "",
-      "outputs": [],
-      "attemptCount": 0,
-      "lastFailure": "",
+      "startedAt": "2026-06-14T19:19:36Z",
+      "updatedAt": "2026-06-14T19:26:48Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Wrote host-pass regression tests proving reconcile_connection_request_status, withdraw_connection, accept_connection_request, and reject_connection_request call runLinkedinMaintenanceWithUnipile with allowDirectUnipileHttp: true before any MCP capture.",
+        "Changed runBrowserActionTask to use same-credential Unipile HTTP first for supported Unipile maintenance actions, while retaining MCP and same-credential fallback for unsupported handoff paths.",
+        "Kept unsupported maintenance kinds fail-closed in the maintenance owner without making HTTP calls.",
+        "Verified focused T2 tests: npm test -- test/agent-host-pass.test.js test/linkedin-unipile-maintenance.test.js passed with 111 tests.",
+        "Verified integration gate: npm test passed with 915 tests, 914 pass, 1 skipped, 0 failures.",
+        "Verified git diff --check."
+      ],
+      "attemptCount": 1,
+      "lastFailure": "Initial focused verification failed while the host-pass maintenance action remained private and MCP-first; the implementation exported and injected runBrowserActionTask, then switched supported Unipile maintenance tasks to direct-first.",
       "commit": "",
       "notes": ""
     },
     {
       "id": "T2b",
       "title": "Add deterministic Unipile send for connection requests",
-      "status": "backlog",
+      "status": "ready",
       "priority": 92,
       "dependsOn": [
         "T2"
@@ -242,7 +249,7 @@
       ],
       "worktree": "",
       "startedAt": "",
-      "updatedAt": "",
+      "updatedAt": "2026-06-14T19:26:48Z",
       "resolvedModel": "",
       "outputs": [],
       "attemptCount": 0,
@@ -253,7 +260,7 @@
     {
       "id": "T3",
       "title": "Make missing Unipile config loud",
-      "status": "backlog",
+      "status": "ready",
       "priority": 90,
       "dependsOn": [
         "T1"
@@ -280,7 +287,7 @@
       ],
       "worktree": "",
       "startedAt": "",
-      "updatedAt": "",
+      "updatedAt": "2026-06-14T19:18:34Z",
       "resolvedModel": "",
       "outputs": [],
       "attemptCount": 0,
@@ -330,7 +337,7 @@
     {
       "id": "T5",
       "title": "Add env-gated real Unipile account smoke test",
-      "status": "backlog",
+      "status": "verify",
       "priority": 70,
       "dependsOn": [
         "T1"
@@ -351,11 +358,16 @@
         "npm test -- test/unipile-account-smoke.test.js",
         "git diff --check"
       ],
-      "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
-      "outputs": [],
+      "worktree": "multi_agent_v1:019ec793-2c34-7203-a2a3-bc73e60d1cbb",
+      "startedAt": "2026-06-14T19:19:36Z",
+      "updatedAt": "2026-06-14T19:26:48Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Subagent Russell added test/unipile-account-smoke.test.js with a default skip gate and documented opt-in command.",
+        "Controller verified npm test -- test/unipile-account-smoke.test.js skips by default without a live request.",
+        "Controller verified EXO_UNIPILE_ACCOUNT_SMOKE=1 npm test -- test/unipile-account-smoke.test.js skips without credentials/provider account id and makes no live request.",
+        "Full npm test included the smoke test as one skipped test."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
       "commit": "",

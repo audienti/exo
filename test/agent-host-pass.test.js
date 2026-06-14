@@ -53,6 +53,7 @@ import {
   shouldUseSameCredentialUnipileHttpFallback,
   recordCompletedMaintenanceTaskCooldown,
   runInboundSyncTask,
+  runBrowserActionTask,
   runSendTask,
 } from "../scripts/run-agent-host-pass.js";
 import {
@@ -3246,6 +3247,73 @@ test("same-credential Unipile HTTP fallback is only allowed for MCP tool availab
     false,
   );
 });
+
+for (const kind of [
+  "reconcile_connection_request_status",
+  "withdraw_connection",
+  "accept_connection_request",
+  "reject_connection_request",
+]) {
+  test(`runBrowserActionTask uses same-credential Unipile HTTP first for ${kind}`, () => {
+    const directCalls = [];
+    const connectorCalls = [];
+    const writebacks = [];
+    const task = {
+      kind,
+      observationId: "observation-1",
+      recipientUrl: "https://www.linkedin.com/in/jordan-example/",
+      writeback: "exo actions result --json",
+    };
+
+    const result = runBrowserActionTask(task, null, {
+      buildLinkedinMaintenanceHandoff: () => ({
+        status: "ready",
+        provider: "unipile",
+        writebackMode: kind === "reconcile_connection_request_status"
+          ? "profile_status_reconciliation"
+          : "task_writeback_after_completion",
+        executionPolicy: {
+          sameCredentialHttpFallbackAllowed: true,
+        },
+      }),
+      runLinkedinMaintenanceWithUnipile: (_task, options = {}) => {
+        directCalls.push({
+          kind: _task.kind,
+          allowDirectUnipileHttp: options.allowDirectUnipileHttp,
+        });
+        return {
+          status: "completed",
+          responseStatus: 200,
+          resolvedKind: kind === "reconcile_connection_request_status" ? "connection_request_accepted" : null,
+          profileStatus: kind === "reconcile_connection_request_status" ? "connected" : null,
+        };
+      },
+      runConnectorCodexTask: () => {
+        connectorCalls.push(kind);
+        throw new Error("MCP should not run before direct Unipile HTTP.");
+      },
+      runShellText: (command) => {
+        writebacks.push(command);
+        return "";
+      },
+      codexHome: "/tmp/codex-home",
+    });
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.detail.transport, "unipile_http_same_credentials");
+    assert.deepEqual(directCalls, [
+      { kind, allowDirectUnipileHttp: true },
+    ]);
+    assert.deepEqual(connectorCalls, []);
+    if (kind === "reconcile_connection_request_status") {
+      assert.deepEqual(writebacks, []);
+      assert.equal(result.detail.resolvedKind, "connection_request_accepted");
+      assert.equal(result.detail.profileStatus, "connected");
+    } else {
+      assert.deepEqual(writebacks, ["exo actions result --json"]);
+    }
+  });
+}
 
 test("preflight task gate can allow maintenance work even when Chrome debug-instance warnings exist", () => {
   const preflight = {

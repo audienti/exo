@@ -3151,14 +3151,36 @@ function findProspectDraft(rawMotion, companyId, prospectId, surface) {
   return (prospect?.drafts ?? []).find((draft) => draft.surface === surface && draft.status !== "sent" && draft.status !== "discarded") ?? null;
 }
 
+const DIRECT_LINKEDIN_MAINTENANCE_TASK_KINDS = new Set([
+  "reconcile_connection_request_status",
+  "withdraw_connection",
+  "accept_connection_request",
+  "reject_connection_request",
+]);
+
 /**
  * @param {any} task
  * @param {{ linkedinMaintenanceSessions?: Map<string, any> } | null} [executionContext]
+ * @param {{
+ *   codexHome?: string | null,
+ *   buildLinkedinMaintenanceHandoff?: typeof buildLinkedinMaintenanceHandoff,
+ *   runLinkedinMaintenanceWithUnipile?: typeof runLinkedinMaintenanceWithUnipile,
+ *   buildLinkedinMaintenancePrompt?: typeof buildLinkedinMaintenancePrompt,
+ *   runConnectorCodexTask?: typeof runConnectorCodexTask,
+ *   runShellText?: typeof runShellText,
+ * }} [dependencies]
  */
-function runBrowserActionTask(task, executionContext = null) {
+export function runBrowserActionTask(task, executionContext = null, dependencies = {}) {
   void executionContext;
-  const handoff = buildLinkedinMaintenanceHandoff(task, {
-    codexHome: CODEX_HOME,
+  const codexHome = dependencies.codexHome ?? CODEX_HOME;
+  const buildLinkedinMaintenanceHandoffImpl = dependencies.buildLinkedinMaintenanceHandoff ?? buildLinkedinMaintenanceHandoff;
+  const runLinkedinMaintenanceWithUnipileImpl = dependencies.runLinkedinMaintenanceWithUnipile ?? runLinkedinMaintenanceWithUnipile;
+  const buildLinkedinMaintenancePromptImpl = dependencies.buildLinkedinMaintenancePrompt ?? buildLinkedinMaintenancePrompt;
+  const runConnectorCodexTaskImpl = dependencies.runConnectorCodexTask ?? runConnectorCodexTask;
+  const runShellTextImpl = dependencies.runShellText ?? runShellText;
+
+  const handoff = buildLinkedinMaintenanceHandoffImpl(task, {
+    codexHome,
   });
   if (handoff.status !== "ready") {
     return {
@@ -3167,10 +3189,44 @@ function runBrowserActionTask(task, executionContext = null) {
     };
   }
 
+  if (shouldRunLinkedinMaintenanceDirectFirst(task, handoff)) {
+    const directResult = runLinkedinMaintenanceWithUnipileImpl(task, {
+      codexHome,
+      allowDirectUnipileHttp: true,
+    });
+    if (directResult.status !== "completed") {
+      return {
+        status: "blocked",
+        detail: {
+          reason: directResult.reason ?? `${task.kind} did not complete through same-credential Unipile HTTP.`,
+          action: task.kind,
+          recipientUrl: task.recipientUrl ?? null,
+          transport: "unipile_http_same_credentials",
+          responseStatus: directResult.responseStatus ?? null,
+        },
+      };
+    }
+
+    if (handoff.writebackMode === "task_writeback_after_completion" && normalizeNullableString(task.writeback)) {
+      runShellTextImpl(task.writeback);
+    }
+    return {
+      status: "completed",
+      detail: {
+        action: task.kind,
+        recipientUrl: task.recipientUrl ?? null,
+        transport: "unipile_http_same_credentials",
+        responseStatus: directResult.responseStatus ?? null,
+        resolvedKind: directResult.resolvedKind ?? null,
+        profileStatus: directResult.profileStatus ?? null,
+      },
+    };
+  }
+
   let connectorResult;
   try {
-    connectorResult = runConnectorCodexTask({
-      prompt: buildLinkedinMaintenancePrompt(handoff),
+    connectorResult = runConnectorCodexTaskImpl({
+      prompt: buildLinkedinMaintenancePromptImpl(handoff),
       outputName: `linkedin-maintenance-${task.kind}-${task.observationId}.json`,
       timeoutMs: BROWSER_TIMEOUT_MS,
       enabledPlugins: [],
@@ -3178,7 +3234,11 @@ function runBrowserActionTask(task, executionContext = null) {
     });
   } catch (error) {
     if (handoff.executionPolicy?.sameCredentialHttpFallbackAllowed === true && shouldUseSameCredentialUnipileHttpFallback(error)) {
-      return runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, error);
+      return runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, error, {
+        codexHome,
+        runLinkedinMaintenanceWithUnipile: runLinkedinMaintenanceWithUnipileImpl,
+        runShellText: runShellTextImpl,
+      });
     }
     return buildBlockedCodexTaskResult(error, {
       action: task.kind,
@@ -3190,7 +3250,11 @@ function runBrowserActionTask(task, executionContext = null) {
   const result = applyLinkedinMaintenanceConnectorResult(task, connectorResult);
   if (result.status !== "completed") {
     if (handoff.executionPolicy?.sameCredentialHttpFallbackAllowed === true && shouldUseSameCredentialUnipileHttpFallback(result)) {
-      return runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, result);
+      return runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, result, {
+        codexHome,
+        runLinkedinMaintenanceWithUnipile: runLinkedinMaintenanceWithUnipileImpl,
+        runShellText: runShellTextImpl,
+      });
     }
     return {
       status: "blocked",
@@ -3205,7 +3269,7 @@ function runBrowserActionTask(task, executionContext = null) {
   }
 
   if (handoff.writebackMode === "task_writeback_after_completion" && normalizeNullableString(task.writeback)) {
-    runShellText(task.writeback);
+    runShellTextImpl(task.writeback);
   }
   return {
     status: "completed",
@@ -3219,10 +3283,18 @@ function runBrowserActionTask(task, executionContext = null) {
   };
 }
 
-function runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, problem) {
+function shouldRunLinkedinMaintenanceDirectFirst(task, handoff) {
+  return DIRECT_LINKEDIN_MAINTENANCE_TASK_KINDS.has(task?.kind)
+    && handoff?.provider === "unipile"
+    && handoff?.executionPolicy?.sameCredentialHttpFallbackAllowed === true;
+}
+
+function runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, problem, dependencies = {}) {
   const fallbackReason = extractSameCredentialFallbackReason(problem) ?? "Unipile MCP tool was unavailable.";
-  const result = runLinkedinMaintenanceWithUnipile(task, {
-    codexHome: CODEX_HOME,
+  const runLinkedinMaintenanceWithUnipileImpl = dependencies.runLinkedinMaintenanceWithUnipile ?? runLinkedinMaintenanceWithUnipile;
+  const runShellTextImpl = dependencies.runShellText ?? runShellText;
+  const result = runLinkedinMaintenanceWithUnipileImpl(task, {
+    codexHome: dependencies.codexHome ?? CODEX_HOME,
     allowDirectUnipileHttp: true,
   });
 
@@ -3240,7 +3312,7 @@ function runSameCredentialUnipileHttpMaintenanceFallback(task, handoff, problem)
   }
 
   if (handoff.writebackMode === "task_writeback_after_completion" && normalizeNullableString(task.writeback)) {
-    runShellText(task.writeback);
+    runShellTextImpl(task.writeback);
   }
   return {
     status: "completed",

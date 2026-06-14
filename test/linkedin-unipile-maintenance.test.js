@@ -203,6 +203,32 @@ test("runLinkedinMaintenanceWithUnipile blocks unstubbed direct HTTP by default"
   }
 });
 
+test("runLinkedinMaintenanceWithUnipile blocks unsupported maintenance kinds without HTTP", () => {
+  let httpCalled = false;
+  const result = runLinkedinMaintenanceWithUnipile(
+    {
+      kind: "unsupported_maintenance",
+      observationId: "observation-1",
+    },
+    {
+      findObservationById: () => buildObservation(),
+      findUserById: () => buildUser(),
+      baseUrl: TEST_UNIPILE_BASE_URL,
+      httpPostImpl: () => {
+        httpCalled = true;
+        return {
+          status: 200,
+          bodyText: "{}",
+        };
+      },
+    },
+  );
+
+  assert.equal(result.status, "blocked");
+  assert.match(result.reason ?? "", /Unsupported LinkedIn maintenance task kind/);
+  assert.equal(httpCalled, false);
+});
+
 test("applyLinkedinMaintenanceConnectorResult records profile reconciliation from MCP response payload", () => {
   let storedObservation = null;
   let storedUser = null;

@@ -139,12 +139,12 @@
     <div class="topline">
       <span class="chip"><b>plan</b>local-runner-inbound-truth</span>
       <span class="chip"><b>status</b>active</span>
-      <span class="chip"><b>progress</b>2/9</span>
+      <span class="chip"><b>progress</b>3/9</span>
       <span class="chip"><b>controller</b>codex</span>
       <span class="chip"><b>worktrees</b>.worktrees</span>
       <span class="chip"><b>open messages</b>1</span>
-      <span class="chip"><b>board updated</b>2026-06-14T19:17:27Z</span>
-      <span class="chip"><b>rendered</b>2026-06-14T19:17:39Z</span>
+      <span class="chip"><b>board updated</b>2026-06-14T19:26:48Z</span>
+      <span class="chip"><b>rendered</b>2026-06-14T19:27:16Z</span>
     </div>
     <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
   </header>
@@ -152,13 +152,13 @@
       <section class="panel">
         <h2>Parallelization Audit</h2>
         <div class="metrics">
-          <div><b>0</b><span>in flight</span></div>
+          <div><b>1</b><span>in flight</span></div>
           <div><b>3</b><span>cap</span></div>
           <div><b>none</b><span>next dispatch candidates</span></div>
         </div>
-        <p><b>Running or verifying:</b> none</p>
+        <p><b>Running or verifying:</b> T5</p>
         <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
-        <p><b>Controller note:</b> T1 is verified green. T2 is next and remains controller-owned because maintenance mutation transport touches the host runner, Unipile maintenance owner, and existing mutation tests together; no safe subagent fan-out yet.</p>
+        <p><b>Controller note:</b> T2 is verified green. T2b and T3 are ready but overlap host-runner files, so only one can proceed next. T5 returned from subagent Russell and is in verify pending its own task commit.</p>
       </section>
 
 
@@ -186,7 +186,7 @@
   <main class="board">
 
           <section class="column">
-            <h2>Backlog <span>6</span></h2>
+            <h2>Backlog <span>3</span></h2>
 
       <article class="task task-backlog">
         <header>
@@ -208,52 +208,34 @@
 
       <article class="task task-backlog">
         <header>
-          <div class="task-id">T5</div>
-          <h3>Add env-gated real Unipile account smoke test</h3>
-        </header>
-        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>70</span></div>
-        <div class="field"><div class="label">Reason</div><div>Backlog task has no open dependency; it may need promotion to ready.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>test/unipile-account-smoke.test.js</li><li>src/lib/unipile-config.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/unipile-account-smoke.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Default npm test does not make a live Unipile request.</li><li>An explicit environment opt-in command is documented in the test or board notes.</li><li>When enabled, the test verifies the configured provider account id is present in /api/v1/accounts.</li></ul></div></div>
-      </article>
-
-      <article class="task task-backlog">
-        <header>
           <div class="task-id">T4</div>
           <h3>Prove invitation lifecycle end to end</h3>
         </header>
         <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>85</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T2, T2b, T3</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2, T2b, T3</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/connection-request-reconciliation.js</li><li>test/connection-request-reconciliation.test.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>The invitation tracer bullet passes through send, sync proof, no-longer-pending, and relationship proof without false acceptance.</li><li>Withdraw or received-invite mutation transport is proven to run before proof debt moves.</li><li>connection-request-reconciliation.js remains the owner for pending, accepted, no-longer-pending, and not-accepted decisions.</li></ul></div></div>
-      </article>
-
-      <article class="task task-backlog">
-        <header>
-          <div class="task-id">T3</div>
-          <h3>Make missing Unipile config loud</h3>
-        </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>90</span></div>
-        <div class="field"><div class="label">Reason</div><div>Backlog task has no open dependency; it may need promotion to ready.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/inbound-linkedin-live-sync.js</li><li>src/core/inbound-linkedin-sync.js</li><li>scripts/run-agent-host-pass.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Missing Unipile config never produces a quiet zero-item success.</li><li>Failed/untrusted payloads include syncTrustStatus, exhaustionStatus, and concrete reason.</li><li>Host-pass output records the concrete reason.</li><li>Identity mismatch is treated as a loud failure.</li></ul></div></div>
-      </article>
-
-      <article class="task task-backlog">
-        <header>
-          <div class="task-id">T2b</div>
-          <h3>Add deterministic Unipile send for connection requests</h3>
-        </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>92</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T2</div></div><div class="field"><div class="label">Depends on</div><div>T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>scripts/run-agent-host-pass.js</li><li>src/lib/linkedin-unipile-maintenance.js</li><li>src/core/build-linkedin-send.js</li><li>test/agent-host-pass.test.js</li><li>test/build-linkedin-send.test.js</li><li>test/linkedin-unipile-maintenance.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>send_connection_request attempts deterministic same-credential Unipile send first for configured managed accounts.</li><li>Local mutation success and proof debt are recorded only after the external write returns success.</li><li>Other send actions remain connector-required with no local success writeback in this board.</li><li>Tests cover success, provider failure, missing config, and fallback behavior.</li></ul></div></div>
+        <div class="field"><div class="label">Reason</div><div>Waiting on T2b, T3</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2, T2b, T3</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/connection-request-reconciliation.js</li><li>test/connection-request-reconciliation.test.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>The invitation tracer bullet passes through send, sync proof, no-longer-pending, and relationship proof without false acceptance.</li><li>Withdraw or received-invite mutation transport is proven to run before proof debt moves.</li><li>connection-request-reconciliation.js remains the owner for pending, accepted, no-longer-pending, and not-accepted decisions.</li></ul></div></div>
       </article>
 
           </section>
 
           <section class="column">
-            <h2>Ready <span>1</span></h2>
+            <h2>Ready <span>2</span></h2>
 
       <article class="task task-ready">
         <header>
-          <div class="task-id">T2</div>
-          <h3>Make direct HTTP primary for supported maintenance mutations</h3>
+          <div class="task-id">T3</div>
+          <h3>Make missing Unipile config loud</h3>
         </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>95</span></div>
-        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>scripts/run-agent-host-pass.js</li><li>src/lib/linkedin-unipile-maintenance.js</li><li>test/agent-host-pass.test.js</li><li>test/linkedin-unipile-maintenance.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-host-pass.test.js test/linkedin-unipile-maintenance.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Host-pass tests prove supported maintenance actions call direct HTTP first.</li><li>An MCP failure does not block a supported direct HTTP maintenance task when direct HTTP is configured.</li><li>Completed maintenance results report a primary direct HTTP transport label rather than fallback.</li><li>Unsupported maintenance still fails closed.</li></ul></div></div>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>90</span></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/inbound-linkedin-live-sync.js</li><li>src/core/inbound-linkedin-sync.js</li><li>scripts/run-agent-host-pass.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Missing Unipile config never produces a quiet zero-item success.</li><li>Failed/untrusted payloads include syncTrustStatus, exhaustionStatus, and concrete reason.</li><li>Host-pass output records the concrete reason.</li><li>Identity mismatch is treated as a loud failure.</li></ul></div></div>
+      </article>
+
+      <article class="task task-ready">
+        <header>
+          <div class="task-id">T2b</div>
+          <h3>Add deterministic Unipile send for connection requests</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>92</span></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T2</div></div><div class="field"><div class="label">Files</div><div><ul><li>scripts/run-agent-host-pass.js</li><li>src/lib/linkedin-unipile-maintenance.js</li><li>src/core/build-linkedin-send.js</li><li>test/agent-host-pass.test.js</li><li>test/build-linkedin-send.test.js</li><li>test/linkedin-unipile-maintenance.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>send_connection_request attempts deterministic same-credential Unipile send first for configured managed accounts.</li><li>Local mutation success and proof debt are recorded only after the external write returns success.</li><li>Other send actions remain connector-required with no local success writeback in this board.</li><li>Tests cover success, provider failure, missing config, and fallback behavior.</li></ul></div></div>
       </article>
 
           </section>
@@ -264,12 +246,30 @@
           </section>
 
           <section class="column">
-            <h2>Verify <span>0</span></h2>
-            <div class="empty">No tasks</div>
+            <h2>Verify <span>1</span></h2>
+
+      <article class="task task-verify">
+        <header>
+          <div class="task-id">T5</div>
+          <h3>Add env-gated real Unipile account smoke test</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>1</span><span class="chip"><b>priority</b>70</span></div>
+        <div class="field"><div class="label">Reason</div><div>Awaiting controller verification.</div></div><div class="field"><div class="label">Worktree</div><div>multi_agent_v1:019ec793-2c34-7203-a2a3-bc73e60d1cbb</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>test/unipile-account-smoke.test.js</li><li>src/lib/unipile-config.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/unipile-account-smoke.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Default npm test does not make a live Unipile request.</li><li>An explicit environment opt-in command is documented in the test or board notes.</li><li>When enabled, the test verifies the configured provider account id is present in /api/v1/accounts.</li></ul></div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Subagent Russell added test/unipile-account-smoke.test.js with a default skip gate and documented opt-in command.</li><li>Controller verified npm test -- test/unipile-account-smoke.test.js skips by default without a live request.</li><li>Controller verified EXO_UNIPILE_ACCOUNT_SMOKE=1 npm test -- test/unipile-account-smoke.test.js skips without credentials/provider account id and makes no live request.</li><li>Full npm test included the smoke test as one skipped test.</li></ul></div></div>
+      </article>
+
           </section>
 
           <section class="column">
-            <h2>Done <span>2</span></h2>
+            <h2>Done <span>3</span></h2>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T2</div>
+          <h3>Make direct HTTP primary for supported maintenance mutations</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>1</span><span class="chip"><b>priority</b>95</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified; no commit recorded.</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>scripts/run-agent-host-pass.js</li><li>src/lib/linkedin-unipile-maintenance.js</li><li>test/agent-host-pass.test.js</li><li>test/linkedin-unipile-maintenance.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-host-pass.test.js test/linkedin-unipile-maintenance.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Host-pass tests prove supported maintenance actions call direct HTTP first.</li><li>An MCP failure does not block a supported direct HTTP maintenance task when direct HTTP is configured.</li><li>Completed maintenance results report a primary direct HTTP transport label rather than fallback.</li><li>Unsupported maintenance still fails closed.</li></ul></div></div><div class="field"><div class="label">Last failure</div><div>Initial focused verification failed while the host-pass maintenance action remained private and MCP-first; the implementation exported and injected runBrowserActionTask, then switched supported Unipile maintenance tasks to direct-first.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Wrote host-pass regression tests proving reconcile_connection_request_status, withdraw_connection, accept_connection_request, and reject_connection_request call runLinkedinMaintenanceWithUnipile with allowDirectUnipileHttp: true before any MCP capture.</li><li>Changed runBrowserActionTask to use same-credential Unipile HTTP first for supported Unipile maintenance actions, while retaining MCP and same-credential fallback for unsupported handoff paths.</li><li>Kept unsupported maintenance kinds fail-closed in the maintenance owner without making HTTP calls.</li><li>Verified focused T2 tests: npm test -- test/agent-host-pass.test.js test/linkedin-unipile-maintenance.test.js passed with 111 tests.</li><li>Verified integration gate: npm test passed with 915 tests, 914 pass, 1 skipped, 0 failures.</li><li>Verified git diff --check.</li></ul></div></div>
+      </article>
 
       <article class="task task-done">
         <header>
