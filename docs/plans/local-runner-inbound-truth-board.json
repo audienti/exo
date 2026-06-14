@@ -275,7 +275,7 @@
       ],
       "attemptCount": 1,
       "lastFailure": "",
-      "commit": "",
+      "commit": "d12bd429e0e2e1173d6bcb1aefe03537c2dd30d3",
       "notes": "Implemented deterministic Unipile POST /api/v1/users/invite for connection requests using configured same-credential Unipile API settings. Handoff now carries sender providerAccountId and recipient providerId from synced profile truth. Host runner attempts this path first for live connection_request sends, preserves connector handoff for unsupported/failing direct sends, and only runs local writeback after a direct or connector external sent result."
     },
     {
