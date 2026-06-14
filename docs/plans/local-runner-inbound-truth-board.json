@@ -59,10 +59,10 @@
     },
     "base": {
       "branch": "codex/remaining-sync-reconcile-mutate-seams",
-      "commit": "c670c204aa016545252323b309717d4abf88ddf8",
-      "verifiedGreen": false
+      "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
+      "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T19:04:29Z"
+    "updatedAt": "2026-06-14T19:08:12Z"
   },
   "tasks": [
     {
@@ -125,7 +125,7 @@
       ],
       "attemptCount": 1,
       "lastFailure": "Initial full npm test failed because test/cli.test.js still asserted that itemization-gap full sync should omit --max-pages even though the queue contract now intentionally page-slices that autonomous task.",
-      "commit": "",
+      "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "notes": "This is a controller-owned preflight task added because plan-loop green-baseline rules could not be satisfied while overlapping uncommitted changes existed. The verified state will be checkpointed before T1 starts."
     },
     {
