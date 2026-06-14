@@ -399,10 +399,11 @@ test("inbound sync linkedin-live rejects a managed Claude chrome connector accou
   }
 });
 
-test("inbound sync linkedin-live defaults managed Unipile accounts to agent handoff instead of direct HTTP", async () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-handoff-default-"));
+test("inbound sync linkedin-live defaults managed Unipile accounts to direct HTTP", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-direct-default-"));
   const codexHome = path.join(tempDir, ".codex");
   const timestamp = "2026-06-04T12:00:00.000Z";
+  const seenRequests = [];
 
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(path.join(codexHome, "config.toml"), [
@@ -475,22 +476,43 @@ test("inbound sync linkedin-live defaults managed Unipile accounts to agent hand
       mode: "full",
       surfaceKeys: ["linkedin-sent-invitations"],
       codexHome,
-      unipileHttpGetImpl: () => {
-        throw new Error("direct Unipile HTTP should not run by default");
+      unipileHttpGetImpl: (url, headers) => {
+        const parsed = new URL(url);
+        seenRequests.push({
+          pathname: parsed.pathname,
+          search: parsed.search,
+          apiKey: headers["X-API-KEY"] ?? null
+        });
+        if (parsed.pathname === "/api/v1/users/invite/sent") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "InvitationList",
+              items: []
+            })
+          };
+        }
+        return {
+          status: 404,
+          bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+        };
       },
       unipileHttpPostImpl: () => {
-        throw new Error("direct Unipile HTTP should not run by default");
+        throw new Error("direct Unipile HTTP POST should not run for sent invitations");
       }
     });
 
-    assert.equal(result.transport.kind, "agent_handoff");
-    assert.equal(result.payload, null);
+    assert.equal(result.transport.kind, "direct_runtime");
     assert.equal(result.transport.connector, "unipile");
-    assert.match(result.transport.captureRequest.prompt, /native unipile connector/i);
-    assert.match(result.transport.captureRequest.prompt, /https:\/\/api14\.unipile\.com:14465/);
-    assert.match(result.transport.captureRequest.prompt, /tenant's configured Unipile API root/i);
-    assert.match(result.transport.captureRequest.prompt, /Do not substitute localhost or documented default server examples/i);
-    assert.match(result.transport.captureRequest.prompt, /errors\/no_client_session/i);
+    assert.ok(result.payload);
+    assert.equal(result.capture.sections.find((section) => section.surfaceKey === "linkedin-sent-invitations")?.status, "success");
+    assert.deepEqual(seenRequests, [
+      {
+        pathname: "/api/v1/users/invite/sent",
+        search: "?account_id=unipile-linkedin-1&limit=100",
+        apiKey: "test-key"
+      }
+    ]);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

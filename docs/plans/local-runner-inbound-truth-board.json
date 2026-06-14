@@ -51,7 +51,7 @@
     "viewer": {
       "htmlPath": "docs/plans/local-runner-inbound-truth-board.html"
     },
-    "parallelismNote": "T0 reconciled the pre-existing dirty tree, fixed one stale CLI expectation for page-sliced itemization-gap sync, and verified the full suite. T1 is next and remains controller-owned because it touches the production runner and transport module together.",
+    "parallelismNote": "T1 is verified green. T2 is next and remains controller-owned because maintenance mutation transport touches the host runner, Unipile maintenance owner, and existing mutation tests together; no safe subagent fan-out yet.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T19:08:12Z"
+    "updatedAt": "2026-06-14T19:16:43Z"
   },
   "tasks": [
     {
@@ -131,7 +131,7 @@
     {
       "id": "T1",
       "title": "Make direct HTTP primary at the read call site",
-      "status": "ready",
+      "status": "done",
       "priority": 100,
       "dependsOn": [
         "T0"
@@ -158,19 +158,26 @@
         "git diff --check"
       ],
       "worktree": "",
-      "startedAt": "",
-      "updatedAt": "",
-      "resolvedModel": "",
-      "outputs": [],
-      "attemptCount": 0,
-      "lastFailure": "",
+      "startedAt": "2026-06-14T19:06:09Z",
+      "updatedAt": "2026-06-14T19:16:43Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Wrote red tests proving managed Unipile LinkedIn live sync should default to direct HTTP and host-pass LinkedIn sync should call runInboundContractImpl with directUnipileHttp: true on the first attempt.",
+        "Changed the host pass so LinkedIn inbound sync requests direct same-credential Unipile HTTP first instead of starting with agent_handoff.",
+        "Changed LinkedIn live sync and the generic live-sync wrapper so direct Unipile HTTP is the default for configured managed Unipile accounts, with --agent-handoff retained as an explicit diagnostic override.",
+        "Verified focused T1 tests: npm test -- test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed with 113 tests.",
+        "Verified integration gate: npm test passed with 909 tests and 0 failures.",
+        "Verified git diff --check."
+      ],
+      "attemptCount": 1,
+      "lastFailure": "Initial implementation still had one stale timeout/fallback test assuming handoff-first behavior; the test was rewritten to cover the remaining fallback timeout only when direct capture is unavailable.",
       "commit": "",
       "notes": ""
     },
     {
       "id": "T2",
       "title": "Make direct HTTP primary for supported maintenance mutations",
-      "status": "backlog",
+      "status": "ready",
       "priority": 95,
       "dependsOn": [
         "T1"
@@ -196,7 +203,7 @@
       ],
       "worktree": "",
       "startedAt": "",
-      "updatedAt": "",
+      "updatedAt": "2026-06-14T19:16:43Z",
       "resolvedModel": "",
       "outputs": [],
       "attemptCount": 0,

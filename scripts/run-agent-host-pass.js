@@ -1732,7 +1732,11 @@ export function runInboundSyncTask(task, preflight, dependencies = {}, execution
 
   const stageTimingsMs = {};
   let stageStartedAt = Date.now();
-  const liveResult = runInboundContractImpl(task);
+  const directUnipileHttpFirst = shouldRequestDirectUnipileHttpFirst(task);
+  const liveResult = runInboundContractImpl(
+    task,
+    directUnipileHttpFirst ? { directUnipileHttp: true } : {},
+  );
   stageTimingsMs.contract = Date.now() - stageStartedAt;
   if (liveResult.payload) {
     const surfaceProgress = extractInboundTaskSurfaceProgress(task, liveResult.payload);
@@ -1909,6 +1913,11 @@ function shouldAllowMultiPageInboundSync(task) {
   return task?.capability === "linkedin"
     && task?.mode === "full"
     && normalizeInboundTaskSurfaceKeys(task).length === 1;
+}
+
+/** @param {any} task */
+function shouldRequestDirectUnipileHttpFirst(task) {
+  return task?.capability === "linkedin";
 }
 
 function resolveInboundContinuationBudgetMs(task) {

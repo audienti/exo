@@ -377,6 +377,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
   const pageSize = normalizeOptionalPositiveInteger(options.pageSize, "pageSize");
   const resumeCursor = normalizeNullableString(options.resumeCursor) ?? null;
   const resumeStartOffset = normalizeOptionalNonNegativeInteger(options.resumeStartOffset, "resumeStartOffset");
+  const allowDirectUnipileHttp = options.allowDirectUnipileHttp !== false;
 
   const probe = liveSource.probe ?? buildStoredHarnessProbe(user, harnessConnection, {
     codexHome: options.codexHome ?? null,
@@ -407,7 +408,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
       limit,
       mode
     });
-    const directUnipileCapture = options.allowDirectUnipileHttp === true
+    const directUnipileCapture = allowDirectUnipileHttp
       ? await maybeCaptureLinkedinQuickSurfacesThroughUnipile({
           account,
           connector,

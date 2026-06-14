@@ -3399,7 +3399,7 @@ test("buildInboundContractArgs adds direct Unipile HTTP flag for linkedin fallba
   ]);
 });
 
-test("runInboundSyncTask falls back to same-credential Unipile HTTP when linkedin MCP capture fails", () => {
+test("runInboundSyncTask uses same-credential Unipile HTTP first for linkedin sync", () => {
   const task = {
     kind: "run_inbound_sync",
     capability: "linkedin",
@@ -3488,19 +3488,16 @@ test("runInboundSyncTask falls back to same-credential Unipile HTTP when linkedi
   });
 
   assert.equal(result.status, "completed");
-  assert.equal(result.detail.transport, "unipile_http_same_credentials_fallback");
-  assert.equal(result.detail.fallbackFrom, "agent_handoff");
-  assert.match(result.detail.fallbackReason ?? "", /connector_no_client_session/i);
+  assert.equal(result.detail.transport, "direct_payload");
   assert.equal(result.detail.captureStatus, "warning");
   assert.equal(result.detail.observedCount, 1);
   assert.deepEqual(appliedPayloads, [fallbackPayload]);
   assert.deepEqual(inboundContractCalls, [
-    { task: "account-1", directUnipileHttp: false },
     { task: "account-1", directUnipileHttp: true },
   ]);
 });
 
-test("runInboundSyncTask skips repeated Unipile MCP retries for the rest of the pass after a no-client-session failure", () => {
+test("runInboundSyncTask uses direct Unipile HTTP for subsequent linkedin sync surfaces without MCP capture", () => {
   const executionContext = {
     inboundConnectorFallbacks: new Map(),
   };
@@ -3616,16 +3613,13 @@ test("runInboundSyncTask skips repeated Unipile MCP retries for the rest of the 
   const secondResult = runInboundSyncTask(followersTask, null, dependencies, executionContext);
 
   assert.equal(firstResult.status, "completed");
-  assert.equal(firstResult.detail.transport, "unipile_http_same_credentials_fallback");
+  assert.equal(firstResult.detail.transport, "direct_payload");
   assert.equal(secondResult.status, "completed");
-  assert.equal(secondResult.detail.transport, "unipile_http_same_credentials_fallback");
-  assert.equal(secondResult.detail.fallbackFrom, "pass_scoped_unipile_mcp_hold");
-  assert.equal(connectorCaptureCalls.length, 1);
+  assert.equal(secondResult.detail.transport, "direct_payload");
+  assert.equal(connectorCaptureCalls.length, 0);
   assert.deepEqual(appliedPayloads, [inboxFallbackPayload, followersFallbackPayload]);
   assert.deepEqual(inboundContractCalls, [
-    { surfaceKey: "linkedin-messaging-inbox", directUnipileHttp: false },
     { surfaceKey: "linkedin-messaging-inbox", directUnipileHttp: true },
-    { surfaceKey: "linkedin-followers-list", directUnipileHttp: false },
     { surfaceKey: "linkedin-followers-list", directUnipileHttp: true },
   ]);
 });
@@ -3704,7 +3698,7 @@ test("runInboundSyncTask drains multiple LinkedIn full-sync continuation pages b
   assert.equal(result.detail.continuationPassCount, 3);
 });
 
-test("runInboundSyncTask gives LinkedIn Unipile handoff captures a short timeout before fallback", () => {
+test("runInboundSyncTask gives LinkedIn Unipile handoff captures a short timeout when direct capture is unavailable", () => {
   const task = {
     kind: "run_inbound_sync",
     capability: "linkedin",
@@ -3715,10 +3709,25 @@ test("runInboundSyncTask gives LinkedIn Unipile handoff captures a short timeout
     verificationCommands: ["exo next --json"],
   };
   let observedTimeoutMs = null;
+  let directAttemptCount = 0;
 
   runInboundSyncTask(task, null, {
     runInboundContract(_taskInput, options = {}) {
       if (options.directUnipileHttp === true) {
+        directAttemptCount += 1;
+        if (directAttemptCount === 1) {
+          return {
+            transport: {
+              kind: "agent_handoff",
+              connector: "unipile",
+              captureRequest: {
+                captureTransportMode: "connector_native_only",
+                outputSchema: { type: "object" },
+                prompt: "Capture LinkedIn followers",
+              },
+            },
+          };
+        }
         return {
           transport: {
             kind: "direct_runtime",

@@ -466,6 +466,7 @@ Rules:
     .option("--runtime <runtime>", "Preferred runtime override when multiple supported harnesses exist, such as codex or claude")
     .option("--limit <count>", "Maximum relevant items to inspect per live surface")
     .option("--since <iso-datetime>", "Only keep Gmail threads whose newest relevant message is at or after this time")
+    .option("--agent-handoff", "Diagnostic only: skip direct Unipile HTTP for LinkedIn and return an agent/MCP handoff when available")
     .option("--apply", "Apply the combined payload through exo inbound sync run semantics")
     .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
     .option("--json", "Emit machine-readable JSON")
@@ -485,7 +486,8 @@ Rules:
           mode: options.mode ?? "quick",
           runtime: options.runtime ?? null,
           limit: options.limit !== undefined ? Number.parseInt(options.limit, 10) : null,
-          since: options.since ?? null
+          since: options.since ?? null,
+          allowDirectUnipileHttp: options.agentHandoff === true ? false : true
         });
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -599,7 +601,8 @@ Rules:
     .option("--page-size <count>", "Override the LinkedIn page size used for full paginated reconciliation")
     .option("--resume-cursor <cursor>", "Resume a cursor-paginated LinkedIn surface from a prior partial result")
     .option("--resume-start-offset <count>", "Resume an offset-paginated LinkedIn surface from a prior partial result")
-    .option("--direct-unipile-http", "Diagnostic only: bypass agent/MCP handoff and call Unipile HTTP directly")
+    .option("--direct-unipile-http", "Compatibility flag: direct Unipile HTTP is already the default for managed Unipile accounts")
+    .option("--agent-handoff", "Diagnostic only: skip direct Unipile HTTP and return an agent/MCP handoff when available")
     .option("--apply", "Apply the generated payload through exo inbound sync run semantics")
     .option("--refresh", "Return a fresh inbox/daily/next summary after writeback; implies --apply")
     .option("--json", "Emit machine-readable JSON")
@@ -624,7 +627,7 @@ Rules:
           pageSize: options.pageSize !== undefined ? Number.parseInt(options.pageSize, 10) : null,
           resumeCursor: options.resumeCursor ?? null,
           resumeStartOffset: options.resumeStartOffset !== undefined ? Number.parseInt(options.resumeStartOffset, 10) : null,
-          allowDirectUnipileHttp: Boolean(options.directUnipileHttp),
+          allowDirectUnipileHttp: options.agentHandoff === true && options.directUnipileHttp !== true ? false : true,
         });
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
