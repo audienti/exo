@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T19:26:48Z"
+    "updatedAt": "2026-06-14T19:27:36Z"
   },
   "tasks": [
     {
@@ -215,7 +215,7 @@
       ],
       "attemptCount": 1,
       "lastFailure": "Initial focused verification failed while the host-pass maintenance action remained private and MCP-first; the implementation exported and injected runBrowserActionTask, then switched supported Unipile maintenance tasks to direct-first.",
-      "commit": "",
+      "commit": "4e094492da9c935a63b607a5c0feadb1aabed224",
       "notes": ""
     },
     {
