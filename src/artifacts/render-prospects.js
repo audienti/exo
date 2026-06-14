@@ -549,6 +549,7 @@ function renderContextPanel(p, meta = {}) {
 /** The funnel stages, in order. */
 const PIPELINE = [
   { key: "identified", label: "Identified" },
+  { key: "pre-connect", label: "Pre-connect" },
   { key: "requested", label: "Request sent" },
   { key: "connected", label: "Connected" },
   { key: "conversation", label: "In conversation" },
@@ -558,14 +559,16 @@ const PIPELINE = [
 /** @param {string} branch */
 function branchStageIndex(branch) {
   switch (branch) {
-    case "connection-requested":
+    case "pre-connect":
       return 1;
-    case "connected":
+    case "connection-requested":
       return 2;
-    case "reply-accepted":
+    case "connected":
       return 3;
+    case "reply-accepted":
+      return 4;
     default:
-      return 0; // identified / pre-connect / ready / waiting / blocked
+      return 0; // identified / ready / waiting / blocked
   }
 }
 
@@ -580,8 +583,8 @@ function branchStageIndex(branch) {
  */
 function reconcileStageIndex(branch, degree) {
   const base = branchStageIndex(branch);
-  if (degree === 1) return Math.max(base, 2);
-  if (degree === 2 || degree === 3) return Math.min(base, 1);
+  if (degree === 1) return Math.max(base, 3);
+  if (degree === 2 || degree === 3) return Math.min(base, 2);
   return base;
 }
 
@@ -883,7 +886,7 @@ function nextMoveForStage(idx, p, composeSurface = null) {
       detail: "Wait for the governed draft to land, or write your own below if you need to move now.",
     };
   }
-  if (composeSurface === "email" && idx <= 1) {
+  if (composeSurface === "email" && idx <= 2) {
     const responseState = privateThreadResponseState(p, composeSurface);
     const draftState = draftStateForSurface(p, composeSurface);
     if (responseState === "sent") {
@@ -923,21 +926,31 @@ function nextMoveForStage(idx, p, composeSurface = null) {
   }
   switch (idx) {
     case 1:
+      return p.owner
+        ? {
+            lead: "Warm the account before connecting",
+            detail: "Engage a recent post or other public activity before sending the request.",
+          }
+        : {
+            lead: "Assign an owner",
+            detail: "Then warm the account before sending the request.",
+          };
+    case 2:
       return {
         lead: "Wait on the pending request",
         detail: "The agent follows up automatically after they accept.",
       };
-    case 2:
+    case 3:
       return {
         lead: "Send the first message",
         detail: "Use the timeline below to keep the opener anchored in context.",
       };
-    case 3:
+    case 4:
       return {
         lead: "Continue the conversation",
         detail: "Steer the thread toward a meeting.",
       };
-    case 4:
+    case 5:
       return {
         lead: "Confirm and prep the meeting",
         detail: null,
@@ -978,10 +991,11 @@ function pipelineStagesFor(p, composeSurface) {
     const emailStageLabel = isWaitingOnEmailReply(p) ? "Email sent" : "Email queued";
     return [
       PIPELINE[0],
-      { key: "email-queued", label: emailStageLabel },
-      PIPELINE[2],
+      PIPELINE[1],
+      { key: "email-stage", label: emailStageLabel },
       PIPELINE[3],
       PIPELINE[4],
+      PIPELINE[5],
     ];
   }
   return PIPELINE;
@@ -1988,6 +2002,7 @@ const SURFACE_META = {
 /** Pipeline stage index → the outreach surface whose message comes next. */
 const STAGE_SURFACE = [
   "connection_request", // identified — not connected yet
+  "connection_request", // pre-connect — warm the account before the request
   "connection_request", // request sent — awaiting accept
   "post_accept_message", // connected — the first message
   "follow_up_direct_message", // in conversation

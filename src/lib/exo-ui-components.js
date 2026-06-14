@@ -2073,7 +2073,7 @@ body.view-settings .exec-policy-card{max-width:none}
 .pd-div{width:1px;height:14px;background:var(--border-2)}
 .pd-actions{display:flex;align-items:center;gap:9px;flex:none;justify-self:end}
 .lifecycle-panel{display:flex;flex-direction:column;gap:10px;background:var(--bg-1);border:1px solid var(--border);
-  border-radius:10px;padding:11px 13px;margin:0 0 16px;max-width:900px}
+  border-radius:10px;padding:11px 13px;margin:0 0 16px}
 .lifecycle-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .lifecycle-actions,.lifecycle-inline,.packet-review-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
 .lifecycle-inline{justify-content:flex-end;max-width:560px}

@@ -180,6 +180,69 @@ test("prospect detail exposes governed lifecycle and packet review actions", () 
   assert.match(html, /Return packet/);
 });
 
+test("prospect detail keeps the lifecycle panel full width", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    disposition: "active",
+    accountDisposition: "active",
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /\.lifecycle-panel\{/);
+  assert.doesNotMatch(html, /\.lifecycle-panel\{[^}]*max-width:900px/);
+});
+
+test("prospect detail stepper shows pre-connect and still honors connection degree reconciliation", () => {
+  const preConnectHtml = renderProspectDetailPage(buildProspect({
+    branch: "pre-connect",
+    branchLabel: "Pre-connect warmup queued",
+    nextAction: "Pre-connect warmup queued.",
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(preConnectHtml, /<div class="pl-step reached current"><div class="pl-dot"><i><\/i><\/div><div class="pl-label">Pre-connect<\/div><\/div>/);
+  assert.match(preConnectHtml, /<div class="pl-label">Request sent<\/div>/);
+
+  const connectedHtml = renderProspectDetailPage(buildProspect({
+    branch: "pre-connect",
+    branchLabel: "Pre-connect warmup queued",
+    connectionDegree: 1,
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(connectedHtml, /<div class="pl-step reached current"><div class="pl-dot"><i><\/i><\/div><div class="pl-label">Connected<\/div><\/div>/);
+  assert.match(connectedHtml, /overriding the recorded stage/);
+
+  const requestSentHtml = renderProspectDetailPage(buildProspect({
+    branch: "reply-accepted",
+    branchLabel: "Reply accepted",
+    connectionDegree: 2,
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(requestSentHtml, /<div class="pl-step reached current"><div class="pl-dot"><i><\/i><\/div><div class="pl-label">Request sent<\/div><\/div>/);
+  assert.match(requestSentHtml, /not accepted yet/);
+});
+
 test("prospect detail shows email thread observations and waits on a sent email instead of inventing a queued draft", () => {
   const html = renderProspectDetailPage(buildProspect({
     branch: "waiting",
