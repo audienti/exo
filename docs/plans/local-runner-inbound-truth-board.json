@@ -51,7 +51,7 @@
     "viewer": {
       "htmlPath": "docs/plans/local-runner-inbound-truth-board.html"
     },
-    "parallelismNote": "T4 is ready next and remains a controller-lane high-overlap invitation lifecycle task, so no subagent fan-out is safe until that seam completes.",
+    "parallelismNote": "T4 passed focused and full-suite verification. T6 is now the only ready task; T7 remains dependency-gated on T6, so parallel capacity is limited by the graph.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T20:08:21Z"
+    "updatedAt": "2026-06-14T20:17:55Z"
   },
   "tasks": [
     {
@@ -334,7 +334,7 @@
     {
       "id": "T4",
       "title": "Prove invitation lifecycle end to end",
-      "status": "ready",
+      "status": "done",
       "priority": 85,
       "dependsOn": [
         "T1",
@@ -361,14 +361,19 @@
         "git diff --check"
       ],
       "worktree": "",
-      "startedAt": "",
-      "updatedAt": "2026-06-14T20:08:21Z",
-      "resolvedModel": "",
-      "outputs": [],
+      "startedAt": "2026-06-14T20:10:05Z",
+      "updatedAt": "2026-06-14T20:17:55Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        "Added a tracer regression that keeps connection_request/sent in pending_reconciliation, treats sent-list disappearance as connection_request_no_longer_pending, and only classifies accepted from first-degree relationship profile proof.",
+        "Verified focused T4 seams: npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed 134/134.",
+        "Verified formatting: git diff --check passed.",
+        "Verified integration gate: npm test passed 929/930 with 1 skipped and 0 failures."
+      ],
       "attemptCount": 0,
       "lastFailure": "",
-      "commit": "",
-      "notes": ""
+      "commit": "8c4ab120ece7b5d8156f9b05ec496eb4c971a556",
+      "notes": "Behavior was already owned by the existing reconciliation seam; T4 adds a composed tracer regression to prevent false acceptance when a sent invitation disappears before profile proof."
     },
     {
       "id": "T5",
@@ -413,7 +418,7 @@
     {
       "id": "T6",
       "title": "Expose runtime truth to queue and run log",
-      "status": "backlog",
+      "status": "ready",
       "priority": 65,
       "dependsOn": [
         "T4"
@@ -440,7 +445,7 @@
       ],
       "worktree": "",
       "startedAt": "",
-      "updatedAt": "",
+      "updatedAt": "2026-06-14T20:17:55Z",
       "resolvedModel": "",
       "outputs": [],
       "attemptCount": 0,

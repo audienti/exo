@@ -139,12 +139,12 @@
     <div class="topline">
       <span class="chip"><b>plan</b>local-runner-inbound-truth</span>
       <span class="chip"><b>status</b>active</span>
-      <span class="chip"><b>progress</b>6/9</span>
+      <span class="chip"><b>progress</b>7/9</span>
       <span class="chip"><b>controller</b>codex</span>
       <span class="chip"><b>worktrees</b>.worktrees</span>
       <span class="chip"><b>open messages</b>1</span>
-      <span class="chip"><b>board updated</b>2026-06-14T20:08:21Z</span>
-      <span class="chip"><b>rendered</b>2026-06-14T20:09:28Z</span>
+      <span class="chip"><b>board updated</b>2026-06-14T20:17:55Z</span>
+      <span class="chip"><b>rendered</b>2026-06-14T20:18:21Z</span>
     </div>
     <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
   </header>
@@ -154,11 +154,11 @@
         <div class="metrics">
           <div><b>0</b><span>in flight</span></div>
           <div><b>3</b><span>cap</span></div>
-          <div><b>none</b><span>next dispatch candidates</span></div>
+          <div><b>T6</b><span>next dispatch candidates</span></div>
         </div>
         <p><b>Running or verifying:</b> none</p>
-        <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
-        <p><b>Controller note:</b> T4 is ready next and remains a controller-lane high-overlap invitation lifecycle task, so no subagent fan-out is safe until that seam completes.</p>
+        <p><b>Capacity read:</b> Capacity available. Next safe dispatch candidates: T6.</p>
+        <p><b>Controller note:</b> T4 passed focused and full-suite verification. T6 is now the only ready task; T7 remains dependency-gated on T6, so parallel capacity is limited by the graph.</p>
       </section>
 
 
@@ -186,7 +186,7 @@
   <main class="board">
 
           <section class="column">
-            <h2>Backlog <span>2</span></h2>
+            <h2>Backlog <span>1</span></h2>
 
       <article class="task task-backlog">
         <header>
@@ -194,16 +194,7 @@
           <h3>Run full integration verification and close board</h3>
         </header>
         <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>10</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T4, T6</div></div><div class="field"><div class="label">Depends on</div><div>T4, T5, T6</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/local-runner-inbound-truth-board.json</li><li>docs/plans/local-runner-inbound-truth-board.html</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js</li><li>npm test -- test/agent-host-pass.test.js</li><li>npm test -- test/linkedin-unipile-maintenance.test.js</li><li>npm test -- test/build-linkedin-send.test.js</li><li>npm test -- test/connection-request-reconciliation.test.js</li><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js</li><li>npm test</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All plan acceptance criteria pass.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board status is complete with final verification recorded.</li></ul></div></div>
-      </article>
-
-      <article class="task task-backlog">
-        <header>
-          <div class="task-id">T6</div>
-          <h3>Expose runtime truth to queue and run log</h3>
-        </header>
-        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>65</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T4</div></div><div class="field"><div class="label">Depends on</div><div>T4</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/build-agent-queue.js</li><li>src/core/agent-run-log.js</li><li>scripts/run-agent-host-pass.js</li><li>test/agent-queue.test.js</li><li>test/agent-run-log.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Queue counts do not imply non-runnable waiting work is ready.</li><li>Last-pass/run-log output names transport and config reasons.</li><li>Blocked, waiting, partial, and ready are distinct in backend tests.</li></ul></div></div>
+        <div class="field"><div class="label">Reason</div><div>Waiting on T6</div></div><div class="field"><div class="label">Depends on</div><div>T4, T5, T6</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/local-runner-inbound-truth-board.json</li><li>docs/plans/local-runner-inbound-truth-board.html</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js</li><li>npm test -- test/agent-host-pass.test.js</li><li>npm test -- test/linkedin-unipile-maintenance.test.js</li><li>npm test -- test/build-linkedin-send.test.js</li><li>npm test -- test/connection-request-reconciliation.test.js</li><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js</li><li>npm test</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All plan acceptance criteria pass.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board status is complete with final verification recorded.</li></ul></div></div>
       </article>
 
           </section>
@@ -213,11 +204,11 @@
 
       <article class="task task-ready">
         <header>
-          <div class="task-id">T4</div>
-          <h3>Prove invitation lifecycle end to end</h3>
+          <div class="task-id">T6</div>
+          <h3>Expose runtime truth to queue and run log</h3>
         </header>
-        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>85</span></div>
-        <div class="field"><div class="label">Reason</div><div>Ready for controller execution.</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2, T2b, T3</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/connection-request-reconciliation.js</li><li>test/connection-request-reconciliation.test.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>The invitation tracer bullet passes through send, sync proof, no-longer-pending, and relationship proof without false acceptance.</li><li>Withdraw or received-invite mutation transport is proven to run before proof debt moves.</li><li>connection-request-reconciliation.js remains the owner for pending, accepted, no-longer-pending, and not-accepted decisions.</li></ul></div></div>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>65</span></div>
+        <div class="field"><div class="label">Reason</div><div>Ready for dispatch if file ownership and capacity permit.</div></div><div class="field"><div class="label">Depends on</div><div>T4</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/build-agent-queue.js</li><li>src/core/agent-run-log.js</li><li>scripts/run-agent-host-pass.js</li><li>test/agent-queue.test.js</li><li>test/agent-run-log.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Queue counts do not imply non-runnable waiting work is ready.</li><li>Last-pass/run-log output names transport and config reasons.</li><li>Blocked, waiting, partial, and ready are distinct in backend tests.</li></ul></div></div>
       </article>
 
           </section>
@@ -233,7 +224,7 @@
           </section>
 
           <section class="column">
-            <h2>Done <span>6</span></h2>
+            <h2>Done <span>7</span></h2>
 
       <article class="task task-done">
         <header>
@@ -242,6 +233,15 @@
         </header>
         <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>70</span></div>
         <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Worktree</div><div>multi_agent_v1:019ec793-2c34-7203-a2a3-bc73e60d1cbb</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>test/unipile-account-smoke.test.js</li><li>src/lib/unipile-config.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/unipile-account-smoke.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Default npm test does not make a live Unipile request.</li><li>An explicit environment opt-in command is documented in the test or board notes.</li><li>When enabled, the test verifies the configured provider account id is present in /api/v1/accounts.</li></ul></div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Subagent Russell added test/unipile-account-smoke.test.js with a default skip gate and documented opt-in command.</li><li>Controller verified npm test -- test/unipile-account-smoke.test.js skips by default without a live request.</li><li>Controller verified EXO_UNIPILE_ACCOUNT_SMOKE=1 npm test -- test/unipile-account-smoke.test.js skips without credentials/provider account id and makes no live request.</li><li>Full npm test included the smoke test as one skipped test.</li><li>Verified git diff --check.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>70b76d21bf7b52104c9f4ca6d50b8eca52d16547</div></div>
+      </article>
+
+      <article class="task task-done">
+        <header>
+          <div class="task-id">T4</div>
+          <h3>Prove invitation lifecycle end to end</h3>
+        </header>
+        <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>max</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>85</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified and committed.</div></div><div class="field"><div class="label">Depends on</div><div>T1, T2, T2b, T3</div></div><div class="field"><div class="label">Files</div><div><ul><li>src/core/connection-request-reconciliation.js</li><li>test/connection-request-reconciliation.test.js</li><li>test/inbound-live-runtime-variants.test.js</li><li>test/agent-host-pass.test.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>The invitation tracer bullet passes through send, sync proof, no-longer-pending, and relationship proof without false acceptance.</li><li>Withdraw or received-invite mutation transport is proven to run before proof debt moves.</li><li>connection-request-reconciliation.js remains the owner for pending, accepted, no-longer-pending, and not-accepted decisions.</li></ul></div></div><div class="field"><div class="label">Notes</div><div>Behavior was already owned by the existing reconciliation seam; T4 adds a composed tracer regression to prevent false acceptance when a sent invitation disappears before profile proof.</div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Added a tracer regression that keeps connection_request/sent in pending_reconciliation, treats sent-list disappearance as connection_request_no_longer_pending, and only classifies accepted from first-degree relationship profile proof.</li><li>Verified focused T4 seams: npm test -- test/connection-request-reconciliation.test.js test/inbound-live-runtime-variants.test.js test/agent-host-pass.test.js passed 134/134.</li><li>Verified formatting: git diff --check passed.</li><li>Verified integration gate: npm test passed 929/930 with 1 skipped and 0 failures.</li></ul></div></div><div class="field"><div class="label">Commit</div><div>8c4ab120ece7b5d8156f9b05ec496eb4c971a556</div></div>
       </article>
 
       <article class="task task-done">
