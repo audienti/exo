@@ -208,6 +208,69 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
 }
 
 /**
+ * @param {any} handoff
+ * @param {{
+ *   codexHome?: string | null,
+ *   baseUrl?: string | null,
+ *   apiKey?: string | null,
+ *   allowDirectUnipileHttp?: boolean | null,
+ *   httpPostImpl?: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null,
+ * }} [options]
+ */
+export function runLinkedinSendWithUnipile(handoff, options = {}) {
+  const context = resolveLinkedinConnectionRequestSendContext(handoff, options);
+  if (context.status !== "ready") {
+    return context;
+  }
+
+  const { apiKey: configuredApiKey } = readUnipileConfig(options.codexHome ?? null);
+  const apiKey = normalizeNullableString(options.apiKey) ?? configuredApiKey;
+  if (!apiKey) {
+    return {
+      status: "blocked",
+      reason: "send_connection_request requires UNIPILE_API_KEY in the local Codex environment.",
+    };
+  }
+
+  const requestBody = {
+    provider_id: context.recipientProviderId,
+    account_id: context.providerAccountId,
+  };
+  if (context.message) {
+    requestBody.message = context.message;
+  }
+
+  const response = requestUnipileJson({
+    method: "POST",
+    url: new URL("/api/v1/users/invite", context.baseUrl).toString(),
+    apiKey,
+    bodyText: JSON.stringify(requestBody),
+    allowDirectUnipileHttp: options.allowDirectUnipileHttp === true,
+    httpPostImpl: options.httpPostImpl ?? null,
+  });
+  if (!response.ok) {
+    return {
+      status: "blocked",
+      reason: buildMaintenanceFailureReason("send_connection_request", response),
+      provider: "unipile",
+      responseStatus: response.status,
+      result: response.parsed,
+    };
+  }
+
+  return {
+    status: "sent",
+    provider: "unipile",
+    responseStatus: response.status,
+    invitationId: normalizeNullableString(response.parsed?.id)
+      ?? normalizeNullableString(response.parsed?.invitation_id)
+      ?? normalizeNullableString(response.parsed?.invitationId)
+      ?? null,
+    result: response.parsed,
+  };
+}
+
+/**
  * @param {any} task
  * @param {{
  *   codexHome?: string | null,
@@ -544,6 +607,81 @@ function resolveLinkedinMaintenanceContext(task, options = {}) {
 }
 
 /**
+ * @param {any} handoff
+ * @param {{ codexHome?: string | null, baseUrl?: string | null }} [options]
+ */
+function resolveLinkedinConnectionRequestSendContext(handoff, options = {}) {
+  const action = normalizeNullableString(handoff?.action);
+  if (action !== "send_connection_request") {
+    return {
+      status: "unsupported",
+      reason: "Direct Unipile send only supports send_connection_request.",
+    };
+  }
+
+  const channel = normalizeNullableString(handoff?.channel)?.toLowerCase() ?? null;
+  if (channel && channel !== "linkedin") {
+    return {
+      status: "unsupported",
+      reason: `Direct Unipile send requires a LinkedIn handoff. Resolved channel ${channel}.`,
+    };
+  }
+
+  const connector = normalizeConnectorKey(handoff?.connector);
+  if (connector && connector !== "unipile") {
+    return {
+      status: "unsupported",
+      reason: `Direct Unipile send requires a Unipile connector. Resolved connector ${handoff.connector}.`,
+    };
+  }
+
+  const providerAccountId = normalizeNullableString(handoff?.senderAccount?.providerAccountId)
+    ?? normalizeNullableString(handoff?.providerAccountId)
+    ?? normalizeNullableString(handoff?.executionPolicy?.sameCredentialHttpFallbackAccountId);
+  if (!providerAccountId) {
+    return {
+      status: "blocked",
+      reason: "send_connection_request requires senderAccount.providerAccountId for the governed LinkedIn account.",
+    };
+  }
+
+  const recipientProviderId = normalizeNullableString(handoff?.recipient?.providerId)
+    ?? normalizeNullableString(handoff?.recipientProviderId);
+  if (!recipientProviderId) {
+    return {
+      status: "unsupported",
+      reason: "send_connection_request requires recipient.providerId from synced LinkedIn profile truth.",
+    };
+  }
+
+  const message = normalizeNullableString(handoff?.message);
+  if (message && message.length > 300) {
+    return {
+      status: "blocked",
+      reason: "send_connection_request note exceeds Unipile's 300 character message limit.",
+    };
+  }
+
+  const config = readUnipileConfig(options.codexHome ?? null);
+  const baseUrl = normalizeNullableString(options.baseUrl)
+    ?? (config.baseUrlSource === "default" ? null : config.baseUrl);
+  if (!baseUrl) {
+    return {
+      status: "blocked",
+      reason: "send_connection_request requires a configured Unipile base URL.",
+    };
+  }
+
+  return {
+    status: "ready",
+    providerAccountId,
+    recipientProviderId,
+    message,
+    baseUrl,
+  };
+}
+
+/**
  * @param {string} userId
  * @param {((id: string) => unknown | null) | null} findUser
  */
@@ -781,7 +919,7 @@ function normalizeUnipileResponse(response) {
 }
 
 /**
- * @param {"withdraw_connection" | "accept_connection_request" | "reject_connection_request" | "reconcile_connection_request_status"} taskKind
+ * @param {"withdraw_connection" | "accept_connection_request" | "reject_connection_request" | "reconcile_connection_request_status" | "send_connection_request"} taskKind
  * @param {{ status?: number | null, error?: string | null, parsed?: any }} response
  */
 function buildMaintenanceFailureReason(taskKind, response) {
@@ -848,6 +986,16 @@ function normalizeNullableString(value) {
   }
   const normalized = value.trim();
   return normalized.length ? normalized : null;
+}
+
+/** @param {string | null | undefined} connector */
+function normalizeConnectorKey(connector) {
+  const normalized = normalizeNullableString(connector)?.toLowerCase() ?? null;
+  if (!normalized) {
+    return null;
+  }
+  const parts = normalized.split(":").filter(Boolean);
+  return parts[parts.length - 1] ?? normalized;
 }
 
 /** @param {number | null | undefined} value @param {number} fallback */

@@ -428,6 +428,247 @@ test("runSendTask stops before connector execution when the dispatch gate reject
   }
 });
 
+function buildReadyConnectionRequestSendHandoff(overrides = {}) {
+  return {
+    status: "ready",
+    action: "send_connection_request",
+    runtime: "codex",
+    connector: "codex:unipile",
+    executionPolicy: {
+      mode: "native_connector_tools_only",
+      writeBackOnlyAfterRealSend: true,
+    },
+    motionId: "motion-1",
+    motionName: "Motion",
+    senderAccount: {
+      accountId: "account-linkedin-1",
+      providerAccountId: "provider-linkedin-1",
+      handle: "operator-linkedin",
+      connector: "codex:unipile",
+    },
+    recipient: {
+      name: "Jordan Example",
+      profileUrl: "https://www.linkedin.com/in/jordan-example/",
+      providerId: "provider-jordan",
+      publicId: "jordan-example",
+    },
+    dispatchGate: {
+      status: "allow",
+      decision: "allow",
+      reasonCode: "allowed",
+      postDispatchDelayMs: null,
+    },
+    channel: "linkedin",
+    surface: "connection_request",
+    subject: null,
+    message: "Jordan, worth connecting.",
+    writeback: "exo actions result --action send_connection_request --result sent --company company-1 --prospect prospect-1 --motion motion-1 --surface connection_request",
+    ...overrides,
+  };
+}
+
+test("runSendTask uses deterministic Unipile HTTP first for connection requests", () => {
+  const directCalls = [];
+  const connectorCalls = [];
+  const writebacks = [];
+  const task = {
+    kind: "send_message",
+    id: "send-connection-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "connection_request",
+    action: "send_connection_request",
+    recipientUrl: "https://www.linkedin.com/in/jordan-example/",
+    body: "Jordan, worth connecting.",
+    writeback: "exo actions result --json",
+    _selectedSendMode: "live",
+  };
+
+  const result = runSendTask(task, {
+    runExoJsonArgs: () => buildReadyConnectionRequestSendHandoff(),
+    runLinkedinSendWithUnipile: (handoff, options = {}) => {
+      directCalls.push({
+        action: handoff.action,
+        allowDirectUnipileHttp: options.allowDirectUnipileHttp,
+        codexHome: options.codexHome,
+      });
+      return {
+        status: "sent",
+        provider: "unipile",
+        responseStatus: 201,
+        result: {
+          id: "invite-123",
+        },
+      };
+    },
+    runConnectorCodexTask: () => {
+      connectorCalls.push("connector");
+      throw new Error("MCP should not run before deterministic Unipile send.");
+    },
+    runShellText: (command) => {
+      writebacks.push(command);
+      return "";
+    },
+    codexHome: "/tmp/codex-home",
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.detail.transport, "unipile_http_same_credentials");
+  assert.equal(result.detail.responseStatus, 201);
+  assert.deepEqual(directCalls, [
+    {
+      action: "send_connection_request",
+      allowDirectUnipileHttp: true,
+      codexHome: "/tmp/codex-home",
+    },
+  ]);
+  assert.deepEqual(connectorCalls, []);
+  assert.deepEqual(writebacks, ["exo actions result --json"]);
+});
+
+test("runSendTask falls back to connector handoff after deterministic provider failure", () => {
+  const directCalls = [];
+  const connectorCalls = [];
+  const writebacks = [];
+  const task = {
+    kind: "send_message",
+    id: "send-connection-fallback",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "connection_request",
+    action: "send_connection_request",
+    recipientUrl: "https://www.linkedin.com/in/jordan-example/",
+    body: "Jordan, worth connecting.",
+    writeback: "exo actions result --json",
+    _selectedSendMode: "live",
+  };
+
+  const result = runSendTask(task, {
+    runExoJsonArgs: () => buildReadyConnectionRequestSendHandoff(),
+    runLinkedinSendWithUnipile: () => {
+      directCalls.push("direct");
+      return {
+        status: "blocked",
+        provider: "unipile",
+        responseStatus: 503,
+        reason: "send_connection_request through Unipile failed (HTTP 503): Provider unavailable",
+      };
+    },
+    runConnectorCodexTask: () => {
+      connectorCalls.push("connector");
+      return {
+        status: "sent",
+        reason: null,
+      };
+    },
+    runShellText: (command) => {
+      writebacks.push(command);
+      return "";
+    },
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.detail.transport, "connector_native");
+  assert.equal(result.detail.fallbackFrom, "unipile_http_same_credentials");
+  assert.match(result.detail.directUnipileFailureReason, /Provider unavailable/i);
+  assert.deepEqual(directCalls, ["direct"]);
+  assert.deepEqual(connectorCalls, ["connector"]);
+  assert.deepEqual(writebacks, ["exo actions result --json"]);
+});
+
+test("runSendTask does not record local success when direct and connector sends both fail", () => {
+  const writebacks = [];
+  const result = runSendTask(
+    {
+      kind: "send_message",
+      id: "send-connection-failed",
+      motionId: "motion-1",
+      companyId: "company-1",
+      prospectId: "prospect-1",
+      surface: "connection_request",
+      action: "send_connection_request",
+      recipientUrl: "https://www.linkedin.com/in/jordan-example/",
+      body: "Jordan, worth connecting.",
+      writeback: "exo actions result --json",
+      _selectedSendMode: "live",
+    },
+    {
+      runExoJsonArgs: () => buildReadyConnectionRequestSendHandoff(),
+      runLinkedinSendWithUnipile: () => ({
+        status: "blocked",
+        provider: "unipile",
+        responseStatus: 429,
+        reason: "send_connection_request through Unipile failed (HTTP 429): Provider rate limit",
+      }),
+      runConnectorCodexTask: () => ({
+        status: "blocked",
+        reason: "MCP send failed after provider rate limit.",
+      }),
+      runShellText: (command) => {
+        writebacks.push(command);
+        return "";
+      },
+    },
+  );
+
+  assert.equal(result.status, "blocked");
+  assert.match(result.detail.reason, /MCP send failed/i);
+  assert.match(result.detail.directUnipileFailureReason, /Provider rate limit/i);
+  assert.deepEqual(writebacks, []);
+});
+
+test("runSendTask keeps non-connection LinkedIn sends connector-required", () => {
+  const directCalls = [];
+  const connectorCalls = [];
+  const writebacks = [];
+  const task = {
+    kind: "send_message",
+    id: "send-dm-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "follow_up_direct_message",
+    action: "send_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/jordan-example/",
+    body: "Jordan, following up.",
+    writeback: "exo actions result --json",
+    _selectedSendMode: "live",
+  };
+
+  const result = runSendTask(task, {
+    runExoJsonArgs: () => buildReadyConnectionRequestSendHandoff({
+      action: "send_direct_message",
+      surface: "follow_up_direct_message",
+      message: "Jordan, following up.",
+    }),
+    runLinkedinSendWithUnipile: () => {
+      directCalls.push("direct");
+      return {
+        status: "sent",
+      };
+    },
+    runConnectorCodexTask: () => {
+      connectorCalls.push("connector");
+      return {
+        status: "sent",
+        reason: null,
+      };
+    },
+    runShellText: (command) => {
+      writebacks.push(command);
+      return "";
+    },
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.detail.transport, "connector_native");
+  assert.deepEqual(directCalls, []);
+  assert.deepEqual(connectorCalls, ["connector"]);
+  assert.deepEqual(writebacks, ["exo actions result --json"]);
+});
+
 function ageSubmittedAccountPacket(motionId, companyId, completedAt) {
   const database = getLocalDatabase();
   const row = database

@@ -9,6 +9,7 @@ import path from "node:path";
 import {
   applyLinkedinMaintenanceConnectorResult,
   buildLinkedinMaintenanceHandoff,
+  runLinkedinSendWithUnipile,
   runLinkedinMaintenanceWithUnipile,
 } from "../src/lib/linkedin-unipile-maintenance.js";
 import { INBOUND_SURFACE_MIXED_BASELINE_REASON } from "../src/core/user-inbound-sync.js";
@@ -226,6 +227,144 @@ test("runLinkedinMaintenanceWithUnipile blocks unsupported maintenance kinds wit
 
   assert.equal(result.status, "blocked");
   assert.match(result.reason ?? "", /Unsupported LinkedIn maintenance task kind/);
+  assert.equal(httpCalled, false);
+});
+
+test("runLinkedinSendWithUnipile sends a connection invitation through Unipile", () => {
+  let seenRequest = null;
+  const result = runLinkedinSendWithUnipile(
+    {
+      action: "send_connection_request",
+      channel: "linkedin",
+      senderAccount: {
+        providerAccountId: "provider-linkedin-1",
+      },
+      recipient: {
+        name: "Jordan Example",
+        providerId: "provider-jordan",
+        profileUrl: "https://www.linkedin.com/in/jordan-example/",
+      },
+      message: "Jordan, worth connecting given your RevOps work.",
+    },
+    {
+      baseUrl: TEST_UNIPILE_BASE_URL,
+      apiKey: "test-key",
+      httpPostImpl: (url, _headers, bodyText) => {
+        seenRequest = {
+          url,
+          body: JSON.parse(bodyText),
+        };
+        return {
+          status: 201,
+          bodyText: JSON.stringify({
+            object: "InvitationSent",
+            id: "invite-123",
+          }),
+        };
+      },
+    },
+  );
+
+  assert.equal(result.status, "sent");
+  assert.equal(result.provider, "unipile");
+  assert.equal(result.responseStatus, 201);
+  assert.equal(new URL(seenRequest?.url ?? "").pathname, "/api/v1/users/invite");
+  assert.deepEqual(seenRequest?.body, {
+    provider_id: "provider-jordan",
+    account_id: "provider-linkedin-1",
+    message: "Jordan, worth connecting given your RevOps work.",
+  });
+});
+
+test("runLinkedinSendWithUnipile returns provider failure without local writeback semantics", () => {
+  const result = runLinkedinSendWithUnipile(
+    {
+      action: "send_connection_request",
+      channel: "linkedin",
+      senderAccount: {
+        providerAccountId: "provider-linkedin-1",
+      },
+      recipient: {
+        providerId: "provider-jordan",
+      },
+      message: "Hello.",
+    },
+    {
+      baseUrl: TEST_UNIPILE_BASE_URL,
+      apiKey: "test-key",
+      httpPostImpl: () => ({
+        status: 429,
+        bodyText: JSON.stringify({
+          message: "Provider rate limit",
+        }),
+      }),
+    },
+  );
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.provider, "unipile");
+  assert.equal(result.responseStatus, 429);
+  assert.match(result.reason ?? "", /send_connection_request through Unipile failed \(HTTP 429\): Provider rate limit/i);
+});
+
+test("runLinkedinSendWithUnipile makes missing deterministic config loud before HTTP", () => {
+  let httpCalled = false;
+  const result = runLinkedinSendWithUnipile(
+    {
+      action: "send_connection_request",
+      channel: "linkedin",
+      senderAccount: {
+        providerAccountId: "provider-linkedin-1",
+      },
+      recipient: {
+        providerId: "provider-jordan",
+      },
+    },
+    {
+      codexHome: "/tmp/nonexistent-exo-codex-home",
+      httpPostImpl: () => {
+        httpCalled = true;
+        return {
+          status: 200,
+          bodyText: "{}",
+        };
+      },
+    },
+  );
+
+  assert.equal(result.status, "blocked");
+  assert.match(result.reason ?? "", /requires a configured Unipile base URL/i);
+  assert.equal(httpCalled, false);
+});
+
+test("runLinkedinSendWithUnipile leaves non-connection sends to connector handoff", () => {
+  let httpCalled = false;
+  const result = runLinkedinSendWithUnipile(
+    {
+      action: "send_direct_message",
+      channel: "linkedin",
+      senderAccount: {
+        providerAccountId: "provider-linkedin-1",
+      },
+      recipient: {
+        providerId: "provider-jordan",
+      },
+    },
+    {
+      baseUrl: TEST_UNIPILE_BASE_URL,
+      apiKey: "test-key",
+      httpPostImpl: () => {
+        httpCalled = true;
+        return {
+          status: 200,
+          bodyText: "{}",
+        };
+      },
+    },
+  );
+
+  assert.equal(result.status, "unsupported");
+  assert.match(result.reason ?? "", /only supports send_connection_request/i);
   assert.equal(httpCalled, false);
 });
 

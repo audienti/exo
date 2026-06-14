@@ -51,7 +51,7 @@
     "viewer": {
       "htmlPath": "docs/plans/local-runner-inbound-truth-board.html"
     },
-    "parallelismNote": "T2 and T5 are verified green. T2b and T3 are ready but overlap host-runner files, so only one can proceed next.",
+    "parallelismNote": "T2b is done. T3 is the next ready controller task; remaining backlog tasks wait on T3 or later verification gates.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T19:29:53Z"
+    "updatedAt": "2026-06-14T20:02:41Z"
   },
   "tasks": [
     {
@@ -221,7 +221,7 @@
     {
       "id": "T2b",
       "title": "Add deterministic Unipile send for connection requests",
-      "status": "ready",
+      "status": "done",
       "priority": 92,
       "dependsOn": [
         "T2"
@@ -248,14 +248,35 @@
         "git diff --check"
       ],
       "worktree": "",
-      "startedAt": "",
-      "updatedAt": "2026-06-14T19:26:48Z",
-      "resolvedModel": "",
-      "outputs": [],
-      "attemptCount": 0,
+      "startedAt": "2026-06-14T19:32:17Z",
+      "updatedAt": "2026-06-14T20:02:41Z",
+      "resolvedModel": "inherit",
+      "outputs": [
+        {
+          "kind": "test",
+          "summary": "RED: focused T2b tests failed on missing deterministic send export, missing send handoff identifiers, and runSendTask ignoring injected direct-send dependencies.",
+          "command": "npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js"
+        },
+        {
+          "kind": "test",
+          "summary": "GREEN: focused T2b tests passed after adding runLinkedinSendWithUnipile, direct-first runSendTask wiring, handoff sender/recipient identifiers, provider-failure fallback, and no-writeback-on-failure coverage.",
+          "command": "npm test -- test/agent-host-pass.test.js test/build-linkedin-send.test.js test/linkedin-unipile-maintenance.test.js"
+        },
+        {
+          "kind": "test",
+          "summary": "Full suite passed with 923 passing and 1 env-gated smoke test skipped.",
+          "command": "npm test"
+        },
+        {
+          "kind": "test",
+          "summary": "Whitespace check passed.",
+          "command": "git diff --check"
+        }
+      ],
+      "attemptCount": 1,
       "lastFailure": "",
       "commit": "",
-      "notes": ""
+      "notes": "Implemented deterministic Unipile POST /api/v1/users/invite for connection requests using configured same-credential Unipile API settings. Handoff now carries sender providerAccountId and recipient providerId from synced profile truth. Host runner attempts this path first for live connection_request sends, preserves connector handoff for unsupported/failing direct sends, and only runs local writeback after a direct or connector external sent result."
     },
     {
       "id": "T3",

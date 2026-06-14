@@ -79,6 +79,7 @@ import {
   applyLinkedinMaintenanceConnectorResult,
   buildLinkedinMaintenanceHandoff,
   runLinkedinMaintenanceWithUnipile,
+  runLinkedinSendWithUnipile,
 } from "../src/lib/linkedin-unipile-maintenance.js";
 import { extractUsableDraftBody } from "../src/lib/draft-policy.js";
 import { extractLinkedinPublicId } from "../src/lib/prospect-contacts.js";
@@ -2765,11 +2766,25 @@ function ensureProspectResearchTaskClaimed(task) {
   }
 }
 
-/** @param {any} task */
-export function runSendTask(task) {
+/**
+ * @param {any} task
+ * @param {{
+ *   runExoJsonArgs?: ((args: string[]) => any) | null,
+ *   runLinkedinSendWithUnipile?: ((handoff: any, options?: Record<string, any>) => any) | null,
+ *   runConnectorCodexTask?: ((input: Record<string, any>) => any) | null,
+ *   runShellText?: ((command: string) => string) | null,
+ *   codexHome?: string | null,
+ * }} [dependencies]
+ */
+export function runSendTask(task, dependencies = {}) {
+  const runExoJsonArgsImpl = dependencies.runExoJsonArgs ?? runExoJsonArgs;
+  const runLinkedinSendWithUnipileImpl = dependencies.runLinkedinSendWithUnipile ?? runLinkedinSendWithUnipile;
+  const runConnectorCodexTaskImpl = dependencies.runConnectorCodexTask ?? runConnectorCodexTask;
+  const runShellTextImpl = dependencies.runShellText ?? runShellText;
+  const codexHome = normalizeNullableString(dependencies.codexHome) ?? CODEX_HOME;
   const selectedMode = typeof task?._selectedSendMode === "string" ? task._selectedSendMode : getSendMode();
   const dryRun = selectedMode === "verify" || selectedMode === "canary_verify";
-  const handoff = runExoJsonArgs([
+  const handoff = runExoJsonArgsImpl([
     "agent",
     "send",
     task.companyId,
@@ -2802,7 +2817,28 @@ export function runSendTask(task) {
     };
   }
 
-  const result = runConnectorCodexTask({
+  const directUnipileSendResult = !dryRun && shouldAttemptDirectUnipileConnectionRequestSend(handoff)
+    ? runLinkedinSendWithUnipileImpl(handoff, {
+        codexHome,
+        allowDirectUnipileHttp: true,
+      })
+    : null;
+  if (directUnipileSendResult?.status === "sent") {
+    runShellTextImpl(resolveSendTaskWriteback(task, directUnipileSendResult));
+    return {
+      status: "completed",
+      detail: {
+        action: handoff.action,
+        recipient: describeHandoffRecipient(handoff),
+        transport: "unipile_http_same_credentials",
+        responseStatus: directUnipileSendResult.responseStatus ?? null,
+        invitationId: directUnipileSendResult.invitationId ?? null,
+      },
+    };
+  }
+  const directFallbackDetail = buildDirectUnipileSendFallbackDetail(directUnipileSendResult);
+
+  const result = runConnectorCodexTaskImpl({
     prompt: buildSendPrompt(handoff, { dryRun }),
     outputName: `send-${task.motionId}-${task.prospectId}-${task.surface}.json`,
     timeoutMs: BROWSER_TIMEOUT_MS,
@@ -2818,6 +2854,8 @@ export function runSendTask(task) {
         recipient: describeHandoffRecipient(handoff),
         verificationOnly: true,
         sendStatus: result.status,
+        transport: "connector_native",
+        ...directFallbackDetail,
       },
     };
   }
@@ -2839,14 +2877,52 @@ export function runSendTask(task) {
   if (result.status !== "sent") {
     return {
       status: "blocked",
-      detail: { reason: result.reason ?? "Send task was not completed." }
+      detail: {
+        reason: result.reason ?? "Send task was not completed.",
+        ...directFallbackDetail,
+      }
     };
   }
 
-  runShellText(resolveSendTaskWriteback(task, result));
+  runShellTextImpl(resolveSendTaskWriteback(task, result));
   return {
     status: "completed",
-    detail: { action: handoff.action, recipient: describeHandoffRecipient(handoff) }
+    detail: {
+      action: handoff.action,
+      recipient: describeHandoffRecipient(handoff),
+      transport: "connector_native",
+      ...directFallbackDetail,
+    }
+  };
+}
+
+/** @param {any} handoff */
+function shouldAttemptDirectUnipileConnectionRequestSend(handoff) {
+  return handoff?.action === "send_connection_request"
+    && handoff?.channel === "linkedin"
+    && normalizeConnectorPluginKey(handoff?.connector) === "unipile"
+    && usesConnectorNativeSend(handoff);
+}
+
+/** @param {any} directResult */
+function buildDirectUnipileSendFallbackDetail(directResult) {
+  if (!directResult) {
+    return {};
+  }
+  const responseStatus = Number.isFinite(directResult.responseStatus)
+    ? Number(directResult.responseStatus)
+    : null;
+  if (directResult.status === "unsupported") {
+    return {
+      fallbackFrom: "unipile_http_same_credentials",
+      directUnipileUnsupportedReason: directResult.reason ?? "Deterministic Unipile send was unsupported for this handoff.",
+      directUnipileResponseStatus: responseStatus,
+    };
+  }
+  return {
+    fallbackFrom: "unipile_http_same_credentials",
+    directUnipileFailureReason: directResult.reason ?? "Deterministic Unipile send did not complete.",
+    directUnipileResponseStatus: responseStatus,
   };
 }
 
