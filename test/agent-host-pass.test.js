@@ -51,6 +51,8 @@ import {
   shouldIgnoreCodexUserConfig,
   shouldPreferBackfillSlice,
   shouldUseSameCredentialUnipileHttpFallback,
+  recordCompletedMaintenanceTaskCooldown,
+  runInboundSyncTask,
   runSendTask,
 } from "../scripts/run-agent-host-pass.js";
 import {
@@ -831,6 +833,77 @@ test("legacy global browser backoff does not suppress connector-native send work
   );
 });
 
+test("send verification fingerprints stay stable when queue metadata is regenerated", () => {
+  const firstBuildTask = {
+    kind: "send_message",
+    id: "send-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "like_post",
+    recipientUrl: "https://www.linkedin.com/posts/example-activity-123",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    dueAt: "2026-06-03T05:00:00.000Z",
+    body: "",
+    writeback: "exo actions result --action like_post --result sent --prospect prospect-1 --generated-at first",
+    checkoutFingerprint: "first-checkout",
+  };
+  const regeneratedTask = {
+    ...firstBuildTask,
+    queuedAt: "2026-06-03T05:15:00.000Z",
+    dueAt: "2026-06-03T05:15:00.000Z",
+    writeback: "exo actions result --action like_post --result sent --prospect prospect-1 --generated-at second",
+    checkoutFingerprint: "second-checkout",
+    checkoutState: null,
+    checkedOutBy: null,
+    checkedOutAt: null,
+    checkoutExpiresAt: null,
+  };
+
+  assert.equal(
+    createTaskVerificationFingerprint(regeneratedTask),
+    createTaskVerificationFingerprint(firstBuildTask),
+  );
+
+  assert.equal(
+    chooseNextQueueTask(
+      {
+        tasks: [
+          regeneratedTask,
+          {
+            kind: "send_message",
+            id: "send-2",
+            motionId: "motion-1",
+            companyId: "company-2",
+            prospectId: "prospect-2",
+            surface: "like_post",
+            recipientUrl: "https://www.linkedin.com/posts/example-activity-456",
+            queuedAt: "2026-06-03T05:15:00.000Z",
+            dueAt: "2026-06-03T05:15:00.000Z",
+            body: "",
+            writeback: "exo actions result --action like_post --result sent --prospect prospect-2",
+          },
+        ],
+      },
+      true,
+      {
+        recentTaskVerifications: [
+          {
+            taskKind: "send_message",
+            fingerprint: createTaskVerificationFingerprint(firstBuildTask),
+            verifiedAt: "2026-06-03T05:10:00.000Z",
+            expiresAt: "2026-06-03T11:10:00.000Z",
+          },
+        ],
+      },
+      "2026-06-03T05:15:00.000Z",
+      false,
+      "verify",
+    )?.id,
+    "send-2",
+  );
+});
+
 test("chooseNextQueueTask skips recently verified send tasks in verification mode", () => {
   const firstTask = {
     kind: "send_message",
@@ -1444,6 +1517,35 @@ test("maintenance bursts stay separate from standard task passes", () => {
     ),
     false,
   );
+});
+
+test("recordCompletedMaintenanceTaskCooldown records bounded status-reconcile cooldowns", () => {
+  const nextState = recordCompletedMaintenanceTaskCooldown(
+    {},
+    {
+      kind: "reconcile_connection_request_status",
+      userId: "user-1",
+      accountId: "account-1",
+      capability: "linkedin",
+      prospectName: "Next Disappeared",
+      recipientUrl: "https://linkedin.com/in/next-disappeared",
+      batch: {
+        groupKey: "user-1:account-1:linkedin",
+        cooldownMs: 30 * 60 * 1000,
+      },
+    },
+    {
+      status: "completed",
+      finishedAt: "2026-06-05T00:05:00.000Z",
+    },
+  );
+
+  assert.equal(nextState.maintenanceTaskCooldowns.length, 1);
+  assert.equal(nextState.maintenanceTaskCooldowns[0].taskKind, "reconcile_connection_request_status");
+  assert.equal(nextState.maintenanceTaskCooldowns[0].groupKey, "user-1:account-1:linkedin");
+  assert.equal(nextState.maintenanceTaskCooldowns[0].recordedAt, "2026-06-05T00:05:00.000Z");
+  assert.equal(nextState.maintenanceTaskCooldowns[0].unavailableUntil, "2026-06-05T00:35:00.000Z");
+  assert.equal(nextState.maintenanceTaskCooldowns[0].reason, "bounded_connection_request_status_reconciliation");
 });
 
 test("standard passes keep draining within the time budget even after the old 8-task mark", () => {
@@ -2655,7 +2757,9 @@ test("task prompts are bounded and fail-fast", () => {
     assert.doesNotMatch(sendDryRunPrompt, /Do not click Send/i);
     assert.match(sendDryRunPrompt, /"status":"ready_to_send"/i);
     assert.match(sendDryRunPrompt, /https:\/\/api14\.unipile\.com:14465\/api\/v1\/accounts/i);
-    assert.match(sendDryRunPrompt, /Do not substitute api1\.unipile\.com/i);
+    assert.match(sendDryRunPrompt, /tenant's configured Unipile API root/i);
+    assert.match(sendDryRunPrompt, /Do not substitute localhost or documented default server examples/i);
+    assert.doesNotMatch(sendDryRunPrompt, /api1\.unipile\.com/i);
     assert.match(sendDryRunPrompt, /direct POST with no native draft\/composer state/i);
   } finally {
     if (originalCodexHome === undefined) {
@@ -2771,6 +2875,27 @@ test("buildCodexTaskEnv derives HOME from CODEX_HOME and forwards Unipile config
     assert.equal(env.UNIPILE_BASE_URL, "https://api14.unipile.com:14465");
     assert.equal(env.UNIPILE_V2_API_KEY, "test-v2-key");
     assert.equal(env.UNIPILE_V2_BASE_URL, "https://api.unipile.com/v2");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("buildCodexTaskEnv does not synthesize a Unipile base URL without tenant config", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-codex-task-env-"));
+  const codexHome = path.join(tempDir, ".codex");
+
+  try {
+    fs.mkdirSync(codexHome, { recursive: true });
+
+    const env = buildCodexTaskEnv({
+      PATH: "/usr/bin:/bin",
+      CODEX_HOME: codexHome,
+      UNIPILE_API_KEY: "tenant-key",
+    });
+
+    assert.equal(env.UNIPILE_API_KEY, "tenant-key");
+    assert.equal(env.UNIPILE_DSN, undefined);
+    assert.equal(env.UNIPILE_BASE_URL, undefined);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -2895,13 +3020,13 @@ test("extractDraftOutputFromCodexResponse preserves subject for email drafts", (
   );
 });
 
-test("verification-only send passes stop after the first proved task", () => {
+test("verification-only send passes continue after proof while canary live sends stop", () => {
   assert.equal(
     shouldStopAfterTaskResult(
       { kind: "send_message", id: "send-1" },
       { status: "completed", detail: { verificationOnly: true, sendStatus: "ready_to_send" } },
     ),
-    true,
+    false,
   );
 
   assert.equal(
@@ -3244,6 +3369,421 @@ test("normalizeInboundCaptureForWriteback preserves structured linkedin connecto
   assert.match(normalized.error, /errors\/no_client_session/);
   assert.equal(normalized.sentInvitations.error, normalized.error);
   assert.equal(normalized.followingList.exhaustionReason, "transport_failure");
+});
+
+test("buildInboundContractArgs adds direct Unipile HTTP flag for linkedin fallback runs", () => {
+  const args = buildInboundContractArgs({
+    kind: "run_inbound_sync",
+    capability: "linkedin",
+    userId: "user-1",
+    accountId: "account-1",
+    mode: "quick",
+    surfaceKeys: ["linkedin-messaging-inbox"],
+  }, {
+    directUnipileHttp: true,
+  });
+
+  assert.deepEqual(args, [
+    "inbound",
+    "sync",
+    "linkedin-live",
+    "user-1",
+    "--account",
+    "account-1",
+    "--surface",
+    "linkedin-messaging-inbox",
+    "--direct-unipile-http",
+    "--mode",
+    "quick",
+    "--json",
+  ]);
+});
+
+test("runInboundSyncTask falls back to same-credential Unipile HTTP when linkedin MCP capture fails", () => {
+  const task = {
+    kind: "run_inbound_sync",
+    capability: "linkedin",
+    userId: "user-1",
+    accountId: "account-1",
+    mode: "quick",
+    surfaceKeys: ["linkedin-messaging-inbox"],
+    verificationCommands: ["exo next --json"],
+  };
+  const appliedPayloads = [];
+  const inboundContractCalls = [];
+  const verificationSummary = [{ command: "exo next --json", elapsedMs: 12, summary: { kind: "next" } }];
+  const fallbackPayload = {
+    mode: "quick",
+    accounts: [
+      {
+        accountId: "account-1",
+        surfaces: [
+          {
+            surfaceKey: "linkedin-messaging-inbox",
+            status: "warning",
+            observations: [{ kind: "inbound_reply_received" }],
+          },
+        ],
+      },
+    ],
+  };
+
+  const result = runInboundSyncTask(task, null, {
+    runInboundContract(taskInput, options = {}) {
+      inboundContractCalls.push({
+        task: taskInput.accountId,
+        directUnipileHttp: options.directUnipileHttp === true,
+      });
+      if (options.directUnipileHttp === true) {
+        return {
+          transport: {
+            kind: "direct_runtime",
+            connector: "unipile",
+          },
+          capture: {
+            status: "warning",
+            itemCount: 1,
+            error: "Unipile returned more unread LinkedIn chats than this quick pass itemized.",
+          },
+          payload: fallbackPayload,
+        };
+      }
+
+      return {
+        transport: {
+          kind: "agent_handoff",
+          connector: "unipile",
+          captureRequest: {
+            captureTransportMode: "connector_native_only",
+            outputSchema: { type: "object" },
+            prompt: "Capture LinkedIn inbox",
+          },
+        },
+      };
+    },
+    requiresBrowserAttachForInboundCapture: () => false,
+    runConnectorCodexTask: () => ({
+      mode: "quick",
+      status: "failed",
+      account: {
+        intended_handle: "williamflanagan",
+        verified: false,
+      },
+      errors: [
+        {
+          code: "connector_no_client_session",
+          surface: "account_identity",
+          message: "GET /api/v1/accounts returned {\"status\":503,\"type\":\"errors/no_client_session\",\"title\":\"No client session\"}.",
+        },
+      ],
+    }),
+    buildInboundCapturePrompt: () => "Capture LinkedIn inbox",
+    buildInboundPayload: () => {
+      throw new Error("failed MCP capture should not be written back when HTTP fallback succeeds");
+    },
+    applyInboundPayload(_taskInput, payload) {
+      appliedPayloads.push(payload);
+    },
+    runVerificationCommands: () => verificationSummary,
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.detail.transport, "unipile_http_same_credentials_fallback");
+  assert.equal(result.detail.fallbackFrom, "agent_handoff");
+  assert.match(result.detail.fallbackReason ?? "", /connector_no_client_session/i);
+  assert.equal(result.detail.captureStatus, "warning");
+  assert.equal(result.detail.observedCount, 1);
+  assert.deepEqual(appliedPayloads, [fallbackPayload]);
+  assert.deepEqual(inboundContractCalls, [
+    { task: "account-1", directUnipileHttp: false },
+    { task: "account-1", directUnipileHttp: true },
+  ]);
+});
+
+test("runInboundSyncTask skips repeated Unipile MCP retries for the rest of the pass after a no-client-session failure", () => {
+  const executionContext = {
+    inboundConnectorFallbacks: new Map(),
+  };
+  const inboxTask = {
+    kind: "run_inbound_sync",
+    capability: "linkedin",
+    userId: "user-1",
+    accountId: "account-1",
+    mode: "quick",
+    surfaceKeys: ["linkedin-messaging-inbox"],
+    verificationCommands: ["exo next --json"],
+  };
+  const followersTask = {
+    kind: "run_inbound_sync",
+    capability: "linkedin",
+    userId: "user-1",
+    accountId: "account-1",
+    mode: "full",
+    surfaceKeys: ["linkedin-followers-list"],
+    verificationCommands: ["exo next --json"],
+  };
+  const appliedPayloads = [];
+  const inboundContractCalls = [];
+  const connectorCaptureCalls = [];
+
+  function buildFallbackPayload(surfaceKey, observationKind) {
+    return {
+      mode: surfaceKey === "linkedin-followers-list" ? "full" : "quick",
+      accounts: [
+        {
+          accountId: "account-1",
+          surfaces: [
+            {
+              surfaceKey,
+              status: "warning",
+              observations: [{ kind: observationKind }],
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  const inboxFallbackPayload = buildFallbackPayload("linkedin-messaging-inbox", "inbound_reply_received");
+  const followersFallbackPayload = buildFallbackPayload("linkedin-followers-list", "follower_confirmed");
+
+  const dependencies = {
+    runInboundContract(taskInput, options = {}) {
+      const surfaceKey = taskInput.surfaceKeys?.[0] ?? null;
+      inboundContractCalls.push({
+        surfaceKey,
+        directUnipileHttp: options.directUnipileHttp === true,
+      });
+      if (options.directUnipileHttp === true) {
+        return {
+          transport: {
+            kind: "direct_runtime",
+            connector: "unipile",
+          },
+          capture: {
+            status: "warning",
+            itemCount: 1,
+            error: surfaceKey === "linkedin-followers-list"
+              ? "Full reconciliation stopped at the configured page budget and should resume from the next cursor."
+              : "Unipile returned more unread LinkedIn chats than this quick pass itemized.",
+          },
+          payload: surfaceKey === "linkedin-followers-list" ? followersFallbackPayload : inboxFallbackPayload,
+        };
+      }
+
+      return {
+        transport: {
+          kind: "agent_handoff",
+          connector: "unipile",
+          captureRequest: {
+            captureTransportMode: "connector_native_only",
+            outputSchema: { type: "object" },
+            prompt: `Capture ${surfaceKey}`,
+          },
+        },
+      };
+    },
+    requiresBrowserAttachForInboundCapture: () => false,
+    runConnectorCodexTask() {
+      connectorCaptureCalls.push("capture");
+      return {
+        mode: "quick",
+        status: "failed",
+        account: {
+          intended_handle: "williamflanagan",
+          verified: false,
+        },
+        errors: [
+          {
+            code: "connector_no_client_session",
+            surface: "account_identity",
+            message: "GET /api/v1/accounts returned {\"status\":503,\"type\":\"errors/no_client_session\",\"title\":\"No client session\"}.",
+          },
+        ],
+      };
+    },
+    buildInboundCapturePrompt: () => "Capture LinkedIn surface",
+    buildInboundPayload: () => {
+      throw new Error("failed MCP capture should not be written back when HTTP fallback succeeds");
+    },
+    applyInboundPayload(_taskInput, payload) {
+      appliedPayloads.push(payload);
+    },
+    runVerificationCommands: () => [],
+  };
+
+  const firstResult = runInboundSyncTask(inboxTask, null, dependencies, executionContext);
+  const secondResult = runInboundSyncTask(followersTask, null, dependencies, executionContext);
+
+  assert.equal(firstResult.status, "completed");
+  assert.equal(firstResult.detail.transport, "unipile_http_same_credentials_fallback");
+  assert.equal(secondResult.status, "completed");
+  assert.equal(secondResult.detail.transport, "unipile_http_same_credentials_fallback");
+  assert.equal(secondResult.detail.fallbackFrom, "pass_scoped_unipile_mcp_hold");
+  assert.equal(connectorCaptureCalls.length, 1);
+  assert.deepEqual(appliedPayloads, [inboxFallbackPayload, followersFallbackPayload]);
+  assert.deepEqual(inboundContractCalls, [
+    { surfaceKey: "linkedin-messaging-inbox", directUnipileHttp: false },
+    { surfaceKey: "linkedin-messaging-inbox", directUnipileHttp: true },
+    { surfaceKey: "linkedin-followers-list", directUnipileHttp: false },
+    { surfaceKey: "linkedin-followers-list", directUnipileHttp: true },
+  ]);
+});
+
+test("runInboundSyncTask drains multiple LinkedIn full-sync continuation pages before verifying", () => {
+  const task = {
+    kind: "run_inbound_sync",
+    capability: "linkedin",
+    userId: "user-1",
+    accountId: "account-1",
+    mode: "full",
+    surfaceKeys: ["linkedin-following-list"],
+    verificationCommands: ["exo next --json"],
+    maxPages: 1,
+    pageSize: 50,
+  };
+  const contractCalls = [];
+  const appliedPayloads = [];
+  let verificationCount = 0;
+
+  function buildPayload(nextStartOffset) {
+    return {
+      mode: "full",
+      accounts: [
+        {
+          accountId: "account-1",
+          surfaces: [
+            {
+              surfaceKey: "linkedin-following-list",
+              status: nextStartOffset === null ? "success" : "warning",
+              reconcileReason: nextStartOffset === null ? null : "page_budget_stopped_early",
+              nextStartOffset,
+              observations: [{ kind: "follow_state_confirmed" }],
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  const result = runInboundSyncTask(task, null, {
+    runInboundContract(taskInput) {
+      contractCalls.push(taskInput.resumeStartOffset ?? null);
+      if ((taskInput.resumeStartOffset ?? 0) >= 100) {
+        return {
+          transport: {
+            kind: "direct_runtime",
+            connector: "unipile",
+          },
+          payload: buildPayload(null),
+        };
+      }
+      return {
+        transport: {
+          kind: "direct_runtime",
+          connector: "unipile",
+        },
+        payload: buildPayload((taskInput.resumeStartOffset ?? 0) + 50),
+      };
+    },
+    applyInboundPayload(_taskInput, payload) {
+      appliedPayloads.push(payload);
+    },
+    runVerificationCommands() {
+      verificationCount += 1;
+      return [{ command: "exo next --json", elapsedMs: 12, summary: { kind: "next" } }];
+    },
+    resolveContinuationBudgetMs: () => 1000,
+    nowMs: () => 0,
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(verificationCount, 1);
+  assert.deepEqual(contractCalls, [null, 50, 100]);
+  assert.equal(appliedPayloads.length, 3);
+  assert.equal(result.detail.continuationPassCount, 3);
+});
+
+test("runInboundSyncTask gives LinkedIn Unipile handoff captures a short timeout before fallback", () => {
+  const task = {
+    kind: "run_inbound_sync",
+    capability: "linkedin",
+    userId: "user-1",
+    accountId: "account-1",
+    mode: "full",
+    surfaceKeys: ["linkedin-followers-list"],
+    verificationCommands: ["exo next --json"],
+  };
+  let observedTimeoutMs = null;
+
+  runInboundSyncTask(task, null, {
+    runInboundContract(_taskInput, options = {}) {
+      if (options.directUnipileHttp === true) {
+        return {
+          transport: {
+            kind: "direct_runtime",
+            connector: "unipile",
+          },
+          capture: {
+            status: "warning",
+            itemCount: 1,
+            error: "Unipile returned more LinkedIn followers than this quick pass itemized.",
+          },
+          payload: {
+            mode: "full",
+            accounts: [
+              {
+                accountId: "account-1",
+                surfaces: [
+                  {
+                    surfaceKey: "linkedin-followers-list",
+                    status: "warning",
+                    observations: [{ kind: "follower_confirmed" }],
+                  },
+                ],
+              },
+            ],
+          },
+        };
+      }
+
+      return {
+        transport: {
+          kind: "agent_handoff",
+          connector: "unipile",
+          captureRequest: {
+            captureTransportMode: "connector_native_only",
+            outputSchema: { type: "object" },
+            prompt: "Capture LinkedIn followers",
+          },
+        },
+      };
+    },
+    requiresBrowserAttachForInboundCapture: () => false,
+    runConnectorCodexTask(input) {
+      observedTimeoutMs = input.timeoutMs;
+      return {
+        mode: "full",
+        status: "failed",
+        account: {
+          intended_handle: "williamflanagan",
+          verified: false,
+        },
+        errors: [
+          {
+            code: "connector_no_client_session",
+            surface: "account_identity",
+            message: "GET /api/v1/accounts returned {\"status\":503,\"type\":\"errors/no_client_session\",\"title\":\"No client session\"}.",
+          },
+        ],
+      };
+    },
+    buildInboundCapturePrompt: () => "Capture LinkedIn followers",
+    applyInboundPayload: () => {},
+    runVerificationCommands: () => [],
+  });
+
+  assert.equal(observedTimeoutMs, 45000);
 });
 
 test("normalizeInboundCaptureForWriteback keeps top-level warning captures free of invented failure errors", () => {

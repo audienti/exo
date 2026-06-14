@@ -49,6 +49,7 @@ import { inboundCueSchema } from "../schema/inbound.js";
 import {
   createTaskLeaseFingerprint,
   getActiveTaskLease,
+  getMaintenanceTaskCooldown,
   getRecentMotionRunAt,
 } from "../lib/agent-host-state.js";
 import { isConnectionRequestInFlight, isStalePendingConnectionRequest } from "../lib/cadence-helpers.js";
@@ -94,18 +95,17 @@ import { shouldQueueConnectionRequestStatusReconciliation } from "./connection-r
 const LIVE_SYNC_TASK_CAPABILITIES = new Set(["linkedin", "gmail"]);
 const SUBJECT_DRAFT_SURFACES = new Set(["email", "in_mail_message"]);
 const AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG = {
-  "linkedin-followers-list": { pageSize: 100 },
-  "linkedin-following-list": { pageSize: 50 },
-  "linkedin-profile-views": { pageSize: 50 },
-  "linkedin-sent-invitations": { pageSize: 100 },
-  "linkedin-received-invitations": { pageSize: 100 },
-  "linkedin-messaging-inbox": { pageSize: 100 },
+  "linkedin-followers-list": { pageSize: 100, maxPages: 1 },
+  "linkedin-following-list": { pageSize: 50, maxPages: 1 },
+  "linkedin-profile-views": { pageSize: 50, maxPages: 1 },
+  "linkedin-sent-invitations": { pageSize: 100, maxPages: 1 },
+  "linkedin-received-invitations": { pageSize: 100, maxPages: 1 },
+  "linkedin-messaging-inbox": { pageSize: 100, maxPages: 1 },
 };
 const MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD = 1;
 const CONNECTION_REQUEST_STATUS_RECONCILIATION_COOLDOWN_MS = 30 * 60 * 1000;
-// Full-mode backfills should follow provider pagination to terminal cursor by
-// default. Set EXO_AGENT_SYNC_SLICE_MAX_PAGES only when intentionally bounding
-// a host during diagnostics or degraded-provider recovery.
+// Full-mode backfills are intentionally page-sliced. Each queue task should
+// move one bounded provider page and then let writeback enqueue the next cursor.
 const MOTION_ROUND_ROBIN_TASK_KINDS = new Set([
   "company_discovery",
   "company_research",
@@ -305,15 +305,11 @@ export function buildAgentQueue(input) {
           surfaceSeams: buildSurfaceSeamsForQueue(account, [surfaceKey], now, {
             fallbackFreshnessState: staleSurface?.freshness?.reason ?? "warning",
           }),
-          dueAt: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
-            ? retrievalWindowStatus.nextOpenAt
-            : fullSyncDueAt,
+          dueAt: fullSyncDueAt,
           resumeCursor: normalizeNullableString(gapSurface?.nextCursor) ?? null,
           resumeStartOffset: Number.isInteger(gapSurface?.nextStartOffset) ? gapSurface.nextStartOffset : null,
           ...resolveAutonomousInboundPaginationConfig(surfaceKey),
-          waitingReason: !retrievalWindowStatus.openNow && retrievalWindowStatus.nextOpenAt
-            ? "outside_retrieval_window"
-            : null,
+          waitingReason: null,
         }), { now, tasks, waiting });
       }
 
@@ -391,7 +387,12 @@ export function buildAgentQueue(input) {
     }
   }
 
-  queueConnectionRequestStatusReconciliationTasks(input.observations ?? [], { now, tasks, waiting });
+  queueConnectionRequestStatusReconciliationTasks(input.observations ?? [], {
+    now,
+    tasks,
+    waiting,
+    hostState: input.hostState ?? null,
+  });
 
   // Accept tasks: inbound invites the operator queued for approval. The agent
   // performs the real accept on LinkedIn, then writes back the final connected
@@ -1497,7 +1498,7 @@ function buildInboundSyncTask({
  * lookups per account so one stale surface cannot turn into bot-like fan-out.
  *
  * @param {any[]} observations
- * @param {{ now: string, tasks: Array<Record<string, any>>, waiting: Array<Record<string, any>> }} queueContext
+ * @param {{ now: string, tasks: Array<Record<string, any>>, waiting: Array<Record<string, any>>, hostState?: any }} queueContext
  */
 function queueConnectionRequestStatusReconciliationTasks(observations, queueContext) {
   const candidates = observations.filter((observation) => shouldQueueConnectionRequestStatusReconciliation(observation));
@@ -1506,6 +1507,13 @@ function queueConnectionRequestStatusReconciliationTasks(observations, queueCont
   for (const accountCandidates of candidatesByAccount.values()) {
     const sortedCandidates = [...accountCandidates].sort(compareObservationQueueOrder);
     const selectedCandidates = sortedCandidates.slice(0, MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD);
+    const groupKey = buildConnectionRequestStatusReconciliationGroupKey(sortedCandidates[0]);
+    const cooldown = getMaintenanceTaskCooldown(
+      queueContext.hostState ?? null,
+      "reconcile_connection_request_status",
+      groupKey,
+      queueContext.now,
+    );
 
     for (const observation of selectedCandidates) {
       const totalPending = sortedCandidates.length;
@@ -1528,13 +1536,19 @@ function queueConnectionRequestStatusReconciliationTasks(observations, queueCont
           ? "sent_invite_status_reconciliation_bounded"
           : "sent_invite_status_reconciliation",
         queuedAt: observation.observedAt ?? null,
-        dueAt: observation.observedAt ?? queueContext.now,
+        dueAt: cooldown.active
+          ? cooldown.unavailableUntil
+          : observation.observedAt ?? queueContext.now,
+        waitingReason: cooldown.active
+          ? "connection_request_status_reconciliation_cooldown"
+          : null,
         batch: {
-          groupKey: buildConnectionRequestStatusReconciliationGroupKey(observation),
+          groupKey,
           totalPending,
           maxPerPass: MAX_CONNECTION_REQUEST_STATUS_RECONCILIATIONS_PER_QUEUE_BUILD,
           remainingAfterThisTask,
           cooldownMs: CONNECTION_REQUEST_STATUS_RECONCILIATION_COOLDOWN_MS,
+          cooldownUntil: cooldown.active ? cooldown.unavailableUntil : null,
           nextObservationId: sortedCandidates[1]?.id ?? null,
         },
       }, queueContext);
@@ -2190,9 +2204,12 @@ function normalizeNullableString(value) {
 function resolveAutonomousInboundPaginationConfig(surfaceKey) {
   const envMaxPages = Number.parseInt(process.env.EXO_AGENT_SYNC_SLICE_MAX_PAGES ?? "", 10);
   const surfaceOverride = AUTONOMOUS_FULL_SURFACE_PAGE_CONFIG[surfaceKey] ?? {};
+  const defaultMaxPages = Number.isInteger(surfaceOverride.maxPages) && surfaceOverride.maxPages > 0
+    ? surfaceOverride.maxPages
+    : 1;
   return {
     ...surfaceOverride,
-    maxPages: Number.isInteger(envMaxPages) && envMaxPages > 0 ? envMaxPages : null,
+    maxPages: Number.isInteger(envMaxPages) && envMaxPages > 0 ? envMaxPages : defaultMaxPages,
   };
 }
 

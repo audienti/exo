@@ -200,7 +200,7 @@ test("agent run still drains the research lane when the transport lane lock is h
   }
 });
 
-test("agent run releases the shared spawn guard after starting a pinned lane", () => {
+test("agent run keeps the shared pass guard held until a pinned lane finishes", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "exo-agent-run-spawn-guard-"));
   const stateDir = path.join(tempRoot, ".exo");
   const runnerScript = path.join(tempRoot, "fake-runner.js");
@@ -248,7 +248,7 @@ test("agent run releases the shared spawn guard after starting a pinned lane", (
 
     const report = JSON.parse(output);
     assert.equal(report.reason, "spawn-guard-checked");
-    assert.equal(report.lockAcquiredAfterSpawn, true);
+    assert.equal(report.lockAcquiredAfterSpawn, false);
     assert.deepEqual(report.lanes.map((lane) => lane.lane), ["transport"]);
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });

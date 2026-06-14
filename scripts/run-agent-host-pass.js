@@ -56,6 +56,7 @@ import {
   getSendCircuitBreaker,
   normalizeAgentHostState,
   pruneExpiredBrowserBackoffs,
+  recordMaintenanceTaskCooldown,
   recordMotionTaskRun,
   recordRuntimeUsageLimit,
   recordSendCircuitFailure,
@@ -111,6 +112,10 @@ const INBOUND_CAPTURE_TIMEOUT_MS = normalizePositiveInteger(
   process.env.EXO_AGENT_INBOUND_CAPTURE_TIMEOUT_MS,
   Math.max(BROWSER_TIMEOUT_MS, 6 * 60 * 1000),
 );
+const LINKEDIN_UNIPILE_HANDOFF_CAPTURE_TIMEOUT_MS = normalizePositiveInteger(
+  process.env.EXO_AGENT_LINKEDIN_UNIPILE_HANDOFF_CAPTURE_TIMEOUT_MS,
+  45 * 1000,
+);
 const INBOUND_IDENTITY_RESOLUTION_TIMEOUT_MS = normalizePositiveInteger(
   process.env.EXO_AGENT_INBOUND_IDENTITY_RESOLUTION_TIMEOUT_MS,
   3 * 60 * 1000,
@@ -121,6 +126,10 @@ const EXO_COMMAND_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_EX
 const INBOUND_EXO_COMMAND_TIMEOUT_MS = normalizePositiveInteger(
   process.env.EXO_AGENT_INBOUND_EXO_COMMAND_TIMEOUT_MS,
   Math.max(EXO_COMMAND_TIMEOUT_MS, 3 * 60 * 1000),
+);
+const LINKEDIN_FULL_SYNC_TASK_BUDGET_MS = normalizePositiveInteger(
+  process.env.EXO_AGENT_LINKEDIN_FULL_SYNC_TASK_BUDGET_MS,
+  5 * 60 * 1000,
 );
 const SHELL_COMMAND_TIMEOUT_MS = normalizePositiveInteger(process.env.EXO_AGENT_SHELL_COMMAND_TIMEOUT_MS, 60000);
 const BROWSER_TRANSPORT_BACKOFF_MS = normalizePositiveInteger(process.env.EXO_AGENT_BROWSER_BACKOFF_MS, 15 * 60 * 1000);
@@ -170,10 +179,11 @@ export function buildCodexTaskEnv(baseEnv = process.env) {
   if (!normalizeNullableString(env.UNIPILE_API_KEY) && unipileConfig.apiKey) {
     env.UNIPILE_API_KEY = unipileConfig.apiKey;
   }
-  if (!normalizeNullableString(env.UNIPILE_DSN) && unipileConfig.baseUrl) {
+  const hasExplicitUnipileBaseUrl = unipileConfig.baseUrlSource !== "default";
+  if (!normalizeNullableString(env.UNIPILE_DSN) && hasExplicitUnipileBaseUrl && unipileConfig.baseUrl) {
     env.UNIPILE_DSN = unipileConfig.baseUrl;
   }
-  if (!normalizeNullableString(env.UNIPILE_BASE_URL) && unipileConfig.baseUrl) {
+  if (!normalizeNullableString(env.UNIPILE_BASE_URL) && hasExplicitUnipileBaseUrl && unipileConfig.baseUrl) {
     env.UNIPILE_BASE_URL = unipileConfig.baseUrl;
   }
   if (!normalizeNullableString(env.UNIPILE_V2_API_KEY) && unipileConfig.v2ApiKey) {
@@ -328,6 +338,9 @@ function runUnlockedAgentHostPass() {
           recordedAt: result.finishedAt ?? new Date().toISOString(),
           status: result.status,
         }));
+      }
+      if (result.status === "completed" && executableTask.kind === "reconcile_connection_request_status") {
+        hostState = mutateHostState((state) => recordCompletedMaintenanceTaskCooldown(state, executableTask, result));
       }
       if (maintenanceTask) {
         maintenanceTaskCount += 1;
@@ -517,8 +530,9 @@ function loadInboundAutomationRolloutWarnings(now = new Date().toISOString()) {
 }
 
 /**
- * Stop the pass after one verification-only send. That path intentionally does
- * not write back, so the queue would otherwise surface the same task again.
+ * Canary live sends remain one-at-a-time. Verification-only sends may keep
+ * draining because recent proof records now prevent the same task from being
+ * reselected inside the pass.
  *
  * @param {any} task
  * @param {any} result
@@ -527,10 +541,7 @@ export function shouldStopAfterTaskResult(task, result) {
   return Boolean(
     task?.kind === "send_message"
       && result?.status === "completed"
-      && (
-        result?.detail?.verificationOnly === true
-        || task?._selectedSendMode === "canary_live"
-      )
+      && task?._selectedSendMode === "canary_live"
   );
 }
 
@@ -1075,6 +1086,57 @@ export function chooseNextQueueTask(
 }
 
 /**
+ * @param {any} state
+ * @param {any} task
+ * @param {any} result
+ */
+export function recordCompletedMaintenanceTaskCooldown(state, task, result) {
+  const normalized = normalizeAgentHostState(state);
+  if (task?.kind !== "reconcile_connection_request_status" || result?.status !== "completed") {
+    return normalized;
+  }
+
+  const cooldownMs = normalizePositiveInteger(task?.batch?.cooldownMs, 0);
+  if (cooldownMs <= 0) {
+    return normalized;
+  }
+
+  const recordedAt = normalizeIsoDatetime(result?.finishedAt) ?? new Date().toISOString();
+  const groupKey = normalizeNullableString(task?.batch?.groupKey)
+    ?? buildConnectionRequestStatusReconciliationGroupKeyFromTask(task);
+  if (!groupKey) {
+    return normalized;
+  }
+
+  return recordMaintenanceTaskCooldown(normalized, {
+    taskKind: task.kind,
+    groupKey,
+    recordedAt,
+    unavailableUntil: new Date(Date.parse(recordedAt) + cooldownMs).toISOString(),
+    reason: "bounded_connection_request_status_reconciliation",
+    taskFingerprint: createTaskLeaseFingerprint(task),
+    taskLabel: [task.prospectName, task.companyName].filter(Boolean).join(" at ")
+      || task.recipientUrl
+      || task.observationId
+      || null,
+  });
+}
+
+/** @param {any} task */
+function buildConnectionRequestStatusReconciliationGroupKeyFromTask(task) {
+  const userId = normalizeNullableString(task?.userId);
+  const accountId = normalizeNullableString(task?.accountId);
+  if (!userId || !accountId) {
+    return null;
+  }
+  return [
+    userId,
+    accountId,
+    normalizeNullableString(task?.capability) ?? "linkedin",
+  ].join(":");
+}
+
+/**
  * Manual host-pass verification should be able to exercise retrieval without
  * waiting for the stale window. When explicitly forced, include waiting
  * `run_inbound_sync` tasks in the same selection pipeline as due work.
@@ -1422,7 +1484,7 @@ function executeTask(task, preflight, options = {}, executionContext = null) {
     }
 
     if (task.kind === "run_inbound_sync") {
-      const sync = runInboundSyncTask(task, preflight);
+      const sync = runInboundSyncTask(task, preflight, {}, executionContext);
       if (sync.status === "blocked" || sync.status === "failed") {
         sync.detail = {
           ...sync.detail,
@@ -1592,22 +1654,109 @@ function runDraftTask(task) {
 }
 
 /** @param {any} task */
-function runInboundSyncTask(task, preflight) {
+export function runInboundSyncTask(task, preflight, dependencies = {}, executionContext = null) {
+  void preflight;
+  const runInboundContractImpl = dependencies.runInboundContract ?? runInboundContract;
+  const applyInboundPayloadImpl = dependencies.applyInboundPayload ?? applyInboundPayload;
+  const runVerificationCommandsImpl = dependencies.runVerificationCommands ?? runVerificationCommands;
+  const requiresBrowserAttachForInboundCaptureImpl = dependencies.requiresBrowserAttachForInboundCapture ?? requiresBrowserAttachForInboundCapture;
+  const runConnectorCodexTaskImpl = dependencies.runConnectorCodexTask ?? runConnectorCodexTask;
+  const buildInboundCapturePromptImpl = dependencies.buildInboundCapturePrompt ?? buildInboundCapturePrompt;
+  const buildInboundPayloadImpl = dependencies.buildInboundPayload ?? buildInboundPayload;
+  const nowMsImpl = dependencies.nowMs ?? Date.now;
+  const resolveContinuationBudgetMsImpl = dependencies.resolveContinuationBudgetMs ?? resolveInboundContinuationBudgetMs;
+  const suppressVerification = dependencies.suppressVerification === true;
+  const disableMultiPage = dependencies.disableMultiPage === true;
+
+  if (!disableMultiPage) {
+    const continuationBudgetMs = resolveContinuationBudgetMsImpl(task);
+    if (continuationBudgetMs > 0 && shouldAllowMultiPageInboundSync(task)) {
+      const aggregateStageTimingsMs = {};
+      const startedAtMs = nowMsImpl();
+      let currentTask = { ...task };
+      let continuationPassCount = 0;
+      /** @type {{ status: string, detail: Record<string, any> } | null} */
+      let finalResult = null;
+
+      while (true) {
+        const singleResult = runInboundSyncTask(
+          currentTask,
+          preflight,
+          {
+            ...dependencies,
+            disableMultiPage: true,
+            suppressVerification: true,
+          },
+          executionContext,
+        );
+        continuationPassCount += 1;
+        finalResult = singleResult;
+        mergeInboundStageTimings(aggregateStageTimingsMs, singleResult.detail?.stageTimingsMs);
+        if (singleResult.status !== "completed") {
+          return singleResult;
+        }
+
+        const continuation = extractInboundTaskContinuation(singleResult.detail);
+        if (!continuation) {
+          break;
+        }
+        if ((nowMsImpl() - startedAtMs) >= continuationBudgetMs) {
+          break;
+        }
+
+        currentTask = {
+          ...currentTask,
+          resumeCursor: continuation.resumeCursor ?? null,
+          resumeStartOffset: continuation.resumeStartOffset ?? null,
+        };
+      }
+
+      let verification = [];
+      if (!suppressVerification) {
+        const verificationStartedAt = nowMsImpl();
+        verification = runVerificationCommandsImpl(task.verificationCommands ?? []);
+        aggregateStageTimingsMs.verification = (aggregateStageTimingsMs.verification ?? 0) + (nowMsImpl() - verificationStartedAt);
+      }
+
+      return {
+        status: finalResult?.status ?? "completed",
+        detail: {
+          ...(finalResult?.detail ?? {}),
+          verification,
+          stageTimingsMs: aggregateStageTimingsMs,
+          continuationPassCount,
+        },
+      };
+    }
+  }
+
   const stageTimingsMs = {};
   let stageStartedAt = Date.now();
-  const liveResult = runInboundContract(task);
+  const liveResult = runInboundContractImpl(task);
   stageTimingsMs.contract = Date.now() - stageStartedAt;
   if (liveResult.payload) {
+    const surfaceProgress = extractInboundTaskSurfaceProgress(task, liveResult.payload);
     stageStartedAt = Date.now();
-    applyInboundPayload(task, liveResult.payload);
+    applyInboundPayloadImpl(task, liveResult.payload);
     stageTimingsMs.apply = Date.now() - stageStartedAt;
-    stageStartedAt = Date.now();
-    const verification = runVerificationCommands(task.verificationCommands ?? []);
-    stageTimingsMs.verification = Date.now() - stageStartedAt;
+    let verification = [];
+    if (!suppressVerification) {
+      stageStartedAt = Date.now();
+      verification = runVerificationCommandsImpl(task.verificationCommands ?? []);
+      stageTimingsMs.verification = Date.now() - stageStartedAt;
+    }
     return {
       status: "completed",
       detail: {
         transport: "direct_payload",
+        captureStatus: surfaceProgress.surfaceStatus,
+        captureError: surfaceProgress.surfaceError,
+        observedCount: surfaceProgress.surfaceItemCount,
+        surfaceStatus: surfaceProgress.surfaceStatus,
+        surfaceError: surfaceProgress.surfaceError,
+        surfaceReconcileReason: surfaceProgress.surfaceReconcileReason,
+        nextCursor: surfaceProgress.nextCursor,
+        nextStartOffset: surfaceProgress.nextStartOffset,
         verification,
         stageTimingsMs,
       }
@@ -1624,8 +1773,46 @@ function runInboundSyncTask(task, preflight) {
   }
 
   const captureRequest = liveResult.transport.captureRequest;
+  const passScopedFallbackReason = getPassScopedInboundSameCredentialFallbackReason(executionContext, task, liveResult);
+  if (passScopedFallbackReason) {
+    stageStartedAt = Date.now();
+    const fallbackLiveResult = runInboundContractImpl(task, { directUnipileHttp: true });
+    stageTimingsMs.fallbackContract = Date.now() - stageStartedAt;
+    if (fallbackLiveResult.payload) {
+      const fallbackCapture = summarizeInboundCaptureResult(fallbackLiveResult.capture, task.capability);
+      const surfaceProgress = extractInboundTaskSurfaceProgress(task, fallbackLiveResult.payload);
+      stageStartedAt = Date.now();
+      applyInboundPayloadImpl(task, fallbackLiveResult.payload);
+      stageTimingsMs.fallbackApply = Date.now() - stageStartedAt;
+      let verification = [];
+      if (!suppressVerification) {
+        stageStartedAt = Date.now();
+        verification = runVerificationCommandsImpl(task.verificationCommands ?? []);
+        stageTimingsMs.verification = Date.now() - stageStartedAt;
+      }
+      return {
+        status: "completed",
+        detail: {
+          transport: "unipile_http_same_credentials_fallback",
+          fallbackFrom: "pass_scoped_unipile_mcp_hold",
+          fallbackReason: passScopedFallbackReason,
+          captureStatus: fallbackCapture?.status ?? surfaceProgress.surfaceStatus,
+          captureError: fallbackCapture?.error ?? surfaceProgress.surfaceError,
+          observedCount: fallbackCapture?.itemCount ?? surfaceProgress.surfaceItemCount,
+          surfaceStatus: surfaceProgress.surfaceStatus,
+          surfaceError: surfaceProgress.surfaceError,
+          surfaceReconcileReason: surfaceProgress.surfaceReconcileReason,
+          nextCursor: surfaceProgress.nextCursor,
+          nextStartOffset: surfaceProgress.nextStartOffset,
+          verification,
+          stageTimingsMs,
+        },
+      };
+    }
+  }
+
   let capture;
-  if (requiresBrowserAttachForInboundCapture(captureRequest)) {
+  if (requiresBrowserAttachForInboundCaptureImpl(captureRequest)) {
     capture = buildFailedInboundCapture(
       task,
       `connector_native_required: ${task.capability} live sync no longer uses browser-native capture. Re-map this account or surface to a connector-native path.`,
@@ -1633,11 +1820,11 @@ function runInboundSyncTask(task, preflight) {
   } else {
     stageStartedAt = Date.now();
     try {
-      capture = runConnectorCodexTask({
-        prompt: buildInboundCapturePrompt(captureRequest, liveResult.transport.connector ?? null),
+      capture = runConnectorCodexTaskImpl({
+        prompt: buildInboundCapturePromptImpl(captureRequest, liveResult.transport.connector ?? null),
         schema: captureRequest.outputSchema,
         outputName: `inbound-${task.capability}-${task.accountId}.json`,
-        timeoutMs: INBOUND_CAPTURE_TIMEOUT_MS,
+        timeoutMs: resolveInboundCaptureTimeoutMs(task, liveResult),
         enabledPlugins: resolveCodexConnectorPluginIds(liveResult.transport.connector ?? task.capability ?? null),
         enabledMcpServers: resolveCodexConnectorMcpServerIds(liveResult.transport.connector ?? task.capability ?? null),
       });
@@ -1648,15 +1835,57 @@ function runInboundSyncTask(task, preflight) {
   }
   const normalizedCapture = normalizeInboundCaptureForWriteback(capture, task.capability);
 
+  if (shouldUseSameCredentialUnipileHttpInboundFallback(task, liveResult, normalizedCapture)) {
+    rememberPassScopedInboundSameCredentialFallback(executionContext, task, liveResult, normalizedCapture.error);
+    stageStartedAt = Date.now();
+    const fallbackLiveResult = runInboundContractImpl(task, { directUnipileHttp: true });
+    stageTimingsMs.fallbackContract = Date.now() - stageStartedAt;
+    if (fallbackLiveResult.payload) {
+      const fallbackCapture = summarizeInboundCaptureResult(fallbackLiveResult.capture, task.capability);
+      const surfaceProgress = extractInboundTaskSurfaceProgress(task, fallbackLiveResult.payload);
+      stageStartedAt = Date.now();
+      applyInboundPayloadImpl(task, fallbackLiveResult.payload);
+      stageTimingsMs.fallbackApply = Date.now() - stageStartedAt;
+      let verification = [];
+      if (!suppressVerification) {
+        stageStartedAt = Date.now();
+        verification = runVerificationCommandsImpl(task.verificationCommands ?? []);
+        stageTimingsMs.verification = Date.now() - stageStartedAt;
+      }
+      return {
+        status: "completed",
+        detail: {
+          transport: "unipile_http_same_credentials_fallback",
+          fallbackFrom: "agent_handoff",
+          fallbackReason: normalizedCapture.error ?? null,
+          captureStatus: fallbackCapture?.status ?? surfaceProgress.surfaceStatus,
+          captureError: fallbackCapture?.error ?? surfaceProgress.surfaceError,
+          observedCount: fallbackCapture?.itemCount ?? surfaceProgress.surfaceItemCount,
+          surfaceStatus: surfaceProgress.surfaceStatus,
+          surfaceError: surfaceProgress.surfaceError,
+          surfaceReconcileReason: surfaceProgress.surfaceReconcileReason,
+          nextCursor: surfaceProgress.nextCursor,
+          nextStartOffset: surfaceProgress.nextStartOffset,
+          verification,
+          stageTimingsMs,
+        },
+      };
+    }
+  }
+
   stageStartedAt = Date.now();
-  const builtPayload = buildInboundPayload(task, normalizedCapture);
+  const builtPayload = buildInboundPayloadImpl(task, normalizedCapture);
   stageTimingsMs.payloadBuild = Date.now() - stageStartedAt;
+  const surfaceProgress = extractInboundTaskSurfaceProgress(task, builtPayload.payload);
   stageStartedAt = Date.now();
-  applyInboundPayload(task, builtPayload.payload);
+  applyInboundPayloadImpl(task, builtPayload.payload);
   stageTimingsMs.apply = Date.now() - stageStartedAt;
-  stageStartedAt = Date.now();
-  const verification = runVerificationCommands(task.verificationCommands ?? []);
-  stageTimingsMs.verification = Date.now() - stageStartedAt;
+  let verification = [];
+  if (!suppressVerification) {
+    stageStartedAt = Date.now();
+    verification = runVerificationCommandsImpl(task.verificationCommands ?? []);
+    stageTimingsMs.verification = Date.now() - stageStartedAt;
+  }
 
   return {
     status: "completed",
@@ -1664,11 +1893,223 @@ function runInboundSyncTask(task, preflight) {
       transport: "agent_handoff",
       captureStatus: normalizedCapture.status,
       captureError: normalizedCapture.error ?? null,
-      observedCount: normalizedCapture.itemCount ?? null,
+      observedCount: normalizedCapture.itemCount ?? surfaceProgress.surfaceItemCount,
+      surfaceStatus: surfaceProgress.surfaceStatus,
+      surfaceError: surfaceProgress.surfaceError,
+      surfaceReconcileReason: surfaceProgress.surfaceReconcileReason,
+      nextCursor: surfaceProgress.nextCursor,
+      nextStartOffset: surfaceProgress.nextStartOffset,
       verification,
       stageTimingsMs,
     }
   };
+}
+
+function shouldAllowMultiPageInboundSync(task) {
+  return task?.capability === "linkedin"
+    && task?.mode === "full"
+    && normalizeInboundTaskSurfaceKeys(task).length === 1;
+}
+
+function resolveInboundContinuationBudgetMs(task) {
+  return shouldAllowMultiPageInboundSync(task)
+    ? LINKEDIN_FULL_SYNC_TASK_BUDGET_MS
+    : 0;
+}
+
+function mergeInboundStageTimings(target, source) {
+  if (!source || typeof source !== "object") {
+    return;
+  }
+  for (const [key, value] of Object.entries(source)) {
+    if (!Number.isFinite(value)) {
+      continue;
+    }
+    target[key] = (target[key] ?? 0) + value;
+  }
+}
+
+function extractInboundTaskContinuation(detail) {
+  if (!detail || typeof detail !== "object") {
+    return null;
+  }
+  if (normalizeNullableString(detail.surfaceReconcileReason) !== "page_budget_stopped_early") {
+    return null;
+  }
+  const resumeCursor = normalizeNullableString(detail.nextCursor) ?? null;
+  const resumeStartOffset = Number.isInteger(detail.nextStartOffset) ? detail.nextStartOffset : null;
+  if (!resumeCursor && resumeStartOffset === null) {
+    return null;
+  }
+  return {
+    resumeCursor,
+    resumeStartOffset,
+  };
+}
+
+function extractInboundTaskSurfaceProgress(task, payload) {
+  const targetSurfaceKey = normalizeInboundTaskSurfaceKeys(task)[0] ?? null;
+  if (!targetSurfaceKey) {
+    return {
+      surfaceStatus: null,
+      surfaceError: null,
+      surfaceReconcileReason: null,
+      nextCursor: null,
+      nextStartOffset: null,
+      surfaceItemCount: null,
+    };
+  }
+
+  const accounts = Array.isArray(payload?.accounts) ? payload.accounts : [];
+  for (const account of accounts) {
+    const surfaces = Array.isArray(account?.surfaces) ? account.surfaces : [];
+    const surface = surfaces.find((candidate) => normalizeNullableString(candidate?.surfaceKey) === targetSurfaceKey) ?? null;
+    if (!surface) {
+      continue;
+    }
+    const observations = Array.isArray(surface.observations) ? surface.observations : [];
+    const itemCount = Number.isInteger(surface.itemCount)
+      ? surface.itemCount
+      : observations.length > 0
+        ? observations.length
+        : null;
+    return {
+      surfaceStatus: normalizeNullableString(surface.status),
+      surfaceError: normalizeNullableString(surface.error),
+      surfaceReconcileReason: normalizeNullableString(surface.reconcileReason),
+      nextCursor: normalizeNullableString(surface.nextCursor),
+      nextStartOffset: Number.isInteger(surface.nextStartOffset) ? surface.nextStartOffset : null,
+      surfaceItemCount: itemCount,
+    };
+  }
+
+  return {
+    surfaceStatus: null,
+    surfaceError: null,
+    surfaceReconcileReason: null,
+    nextCursor: null,
+    nextStartOffset: null,
+    surfaceItemCount: null,
+  };
+}
+
+function resolveInboundCaptureTimeoutMs(task, liveResult) {
+  if (
+    task?.capability === "linkedin"
+    && liveResult?.transport?.kind === "agent_handoff"
+    && normalizeNullableString(liveResult?.transport?.connector)?.toLowerCase() === "unipile"
+  ) {
+    return Math.min(INBOUND_CAPTURE_TIMEOUT_MS, LINKEDIN_UNIPILE_HANDOFF_CAPTURE_TIMEOUT_MS);
+  }
+  return INBOUND_CAPTURE_TIMEOUT_MS;
+}
+
+function shouldUseSameCredentialUnipileHttpInboundFallback(task, liveResult, normalizedCapture) {
+  return task?.capability === "linkedin"
+    && liveResult?.transport?.kind === "agent_handoff"
+    && normalizeNullableString(liveResult?.transport?.connector)?.toLowerCase() === "unipile"
+    && normalizeNullableString(normalizedCapture?.status)?.toLowerCase() === "failed";
+}
+
+function getPassScopedInboundSameCredentialFallbackReason(executionContext, task, liveResult) {
+  const holdKey = buildPassScopedInboundSameCredentialFallbackKey(task, liveResult);
+  if (!holdKey) {
+    return null;
+  }
+  const fallbackHolds = executionContext?.inboundConnectorFallbacks;
+  if (!(fallbackHolds instanceof Map)) {
+    return null;
+  }
+  const hold = fallbackHolds.get(holdKey);
+  return normalizeNullableString(hold?.reason) ?? null;
+}
+
+function rememberPassScopedInboundSameCredentialFallback(executionContext, task, liveResult, reason) {
+  const normalizedReason = normalizeNullableString(reason);
+  if (!shouldHoldInboundSameCredentialFallbackForPass(normalizedReason)) {
+    return;
+  }
+  const holdKey = buildPassScopedInboundSameCredentialFallbackKey(task, liveResult);
+  if (!holdKey) {
+    return;
+  }
+  const fallbackHolds = executionContext?.inboundConnectorFallbacks;
+  if (!(fallbackHolds instanceof Map)) {
+    return;
+  }
+  fallbackHolds.set(holdKey, {
+    reason: normalizedReason,
+    recordedAt: new Date().toISOString(),
+  });
+}
+
+function buildPassScopedInboundSameCredentialFallbackKey(task, liveResult) {
+  if (
+    task?.capability !== "linkedin"
+    || liveResult?.transport?.kind !== "agent_handoff"
+    || normalizeNullableString(liveResult?.transport?.connector)?.toLowerCase() !== "unipile"
+  ) {
+    return null;
+  }
+  return "linkedin:unipile:inbound";
+}
+
+function shouldHoldInboundSameCredentialFallbackForPass(reason) {
+  const normalized = normalizeNullableString(reason)?.toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.includes("timeout")
+    || normalized.includes("timed out")
+    || normalized.includes("connector_no_client_session")
+    || normalized.includes("errors/no_client_session")
+    || normalized.includes("no_client_session");
+}
+
+function summarizeInboundCaptureResult(capture, capability) {
+  if (!capture || typeof capture !== "object") {
+    return {
+      status: null,
+      error: null,
+      itemCount: null,
+    };
+  }
+
+  const status = normalizeNullableString(capture.status)?.toLowerCase() ?? null;
+  const error = normalizeNullableString(capture.error);
+  const itemCount = Number.isInteger(capture.itemCount) ? capture.itemCount : null;
+  if (capability !== "linkedin" || status || error || itemCount !== null) {
+    return { status, error, itemCount };
+  }
+
+  const sections = Array.isArray(capture.sections) ? capture.sections : [];
+  return {
+    status: summarizeInboundCaptureSectionStatus(sections),
+    error: sections.map((section) => resolveLinkedinSurfaceError(section)).find(Boolean) ?? null,
+    itemCount: sections.reduce(
+      (sum, section) => sum + (Number.isInteger(section?.itemCount) ? section.itemCount : 0),
+      0,
+    ),
+  };
+}
+
+function summarizeInboundCaptureSectionStatus(sections) {
+  const statuses = sections
+    .map((section) => normalizeNullableString(section?.status)?.toLowerCase() ?? null)
+    .filter(Boolean);
+  if (!statuses.length) {
+    return null;
+  }
+  if (statuses.includes("failed")) {
+    return "failed";
+  }
+  if (statuses.includes("warning")) {
+    return "warning";
+  }
+  if (statuses.every((status) => status === "success")) {
+    return "success";
+  }
+  return statuses[0];
 }
 
 /** @param {any} task */
@@ -2678,10 +3119,13 @@ export function classifyHandledLinkedinReplyUnavailable(task, handoff, result) {
 }
 
 function createAgentExecutionContext() {
-  return null;
+  return {
+    linkedinMaintenanceSessions: new Map(),
+    inboundConnectorFallbacks: new Map(),
+  };
 }
 
-/** @param {{ linkedinMaintenanceSessions?: Map<string, any> } | null} executionContext */
+/** @param {{ linkedinMaintenanceSessions?: Map<string, any>, inboundConnectorFallbacks?: Map<string, any> } | null} executionContext */
 function disposeAgentExecutionContext(executionContext) {
   void executionContext;
 }
@@ -2892,10 +3336,10 @@ function extractSameCredentialFallbackHttpStatus(problem) {
 }
 
 /** @param {any} task */
-function runInboundContract(task) {
+function runInboundContract(task, options = {}) {
   if (task.capability === "gmail" || task.capability === "linkedin") {
     return runExoJsonArgs(
-      buildInboundContractArgs(task),
+      buildInboundContractArgs(task, options),
       { timeoutMs: resolveInboundExoCommandTimeoutMs(task) },
     );
   }
@@ -2904,7 +3348,7 @@ function runInboundContract(task) {
 }
 
 /** @param {any} task */
-export function buildInboundContractArgs(task) {
+export function buildInboundContractArgs(task, options = {}) {
   const command = task?.capability === "linkedin"
     ? "linkedin-live"
     : task?.capability === "gmail"
@@ -2939,6 +3383,9 @@ export function buildInboundContractArgs(task) {
     }
     if (Number.isInteger(task?.pageSize) && task.pageSize > 0) {
       args.push("--page-size", String(task.pageSize));
+    }
+    if (options.directUnipileHttp === true) {
+      args.push("--direct-unipile-http");
     }
   }
   args.push(
@@ -3855,16 +4302,16 @@ function buildUnipileSendPromptHints(handoff) {
   }
 
   const codexHome = normalizeNullableString(process.env.CODEX_HOME) ?? CODEX_HOME;
-  const { baseUrl } = readUnipileConfig(codexHome);
+  const { baseUrl, baseUrlSource } = readUnipileConfig(codexHome);
   const exactBaseUrl = normalizeNullableString(baseUrl);
-  if (!exactBaseUrl) {
+  if (!exactBaseUrl || baseUrlSource === "default") {
     return [];
   }
 
   return [
-    `Every Unipile MCP request in this task MUST use URLs rooted at ${exactBaseUrl}. Do not substitute api1.unipile.com, localhost, or any documented default server example.`,
+    `Use the configured Unipile MCP server for this runtime. This tenant's configured Unipile API root is ${exactBaseUrl}. Do not substitute localhost or documented default server examples.`,
     `If you need governed account discovery, call GET ${exactBaseUrl}/api/v1/accounts with accept: application/json and keep every follow-on Unipile request on that same base URL.`,
-    "If a different Unipile base URL returns errors/no_client_session, treat that as a misrouted request, not as proof that the governed connector is down.",
+    "If a different Unipile base URL returns errors/no_client_session, treat that as a tenant routing mismatch, not as proof that the governed connector is down.",
   ];
 }
 

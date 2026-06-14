@@ -523,7 +523,8 @@ function resolveLinkedinMaintenanceContext(task, options = {}) {
   }
 
   const config = readUnipileConfig(options.codexHome ?? null);
-  const baseUrl = normalizeNullableString(options.baseUrl) ?? config.baseUrl;
+  const baseUrl = normalizeNullableString(options.baseUrl)
+    ?? (config.baseUrlSource === "default" ? null : config.baseUrl);
   if (!baseUrl) {
     return {
       status: "blocked",

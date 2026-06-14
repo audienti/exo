@@ -765,8 +765,6 @@ export async function runAgentWorkerPass(options = {}) {
     const lanes = pinnedLane ? [pinnedLane] : [...AGENT_EXECUTION_LANES];
     const lanePasses = lanes.map((lane) =>
       runWorkerLanePass({ lane, runnerNode, runnerScript, env }));
-    releaseAgentRunLock(runLock);
-    runLock = null;
     const laneSummaries = await Promise.all(lanePasses);
     const summary = {
       ...mergeLanePassSummaries(laneSummaries),

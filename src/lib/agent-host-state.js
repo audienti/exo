@@ -52,6 +52,7 @@ export function normalizeAgentHostState(state) {
     taskLeases: [],
     recentTaskVerifications: [],
     recentMotionTaskRuns: [],
+    maintenanceTaskCooldowns: [],
   };
 
   for (const lane of ["retrieval", "execution"]) {
@@ -120,6 +121,13 @@ export function normalizeAgentHostState(state) {
     .map(normalizeMotionTaskRunEntry)
     .filter(Boolean);
 
+  const maintenanceTaskCooldowns = Array.isArray(state?.maintenanceTaskCooldowns)
+    ? state.maintenanceTaskCooldowns
+    : [];
+  normalized.maintenanceTaskCooldowns = maintenanceTaskCooldowns
+    .map(normalizeMaintenanceTaskCooldownEntry)
+    .filter(Boolean);
+
   return normalized;
 }
 
@@ -176,6 +184,10 @@ export function pruneExpiredBrowserBackoffs(state, now = new Date().toISOString(
       runtime: null,
     };
   }
+  normalized.maintenanceTaskCooldowns = normalized.maintenanceTaskCooldowns.filter((entry) => {
+    if (!entry.unavailableUntil) return false;
+    return Date.parse(now) < Date.parse(entry.unavailableUntil);
+  });
   return normalized;
 }
 
@@ -318,6 +330,64 @@ export function recordMotionTaskRun(state, entry) {
     normalized.recentMotionTaskRuns = normalized.recentMotionTaskRuns.slice(-200);
   }
   return normalized;
+}
+
+/**
+ * @param {any} state
+ * @param {{
+ *   taskKind: string,
+ *   groupKey: string,
+ *   recordedAt: string,
+ *   unavailableUntil: string,
+ *   reason?: string | null,
+ *   taskFingerprint?: string | null,
+ *   taskLabel?: string | null,
+ * }} entry
+ */
+export function recordMaintenanceTaskCooldown(state, entry) {
+  const normalized = normalizeAgentHostState(state);
+  const nextEntry = normalizeMaintenanceTaskCooldownEntry(entry);
+  if (!nextEntry) return normalized;
+  normalized.maintenanceTaskCooldowns = normalized.maintenanceTaskCooldowns
+    .filter((item) => !(item.taskKind === nextEntry.taskKind && item.groupKey === nextEntry.groupKey));
+  normalized.maintenanceTaskCooldowns.push(nextEntry);
+  normalized.maintenanceTaskCooldowns.sort((left, right) => left.unavailableUntil.localeCompare(right.unavailableUntil));
+  if (normalized.maintenanceTaskCooldowns.length > 200) {
+    normalized.maintenanceTaskCooldowns = normalized.maintenanceTaskCooldowns.slice(-200);
+  }
+  return normalized;
+}
+
+/**
+ * @param {any} state
+ * @param {string | null | undefined} taskKind
+ * @param {string | null | undefined} groupKey
+ * @param {string} [now]
+ */
+export function getMaintenanceTaskCooldown(state, taskKind, groupKey, now = new Date().toISOString()) {
+  if (!taskKind || !groupKey) {
+    return {
+      active: false,
+      unavailableUntil: null,
+      reason: null,
+      recordedAt: null,
+      taskFingerprint: null,
+      taskLabel: null,
+    };
+  }
+  const normalized = pruneExpiredBrowserBackoffs(state, now);
+  const entry = normalized.maintenanceTaskCooldowns.find((item) => (
+    item.taskKind === taskKind
+    && item.groupKey === groupKey
+  )) ?? null;
+  return {
+    active: Boolean(entry),
+    unavailableUntil: entry?.unavailableUntil ?? null,
+    reason: entry?.reason ?? null,
+    recordedAt: entry?.recordedAt ?? null,
+    taskFingerprint: entry?.taskFingerprint ?? null,
+    taskLabel: entry?.taskLabel ?? null,
+  };
 }
 
 /**
@@ -617,14 +687,16 @@ export function releaseTaskLease(state, fingerprint) {
 export function createTaskVerificationFingerprint(task) {
   const basis = JSON.stringify({
     kind: task?.kind ?? null,
+    action: task?.action ?? null,
     motionId: task?.motionId ?? null,
     companyId: task?.companyId ?? null,
     prospectId: task?.prospectId ?? null,
     surface: task?.surface ?? null,
+    channel: task?.channel ?? null,
     recipientUrl: task?.recipientUrl ?? null,
-    queuedAt: task?.queuedAt ?? null,
+    recipientEmail: task?.recipientEmail ?? null,
+    subject: task?.subject ?? null,
     body: task?.body ?? null,
-    writeback: task?.writeback ?? null,
   });
   return createHash("sha1").update(basis).digest("hex");
 }
@@ -730,6 +802,24 @@ function normalizeMotionTaskRunEntry(entry) {
     companyId: normalizeIdentity(entry?.companyId),
     prospectId: normalizeIdentity(entry?.prospectId),
     status: normalizeIdentity(entry?.status),
+  };
+}
+
+/** @param {any} entry */
+function normalizeMaintenanceTaskCooldownEntry(entry) {
+  const taskKind = normalizeIdentity(entry?.taskKind);
+  const groupKey = normalizeIdentity(entry?.groupKey);
+  const recordedAt = normalizeIsoDatetime(entry?.recordedAt);
+  const unavailableUntil = normalizeIsoDatetime(entry?.unavailableUntil);
+  if (!taskKind || !groupKey || !recordedAt || !unavailableUntil) return null;
+  return {
+    taskKind,
+    groupKey,
+    recordedAt,
+    unavailableUntil,
+    reason: normalizeReason(entry?.reason),
+    taskFingerprint: normalizeIdentity(entry?.taskFingerprint),
+    taskLabel: normalizeReason(entry?.taskLabel),
   };
 }
 

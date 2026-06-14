@@ -650,9 +650,9 @@ function deriveGapState(surface, itemized) {
       autoRepairable: false,
     };
   }
-  if (surface.lastRunStatus === "error" || surface.lastRunStatus === "failure") {
+  if (isFailedRunStatus(surface.lastRunStatus)) {
     return {
-      message: "Last sync failed — this surface cannot be trusted until it is re-run.",
+      message: failedSurfaceMessage(surface),
       kind: "failure",
       autoRepairable: false,
     };
@@ -680,11 +680,24 @@ function freshnessChip(name, surface) {
 function mapSurfaceTruth(surface) {
   const lastRunStatus = surface?.lastRunStatus;
   const meta = surface?.meta;
-  if (lastRunStatus === "error" || lastRunStatus === "failure") return "failed";
+  if (isFailedRunStatus(lastRunStatus)) return "failed";
   if (lastRunStatus === "never" || meta?.unchecked) return "unchecked";
   if (hasMixedInboundBaseline(surface) || meta?.itemizationGap || meta?.stale || lastRunStatus === "warning") return "partial";
   if (lastRunStatus === "success") return "checked";
   return "quiet";
+}
+
+/** @param {unknown} status */
+function isFailedRunStatus(status) {
+  return ["error", "failure", "failed"].includes(String(status ?? "").trim().toLowerCase());
+}
+
+/** @param {{ lastError?: unknown }} surface */
+function failedSurfaceMessage(surface) {
+  const error = normalizeDisplayString(surface?.lastError);
+  return error
+    ? `Last sync failed: ${error}`
+    : "Last sync failed — this surface cannot be trusted until it is re-run.";
 }
 
 /**

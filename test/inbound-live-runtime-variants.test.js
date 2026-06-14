@@ -487,6 +487,10 @@ test("inbound sync linkedin-live defaults managed Unipile accounts to agent hand
     assert.equal(result.payload, null);
     assert.equal(result.transport.connector, "unipile");
     assert.match(result.transport.captureRequest.prompt, /native unipile connector/i);
+    assert.match(result.transport.captureRequest.prompt, /https:\/\/api14\.unipile\.com:14465/);
+    assert.match(result.transport.captureRequest.prompt, /tenant's configured Unipile API root/i);
+    assert.match(result.transport.captureRequest.prompt, /Do not substitute localhost or documented default server examples/i);
+    assert.match(result.transport.captureRequest.prompt, /errors\/no_client_session/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

@@ -14,6 +14,7 @@ import {
 import { INBOUND_SURFACE_MIXED_BASELINE_REASON } from "../src/core/user-inbound-sync.js";
 
 const timestamp = "2026-06-06T12:00:00.000Z";
+const TEST_UNIPILE_BASE_URL = "https://api14.unipile.com:14465";
 
 function buildUser(overrides = {}) {
   return {
@@ -121,6 +122,7 @@ test("runLinkedinMaintenanceWithUnipile withdraws a stale invite through Unipile
     {
       findObservationById: () => buildObservation(),
       findUserById: () => buildUser(),
+      baseUrl: TEST_UNIPILE_BASE_URL,
       httpDeleteImpl: (url) => {
         seenUrl = new URL(url);
         return {
@@ -298,6 +300,7 @@ test("runLinkedinMaintenanceWithUnipile blocks a reject without shared_secret", 
         kind: "connection_request_received",
       }),
       findUserById: () => buildUser(),
+      baseUrl: TEST_UNIPILE_BASE_URL,
     },
   );
 
@@ -319,6 +322,7 @@ test("runLinkedinMaintenanceWithUnipile accepts a received invite through Unipil
         providerSharedSecret: "secret-123",
       }),
       findUserById: () => buildUser(),
+      baseUrl: TEST_UNIPILE_BASE_URL,
       httpPostImpl: (url, _headers, bodyText) => {
         seenRequest = {
           url,
@@ -360,6 +364,7 @@ test("runLinkedinMaintenanceWithUnipile declines a received invite through Unipi
         providerSharedSecret: "secret-123",
       }),
       findUserById: () => buildUser(),
+      baseUrl: TEST_UNIPILE_BASE_URL,
       httpPostImpl: (url, _headers, bodyText) => {
         seenRequest = {
           url,
@@ -447,6 +452,7 @@ test("runLinkedinMaintenanceWithUnipile restores a disappeared sent invite when 
       updateUser: (user) => {
         storedUser = user;
       },
+      baseUrl: TEST_UNIPILE_BASE_URL,
       httpGetImpl: (url) => {
         seenUrl = new URL(url);
         return {
@@ -506,6 +512,7 @@ test("runLinkedinMaintenanceWithUnipile records accepted when profile state is f
       upsertObservation: (observation) => {
         storedObservation = observation;
       },
+      baseUrl: TEST_UNIPILE_BASE_URL,
       httpGetImpl: () => ({
         status: 200,
         bodyText: JSON.stringify({
@@ -547,6 +554,7 @@ test("runLinkedinMaintenanceWithUnipile records not accepted when profile is not
       upsertObservation: (observation) => {
         storedObservation = observation;
       },
+      baseUrl: TEST_UNIPILE_BASE_URL,
       httpGetImpl: () => ({
         status: 200,
         bodyText: JSON.stringify({

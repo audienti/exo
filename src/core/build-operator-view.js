@@ -118,6 +118,7 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {string} action
  * @property {string} note
  * @property {string} capability
+ * @property {string | null} taskKind
  * @property {string | null} dueAt
  * @property {string | null} dueAtIso
  * @property {string | null} waitingFor
@@ -125,6 +126,8 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {string | null} checkedOutBy
  * @property {string | null} checkedOutAt
  * @property {string | null} href
+ * @property {string | null} [queueRole]
+ * @property {string | null} [reviewLabel]
  *
  * @typedef {Object} OperatorBlockedAction
  * @property {string} writer
@@ -537,6 +540,7 @@ function shapeQueue(items) {
       action: shortenAction(item.action ?? ""),
       note: item.why ?? "",
       capability: deriveCapabilityLabel(item),
+      taskKind: normalizeQueueTaskKind(item),
       dueAt: relativeFromIso(item.dueAt),
       dueAtIso: item.dueAt ?? null,
       // How long the agent has been holding this — measured from when it became
@@ -1487,6 +1491,9 @@ function shortenSubject(text) {
 
 /** @param {any} item */
 function deriveCapabilityLabel(item) {
+  if (typeof item.capability === "string" && item.capability.trim()) {
+    return item.capability.trim();
+  }
   const subject = String(item.subject ?? "");
   const match = subject.match(/^([a-z][a-z-]+):/i);
   if (match) return match[1];
@@ -1495,6 +1502,13 @@ function deriveCapabilityLabel(item) {
   if (item.sourceType?.includes("inbound")) return "inbound sync";
   if (item.sourceType === "maintenance") return "maintenance";
   return "exo";
+}
+
+/** @param {any} item */
+function normalizeQueueTaskKind(item) {
+  const value = item?.taskKind ?? item?.kind ?? null;
+  if (typeof value !== "string" || !value.trim()) return null;
+  return value.trim().toLowerCase();
 }
 
 /** @param {any} blocker */

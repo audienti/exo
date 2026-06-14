@@ -293,7 +293,7 @@ function renderPersonDetail(p, meta = {}) {
   const replyUnavailable = p.handledNotification?.state === "reply_unavailable";
   const showComposeAction = !replyUnavailable && !shouldHideComposeAction(p);
   const showAssignOwnerAction = meta.interactive && p.companyId && !p.owner;
-  const stageBranch = stageBranchFor(p);
+  const stageBranch = stageBranchFor(p, composeSurface);
   const baseStageIdx = branchStageIndex(stageBranch);
   const stageIdx = reconcileStageIndex(stageBranch, p.connectionDegree);
   const degreeOverride = p.connectionDegree != null && stageIdx !== baseStageIdx;
@@ -553,6 +553,7 @@ function renderContextPanel(p, meta = {}) {
 /** The funnel stages, in order. */
 const PIPELINE = [
   { key: "identified", label: "Identified" },
+  { key: "pre-connect", label: "Pre-connect" },
   { key: "requested", label: "Request sent" },
   { key: "connected", label: "Connected" },
   { key: "conversation", label: "In conversation" },
@@ -562,21 +563,23 @@ const PIPELINE = [
 /** @param {string} branch */
 function branchStageIndex(branch) {
   switch (branch) {
-    case "connection-requested":
+    case "pre-connect":
       return 1;
-    case "connected":
+    case "connection-requested":
       return 2;
-    case "reply-accepted":
+    case "connected":
       return 3;
+    case "reply-accepted":
+      return 4;
     default:
-      return 0; // identified / pre-connect / ready / waiting / blocked
+      return 0; // identified / ready / waiting / blocked
   }
 }
 
 /**
  * Reconcile pipeline stage against the authoritative LinkedIn connection
  * degree. A 1st-degree connection means the request was accepted (connected,
- * stage ≥ 2); a 2nd/3rd-degree means it has NOT been accepted yet, so the
+ * stage ≥ 3); a 2nd/3rd-degree means it has NOT been accepted yet, so the
  * stage cannot be past "Request sent" — they stay in the sent queue.
  *
  * @param {string} branch
@@ -584,19 +587,36 @@ function branchStageIndex(branch) {
  */
 function reconcileStageIndex(branch, degree) {
   const base = branchStageIndex(branch);
-  if (degree === 1) return Math.max(base, 2);
-  if (degree === 2 || degree === 3) return Math.min(base, 1);
+  if (degree === 1) return Math.max(base, 3);
+  if (degree === 2 || degree === 3) return Math.min(base, 2);
   return base;
 }
 
 /**
  * @param {any} prospect
+ * @param {string | null} [composeSurface]
  * @returns {string}
  */
-function stageBranchFor(prospect) {
+function stageBranchFor(prospect, composeSurface = null) {
   return hasOutstandingConnectionRequest(prospect) || isWaitingOnEmailReply(prospect)
     ? "connection-requested"
+    : isActivePreConnectStage(prospect, composeSurface)
+      ? "pre-connect"
     : prospect?.branch;
+}
+
+/**
+ * Pre-connect should show up as its own stage whenever public warmup is the
+ * current governed branch, even if the persisted branch still says "identified".
+ *
+ * @param {any} prospect
+ * @param {string | null} composeSurface
+ */
+function isActivePreConnectStage(prospect, composeSurface = null) {
+  if (String(prospect?.branch ?? "").trim() === "pre-connect") return true;
+  if (activePublicEngagementQueueItem(prospect)) return true;
+  return PUBLIC_ENGAGEMENT_DRAFT_SURFACES.has(composeSurface ?? "")
+    && draftStateForSurface(prospect, composeSurface) !== "none";
 }
 
 /** @param {number} degree */
@@ -892,7 +912,7 @@ function nextMoveForStage(idx, p, composeSurface = null) {
       detail: "Wait for the governed draft to land, or write your own below if you need to move now.",
     };
   }
-  if (composeSurface === "email" && idx <= 1) {
+  if (composeSurface === "email" && idx <= 2) {
     const responseState = privateThreadResponseState(p, composeSurface);
     const draftState = draftStateForSurface(p, composeSurface);
     if (responseState === "sent") {
@@ -931,22 +951,22 @@ function nextMoveForStage(idx, p, composeSurface = null) {
     };
   }
   switch (idx) {
-    case 1:
+    case 2:
       return {
         lead: "Wait on the pending request",
         detail: "The agent follows up automatically after they accept.",
       };
-    case 2:
+    case 3:
       return {
         lead: "Send the first message",
         detail: "Use the timeline below to keep the opener anchored in context.",
       };
-    case 3:
+    case 4:
       return {
         lead: "Continue the conversation",
         detail: "Steer the thread toward a meeting.",
       };
-    case 4:
+    case 5:
       return {
         lead: "Confirm and prep the meeting",
         detail: null,
@@ -995,10 +1015,11 @@ function pipelineStagesFor(p, composeSurface) {
     const emailStageLabel = isWaitingOnEmailReply(p) ? "Email sent" : "Email queued";
     return [
       PIPELINE[0],
+      PIPELINE[1],
       { key: "email-queued", label: emailStageLabel },
-      PIPELINE[2],
       PIPELINE[3],
       PIPELINE[4],
+      PIPELINE[5],
     ];
   }
   return PIPELINE;
@@ -2057,6 +2078,7 @@ const SURFACE_META = {
 /** Pipeline stage index → the outreach surface whose message comes next. */
 const STAGE_SURFACE = [
   "connection_request", // identified — not connected yet
+  "connection_request", // pre-connect — warmup before request
   "connection_request", // request sent — awaiting accept
   "post_accept_message", // connected — the first message
   "follow_up_direct_message", // in conversation

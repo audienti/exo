@@ -1111,6 +1111,239 @@ test("queue page folds agent status into a strip and tabs the full surface list"
   );
 });
 
+test("queue page marks send work as gated by failed LinkedIn inbound sync", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "partial", endedAt: "2026-06-14T00:50:00.000Z" },
+    queueCount: 13,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-14T00:53:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "sync-1",
+          subject: "LinkedIn sent invitations",
+          action: "Run inbound sync",
+          why: "Repair stale LinkedIn truth before sending.",
+          dueAt: "2026-06-14T00:45:00.000Z",
+          sourceType: "inbound_itemization_gap",
+          taskKind: "run_inbound_sync",
+          capability: "linkedin",
+        },
+        {
+          id: "send-1",
+          subject: "Brandon Clements",
+          action: "Like post",
+          why: "Public warmup is ready.",
+          dueAt: "2026-06-14T00:44:00.000Z",
+          sourceType: "cadence",
+          taskKind: "send_message",
+          capability: "linkedin",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+  const agentStatus = {
+    checkedAt: "2026-06-14T00:53:00.000Z",
+    state: "partial",
+    current: { active: false, activeTaskCount: 0, tasks: [], locks: { active: false, lanes: [] } },
+    backlog: {
+      dueTaskCount: 13,
+      waitingTaskCount: 7,
+      blockerCount: 0,
+      dueByKind: [
+        { kind: "send_message", count: 7 },
+        { kind: "run_inbound_sync", count: 6 },
+      ],
+      waitingByReason: [],
+      blockersByReason: [],
+    },
+    throughput: {
+      lastPass: { status: "partial", resultCount: 1, durationSeconds: 4, byKind: [] },
+      last24Hours: { resultCount: 1, recentMotionRunCount: 3 },
+    },
+    partial: {
+      active: true,
+      reason: "No due tasks were available.",
+      nextAction: "Continue the agent pass to drain 13 due tasks.",
+    },
+    inboundSurfaces: {
+      count: 2,
+      items: [
+        {
+          capability: "linkedin",
+          accountHandle: "williamflanagan",
+          surfaceLabel: "Sent Invitations",
+          lastRunStatus: "failed",
+          lastSyncedAt: null,
+          lastObservedAt: "2026-06-14T00:30:00.000Z",
+          capturedItemCount: 0,
+          visibleTotalCount: null,
+          observationCount: 0,
+          pageWalkStatus: null,
+          resumeCursor: null,
+          resumeStartOffset: null,
+          lastError: "linkedin capture failed.",
+        },
+        {
+          capability: "linkedin",
+          accountHandle: "williamflanagan",
+          surfaceLabel: "Received Invitations",
+          lastRunStatus: "failed",
+          lastSyncedAt: null,
+          lastObservedAt: "2026-06-14T00:31:00.000Z",
+          capturedItemCount: 0,
+          visibleTotalCount: null,
+          observationCount: 0,
+          pageWalkStatus: null,
+          resumeCursor: null,
+          resumeStartOffset: null,
+          lastError: "linkedin capture failed.",
+        },
+      ],
+    },
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    generatedAt: "2026-06-14T00:53:00.000Z",
+  });
+
+  assert.match(html, /Live sends gated/i);
+  assert.match(html, /7 send tasks are paused until LinkedIn inbound sync is healthy\./i);
+  assert.match(html, /Run 6 inbound sync repair tasks first\./i);
+  assert.match(html, /Latest error: linkedin capture failed\./i);
+  assert.doesNotMatch(html, /linkedin capture failed\.\./i);
+  assert.match(html, /Live send gated/i);
+  assert.match(html, /Gated by sync/i);
+  assert.doesNotMatch(html, /Continue the agent pass to drain 13 due tasks\./i);
+
+  assert.match(html, /data-tab-target="queue"[^>]*>Agent queue<span class="count-chip tone-blue">1<\/span>/i);
+  assert.match(html, /data-tab-target="waiting"[^>]*>Waiting<span class="count-chip tone-amber">1<\/span>/i);
+  assert.match(html, /id="queue-views-panel-waiting"[^>]*data-tab-panel="waiting" hidden/i);
+  const queuePanel = html.slice(
+    html.indexOf('id="queue-views-panel-queue"'),
+    html.indexOf('id="queue-views-panel-waiting"'),
+  );
+  const waitingPanel = html.slice(
+    html.indexOf('id="queue-views-panel-waiting"'),
+    html.indexOf('id="queue-views-panel-surfaces"'),
+  );
+  assert.match(queuePanel, /LinkedIn sent invitations/i);
+  assert.doesNotMatch(queuePanel, /Brandon Clements/i);
+  assert.match(waitingPanel, /Brandon Clements/i);
+});
+
+test("queue page shows a prerequisite card when gated sends have no repair task queued", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "partial", endedAt: "2026-06-14T00:50:00.000Z" },
+    queueCount: 7,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-14T00:53:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "send-1",
+          subject: "Brandon Clements",
+          action: "Like post",
+          why: "Public warmup is ready.",
+          dueAt: "2026-06-14T00:44:00.000Z",
+          sourceType: "cadence",
+          taskKind: "send_message",
+          capability: "linkedin",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+  const agentStatus = {
+    checkedAt: "2026-06-14T00:53:00.000Z",
+    state: "partial",
+    current: { active: false, activeTaskCount: 0, tasks: [], locks: { active: false, lanes: [] } },
+    backlog: {
+      dueTaskCount: 7,
+      waitingTaskCount: 0,
+      blockerCount: 0,
+      dueByKind: [{ kind: "send_message", count: 7 }],
+      waitingByReason: [],
+      blockersByReason: [],
+    },
+    throughput: {
+      lastPass: { status: "partial", resultCount: 1, durationSeconds: 4, byKind: [] },
+      last24Hours: { resultCount: 1, recentMotionRunCount: 3 },
+    },
+    partial: {
+      active: true,
+      reason: "No due tasks were available.",
+      nextAction: "Continue the agent pass to drain 7 due tasks.",
+    },
+    inboundSurfaces: {
+      count: 1,
+      items: [
+        {
+          capability: "linkedin",
+          accountHandle: "williamflanagan",
+          surfaceLabel: "Sent Invitations",
+          lastRunStatus: "failed",
+          lastSyncedAt: null,
+          lastObservedAt: "2026-06-14T00:30:00.000Z",
+          capturedItemCount: 0,
+          visibleTotalCount: null,
+          observationCount: 0,
+          pageWalkStatus: null,
+          resumeCursor: null,
+          resumeStartOffset: null,
+          lastError: "no_client_session: Capture blocked before identity verification.",
+        },
+      ],
+    },
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    generatedAt: "2026-06-14T00:53:00.000Z",
+  });
+
+  const queuePanel = html.slice(
+    html.indexOf('id="queue-views-panel-queue"'),
+    html.indexOf('id="queue-views-panel-waiting"'),
+  );
+  const waitingPanel = html.slice(
+    html.indexOf('id="queue-views-panel-waiting"'),
+    html.indexOf('id="queue-views-panel-surfaces"'),
+  );
+  assert.match(html, /data-tab-target="queue"[^>]*>Agent queue<span class="count-chip tone-blue">1<\/span>/i);
+  assert.match(html, /data-tab-target="waiting"[^>]*>Waiting<span class="count-chip tone-amber">1<\/span>/i);
+  assert.match(queuePanel, /Repair LinkedIn inbound sync/i);
+  assert.match(queuePanel, /Prerequisite/i);
+  assert.doesNotMatch(queuePanel, /Brandon Clements/i);
+  assert.match(waitingPanel, /Brandon Clements/i);
+});
+
 test("operator header marks an overdue loaded scheduler as behind instead of healthy queued", () => {
   const model = buildOperatorViewModel({
     user: { id: "user-1", label: "william-main", owner: "William" },

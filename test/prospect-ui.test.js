@@ -57,6 +57,17 @@ function buildProspect(overrides = {}) {
   };
 }
 
+/**
+ * @param {string} html
+ * @param {string} label
+ */
+function assertCurrentPipelineStage(html, label) {
+  assert.match(
+    html,
+    new RegExp(`pl-step reached current"><div class="pl-dot"><i></i></div><div class="pl-label">${label}</div>`),
+  );
+}
+
 test("prospect detail prefers the active email draft surface over branch-based LinkedIn compose", () => {
   const html = renderProspectDetailPage(buildProspect({
     drafts: [{
@@ -193,6 +204,7 @@ test("prospect detail exposes governed lifecycle and packet review actions", () 
   assert.match(html, /data-exo-writer="resolvePacketReview"/);
   assert.match(html, /Accept packet/);
   assert.match(html, /Return packet/);
+  assert.match(html, /\.lifecycle-panel\{[^}]*max-width:none\}/s);
 });
 
 test("prospect detail shows email thread observations and waits on a sent email instead of inventing a queued draft", () => {
@@ -340,6 +352,7 @@ test("prospect detail keeps queued pre-connect warmup in next move and out of th
   });
 
   assert.match(html, /Pre-connect warmup queued/);
+  assertCurrentPipelineStage(html, "Pre-connect");
   assert.match(html, /The agent will react to the stored post on its next pass\./);
   assert.match(html, /Wait 48 hours, then queue the connection-request draft for review\./);
   assert.match(html, /Engagement timeline <span>0<\/span>/);
@@ -1122,6 +1135,28 @@ test("prospect detail keeps connected outreach available when a pending invite o
   assert.match(html, /Compose message/);
   assert.match(html, /First message · Lina Park/);
   assert.match(html, /Connected on LinkedIn/);
+  assertCurrentPipelineStage(html, "Connected");
+});
+
+test("prospect detail caps a stale connected branch at request sent when LinkedIn still shows 2nd-degree", () => {
+  const html = renderProspectDetailPage(buildProspect({
+    linkedinProfileUrl: "https://www.linkedin.com/in/lina-park/",
+    branch: "connected",
+    primaryChannel: "linkedin",
+    channels: ["linkedin"],
+    connectionDegree: 2,
+  }), {
+    interactive: true,
+    userId: "user-1",
+    transitionMotionId: "motion-1",
+    users: [{ id: "user-1", label: "william-main" }],
+    motions: [],
+  });
+
+  assert.match(html, /LinkedIn shows a <strong>2nd-degree<\/strong> connection/);
+  assert.match(html, /the request is <strong>not accepted yet<\/strong>/);
+  assertCurrentPipelineStage(html, "Request sent");
+  assert.match(html, /Wait on the pending request/);
 });
 
 test("prospects table renders clickable channel anchors with the underlying destination on hover", () => {

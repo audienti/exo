@@ -434,6 +434,19 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
         const surfaceHints = buildLinkedinQuickSurfaceHints({ limit });
         const outputGuide = buildLinkedinCaptureOutputGuide({ mode, limit });
         const captureScaffold = buildLinkedinQuickCaptureScaffold({ limit });
+        const capturePrompt = buildLinkedinLiveConnectorCapturePrompt({
+          connector,
+          codexHome: options.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null,
+          providerAccountId: account.providerAccountId,
+          prompt: buildLinkedinLiveCapturePrompt({
+            connector,
+            handle: account.handle,
+            profile,
+            limit,
+            mode,
+            mentionStructuredHints: true
+          })
+        });
 
         return {
           user: {
@@ -457,14 +470,7 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
             connector,
             source: liveSource.source,
             captureTransportMode: "connector_native_only",
-            prompt: buildLinkedinLiveCapturePrompt({
-              connector,
-              handle: account.handle,
-              profile,
-              limit,
-              mode,
-              mentionStructuredHints: true
-            }),
+            prompt: capturePrompt,
             outputSchema: linkedinLiveCaptureOutputSchema,
             outputGuide,
             captureScaffold,
@@ -527,6 +533,47 @@ export async function buildLiveLinkedinInboundSyncPayload(rawUser, rawProfiles, 
     capture: built.capture,
     payload: built.payload
   };
+}
+
+/**
+ * @param {{ connector: string | null | undefined, codexHome?: string | null, providerAccountId?: string | null, prompt: string }} input
+ */
+function buildLinkedinLiveConnectorCapturePrompt(input) {
+  const routingHints = buildUnipileMcpRoutingHints(input);
+  if (!routingHints.length) {
+    return input.prompt;
+  }
+  return [
+    ...routingHints,
+    "",
+    input.prompt
+  ].join("\n");
+}
+
+/**
+ * @param {{ connector: string | null | undefined, codexHome?: string | null, providerAccountId?: string | null }} input
+ * @returns {string[]}
+ */
+function buildUnipileMcpRoutingHints(input) {
+  if (normalizeNullableString(input.connector)?.toLowerCase() !== "unipile") {
+    return [];
+  }
+
+  const { baseUrl, baseUrlSource } = readUnipileConfig(input.codexHome ?? normalizeNullableString(process.env.CODEX_HOME) ?? null);
+  const exactBaseUrl = normalizeNullableString(baseUrl);
+  if (!exactBaseUrl || baseUrlSource === "default") {
+    return [];
+  }
+
+  const providerAccountId = normalizeNullableString(input.providerAccountId);
+  return [
+    `Use the configured Unipile MCP server for this runtime. This tenant's configured Unipile API root is ${exactBaseUrl}. Do not substitute localhost or documented default server examples.`,
+    `If you need governed account discovery, call GET ${exactBaseUrl}/api/v1/accounts with accept: application/json and keep every follow-on Unipile request on that same base URL.`,
+    providerAccountId
+      ? `The governed Unipile account_id for this LinkedIn account is ${providerAccountId}; verify the returned account identity matches it before reading surfaces.`
+      : "Verify the returned Unipile account identity matches the intended Exo LinkedIn handle before reading surfaces.",
+    "If a different Unipile base URL returns errors/no_client_session, treat that as a tenant routing mismatch, not as proof that the governed connector is down.",
+  ];
 }
 
 /**
@@ -743,8 +790,8 @@ async function maybeCaptureLinkedinQuickSurfacesThroughUnipile(input) {
     return null;
   }
 
-  const { apiKey, baseUrl, v2ApiKey, v2BaseUrl } = readUnipileConfig(input.codexHome);
-  if (!apiKey) {
+  const { apiKey, baseUrl, baseUrlSource, v2ApiKey, v2BaseUrl } = readUnipileConfig(input.codexHome);
+  if (!apiKey || baseUrlSource === "default") {
     return null;
   }
 
@@ -1972,11 +2019,16 @@ export async function resolveLinkedinActorCompanyProfile(input) {
   if (!apiKey) {
     return null;
   }
+  const baseUrl = normalizeNullableString(input.baseUrl)
+    ?? (unipileConfig.baseUrlSource === "default" ? null : unipileConfig.baseUrl);
+  if (!baseUrl) {
+    return null;
+  }
 
   const enrichment = await enrichUnipileLinkedinActorIdentity({
     providerAccountId: input.providerAccountId,
     apiKey,
-    baseUrl: normalizeNullableString(input.baseUrl) ?? unipileConfig.baseUrl,
+    baseUrl,
     httpGetImpl: input.httpGetImpl ?? null,
     profileCache: new Map(),
     companyCache: new Map(),

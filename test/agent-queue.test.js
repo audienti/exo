@@ -513,9 +513,8 @@ test("buildAgentQueue emits a full inbound sync task when an itemization gap exi
   assert.equal(task.mode, "full");
   assert.equal(task.reason, "itemization_gap");
   assert.ok(task.surfaceKeys.includes("linkedin-sent-invitations"));
-  assert.match(task.contractCommand, /exo inbound sync linkedin-live user-1 --account account-1 .*--surface linkedin-sent-invitations .*--mode full.* --page-size 100 --json/);
-  assert.doesNotMatch(task.contractCommand, /--max-pages/);
-  assert.equal(task.maxPages, null);
+  assert.match(task.contractCommand, /exo inbound sync linkedin-live user-1 --account account-1 .*--surface linkedin-sent-invitations .*--mode full.*--max-pages 1 --page-size 100 --json/);
+  assert.equal(task.maxPages, 1);
   assert.equal(task.pageSize, 100);
   assert.match(task.applyCommand, /exo inbound sync run user-1 --input <combined-inbound-sync\.json> --refresh --json/);
 });
@@ -1876,11 +1875,111 @@ test("buildAgentQueue carries paginated full-sync continuation metadata for Link
   assert.ok(task);
   assert.equal(task.mode, "full");
   assert.equal(task.resumeStartOffset, 10);
-  assert.equal(task.maxPages, null);
+  assert.equal(task.maxPages, 1);
   assert.equal(task.pageSize, 50);
   assert.match(task.contractCommand, /--resume-start-offset 10/);
-  assert.doesNotMatch(task.contractCommand, /--max-pages/);
+  assert.match(task.contractCommand, /--max-pages 1/);
   assert.match(task.contractCommand, /--page-size 50/);
+});
+
+test("buildAgentQueue keeps paginated LinkedIn itemization-gap continuation due outside the retrieval window", () => {
+  const queue = buildAgentQueue({
+    motions: [],
+    companies: [],
+    users: [
+      {
+        id: "user-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        label: "Operator",
+        owner: "operator",
+        notes: null,
+        workingHours: {
+          mode: "scheduled",
+          timezone: "America/New_York",
+          weekdays: ["mon", "tue", "wed", "thu", "fri"],
+          startLocalTime: "09:00",
+          endLocalTime: "17:00",
+        },
+        accounts: [
+          {
+            id: "account-1",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            capability: "linkedin",
+            handle: "operator-linkedin",
+            label: null,
+            sourceType: "harness-connection",
+            browserProfileId: null,
+            harnessConnectionId: "harness-1",
+            providerAccountId: "provider-1",
+            preferred: true,
+            notes: null,
+            inboundSync: {
+              surfaces: [
+                { surfaceKey: "linkedin-sent-invitations", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-received-invitations", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-messaging-inbox", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-profile-views", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-followers-list", enabled: false, lastRunStatus: "never" },
+                {
+                  surfaceKey: "linkedin-following-list",
+                  enabled: true,
+                  lastSyncedAt: "2026-06-03T08:30:00.000Z",
+                  lastObservedAt: "2026-06-03T08:30:00.000Z",
+                  lastRunStatus: "warning",
+                  lastItemCount: 10,
+                  lastVisibleTotalCount: 25,
+                  lastCaptureCompleteness: "partial_visible_slice",
+                  lastRequestedMode: "full",
+                  lastActualMode: "full",
+                  lastReconcileRequired: true,
+                  lastReconcileReason: "page_budget_stopped_early",
+                  lastExhaustionStatus: "incomplete",
+                  lastExhaustionReason: "page_budget_stopped_early",
+                  lastPaginationAttempted: true,
+                  lastTerminalSignalSeen: false,
+                  lastStalledPassCount: 0,
+                  continuationStartedAt: "2026-06-03T08:30:00.000Z",
+                  nextCursor: null,
+                  nextStartOffset: 10,
+                  lastObservationCount: 10,
+                  lastItemizationGapCount: 0,
+                  lastCountDiscrepancyCount: 15,
+                  lastError: "Full reconciliation stopped at the configured page budget and should resume from the next offset.",
+                },
+                { surfaceKey: "linkedin-comment-replies", enabled: false, lastRunStatus: "never" },
+                { surfaceKey: "linkedin-catch-up-updates", enabled: false, lastRunStatus: "never" },
+              ],
+            },
+          },
+        ],
+        harnessConnections: [
+          {
+            id: "harness-1",
+            createdAt: "2026-06-01T00:00:00.000Z",
+            updatedAt: "2026-06-01T00:00:00.000Z",
+            runtime: "codex",
+            connector: "unipile",
+            label: "codex:unipile",
+            status: "available",
+            notes: null,
+          },
+        ],
+      },
+    ],
+    observations: [],
+    cues: [],
+    now: "2026-06-03T10:00:00.000Z",
+  });
+
+  const dueTask = queue.tasks.find((item) => item.kind === "run_inbound_sync");
+  assert.ok(dueTask);
+  assert.equal(dueTask.mode, "full");
+  assert.equal(dueTask.resumeStartOffset, 10);
+  assert.equal(dueTask.queueState, "due_now");
+  assert.equal(dueTask.waitingReason, null);
+  assert.equal(queue.waiting.some((item) => item.kind === "run_inbound_sync"), false);
 });
 
 test("buildAgentQueue defers itemization-gap full sync until provider backoff expires", () => {
@@ -3303,6 +3402,49 @@ test("buildAgentQueue bounds disappeared sent-invite status reconciliation to on
   assert.equal(tasks[0].batch.maxPerPass, 1);
   assert.equal(tasks[0].batch.remainingAfterThisTask, 28);
   assert.equal(tasks[0].reason, "sent_invite_status_reconciliation_bounded");
+});
+
+test("buildAgentQueue waits disappeared sent-invite reconciliation while the account cooldown is active", () => {
+  const queue = buildAgentQueue({
+    ...fixture({
+      drafts: [],
+      touches: [],
+      observations: [
+        {
+          id: "obs-disappeared-next",
+          userId: "user-1",
+          accountId: "account-1",
+          capability: "linkedin",
+          kind: "connection_request_no_longer_pending",
+          observedAt: "2026-06-05T00:00:00.000Z",
+          actorName: "Next Disappeared",
+          actorProfileUrl: "https://linkedin.com/in/next-disappeared",
+          actorLinkedinPublicId: "next-disappeared",
+        },
+      ],
+    }),
+    now: "2026-06-05T00:10:00.000Z",
+    hostState: {
+      maintenanceTaskCooldowns: [
+        {
+          taskKind: "reconcile_connection_request_status",
+          groupKey: "user-1:account-1:linkedin",
+          recordedAt: "2026-06-05T00:05:00.000Z",
+          unavailableUntil: "2026-06-05T00:35:00.000Z",
+          reason: "bounded_connection_request_status_reconciliation",
+        },
+      ],
+    },
+  });
+
+  const dueTasks = queue.tasks.filter((item) => item.kind === "reconcile_connection_request_status");
+  const waitingTasks = queue.waiting.filter((item) => item.kind === "reconcile_connection_request_status");
+  assert.equal(dueTasks.length, 0);
+  assert.equal(waitingTasks.length, 1);
+  assert.equal(waitingTasks[0].observationId, "obs-disappeared-next");
+  assert.equal(waitingTasks[0].dueAt, "2026-06-05T00:35:00.000Z");
+  assert.equal(waitingTasks[0].waitingReason, "connection_request_status_reconciliation_cooldown");
+  assert.equal(waitingTasks[0].batch.cooldownUntil, "2026-06-05T00:35:00.000Z");
 });
 
 test("buildAgentQueue does not synthesize unfollow cleanup after a withdrawn branch", () => {
