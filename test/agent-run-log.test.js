@@ -84,8 +84,17 @@ test("buildAgentRunLog skips malformed agent.log JSON blocks and keeps parseable
     assert.equal(runLog.entries[0].resultCounts.total, 1);
     assert.deepEqual(runLog.entries[0].queueCounts, {
       dueTaskCount: 2,
+      readyTaskCount: 2,
       waitingTaskCount: 1,
       blockerCount: 0,
+      partialTaskCount: 0,
+      statusCounts: {
+        ready: 2,
+        waiting: 1,
+        blocked: 0,
+        partial: 0,
+        readyIncludesWaiting: false,
+      },
     });
     assert.equal(runLog.entries[0].sourceArtifact.kind, "agent.log");
     assert.ok(runLog.warnings.some((warning) =>
@@ -188,8 +197,17 @@ test("buildAgentRunLog normalizes last-pass and host-state facts into recent ent
     assert.equal(mergedPass.resultCounts.failed, 1);
     assert.deepEqual(mergedPass.queueCounts, {
       dueTaskCount: 3,
+      readyTaskCount: 3,
       waitingTaskCount: 4,
       blockerCount: 1,
+      partialTaskCount: 0,
+      statusCounts: {
+        ready: 3,
+        waiting: 4,
+        blocked: 1,
+        partial: 0,
+        readyIncludesWaiting: false,
+      },
     });
 
     const transportLane = runLog.entries.find((entry) =>
@@ -217,6 +235,113 @@ test("buildAgentRunLog normalizes last-pass and host-state facts into recent ent
     assert.equal(verification.timestamp, "2026-06-11T14:04:00.000Z");
     assert.equal(verification.status, "ready_to_send");
     assert.equal(verification.taskKind, "send_message");
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test("buildAgentRunLog preserves transport and config reasons from last-pass results", () => {
+  const fixture = makeStateDir("exo-agent-run-log-runtime-truth-");
+
+  try {
+    writeJson(path.join(fixture.stateDir, "agent-last-pass.json"), {
+      status: "blocked",
+      reason: "linkedin live sync requires a configured Unipile base URL.",
+      startedAt: "2026-06-11T14:10:00.000Z",
+      endedAt: "2026-06-11T14:11:00.000Z",
+      lane: "transport",
+      results: [
+        {
+          kind: "run_inbound_sync",
+          status: "completed",
+          detail: {
+            transport: "direct_payload",
+            configReason: "missing_unipile_base_url",
+            surfaceStatus: "failed",
+            surfaceError: "linkedin live sync requires a configured Unipile base URL.",
+          },
+        },
+        {
+          kind: "send_message",
+          status: "completed",
+          detail: {
+            transport: "connector_native",
+            fallbackFrom: "unipile_http_same_credentials",
+            directUnipileFailureReason: "send_connection_request through Unipile failed (HTTP 503): Provider unavailable",
+          },
+        },
+        {
+          kind: "run_inbound_sync",
+          status: "completed",
+          detail: {
+            transport: "direct_payload",
+            surfaceError: "LinkedIn live sync requires providerAccountId on LinkedIn account account-1.",
+          },
+        },
+      ],
+      finalQueueCounts: {
+        dueTaskCount: 2,
+        readyTaskCount: 2,
+        waitingTaskCount: 1,
+        blockerCount: 0,
+        partialTaskCount: 1,
+        statusCounts: {
+          ready: 2,
+          waiting: 1,
+          blocked: 0,
+          partial: 1,
+          readyIncludesWaiting: false,
+        },
+      },
+    });
+
+    const runLog = buildAgentRunLog({
+      stateDir: fixture.stateDir,
+      now: "2026-06-11T14:12:00.000Z",
+    });
+
+    assert.equal(runLog.entries.length, 1);
+    assert.deepEqual(runLog.entries[0].queueCounts.statusCounts, {
+      ready: 2,
+      waiting: 1,
+      blocked: 0,
+      partial: 1,
+      readyIncludesWaiting: false,
+    });
+    assert.deepEqual(runLog.entries[0].runtimeTruth.transports, [
+      {
+        taskKind: "run_inbound_sync",
+        status: "completed",
+        transport: "direct_payload",
+        fallbackFrom: null,
+      },
+      {
+        taskKind: "send_message",
+        status: "completed",
+        transport: "connector_native",
+        fallbackFrom: "unipile_http_same_credentials",
+      },
+      {
+        taskKind: "run_inbound_sync",
+        status: "completed",
+        transport: "direct_payload",
+        fallbackFrom: null,
+      },
+    ]);
+    assert.deepEqual(runLog.entries[0].runtimeTruth.configReasons, [
+      {
+        taskKind: "run_inbound_sync",
+        status: "completed",
+        reason: "missing_unipile_base_url",
+        message: "linkedin live sync requires a configured Unipile base URL.",
+      },
+      {
+        taskKind: "run_inbound_sync",
+        status: "completed",
+        reason: "missing_provider_account_id",
+        message: "LinkedIn live sync requires providerAccountId on LinkedIn account account-1.",
+      },
+    ]);
   } finally {
     fixture.cleanup();
   }

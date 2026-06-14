@@ -292,6 +292,10 @@ export function buildAgentQueue(input) {
         const fullSyncDueAt = computeItemizationGapSyncDueAt(gapSurface, oldestDueAt, {
           workingHoursStatus: retrievalWindowStatus,
         });
+        const waitingReason = computeItemizationGapSyncWaitingReason(gapSurface, oldestDueAt, fullSyncDueAt, {
+          now,
+          workingHoursStatus: retrievalWindowStatus,
+        });
 
         placeTask(buildInboundSyncTask({
           user: syncView.user,
@@ -309,7 +313,8 @@ export function buildAgentQueue(input) {
           resumeCursor: normalizeNullableString(gapSurface?.nextCursor) ?? null,
           resumeStartOffset: Number.isInteger(gapSurface?.nextStartOffset) ? gapSurface.nextStartOffset : null,
           ...resolveAutonomousInboundPaginationConfig(surfaceKey),
-          waitingReason: null,
+          waitingReason,
+          backoffReason: normalizeNullableString(gapSurface?.backoffReason) ?? null,
         }), { now, tasks, waiting });
       }
 
@@ -787,14 +792,45 @@ export function buildAgentQueue(input) {
   waiting.sort(taskComparator);
   const annotatedTasks = annotateTaskCheckouts(tasks, input.hostState ?? null, now);
   const annotatedWaiting = annotateTaskCheckouts(waiting, input.hostState ?? null, now);
+  const statusCounts = buildQueueStatusCounts(annotatedTasks, annotatedWaiting, blockers);
   return {
     count: annotatedTasks.length,
     itemCount: annotatedTasks.length,
     waitingCount: annotatedWaiting.length,
+    statusCounts,
     tasks: annotatedTasks,
     waiting: annotatedWaiting,
     blockers,
   };
+}
+
+/**
+ * @param {Array<Record<string, any>>} tasks
+ * @param {Array<Record<string, any>>} waiting
+ * @param {Array<Record<string, any>>} blockers
+ */
+function buildQueueStatusCounts(tasks, waiting, blockers) {
+  return {
+    ready: tasks.length,
+    waiting: waiting.length,
+    blocked: blockers.length,
+    partial: [...tasks, ...waiting].filter(isPartialRuntimeTruthTask).length,
+    readyIncludesWaiting: false,
+  };
+}
+
+/** @param {Record<string, any>} task */
+function isPartialRuntimeTruthTask(task) {
+  if (task.kind !== "run_inbound_sync") return false;
+  if (task.reason === "itemization_gap") return true;
+  return (task.surfaceSeams ?? []).some((seam) => {
+    const debt = seam?.debt ?? {};
+    return debt.freshnessState === "warning"
+      || debt.lastReconcileReason === "bounded_capture_stopped_early"
+      || debt.lastReconcileReason === "page_budget_stopped_early"
+      || debt.lastExhaustionReason === "bounded_capture_stopped_early"
+      || debt.lastExhaustionReason === "page_budget_stopped_early";
+  });
 }
 
 /**
@@ -1427,6 +1463,7 @@ function buildInboundSyncTask({
   pageSize = null,
   forceRetrieval = false,
   waitingReason = null,
+  backoffReason = null,
 }) {
   const capabilityLabel = humanizeCapability(account.capability);
   const reason = forceRetrieval
@@ -1472,6 +1509,7 @@ function buildInboundSyncTask({
     queuedAt: dueAt,
     dueAt,
     waitingReason,
+    backoffReason,
     contractCommand: buildInboundSyncContractCommand({
       userId: user.id,
       accountId: account.accountId,
@@ -1620,6 +1658,40 @@ function computeItemizationGapSyncDueAt(surface, baseDueAt, options = {}) {
   }
 
   return dueAt;
+}
+
+/**
+ * @param {Record<string, any> | null} surface
+ * @param {string} baseDueAt
+ * @param {string} scheduledDueAt
+ * @param {{ now?: string | null, workingHoursStatus?: { openNow: boolean, nextOpenAt: string | null } | null }} [options]
+ */
+function computeItemizationGapSyncWaitingReason(surface, baseDueAt, scheduledDueAt, options = {}) {
+  const now = normalizeOptionalIso(options.now) ?? null;
+  const dueAt = normalizeOptionalIso(scheduledDueAt);
+  if (!dueAt || (now && dueAt <= now)) {
+    return null;
+  }
+
+  const providerDueAt = normalizeOptionalIso(surface?.nextAllowedSyncAt);
+  if (providerDueAt && providerDueAt >= dueAt) {
+    return normalizeNullableString(surface?.backoffReason)
+      ?? normalizeNullableString(surface?.lastExhaustionReason)
+      ?? "provider_backoff";
+  }
+
+  const base = normalizeOptionalIso(baseDueAt);
+  if (surface?.lastRunStatus === "failed" && base && dueAt > base) {
+    return normalizeNullableString(surface?.backoffReason)
+      ?? normalizeNullableString(surface?.lastExhaustionReason)
+      ?? "failed_sync_retry_backoff";
+  }
+
+  if (options.workingHoursStatus?.openNow === false && options.workingHoursStatus.nextOpenAt === dueAt) {
+    return "outside_retrieval_window";
+  }
+
+  return null;
 }
 
 /**

@@ -4045,12 +4045,32 @@ function loadQueue(hostState = null) {
 }
 
 /** @param {ReturnType<typeof loadQueue>} queue */
-function summarizeQueue(queue) {
-  return {
-    dueTaskCount: queue.tasks.length,
-    waitingTaskCount: queue.waiting.length,
-    blockerCount: (queue.blockers ?? []).length,
+export function summarizeQueue(queue) {
+  const readyTaskCount = queue.tasks.length;
+  const waitingTaskCount = queue.waiting.length;
+  const blockerCount = (queue.blockers ?? []).length;
+  const partialTaskCount = normalizeQueueCount(queue.statusCounts?.partial) ?? 0;
+  const statusCounts = {
+    ready: normalizeQueueCount(queue.statusCounts?.ready) ?? readyTaskCount,
+    waiting: normalizeQueueCount(queue.statusCounts?.waiting) ?? waitingTaskCount,
+    blocked: normalizeQueueCount(queue.statusCounts?.blocked) ?? blockerCount,
+    partial: partialTaskCount,
+    readyIncludesWaiting: queue.statusCounts?.readyIncludesWaiting === true,
   };
+  return {
+    dueTaskCount: readyTaskCount,
+    readyTaskCount,
+    waitingTaskCount,
+    blockerCount,
+    partialTaskCount,
+    statusCounts,
+  };
+}
+
+/** @param {unknown} value */
+function normalizeQueueCount(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? Math.floor(numeric) : null;
 }
 
 /** @param {any} task */

@@ -55,6 +55,7 @@ import {
   runInboundSyncTask,
   runBrowserActionTask,
   runSendTask,
+  summarizeQueue,
 } from "../scripts/run-agent-host-pass.js";
 import {
   checkoutTaskLease,
@@ -960,6 +961,41 @@ test("merged lane pass does not let an idle lane reason mask completed work", ()
   assert.equal(merged.reason, null);
   assert.equal(merged.results.length, 1);
   assert.equal(merged.finalQueueCounts.dueTaskCount, 10);
+});
+
+test("summarizeQueue exposes runnable, waiting, blocked, and partial counts distinctly", () => {
+  const summary = summarizeQueue({
+    tasks: [
+      { kind: "run_inbound_sync" },
+      { kind: "send_message" },
+    ],
+    waiting: [
+      { kind: "run_inbound_sync", queueState: "waiting" },
+    ],
+    blockers: [
+      { kind: "stale_send_ready_draft" },
+    ],
+    statusCounts: {
+      ready: 2,
+      waiting: 1,
+      blocked: 1,
+      partial: 1,
+      readyIncludesWaiting: false,
+    },
+  });
+
+  assert.equal(summary.dueTaskCount, 2);
+  assert.equal(summary.readyTaskCount, 2);
+  assert.equal(summary.waitingTaskCount, 1);
+  assert.equal(summary.blockerCount, 1);
+  assert.equal(summary.partialTaskCount, 1);
+  assert.deepEqual(summary.statusCounts, {
+    ready: 2,
+    waiting: 1,
+    blocked: 1,
+    partial: 1,
+    readyIncludesWaiting: false,
+  });
 });
 
 test("chooseNextQueueTask prefers connector-native send work before retrieval and draft work even when browser preflight is down", () => {

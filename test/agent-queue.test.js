@@ -519,6 +519,60 @@ test("buildAgentQueue emits a full inbound sync task when an itemization gap exi
   assert.match(task.applyCommand, /exo inbound sync run user-1 --input <combined-inbound-sync\.json> --refresh --json/);
 });
 
+test("buildAgentQueue exposes ready, waiting, partial, and blocked counts without treating waiting work as ready", () => {
+  const queue = buildAgentQueue({
+    motions: [],
+    companies: [],
+    users: [
+      inboundUserFixture({
+        capability: "gmail",
+        surfaceKey: "gmail-inbox-threads",
+        surfaceStateOverrides: {
+          lastRunStatus: "success",
+          lastObservedAt: "2026-06-03T08:00:00.000Z",
+          lastSyncedAt: "2026-06-03T08:00:00.000Z",
+        },
+      }),
+      inboundUserFixture({
+        capability: "linkedin",
+        surfaceKey: "linkedin-sent-invitations",
+        surfaceStateOverrides: {
+          lastRunStatus: "warning",
+          lastItemCount: 20,
+          lastVisibleTotalCount: 25,
+          lastObservationCount: 20,
+          lastItemizationGapCount: 5,
+          lastCaptureCompleteness: "partial_visible_slice",
+          lastRequestedMode: "quick",
+          lastActualMode: "quick",
+          lastReconcileRequired: true,
+          lastReconcileReason: "bounded_capture_stopped_early",
+          lastExhaustionStatus: "incomplete",
+          lastExhaustionReason: "bounded_capture_stopped_early",
+        },
+      }),
+    ],
+    observations: [],
+    cues: [],
+    now: "2026-06-03T13:00:00.000Z",
+    includeWaitingRetrieval: true,
+  });
+
+  assert.equal(queue.statusCounts.ready, queue.tasks.length);
+  assert.equal(queue.statusCounts.waiting, queue.waiting.length);
+  assert.equal(queue.statusCounts.blocked, queue.blockers.length);
+  assert.equal(queue.statusCounts.partial, 1);
+  assert.equal(queue.statusCounts.readyIncludesWaiting, false);
+  assert.equal(queue.count, queue.statusCounts.ready);
+  assert.equal(queue.waitingCount, queue.statusCounts.waiting);
+  assert.equal(queue.statusCounts.blocked, 0);
+  assert.equal(queue.waiting.some((item) => item.kind === "run_inbound_sync"), true);
+  assert.equal(queue.tasks.some((item) =>
+    item.kind === "run_inbound_sync"
+    && item.surfaceKeys.includes("linkedin-sent-invitations")
+  ), true);
+});
+
 test("buildAgentQueue splits inbound sync work into one task per surface", () => {
   const queue = buildAgentQueue({
     motions: [],
@@ -2082,7 +2136,8 @@ test("buildAgentQueue defers itemization-gap full sync until provider backoff ex
   assert.equal(task.reason, "itemization_gap");
   assert.equal(task.dueAt, "2026-06-03T16:00:00.000Z");
   assert.equal(task.queueState, "waiting");
-  assert.equal(task.waitingReason, null);
+  assert.equal(task.waitingReason, "provider_rate_limited");
+  assert.equal(task.backoffReason, "provider_rate_limited");
   assert.equal(task.resumeStartOffset, 10);
   assert.match(task.contractCommand, /--resume-start-offset 10/);
 });
@@ -2475,6 +2530,8 @@ test("buildAgentQueue surfaces a send-ready draft as a stale_send_ready_draft bl
   );
   assert.equal(queue.tasks.filter((t) => t.kind === "send_message").length, 0, "stale send-ready drafts must not be enqueued as sends");
   assert.equal(queue.blockers.length, 1);
+  assert.equal(queue.statusCounts.blocked, 1);
+  assert.equal(queue.statusCounts.readyIncludesWaiting, false);
   assert.equal(queue.blockers[0].kind, "stale_send_ready_draft");
   assert.equal(queue.blockers[0].sendReadySurface, "follow_up_direct_message");
   assert.equal(queue.blockers[0].nextSurface, "inbound_reply");

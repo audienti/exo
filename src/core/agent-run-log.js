@@ -157,6 +157,7 @@ function buildPassEntry(pass, sourceArtifact) {
   const timestamp = endedAt ?? startedAt;
   const results = normalizeResults(pass?.results);
   const resultCounts = buildResultCounts(results);
+  const runtimeTruth = buildRuntimeTruth(results);
   const taskKinds = [...new Set(results.map((result) => result.kind).filter(Boolean))];
   const taskKind = taskKinds.length === 0
     ? null
@@ -189,6 +190,7 @@ function buildPassEntry(pass, sourceArtifact) {
     taskKinds,
     resultCounts,
     queueCounts: normalizeQueueCounts(pass?.finalQueueCounts),
+    runtimeTruth,
     reason: normalizeText(pass?.reason),
     sourceArtifact: source,
   };
@@ -393,7 +395,81 @@ function normalizeResults(results) {
   return results.map((result) => ({
     kind: normalizeText(result?.kind),
     status: normalizeText(result?.status),
+    detail: normalizeResultDetail(result?.detail),
   }));
+}
+
+/** @param {any} detail */
+function normalizeResultDetail(detail) {
+  if (!detail || typeof detail !== "object") return {};
+  return {
+    transport: normalizeText(detail.transport),
+    fallbackFrom: normalizeText(detail.fallbackFrom),
+    configReason: normalizeText(detail.configReason)
+      ?? normalizeText(detail.backoffReason)
+      ?? inferConfigReason(detail),
+    surfaceError: normalizeText(detail.surfaceError),
+    captureError: normalizeText(detail.captureError),
+    reason: normalizeText(detail.reason),
+    reasonCode: normalizeText(detail.reasonCode),
+    blockReason: normalizeText(detail.blockReason),
+    directUnipileFailureReason: normalizeText(detail.directUnipileFailureReason),
+    directUnipileUnsupportedReason: normalizeText(detail.directUnipileUnsupportedReason),
+  };
+}
+
+/** @param {any} detail */
+function inferConfigReason(detail) {
+  const text = [
+    detail?.surfaceError,
+    detail?.captureError,
+    detail?.reason,
+    detail?.directUnipileFailureReason,
+    detail?.directUnipileUnsupportedReason,
+  ].map((value) => normalizeText(value)).filter(Boolean).join(" ");
+  if (/configured Unipile base URL|missing_unipile_base_url/i.test(text)) {
+    return "missing_unipile_base_url";
+  }
+  if (/Unipile API key|missing_unipile_api_key/i.test(text)) {
+    return "missing_unipile_api_key";
+  }
+  if (/providerAccountId|provider account id|missing_provider_account_id/i.test(text)) {
+    return "missing_provider_account_id";
+  }
+  return null;
+}
+
+/** @param {Array<{ kind: string | null, status: string | null, detail: Record<string, any> }>} results */
+function buildRuntimeTruth(results) {
+  const transports = [];
+  const configReasons = [];
+
+  for (const result of results) {
+    if (result.detail.transport) {
+      transports.push({
+        taskKind: result.kind,
+        status: result.status,
+        transport: result.detail.transport,
+        fallbackFrom: result.detail.fallbackFrom ?? null,
+      });
+    }
+
+    if (result.detail.configReason) {
+      configReasons.push({
+        taskKind: result.kind,
+        status: result.status,
+        reason: result.detail.configReason,
+        message: result.detail.surfaceError
+          ?? result.detail.captureError
+          ?? result.detail.reason
+          ?? result.detail.directUnipileFailureReason
+          ?? result.detail.directUnipileUnsupportedReason
+          ?? null,
+      });
+    }
+  }
+
+  return { transports, configReasons };
 }
 
 /** @param {Array<{ kind: string | null, status: string | null }>} results */
@@ -450,10 +526,28 @@ function inferPassStatus(counts) {
 /** @param {any} queueCounts */
 function normalizeQueueCounts(queueCounts) {
   if (!queueCounts || typeof queueCounts !== "object") return null;
+  const readyTaskCount = normalizeNonNegativeInteger(queueCounts.readyTaskCount)
+    ?? normalizeNonNegativeInteger(queueCounts.dueTaskCount)
+    ?? 0;
+  const waitingTaskCount = normalizeNonNegativeInteger(queueCounts.waitingTaskCount) ?? 0;
+  const blockerCount = normalizeNonNegativeInteger(queueCounts.blockerCount) ?? 0;
+  const partialTaskCount = normalizeNonNegativeInteger(queueCounts.partialTaskCount)
+    ?? normalizeNonNegativeInteger(queueCounts.statusCounts?.partial)
+    ?? 0;
+  const statusCounts = {
+    ready: normalizeNonNegativeInteger(queueCounts.statusCounts?.ready) ?? readyTaskCount,
+    waiting: normalizeNonNegativeInteger(queueCounts.statusCounts?.waiting) ?? waitingTaskCount,
+    blocked: normalizeNonNegativeInteger(queueCounts.statusCounts?.blocked) ?? blockerCount,
+    partial: normalizeNonNegativeInteger(queueCounts.statusCounts?.partial) ?? partialTaskCount,
+    readyIncludesWaiting: queueCounts.statusCounts?.readyIncludesWaiting === true,
+  };
   return {
-    dueTaskCount: normalizeNonNegativeInteger(queueCounts.dueTaskCount) ?? 0,
-    waitingTaskCount: normalizeNonNegativeInteger(queueCounts.waitingTaskCount) ?? 0,
-    blockerCount: normalizeNonNegativeInteger(queueCounts.blockerCount) ?? 0,
+    dueTaskCount: normalizeNonNegativeInteger(queueCounts.dueTaskCount) ?? readyTaskCount,
+    readyTaskCount,
+    waitingTaskCount,
+    blockerCount,
+    partialTaskCount,
+    statusCounts,
   };
 }
 
