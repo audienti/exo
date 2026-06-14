@@ -282,7 +282,7 @@ test("inbound sync live returns managed-account handoff contracts in Codex shell
       "--json"
     ]);
 
-    const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--json"], {
+    const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--agent-handoff", "--json"], {
       CODEX_HOME: codexHome,
       CODEX_SHELL: "1",
       EXO_CODEX_CLI: fakeCodexPath
@@ -398,7 +398,18 @@ test("inbound sync live supports full-mode Codex handoff for LinkedIn reconcilia
       "--json"
     ]);
 
-    const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--capability", "linkedin", "--mode", "full", "--json"], {
+    const result = runCliJson(tempDir, [
+      "inbound",
+      "sync",
+      "live",
+      user.id,
+      "--capability",
+      "linkedin",
+      "--mode",
+      "full",
+      "--agent-handoff",
+      "--json"
+    ], {
       CODEX_HOME: codexHome,
       CODEX_SHELL: "1",
       EXO_CODEX_CLI: path.join(tempDir, "ignored-codex-shell-binary")
@@ -474,7 +485,7 @@ test("inbound sync live reports mixed-account failure plus managed-account hando
     ]);
     const gmailAccountId = withGmail.accounts.find((account) => account.capability === "gmail").id;
 
-    const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--json"], {
+    const result = runCliJson(tempDir, ["inbound", "sync", "live", user.id, "--agent-handoff", "--json"], {
       CODEX_HOME: codexHome,
       EXO_CODEX_CLI: fakeCodexPath
     });

@@ -3806,6 +3806,69 @@ test("runInboundSyncTask uses same-credential Unipile HTTP first for linkedin sy
   ]);
 });
 
+test("runInboundSyncTask surfaces direct Unipile config failures from payloads", () => {
+  const task = {
+    kind: "run_inbound_sync",
+    capability: "linkedin",
+    userId: "user-1",
+    accountId: "account-1",
+    mode: "quick",
+    surfaceKeys: ["linkedin-sent-invitations"],
+    verificationCommands: [],
+  };
+  const appliedPayloads = [];
+  const failedPayload = {
+    mode: "quick",
+    accounts: [
+      {
+        accountId: "account-1",
+        surfaces: [
+          {
+            surfaceKey: "linkedin-sent-invitations",
+            status: "failed",
+            itemCount: 0,
+            captureCompleteness: "failed",
+            exhaustionStatus: "blocked",
+            backoffReason: "missing_unipile_base_url",
+            syncTrustStatus: "untrusted",
+            error: "linkedin live sync requires a configured Unipile base URL.",
+            observations: [],
+          },
+        ],
+      },
+    ],
+  };
+
+  const result = runInboundSyncTask(task, null, {
+    runInboundContract(_taskInput, options = {}) {
+      assert.equal(options.directUnipileHttp, true);
+      return {
+        transport: {
+          kind: "direct_runtime",
+          connector: "unipile",
+        },
+        capture: {
+          status: "failed",
+          itemCount: 0,
+          error: "linkedin live sync requires a configured Unipile base URL.",
+        },
+        payload: failedPayload,
+      };
+    },
+    applyInboundPayload(_taskInput, payload) {
+      appliedPayloads.push(payload);
+    },
+    runVerificationCommands: () => [],
+    suppressVerification: true,
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.detail.transport, "direct_payload");
+  assert.equal(result.detail.surfaceStatus, "failed");
+  assert.match(result.detail.surfaceError, /configured Unipile base URL/i);
+  assert.deepEqual(appliedPayloads, [failedPayload]);
+});
+
 test("runInboundSyncTask uses direct Unipile HTTP for subsequent linkedin sync surfaces without MCP capture", () => {
   const executionContext = {
     inboundConnectorFallbacks: new Map(),

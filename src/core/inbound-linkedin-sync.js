@@ -206,6 +206,8 @@ function buildCaptureSummary(mode, surfaces) {
 function buildLegacySurface(definition, section) {
   const exhaustionStatus = normalizeSurfaceExhaustionStatus(section);
   const exhaustionReason = normalizeNullableString(section.exhaustionReason);
+  const backoffReason = normalizeNullableString(section.backoffReason);
+  const syncTrustStatus = normalizeSyncTrustStatus(section.syncTrustStatus);
   const paginationAttempted = typeof section.paginationAttempted === "boolean" ? section.paginationAttempted : null;
   const terminalSignalSeen = typeof section.terminalSignalSeen === "boolean" ? section.terminalSignalSeen : null;
   const stalledPassCount = Number.isInteger(section.stalledPassCount) ? section.stalledPassCount : null;
@@ -317,6 +319,8 @@ function buildLegacySurface(definition, section) {
     reconcileReason: section.reconcileReason,
     exhaustionStatus,
     exhaustionReason,
+    backoffReason,
+    syncTrustStatus,
     paginationAttempted,
     terminalSignalSeen,
     stalledPassCount,
@@ -354,6 +358,20 @@ function normalizeSurfaceExhaustionStatus(section) {
 function normalizeVisibleTotalCount(visibleTotalCount, itemCount) {
   if (visibleTotalCount === null || itemCount === null) return visibleTotalCount;
   return Math.max(visibleTotalCount, itemCount);
+}
+
+/**
+ * @param {unknown} value
+ */
+function normalizeSyncTrustStatus(value) {
+  switch (value) {
+    case "trusted":
+    case "degraded":
+    case "untrusted":
+      return value;
+    default:
+      return null;
+  }
 }
 
 /**

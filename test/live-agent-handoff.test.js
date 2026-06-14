@@ -70,7 +70,8 @@ async function buildCodexLinkedinHandoffResult(options = {}) {
       },
       [],
       {
-        runtime: "codex"
+        runtime: "codex",
+        allowDirectUnipileHttp: false
       }
     );
   } finally {
@@ -149,7 +150,8 @@ async function buildCodexUnipileLinkedinHandoffResult() {
       },
       [],
       {
-        runtime: "codex"
+        runtime: "codex",
+        allowDirectUnipileHttp: false
       }
     );
   } finally {

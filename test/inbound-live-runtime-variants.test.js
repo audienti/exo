@@ -72,6 +72,80 @@ function createLinkedinChromeProfile(tempDir, label) {
   return { chrome, profile };
 }
 
+function buildManagedLinkedinUser(overrides = {}) {
+  const timestamp = overrides.timestamp ?? "2026-06-04T12:00:00.000Z";
+  return {
+    id: "user-1",
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    label: "linkedin-live-unipile-user",
+    owner: "william",
+    notes: null,
+    workingHours: {
+      mode: "always",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "09:00",
+      endLocalTime: "17:00"
+    },
+    accounts: [
+      {
+        id: "linkedin-account-1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        capability: "linkedin",
+        handle: "linkedin-live-unipile-user",
+        label: "LinkedIn via Unipile",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-1",
+        providerAccountId: "unipile-linkedin-1",
+        preferred: true,
+        automationControls: {
+          weeklyQuotas: {
+            profileVisits: null,
+            invitations: null,
+            messages: null
+          }
+        },
+        notes: null,
+        inboundSync: {
+          surfaces: []
+        },
+        ...(overrides.account ?? {})
+      }
+    ],
+    harnessConnections: [
+      {
+        id: "harness-1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        runtime: "codex",
+        connector: "unipile",
+        label: "codex:unipile",
+        status: "available",
+        notes: null
+      }
+    ],
+    inboundIgnoreRules: []
+  };
+}
+
+function writeUnipileCodexConfig(codexHome, envLines = []) {
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    ...(envLines.length
+      ? [
+          "[mcp_servers.unipile.env]",
+          ...envLines,
+        ]
+      : []),
+    ""
+  ].join("\n"));
+}
+
 test("inbound sync gmail-live uses a Claude Gmail cassette and applies governed writeback", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-claude-cassette-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude");
@@ -513,6 +587,123 @@ test("inbound sync linkedin-live defaults managed Unipile accounts to direct HTT
         apiKey: "test-key"
       }
     ]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of [
+  {
+    name: "missing API key",
+    configEnv: ['UNIPILE_DSN = "https://api14.unipile.com:14465"'],
+    account: {},
+    expectedError: /requires UNIPILE_API_KEY/i,
+    expectedBackoffReason: "missing_unipile_api_key",
+  },
+  {
+    name: "missing explicit base URL",
+    configEnv: ['UNIPILE_API_KEY = "test-key"'],
+    account: {},
+    expectedError: /requires a configured Unipile base URL/i,
+    expectedBackoffReason: "missing_unipile_base_url",
+  },
+  {
+    name: "missing provider account id",
+    configEnv: [
+      'UNIPILE_API_KEY = "test-key"',
+      'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ],
+    account: { providerAccountId: null },
+    expectedError: /requires providerAccountId/i,
+    expectedBackoffReason: "missing_provider_account_id",
+  },
+]) {
+  test(`inbound sync linkedin-live returns a failed untrusted payload for ${scenario.name}`, async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `exo-inbound-sync-linkedin-live-${scenario.name.replaceAll(" ", "-")}-`));
+    const codexHome = path.join(tempDir, ".codex");
+    let httpCalled = false;
+
+    writeUnipileCodexConfig(codexHome, scenario.configEnv);
+
+    try {
+      const result = await buildLiveLinkedinInboundSyncPayload(
+        buildManagedLinkedinUser({ account: scenario.account }),
+        [],
+        {
+          accountId: "linkedin-account-1",
+          runtime: "codex",
+          connector: "unipile",
+          mode: "quick",
+          surfaceKeys: ["linkedin-sent-invitations"],
+          codexHome,
+          allowDirectUnipileHttp: true,
+          unipileHttpGetImpl: () => {
+            httpCalled = true;
+            return {
+              status: 200,
+              bodyText: "{}",
+            };
+          },
+        },
+      );
+
+      const sentInvitations = result.payload?.accounts?.[0]?.surfaces?.find((surface) => surface.surfaceKey === "linkedin-sent-invitations");
+      assert.equal(result.transport.kind, "direct_runtime");
+      assert.ok(sentInvitations);
+      assert.equal(sentInvitations.status, "failed");
+      assert.equal(sentInvitations.exhaustionStatus, "blocked");
+      assert.equal(sentInvitations.captureCompleteness, "failed");
+      assert.equal(sentInvitations.syncTrustStatus, "untrusted");
+      assert.equal(sentInvitations.backoffReason, scenario.expectedBackoffReason);
+      assert.match(sentInvitations.error, scenario.expectedError);
+      assert.equal(sentInvitations.itemCount, 0);
+      assert.equal(httpCalled, false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("inbound sync linkedin-live treats provider account identity failures as untrusted failed surfaces", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-identity-mismatch-"));
+  const codexHome = path.join(tempDir, ".codex");
+
+  writeUnipileCodexConfig(codexHome, [
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+  ]);
+
+  try {
+    const result = await buildLiveLinkedinInboundSyncPayload(
+      buildManagedLinkedinUser(),
+      [],
+      {
+        accountId: "linkedin-account-1",
+        runtime: "codex",
+        connector: "unipile",
+        mode: "quick",
+        surfaceKeys: ["linkedin-sent-invitations"],
+        codexHome,
+        allowDirectUnipileHttp: true,
+        unipileHttpGetImpl: () => ({
+          status: 503,
+          bodyText: JSON.stringify({
+            status: 503,
+            type: "errors/no_client_session",
+            title: "No client session for account_id unipile-linkedin-1",
+          }),
+        }),
+      },
+    );
+
+    const sentInvitations = result.payload?.accounts?.[0]?.surfaces?.find((surface) => surface.surfaceKey === "linkedin-sent-invitations");
+    assert.equal(result.transport.kind, "direct_runtime");
+    assert.ok(sentInvitations);
+    assert.equal(sentInvitations.status, "failed");
+    assert.equal(sentInvitations.syncTrustStatus, "untrusted");
+    assert.equal(sentInvitations.backoffReason, "transport_or_surface_failure");
+    assert.match(sentInvitations.error, /errors\/no_client_session/i);
+    assert.match(sentInvitations.error, /unipile-linkedin-1/i);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

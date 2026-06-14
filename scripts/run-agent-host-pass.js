@@ -5129,6 +5129,8 @@ function buildFailedLinkedinSurface(mode, checkedAt, error) {
     reconcileReason: null,
     exhaustionStatus: "blocked",
     exhaustionReason: "transport_failure",
+    backoffReason: "transport_failure",
+    syncTrustStatus: "untrusted",
     paginationAttempted: false,
     terminalSignalSeen: false,
     stalledPassCount: 0,
@@ -5142,6 +5144,11 @@ function normalizeLinkedinSurfaceCapture(surface, mode) {
   const items = Array.isArray(surface?.items) ? surface.items : [];
   const status = typeof surface?.status === "string" ? surface.status : "failed";
   const error = resolveLinkedinSurfaceError(surface);
+  const exhaustionReason = typeof surface?.exhaustionReason === "string" ? surface.exhaustionReason : null;
+  const backoffReason = normalizeNullableString(surface?.backoffReason)
+    ?? (status === "failed" ? exhaustionReason ?? "transport_failure" : null);
+  const syncTrustStatus = normalizeNullableString(surface?.syncTrustStatus)
+    ?? (status === "failed" ? "untrusted" : null);
   return {
     status,
     checkedAt,
@@ -5153,7 +5160,9 @@ function normalizeLinkedinSurfaceCapture(surface, mode) {
     reconcileRequired: typeof surface?.reconcileRequired === "boolean" ? surface.reconcileRequired : null,
     reconcileReason: typeof surface?.reconcileReason === "string" ? surface.reconcileReason : null,
     exhaustionStatus: surface?.exhaustionStatus ?? (status === "failed" ? "blocked" : "incomplete"),
-    exhaustionReason: typeof surface?.exhaustionReason === "string" ? surface.exhaustionReason : null,
+    exhaustionReason,
+    backoffReason,
+    syncTrustStatus,
     paginationAttempted: typeof surface?.paginationAttempted === "boolean" ? surface.paginationAttempted : false,
     terminalSignalSeen: typeof surface?.terminalSignalSeen === "boolean" ? surface.terminalSignalSeen : false,
     stalledPassCount: Number.isInteger(surface?.stalledPassCount) ? surface.stalledPassCount : 0,

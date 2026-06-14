@@ -788,12 +788,27 @@ async function maybeCaptureLinkedinQuickSurfacesThroughUnipile(input) {
 
   const providerAccountId = normalizeNullableString(input.account.providerAccountId);
   if (!providerAccountId) {
-    return null;
+    return buildFailedLinkedinCapture(
+      input.mode,
+      `LinkedIn live sync requires providerAccountId on LinkedIn account ${input.account.id}.`,
+      "missing_provider_account_id"
+    );
   }
 
   const { apiKey, baseUrl, baseUrlSource, v2ApiKey, v2BaseUrl } = readUnipileConfig(input.codexHome);
-  if (!apiKey || baseUrlSource === "default") {
-    return null;
+  if (!apiKey) {
+    return buildFailedLinkedinCapture(
+      input.mode,
+      "LinkedIn live sync requires UNIPILE_API_KEY in the local Codex environment.",
+      "missing_unipile_api_key"
+    );
+  }
+  if (baseUrlSource === "default") {
+    return buildFailedLinkedinCapture(
+      input.mode,
+      "LinkedIn live sync requires a configured Unipile base URL.",
+      "missing_unipile_base_url"
+    );
   }
 
   return captureLinkedinQuickSurfacesThroughUnipile({
@@ -3203,16 +3218,16 @@ function buildLinkedinCaptureOutputGuide(input) {
 /**
  * @param {string} error
  */
-function buildFailedLinkedinCapture(mode, error) {
+function buildFailedLinkedinCapture(mode, error, reason = "transport_or_surface_failure") {
   const checkedAt = new Date().toISOString();
   return {
     mode,
-    sentInvitations: buildFailedSurface(error, checkedAt, mode),
-    receivedInvitations: buildFailedSurface(error, checkedAt, mode),
-    messagingInbox: buildFailedSurface(error, checkedAt, mode),
-    profileViews: buildFailedSurface(error, checkedAt, mode),
-    followersList: buildFailedSurface(error, checkedAt, mode),
-    followingList: buildFailedSurface(error, checkedAt, mode)
+    sentInvitations: buildFailedSurface(error, checkedAt, mode, reason),
+    receivedInvitations: buildFailedSurface(error, checkedAt, mode, reason),
+    messagingInbox: buildFailedSurface(error, checkedAt, mode, reason),
+    profileViews: buildFailedSurface(error, checkedAt, mode, reason),
+    followersList: buildFailedSurface(error, checkedAt, mode, reason),
+    followingList: buildFailedSurface(error, checkedAt, mode, reason)
   };
 }
 
@@ -3265,6 +3280,8 @@ function buildFailedSurface(error, checkedAt, mode, exhaustionReason = "transpor
     reconcileReason: null,
     exhaustionStatus: "blocked",
     exhaustionReason,
+    backoffReason: exhaustionReason,
+    syncTrustStatus: "untrusted",
     paginationAttempted: null,
     terminalSignalSeen: null,
     stalledPassCount: null,
