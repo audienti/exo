@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T20:35:27Z"
+    "updatedAt": "2026-06-14T20:36:03Z"
   },
   "tasks": [
     {
@@ -525,7 +525,7 @@
       "subject": "Dirty tree before loop start",
       "body": "The loop started with existing uncommitted changes in plan-overlapping files. T0 must attribute and verify them before T1 implementation begins.",
       "createdAt": "2026-06-14T18:49:36.000Z",
-      "status": "open"
+      "status": "resolved"
     }
   ]
 }
