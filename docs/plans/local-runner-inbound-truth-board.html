@@ -139,12 +139,12 @@
     <div class="topline">
       <span class="chip"><b>plan</b>local-runner-inbound-truth</span>
       <span class="chip"><b>status</b>active</span>
-      <span class="chip"><b>progress</b>3/9</span>
+      <span class="chip"><b>progress</b>4/9</span>
       <span class="chip"><b>controller</b>codex</span>
       <span class="chip"><b>worktrees</b>.worktrees</span>
       <span class="chip"><b>open messages</b>1</span>
-      <span class="chip"><b>board updated</b>2026-06-14T19:27:36Z</span>
-      <span class="chip"><b>rendered</b>2026-06-14T19:27:56Z</span>
+      <span class="chip"><b>board updated</b>2026-06-14T19:28:45Z</span>
+      <span class="chip"><b>rendered</b>2026-06-14T19:29:13Z</span>
     </div>
     <div class="topline"><span class="chip"><b>default</b>inherit</span><span class="chip"><b>fast</b>inherit</span><span class="chip"><b>max</b>inherit</span></div>
   </header>
@@ -152,13 +152,13 @@
       <section class="panel">
         <h2>Parallelization Audit</h2>
         <div class="metrics">
-          <div><b>1</b><span>in flight</span></div>
+          <div><b>0</b><span>in flight</span></div>
           <div><b>3</b><span>cap</span></div>
           <div><b>none</b><span>next dispatch candidates</span></div>
         </div>
-        <p><b>Running or verifying:</b> T5</p>
+        <p><b>Running or verifying:</b> none</p>
         <p><b>Capacity read:</b> No ready sub-agent tasks; work is dependency-gated or controller-lane only.</p>
-        <p><b>Controller note:</b> T2 is verified green. T2b and T3 are ready but overlap host-runner files, so only one can proceed next. T5 returned from subagent Russell and is in verify pending its own task commit.</p>
+        <p><b>Controller note:</b> T2 and T5 are verified green. T2b and T3 are ready but overlap host-runner files, so only one can proceed next.</p>
       </section>
 
 
@@ -194,7 +194,7 @@
           <h3>Run full integration verification and close board</h3>
         </header>
         <div class="chips"><span class="chip"><b>lane</b>controller</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>10</span></div>
-        <div class="field"><div class="label">Reason</div><div>Waiting on T4, T5, T6</div></div><div class="field"><div class="label">Depends on</div><div>T4, T5, T6</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/local-runner-inbound-truth-board.json</li><li>docs/plans/local-runner-inbound-truth-board.html</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js</li><li>npm test -- test/agent-host-pass.test.js</li><li>npm test -- test/linkedin-unipile-maintenance.test.js</li><li>npm test -- test/build-linkedin-send.test.js</li><li>npm test -- test/connection-request-reconciliation.test.js</li><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js</li><li>npm test</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All plan acceptance criteria pass.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board status is complete with final verification recorded.</li></ul></div></div>
+        <div class="field"><div class="label">Reason</div><div>Waiting on T4, T6</div></div><div class="field"><div class="label">Depends on</div><div>T4, T5, T6</div></div><div class="field"><div class="label">Files</div><div><ul><li>docs/plans/local-runner-inbound-truth-board.json</li><li>docs/plans/local-runner-inbound-truth-board.html</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/inbound-live-runtime-variants.test.js</li><li>npm test -- test/agent-host-pass.test.js</li><li>npm test -- test/linkedin-unipile-maintenance.test.js</li><li>npm test -- test/build-linkedin-send.test.js</li><li>npm test -- test/connection-request-reconciliation.test.js</li><li>npm test -- test/agent-queue.test.js test/agent-run-log.test.js</li><li>npm test</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>All plan acceptance criteria pass.</li><li>npm test passes.</li><li>git diff --check passes.</li><li>Board status is complete with final verification recorded.</li></ul></div></div>
       </article>
 
       <article class="task task-backlog">
@@ -246,21 +246,21 @@
           </section>
 
           <section class="column">
-            <h2>Verify <span>1</span></h2>
+            <h2>Verify <span>0</span></h2>
+            <div class="empty">No tasks</div>
+          </section>
 
-      <article class="task task-verify">
+          <section class="column">
+            <h2>Done <span>4</span></h2>
+
+      <article class="task task-done">
         <header>
           <div class="task-id">T5</div>
           <h3>Add env-gated real Unipile account smoke test</h3>
         </header>
-        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>1</span><span class="chip"><b>priority</b>70</span></div>
-        <div class="field"><div class="label">Reason</div><div>Awaiting controller verification.</div></div><div class="field"><div class="label">Worktree</div><div>multi_agent_v1:019ec793-2c34-7203-a2a3-bc73e60d1cbb</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>test/unipile-account-smoke.test.js</li><li>src/lib/unipile-config.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/unipile-account-smoke.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Default npm test does not make a live Unipile request.</li><li>An explicit environment opt-in command is documented in the test or board notes.</li><li>When enabled, the test verifies the configured provider account id is present in /api/v1/accounts.</li></ul></div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Subagent Russell added test/unipile-account-smoke.test.js with a default skip gate and documented opt-in command.</li><li>Controller verified npm test -- test/unipile-account-smoke.test.js skips by default without a live request.</li><li>Controller verified EXO_UNIPILE_ACCOUNT_SMOKE=1 npm test -- test/unipile-account-smoke.test.js skips without credentials/provider account id and makes no live request.</li><li>Full npm test included the smoke test as one skipped test.</li></ul></div></div>
+        <div class="chips"><span class="chip"><b>lane</b>subagent</span><span class="chip"><b>tier</b>default</span><span class="chip"><b>model</b>inherit</span><span class="chip"><b>attempt</b>0</span><span class="chip"><b>priority</b>70</span></div>
+        <div class="field"><div class="label">Reason</div><div>Verified; no commit recorded.</div></div><div class="field"><div class="label">Worktree</div><div>multi_agent_v1:019ec793-2c34-7203-a2a3-bc73e60d1cbb</div></div><div class="field"><div class="label">Depends on</div><div>T1</div></div><div class="field"><div class="label">Files</div><div><ul><li>test/unipile-account-smoke.test.js</li><li>src/lib/unipile-config.js</li></ul></div></div><div class="field"><div class="label">Verification</div><div><ul><li>npm test -- test/unipile-account-smoke.test.js</li><li>git diff --check</li></ul></div></div><div class="field"><div class="label">Done when</div><div><ul><li>Default npm test does not make a live Unipile request.</li><li>An explicit environment opt-in command is documented in the test or board notes.</li><li>When enabled, the test verifies the configured provider account id is present in /api/v1/accounts.</li></ul></div></div><div class="field"><div class="label">Outputs</div><div><ul><li>Subagent Russell added test/unipile-account-smoke.test.js with a default skip gate and documented opt-in command.</li><li>Controller verified npm test -- test/unipile-account-smoke.test.js skips by default without a live request.</li><li>Controller verified EXO_UNIPILE_ACCOUNT_SMOKE=1 npm test -- test/unipile-account-smoke.test.js skips without credentials/provider account id and makes no live request.</li><li>Full npm test included the smoke test as one skipped test.</li><li>Verified git diff --check.</li></ul></div></div>
       </article>
-
-          </section>
-
-          <section class="column">
-            <h2>Done <span>3</span></h2>
 
       <article class="task task-done">
         <header>

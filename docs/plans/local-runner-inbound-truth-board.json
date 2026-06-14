@@ -51,7 +51,7 @@
     "viewer": {
       "htmlPath": "docs/plans/local-runner-inbound-truth-board.html"
     },
-    "parallelismNote": "T2 is verified green. T2b and T3 are ready but overlap host-runner files, so only one can proceed next. T5 returned from subagent Russell and is in verify pending its own task commit.",
+    "parallelismNote": "T2 and T5 are verified green. T2b and T3 are ready but overlap host-runner files, so only one can proceed next.",
     "models": {
       "fast": "inherit",
       "default": "inherit",
@@ -62,7 +62,7 @@
       "commit": "66aecc72b37febda9cc4072673344ce8d7a7d53e",
       "verifiedGreen": true
     },
-    "updatedAt": "2026-06-14T19:27:36Z"
+    "updatedAt": "2026-06-14T19:28:45Z"
   },
   "tasks": [
     {
@@ -337,7 +337,7 @@
     {
       "id": "T5",
       "title": "Add env-gated real Unipile account smoke test",
-      "status": "verify",
+      "status": "done",
       "priority": 70,
       "dependsOn": [
         "T1"
@@ -360,13 +360,14 @@
       ],
       "worktree": "multi_agent_v1:019ec793-2c34-7203-a2a3-bc73e60d1cbb",
       "startedAt": "2026-06-14T19:19:36Z",
-      "updatedAt": "2026-06-14T19:26:48Z",
+      "updatedAt": "2026-06-14T19:28:45Z",
       "resolvedModel": "inherit",
       "outputs": [
         "Subagent Russell added test/unipile-account-smoke.test.js with a default skip gate and documented opt-in command.",
         "Controller verified npm test -- test/unipile-account-smoke.test.js skips by default without a live request.",
         "Controller verified EXO_UNIPILE_ACCOUNT_SMOKE=1 npm test -- test/unipile-account-smoke.test.js skips without credentials/provider account id and makes no live request.",
-        "Full npm test included the smoke test as one skipped test."
+        "Full npm test included the smoke test as one skipped test.",
+        "Verified git diff --check."
       ],
       "attemptCount": 0,
       "lastFailure": "",
