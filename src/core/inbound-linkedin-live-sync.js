@@ -999,6 +999,7 @@ async function captureUnipileSentInvitationsSurface(input) {
     maxPageSize: LINKEDIN_COLLECTION_MAX_PAGE_SIZE,
     partialError: "Unipile returned more pending sent invitations than this quick pass itemized.",
     protectEmptyTerminalResume: true,
+    acceptStructuredOffsetShortPageTerminal: true,
     httpGetImpl: input.httpGetImpl,
     mapItem: (item, fallbackObservedAt) => {
       const invitationId = normalizeNullableString(item?.id);
@@ -1531,6 +1532,7 @@ async function captureUnipileFollowingSurface(input) {
  *   partialError: string,
  *   acceptTrailingEmptyCursor?: boolean,
  *   protectEmptyTerminalResume?: boolean,
+ *   acceptStructuredOffsetShortPageTerminal?: boolean,
  *   httpGetImpl: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   extraQuery?: Record<string, string> | null,
  *   mapItem: (item: any, fallbackObservedAt: string) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null
@@ -1547,6 +1549,9 @@ async function captureUnipileLinkedinCollectionSurface(input) {
   let pageCount = 0;
 
   while (items.length < targetCount) {
+    const requestCursor = input.mode === "full"
+      ? normalizeUnipileCursorPageLimit(cursor, pageSize)
+      : cursor;
     const page = await fetchUnipileJsonPage({
       apiKey: input.apiKey,
       baseUrl: input.baseUrl,
@@ -1554,7 +1559,7 @@ async function captureUnipileLinkedinCollectionSurface(input) {
       query: {
         account_id: input.providerAccountId,
         limit: String(pageSize),
-        cursor,
+        cursor: requestCursor,
         ...input.extraQuery
       },
       httpGetImpl: input.httpGetImpl
@@ -1628,6 +1633,38 @@ async function captureUnipileLinkedinCollectionSurface(input) {
         reconcileReason: null,
         exhaustionStatus: "complete",
         exhaustionReason: "api_cursor_exhausted",
+        paginationAttempted,
+        terminalSignalSeen: true,
+        stalledPassCount: 0,
+        nextCursor: null,
+        nextStartOffset: null,
+        error: null,
+        items
+      };
+    }
+
+    if (
+      input.acceptStructuredOffsetShortPageTerminal
+      && input.mode === "full"
+      && isUnipileStructuredOffsetShortPageTerminal({
+        currentCursor: requestCursor,
+        nextCursor,
+        rawItemCount: rawItems.length,
+        pageSize
+      })
+    ) {
+      return {
+        status: "success",
+        checkedAt,
+        itemCount: items.length,
+        visibleTotalCount: items.length,
+        captureCompleteness: "complete",
+        requestedMode: input.mode,
+        actualMode: input.mode,
+        reconcileRequired: false,
+        reconcileReason: null,
+        exhaustionStatus: "complete",
+        exhaustionReason: "provider_structured_offset_short_page_terminal",
         paginationAttempted,
         terminalSignalSeen: true,
         stalledPassCount: 0,
@@ -2855,6 +2892,60 @@ function extractUnipileCursor(parsed) {
 }
 
 /**
+ * @param {{
+ *   currentCursor?: string | null,
+ *   nextCursor: string,
+ *   rawItemCount: number,
+ *   pageSize: number
+ * }} input
+ */
+function isUnipileStructuredOffsetShortPageTerminal(input) {
+  if (!Number.isInteger(input.rawItemCount) || input.rawItemCount < 1) {
+    return false;
+  }
+
+  if (!Number.isInteger(input.pageSize) || input.pageSize < 1 || input.rawItemCount >= input.pageSize) {
+    return false;
+  }
+
+  const nextCursor = parseUnipileStructuredOffsetCursor(input.nextCursor);
+  if (!nextCursor || nextCursor.limit !== input.pageSize) {
+    return false;
+  }
+
+  const currentCursor = input.currentCursor
+    ? parseUnipileStructuredOffsetCursor(input.currentCursor)
+    : { limit: nextCursor.limit, cursor: 0 };
+  if (!currentCursor || currentCursor.limit !== nextCursor.limit) {
+    return false;
+  }
+
+  return nextCursor.cursor === currentCursor.cursor + input.rawItemCount;
+}
+
+/**
+ * @param {string | null | undefined} rawCursor
+ * @param {number} requestedPageSize
+ */
+function normalizeUnipileCursorPageLimit(rawCursor, requestedPageSize) {
+  const structured = parseUnipileStructuredCursorEnvelope(rawCursor);
+  if (!structured || structured.limit === requestedPageSize) {
+    return normalizeNullableString(rawCursor);
+  }
+
+  const payload = {
+    ...structured.payload,
+    limit: typeof structured.payload.limit === "string"
+      ? String(requestedPageSize)
+      : requestedPageSize
+  };
+  const encoded = JSON.stringify(payload);
+  return structured.encoding === "base64"
+    ? Buffer.from(encoded, "utf8").toString("base64")
+    : encoded;
+}
+
+/**
  * @param {unknown} raw
  */
 function normalizeUnipileCursor(raw) {
@@ -2866,6 +2957,103 @@ function normalizeUnipileCursor(raw) {
       ?? normalizeUnipileCursor(raw.next_cursor)
       ?? normalizeUnipileCursor(raw.value);
   }
+  return null;
+}
+
+/**
+ * @param {string | null | undefined} raw
+ */
+function parseUnipileStructuredOffsetCursor(raw) {
+  const structured = parseUnipileStructuredCursorEnvelope(raw);
+  if (!structured) {
+    return null;
+  }
+
+  return normalizeUnipileStructuredOffsetCursorValue(structured.payload);
+}
+
+/**
+ * @param {unknown} raw
+ */
+function normalizeUnipileStructuredOffsetCursorValue(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const limit = normalizeUnipileStructuredCursorInteger(raw.limit);
+  const cursor = normalizeUnipileStructuredCursorInteger(raw.cursor);
+  if (limit === null || cursor === null) {
+    return null;
+  }
+
+  return { limit, cursor };
+}
+
+/**
+ * @param {string | null | undefined} raw
+ */
+function parseUnipileStructuredCursorEnvelope(raw) {
+  const normalized = normalizeNullableString(raw);
+  if (!normalized) {
+    return null;
+  }
+
+  const direct = normalizeUnipileStructuredCursorPayload(safeJsonParse(normalized));
+  if (direct) {
+    return {
+      encoding: "json",
+      payload: direct.payload,
+      limit: direct.limit
+    };
+  }
+
+  const decoded = normalizeUnipileStructuredCursorPayload(
+    safeJsonParse(Buffer.from(normalized, "base64").toString("utf8"))
+  );
+  if (!decoded) {
+    return null;
+  }
+
+  return {
+    encoding: "base64",
+    payload: decoded.payload,
+    limit: decoded.limit
+  };
+}
+
+/**
+ * @param {unknown} raw
+ */
+function normalizeUnipileStructuredCursorPayload(raw) {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+
+  const limit = normalizeUnipileStructuredCursorInteger(raw.limit);
+  const hasCursor = normalizeUnipileStructuredCursorInteger(raw.cursor) !== null;
+  const hasStartIndex = normalizeUnipileStructuredCursorInteger(raw.startIndex) !== null;
+  if (limit === null || (!hasCursor && !hasStartIndex)) {
+    return null;
+  }
+
+  return {
+    payload: raw,
+    limit
+  };
+}
+
+/**
+ * @param {unknown} raw
+ */
+function normalizeUnipileStructuredCursorInteger(raw) {
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0) {
+    return raw;
+  }
+
+  if (typeof raw === "string" && /^\d+$/.test(raw)) {
+    return Number.parseInt(raw, 10);
+  }
+
   return null;
 }
 

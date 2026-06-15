@@ -1714,6 +1714,187 @@ test("inbound sync linkedin-live caps full followers sync to Unipile's LinkedIn 
   }
 });
 
+test("inbound sync linkedin-live rewrites a structured followers resume cursor to the requested page size", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-followers-resume-limit-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const timestamp = "2026-06-04T12:00:00.000Z";
+  const seenFollowerRequests = [];
+  const originalResumeCursor = Buffer.from(JSON.stringify({ startIndex: "932", limit: 5 }), "utf8").toString("base64");
+  const widenedResumeCursor = Buffer.from(JSON.stringify({ startIndex: "932", limit: 100 }), "utf8").toString("base64");
+  const widenedTailCursor = Buffer.from(JSON.stringify({ startIndex: "992", limit: 100 }), "utf8").toString("base64");
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ""
+  ].join("\n"));
+
+  const buildFollowerItems = (startIndex, count) => Array.from({ length: count }, (_value, offset) => {
+    const numericId = startIndex + offset;
+    return {
+      object: "UserFollower",
+      id: `follower-${numericId}`,
+      urn: `urn:li:member:member-${numericId}`,
+      name: `Follower ${numericId}`,
+      headline: "Director of Revenue Operations",
+      profile_url: `https://www.linkedin.com/in/follower-${numericId}/`,
+      profile_picture_url: null,
+      profile_picture_url_large: null
+    };
+  });
+
+  try {
+    const rawUser = {
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "linkedin-live-unipile-user",
+      owner: "william",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00"
+      },
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "linkedin-live-unipile-user",
+          label: "LinkedIn via Unipile",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-1",
+          providerAccountId: "unipile-linkedin-1",
+          preferred: true,
+          automationControls: {
+            weeklyQuotas: {
+              profileVisits: null,
+              invitations: null,
+              messages: null
+            }
+          },
+          notes: null,
+          inboundSync: {
+            surfaces: []
+          }
+        }
+      ],
+      harnessConnections: [
+        {
+          id: "harness-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          runtime: "codex",
+          connector: "unipile",
+          label: "codex:unipile",
+          status: "available",
+          notes: null
+        }
+      ],
+      inboundIgnoreRules: []
+    };
+
+    const sharedOptions = {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      limit: 500,
+      surfaceKeys: ["linkedin-followers-list"],
+      maxPages: 1,
+      pageSize: 100,
+      codexHome,
+      allowDirectUnipileHttp: true,
+      unipileHttpGetImpl: (url) => {
+        const parsed = new URL(url);
+        if (parsed.pathname !== "/api/v1/users/followers") {
+          return {
+            status: 404,
+            bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+          };
+        }
+
+        const requestCursor = parsed.searchParams.get("cursor");
+        const decodedCursor = requestCursor ? JSON.parse(Buffer.from(requestCursor, "base64").toString("utf8")) : null;
+        seenFollowerRequests.push({
+          limit: parsed.searchParams.get("limit"),
+          cursor: decodedCursor
+        });
+
+        if (requestCursor === widenedResumeCursor) {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserFollowerList",
+              items: buildFollowerItems(932, 60),
+              cursor: widenedTailCursor
+            })
+          };
+        }
+
+        if (requestCursor === widenedTailCursor) {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserFollowerList",
+              items: buildFollowerItems(992, 8),
+              cursor: null
+            })
+          };
+        }
+
+        return {
+          status: 400,
+          bodyText: JSON.stringify({
+            title: "Unexpected cursor",
+            status: 400,
+            detail: requestCursor
+          })
+        };
+      }
+    };
+
+    const first = await buildLiveLinkedinInboundSyncPayload(rawUser, [], {
+      ...sharedOptions,
+      resumeCursor: originalResumeCursor,
+    });
+
+    const firstFollowers = first.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-followers-list");
+    assert.ok(firstFollowers);
+    assert.equal(firstFollowers.status, "warning");
+    assert.equal(firstFollowers.reconcileReason, "page_budget_stopped_early");
+    assert.equal(firstFollowers.nextCursor, widenedTailCursor);
+    assert.equal(firstFollowers.observations.length, 60);
+
+    const resumed = await buildLiveLinkedinInboundSyncPayload(rawUser, [], {
+      ...sharedOptions,
+      resumeCursor: widenedTailCursor,
+    });
+
+    const resumedFollowers = resumed.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-followers-list");
+    assert.ok(resumedFollowers);
+    assert.equal(resumedFollowers.status, "success");
+    assert.equal(resumedFollowers.captureCompleteness, "complete");
+    assert.equal(resumedFollowers.nextCursor, null);
+    assert.equal(resumedFollowers.observations.length, 8);
+    assert.deepEqual(seenFollowerRequests, [
+      { limit: "100", cursor: { startIndex: "932", limit: 100 } },
+      { limit: "100", cursor: { startIndex: "992", limit: 100 } },
+    ]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound sync linkedin-live can stop a full following reconciliation at a page budget and resume from the next offset", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-following-page-budget-"));
   const codexHome = path.join(tempDir, ".codex");
@@ -2225,6 +2406,146 @@ test("inbound sync linkedin-live can stop a full sent-invitations reconciliation
     assert.deepEqual(seenInvitationRequests, [
       { cursor: null, limit: 1 },
       { cursor: "cursor-2", limit: 1 },
+    ]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync linkedin-live treats a structured sent-invitations cursor on a short page as terminal", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-sent-structured-tail-"));
+  const codexHome = path.join(tempDir, ".codex");
+  const timestamp = "2026-06-04T12:00:00.000Z";
+  const seenInvitationRequests = [];
+  const structuredCursor = Buffer.from(JSON.stringify({ limit: 100, cursor: 2 }), "utf8").toString("base64");
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "config.toml"), [
+    "[mcp_servers.unipile]",
+    "enabled = true",
+    "[mcp_servers.unipile.env]",
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+    ""
+  ].join("\n"));
+
+  try {
+    const result = await buildLiveLinkedinInboundSyncPayload({
+      id: "user-1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      label: "linkedin-live-unipile-user",
+      owner: "william",
+      notes: null,
+      workingHours: {
+        mode: "always",
+        timezone: "America/New_York",
+        weekdays: ["mon", "tue", "wed", "thu", "fri"],
+        startLocalTime: "09:00",
+        endLocalTime: "17:00"
+      },
+      accounts: [
+        {
+          id: "linkedin-account-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          capability: "linkedin",
+          handle: "linkedin-live-unipile-user",
+          label: "LinkedIn via Unipile",
+          sourceType: "harness-connection",
+          browserProfileId: null,
+          harnessConnectionId: "harness-1",
+          providerAccountId: "unipile-linkedin-1",
+          preferred: true,
+          automationControls: {
+            weeklyQuotas: {
+              profileVisits: null,
+              invitations: null,
+              messages: null
+            }
+          },
+          notes: null,
+          inboundSync: {
+            surfaces: []
+          }
+        }
+      ],
+      harnessConnections: [
+        {
+          id: "harness-1",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          runtime: "codex",
+          connector: "unipile",
+          label: "codex:unipile",
+          status: "available",
+          notes: null
+        }
+      ],
+      inboundIgnoreRules: []
+    }, [], {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      limit: 500,
+      surfaceKeys: ["linkedin-sent-invitations"],
+      maxPages: 1,
+      pageSize: 100,
+      codexHome,
+      allowDirectUnipileHttp: true,
+      unipileHttpGetImpl: (url) => {
+        const requestUrl = new URL(url);
+        if (!requestUrl.pathname.endsWith("/api/v1/users/invite/sent")) {
+          return {
+            status: 404,
+            bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+          };
+        }
+
+        seenInvitationRequests.push({
+          cursor: requestUrl.searchParams.get("cursor"),
+          limit: Number(requestUrl.searchParams.get("limit") ?? "-1")
+        });
+
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            items: [
+              {
+                id: "invitation-1",
+                invited_user: "Page One Pending",
+                invited_user_public_id: "page-one-pending",
+                date: timestamp
+              },
+              {
+                id: "invitation-2",
+                invited_user: "Page Two Pending",
+                invited_user_public_id: "page-two-pending",
+                date: timestamp
+              }
+            ],
+            cursor: structuredCursor
+          })
+        };
+      },
+      unipileHttpPostImpl: () => ({
+        status: 404,
+        bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" })
+      })
+    });
+
+    const sentInvitations = result.payload.accounts[0].surfaces.find((surface) => surface.surfaceKey === "linkedin-sent-invitations");
+    assert.ok(sentInvitations);
+    assert.equal(sentInvitations.status, "success");
+    assert.equal(sentInvitations.captureCompleteness, "complete");
+    assert.equal(sentInvitations.exhaustionStatus, "complete");
+    assert.equal(sentInvitations.exhaustionReason, "provider_structured_offset_short_page_terminal");
+    assert.equal(sentInvitations.reconcileRequired, false);
+    assert.equal(sentInvitations.nextCursor, null);
+    assert.equal(sentInvitations.observations.length, 2);
+    assert.deepEqual(seenInvitationRequests, [
+      { cursor: null, limit: 100 },
     ]);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
