@@ -146,6 +146,10 @@ function writeUnipileCodexConfig(codexHome, envLines = []) {
   ].join("\n"));
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 test("inbound sync gmail-live uses a Claude Gmail cassette and applies governed writeback", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-gmail-live-claude-cassette-"));
   const fakeClaudePath = path.join(tempDir, "fake-claude");
@@ -1714,6 +1718,111 @@ test("inbound sync linkedin-live caps full followers sync to Unipile's LinkedIn 
   }
 });
 
+test("inbound sync linkedin-live overlaps follower enrichment lookups with bounded concurrency", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-followers-concurrency-"));
+  const codexHome = path.join(tempDir, ".codex");
+  let activeUserLookups = 0;
+  let maxUserLookups = 0;
+  let activeCompanyLookups = 0;
+  let maxCompanyLookups = 0;
+
+  writeUnipileCodexConfig(codexHome, [
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+  ]);
+
+  const followerItems = Array.from({ length: 4 }, (_value, index) => ({
+    object: "UserFollower",
+    id: `follower-${index + 1}`,
+    urn: `urn:li:member:follower-${index + 1}`,
+    name: `Follower ${index + 1}`,
+    headline: "Director of Revenue Operations",
+    profile_url: `https://www.linkedin.com/in/follower-${index + 1}/`,
+    profile_picture_url: null,
+    profile_picture_url_large: null,
+  }));
+
+  try {
+    const result = await buildLiveLinkedinInboundSyncPayload(buildManagedLinkedinUser(), [], {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      limit: 10,
+      maxPages: 1,
+      pageSize: 10,
+      surfaceKeys: ["linkedin-followers-list"],
+      codexHome,
+      allowDirectUnipileHttp: true,
+      unipileHttpGetImpl: async (url) => {
+        const parsed = new URL(url);
+        if (parsed.pathname === "/api/v1/users/followers") {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "UserFollowerList",
+              items: followerItems,
+            }),
+          };
+        }
+
+        if (parsed.pathname.startsWith("/api/v1/users/")) {
+          activeUserLookups += 1;
+          maxUserLookups = Math.max(maxUserLookups, activeUserLookups);
+          const providerId = decodeURIComponent(parsed.pathname.split("/").pop() ?? "");
+          await delay(20);
+          activeUserLookups -= 1;
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              provider_id: providerId,
+              public_identifier: providerId,
+              public_profile_url: `https://www.linkedin.com/in/${providerId}/`,
+              headline: `Title for ${providerId}`,
+              current_company_name: `Company ${providerId}`,
+              company: {
+                public_identifier: `company-${providerId}`,
+              },
+            }),
+          };
+        }
+
+        if (parsed.pathname.startsWith("/api/v1/linkedin/company/")) {
+          activeCompanyLookups += 1;
+          maxCompanyLookups = Math.max(maxCompanyLookups, activeCompanyLookups);
+          const companyId = decodeURIComponent(parsed.pathname.split("/").pop() ?? "");
+          await delay(20);
+          activeCompanyLookups -= 1;
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              name: `Company ${companyId}`,
+              public_identifier: companyId,
+              profile_url: `https://www.linkedin.com/company/${companyId}/`,
+              website: `https://${companyId}.example.com/`,
+            }),
+          };
+        }
+
+        return {
+          status: 404,
+          bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" }),
+        };
+      },
+    });
+
+    assert.equal(result.capture.sections[0]?.surfaceKey, "linkedin-followers-list");
+    assert.equal(result.capture.sections[0]?.status, "success");
+    assert.equal(result.capture.sections[0]?.itemCount, 4);
+    assert.ok(maxUserLookups > 1, `expected overlapping user lookups, saw max ${maxUserLookups}`);
+    assert.ok(maxUserLookups <= 4, `expected bounded user lookups, saw max ${maxUserLookups}`);
+    assert.ok(maxCompanyLookups > 1, `expected overlapping company lookups, saw max ${maxCompanyLookups}`);
+    assert.ok(maxCompanyLookups <= 4, `expected bounded company lookups, saw max ${maxCompanyLookups}`);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("inbound sync linkedin-live rewrites a structured followers resume cursor to the requested page size", async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-unipile-followers-resume-limit-"));
   const codexHome = path.join(tempDir, ".codex");
@@ -2081,6 +2190,122 @@ test("inbound sync linkedin-live can stop a full following reconciliation at a p
       { start: 0, count: 1 },
       { start: 1, count: 1 },
     ]);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("inbound sync linkedin-live overlaps following enrichment lookups with bounded concurrency", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-inbound-sync-linkedin-live-following-concurrency-"));
+  const codexHome = path.join(tempDir, ".codex");
+  let activeUserLookups = 0;
+  let maxUserLookups = 0;
+
+  writeUnipileCodexConfig(codexHome, [
+    'UNIPILE_API_KEY = "test-key"',
+    'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+  ]);
+
+  const followingItems = Array.from({ length: 4 }, (_value, index) => ({
+    item: {
+      entityResult: {
+        navigationUrl: `https://www.linkedin.com/in/following-${index + 1}/`,
+        title: { text: `Following ${index + 1}` },
+        primarySubtitle: { text: "Director of Revenue Operations" },
+        trackingUrn: `following-${index + 1}`,
+        primaryActions: [
+          {
+            actionDetails: {
+              followAction: {
+                entityUrn: `follow:${index + 1}`,
+              },
+            },
+          },
+        ],
+      },
+    },
+  }));
+
+  try {
+    const result = await buildLiveLinkedinInboundSyncPayload(buildManagedLinkedinUser(), [], {
+      accountId: "linkedin-account-1",
+      runtime: "codex",
+      connector: "unipile",
+      mode: "full",
+      limit: 10,
+      maxPages: 1,
+      pageSize: 10,
+      surfaceKeys: ["linkedin-following-list"],
+      codexHome,
+      allowDirectUnipileHttp: true,
+      unipileHttpGetImpl: async (url) => {
+        const parsed = new URL(url);
+        if (parsed.pathname.startsWith("/api/v1/users/")) {
+          activeUserLookups += 1;
+          maxUserLookups = Math.max(maxUserLookups, activeUserLookups);
+          const providerId = decodeURIComponent(parsed.pathname.split("/").pop() ?? "");
+          await delay(20);
+          activeUserLookups -= 1;
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              provider_id: providerId,
+              public_identifier: providerId,
+              public_profile_url: `https://www.linkedin.com/in/${providerId}/`,
+              headline: `Title for ${providerId}`,
+              current_company_name: `Company ${providerId}`,
+            }),
+          };
+        }
+
+        if (parsed.pathname.startsWith("/api/v1/linkedin/company/")) {
+          const companyId = decodeURIComponent(parsed.pathname.split("/").pop() ?? "");
+          await delay(20);
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              name: `Company ${companyId}`,
+              public_identifier: companyId,
+              profile_url: `https://www.linkedin.com/company/${companyId}/`,
+            }),
+          };
+        }
+
+        return {
+          status: 404,
+          bodyText: JSON.stringify({ title: "Not found", status: 404, type: "errors/not_found" }),
+        };
+      },
+      unipileHttpPostImpl: async (_url, _headers, bodyText) => {
+        const payload = JSON.parse(bodyText);
+        const requestUrl = new URL(payload.request_url);
+        assert.match(requestUrl.searchParams.get("variables") ?? "", /resultType,value:List\(PEOPLE_FOLLOW\)/);
+        await delay(20);
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            data: {
+              data: {
+                searchDashClustersByAll: {
+                  paging: { total: followingItems.length },
+                  elements: [
+                    {
+                      items: followingItems,
+                    },
+                  ],
+                },
+              },
+            },
+          }),
+        };
+      },
+    });
+
+    assert.equal(result.capture.sections[0]?.surfaceKey, "linkedin-following-list");
+    assert.equal(result.capture.sections[0]?.status, "success");
+    assert.equal(result.capture.sections[0]?.itemCount, 4);
+    assert.ok(maxUserLookups > 1, `expected overlapping following lookups, saw max ${maxUserLookups}`);
+    assert.ok(maxUserLookups <= 4, `expected bounded following lookups, saw max ${maxUserLookups}`);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

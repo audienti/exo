@@ -1,6 +1,6 @@
 // @ts-check
 
-import { execFile, execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -38,6 +38,19 @@ const UNIPILE_HTTP_TIMEOUT_MS = normalizePositiveInteger(
 );
 const UNIPILE_HTTP_CONNECT_TIMEOUT_SECONDS = Math.max(1, Math.min(10, Math.ceil(UNIPILE_HTTP_TIMEOUT_MS / 1000)));
 const UNIPILE_HTTP_MAX_TIME_SECONDS = Math.max(1, Math.ceil(UNIPILE_HTTP_TIMEOUT_MS / 1000));
+const UNIPILE_SURFACE_ITEM_MAP_CONCURRENCY = Math.max(
+  1,
+  Math.min(
+    8,
+    normalizePositiveInteger(
+      process.env.EXO_UNIPILE_SURFACE_ITEM_MAP_CONCURRENCY
+        ? Number.parseInt(process.env.EXO_UNIPILE_SURFACE_ITEM_MAP_CONCURRENCY, 10)
+        : null,
+      4,
+      "EXO_UNIPILE_SURFACE_ITEM_MAP_CONCURRENCY",
+    ),
+  ),
+);
 
 const linkedinActorFieldsSchema = {
   actorName: { type: ["string", "null"] },
@@ -1586,11 +1599,14 @@ async function captureUnipileLinkedinCollectionSurface(input) {
     }
 
     pageCount += 1;
-    for (const rawItem of rawItems) {
-      if (items.length >= targetCount) {
-        break;
-      }
-      const mapped = await input.mapItem(rawItem, checkedAt);
+    const rawItemsToMap = Number.isFinite(targetCount)
+      ? rawItems.slice(0, Math.max(0, targetCount - items.length))
+      : rawItems;
+    const mappedItems = await mapAsyncWithConcurrencyPreservingOrder(rawItemsToMap, (rawItem) =>
+      input.mapItem(rawItem, checkedAt), {
+      concurrency: UNIPILE_SURFACE_ITEM_MAP_CONCURRENCY,
+    });
+    for (const mapped of mappedItems) {
       if (mapped) {
         items.push(mapped);
       }
@@ -1845,11 +1861,14 @@ async function captureUnipileLinkedinProxyCollectionSurface(input) {
       visibleTotalCount = resolvedVisibleTotal;
     }
 
-    for (const rawItem of rawItems) {
-      if (items.length >= targetCount) {
-        break;
-      }
-      const mapped = await input.mapItem(rawItem, checkedAt);
+    const rawItemsToMap = Number.isFinite(targetCount)
+      ? rawItems.slice(0, Math.max(0, targetCount - items.length))
+      : rawItems;
+    const mappedItems = await mapAsyncWithConcurrencyPreservingOrder(rawItemsToMap, (rawItem) =>
+      input.mapItem(rawItem, checkedAt), {
+      concurrency: UNIPILE_SURFACE_ITEM_MAP_CONCURRENCY,
+    });
+    for (const mapped of mappedItems) {
       if (mapped) {
         items.push(mapped);
       }
@@ -1958,6 +1977,34 @@ async function captureUnipileLinkedinProxyCollectionSurface(input) {
     error: null,
     items
   };
+}
+
+/**
+ * @template T,U
+ * @param {T[]} values
+ * @param {(value: T, index: number) => Promise<U> | U} mapper
+ * @param {{ concurrency?: number | null }} [options]
+ * @returns {Promise<U[]>}
+ */
+async function mapAsyncWithConcurrencyPreservingOrder(values, mapper, options = {}) {
+  if (!Array.isArray(values) || !values.length) {
+    return [];
+  }
+
+  const results = new Array(values.length);
+  const concurrency = Math.max(1, Math.min(values.length, options.concurrency ?? values.length));
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < values.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(values[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  return results;
 }
 
 /**
@@ -2697,7 +2744,7 @@ async function fetchUnipileJsonPage(input) {
 
   try {
     if (input.httpGetImpl) {
-      const response = input.httpGetImpl(url.toString(), {
+      const response = await input.httpGetImpl(url.toString(), {
         accept: "application/json",
         "X-API-KEY": input.apiKey
       });
@@ -2709,7 +2756,7 @@ async function fetchUnipileJsonPage(input) {
       };
     }
 
-    const raw = execFileSync("curl", [
+    const { stdout: raw } = await execWithClosedStdin(execFileAsync, "curl", [
       "-sS",
       "-L",
       "--connect-timeout",
@@ -2763,7 +2810,7 @@ async function fetchUnipileJsonPage(input) {
 async function fetchUnipileJsonPost(input) {
   try {
     if (input.httpPostImpl) {
-      const response = input.httpPostImpl(input.url, {
+      const response = await input.httpPostImpl(input.url, {
         accept: "application/json",
         "content-type": "application/json",
         "X-API-KEY": input.apiKey
@@ -2776,7 +2823,7 @@ async function fetchUnipileJsonPost(input) {
       };
     }
 
-    const raw = execFileSync("curl", [
+    const { stdout: raw } = await execWithClosedStdin(execFileAsync, "curl", [
       "-sS",
       "-L",
       "--connect-timeout",
