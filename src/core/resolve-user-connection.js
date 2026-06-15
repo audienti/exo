@@ -7,6 +7,7 @@ import { userSchema } from "../schema/user.js";
 import { accountCanAttachConnectionNote } from "./connection-note-capability.js";
 import { discoverRuntimeConnectorAccounts } from "./discover-runtime-account-identities.js";
 import { getHomeStateDir } from "../db/paths.js";
+import { buildCanonicalGmailAccountSelection } from "./gmail-account-selection.js";
 import { isStoredManagedAccountExcluded } from "./user-account-governance.js";
 
 const discoveredAccountCache = new Map();
@@ -25,14 +26,18 @@ export function resetResolveUserConnectionCachesForTest() {
 export function resolveUserConnection(rawUser, rawProfiles, input) {
   const user = userSchema.parse(rawUser);
   const profiles = rawProfiles.map((profile) => browserProfileSchema.parse(profile));
-  const matches = user.accounts
+  const eligibleAccounts = user.accounts
     .filter((account) => account.capability === input.capability)
     .filter((account) => {
       const harnessConnection = account.harnessConnectionId
         ? user.harnessConnections.find((candidate) => candidate.id === account.harnessConnectionId) ?? null
         : null;
       return !isStoredManagedAccountExcluded(user, account, harnessConnection);
-    })
+    });
+  const candidateAccounts = input.capability === "gmail"
+    ? buildCanonicalGmailAccountSelection(user, { accounts: eligibleAccounts }).canonicalAccounts
+    : eligibleAccounts;
+  const matches = candidateAccounts
     .map((account) => buildResolvedAccount(account, profiles, user))
     .sort(compareResolvedAccounts);
   const browserResolved = matches.find((candidate) => candidate.sourceType === "browser-profile") ?? null;

@@ -4,6 +4,7 @@ import { browserProfileCapabilitySchema } from "../schema/browser-profile.js";
 import { userSchema } from "../schema/user.js";
 import { inboundSyncPlanModeSchema, inboundSyncRunStatusSchema, inboundSurfaceStateSchema } from "../schema/inbound.js";
 import { CAPABILITY_SEAM_STATES, buildCapabilitySeamResult } from "./capability-seam-contract.js";
+import { buildCanonicalGmailAccountSelection, resolveCanonicalGmailAccountId } from "./gmail-account-selection.js";
 import { findBackendCapability } from "../lib/backend-capability-registry.js";
 import { findInboundSurfaceDefinition, listInboundSurfaceCatalog } from "../lib/inbound-surface-catalog.js";
 import { classifyWorkingHoursWindow } from "./working-hours.js";
@@ -31,7 +32,7 @@ const QUICK_MODE_SUPPLEMENTARY_SURFACES = new Set([
 export function buildUserInboundSyncView(rawUser, options = {}) {
   const user = userSchema.parse(rawUser);
   const capability = options.capability ? browserProfileCapabilitySchema.parse(options.capability) : null;
-  const accounts = user.accounts
+  const accounts = selectInboundSyncAccounts(user)
     .filter((account) => !capability || account.capability === capability)
     .map((account) => buildAccountInboundView(account));
 
@@ -222,8 +223,9 @@ export function buildUserInboundSyncPlan(rawUser, options = {}) {
   const capability = options.capability ? browserProfileCapabilitySchema.parse(options.capability) : null;
   const mode = inboundSyncPlanModeSchema.parse(options.mode ?? "quick");
   const now = options.now ?? new Date().toISOString();
+  const accountId = resolveCanonicalGmailAccountId(user, options.accountId ?? null)
+    ?? normalizeNullableString(options.accountId ?? null);
   const syncView = buildUserInboundSyncView(user, { capability });
-  const accountId = options.accountId ?? null;
 
   if (accountId && !syncView.accounts.some((account) => account.accountId === accountId)) {
     throw new Error(`User account not found: ${accountId}`);
@@ -285,6 +287,18 @@ export function buildUserInboundSyncPlan(rawUser, options = {}) {
     ],
     accounts
   };
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type} user
+ */
+function selectInboundSyncAccounts(user) {
+  const { canonicalAccounts } = buildCanonicalGmailAccountSelection(user);
+  const canonicalGmailAccountIds = new Set(canonicalAccounts.map((account) => account.id));
+
+  return user.accounts.filter((account) =>
+    account.capability !== "gmail" || canonicalGmailAccountIds.has(account.id)
+  );
 }
 
 /**

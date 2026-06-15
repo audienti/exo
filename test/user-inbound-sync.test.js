@@ -8,6 +8,7 @@ import {
   INBOUND_SYNC_STALE_MS,
   buildInboundAutomationHealthWarnings,
   buildInboundAutomationStatus,
+  buildUserInboundSyncView,
   buildUserInboundSyncPlan,
   classifyInboundSurfaceFreshness,
   computeInboundAutomationNextDueAt,
@@ -418,6 +419,108 @@ test("buildUserInboundSyncPlan exposes owner seam status for stale Gmail truth s
   assert.equal(surface.seamStatus.state, "stale");
   assert.equal(surface.seamStatus.requiresAction, true);
   assert.deepEqual(surface.seamStatus.proofSurfaces, ["gmail-inbox-threads"]);
+});
+
+test("buildUserInboundSyncView collapses duplicate same-mailbox Gmail accounts onto the runnable Gmail connector", () => {
+  const user = {
+    id: "user-1",
+    createdAt: "2026-06-03T00:00:00.000Z",
+    updatedAt: "2026-06-03T00:00:00.000Z",
+    label: "William",
+    owner: "William",
+    notes: null,
+    workingHours: {
+      mode: "always",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "09:00",
+      endLocalTime: "17:00",
+    },
+    accounts: [
+      {
+        id: "gmail-unipile",
+        createdAt: "2026-06-03T00:00:00.000Z",
+        updatedAt: "2026-06-03T00:00:00.000Z",
+        capability: "gmail",
+        handle: "omalab-main@example.com",
+        label: "Shadow Gmail",
+        sourceType: "harness-connection",
+        harnessConnectionId: "hc-unipile",
+        providerAccountId: "acct-unipile-mail",
+        preferred: true,
+        notes: null,
+        inboundSync: {
+          surfaces: [
+            {
+              surfaceKey: "gmail-inbox-threads",
+              enabled: true,
+              lastRunStatus: "never",
+            },
+          ],
+        },
+      },
+      {
+        id: "gmail-real",
+        createdAt: "2026-06-03T00:00:00.000Z",
+        updatedAt: "2026-06-03T00:00:00.000Z",
+        capability: "gmail",
+        handle: "omalab-main@example.com",
+        label: "Real Gmail",
+        sourceType: "harness-connection",
+        harnessConnectionId: "hc-gmail",
+        providerAccountId: "acct-gmail-mail",
+        preferred: false,
+        notes: null,
+        inboundSync: {
+          surfaces: [
+            {
+              surfaceKey: "gmail-inbox-threads",
+              enabled: true,
+              lastRunStatus: "success",
+              lastSyncedAt: "2026-06-03T11:30:00.000Z",
+              lastObservedAt: "2026-06-03T11:30:00.000Z",
+            },
+          ],
+        },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "hc-unipile",
+        createdAt: "2026-06-03T00:00:00.000Z",
+        updatedAt: "2026-06-03T00:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+      {
+        id: "hc-gmail",
+        createdAt: "2026-06-03T00:00:00.000Z",
+        updatedAt: "2026-06-03T00:00:00.000Z",
+        runtime: "codex",
+        connector: "gmail",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+    inboundIgnoreRules: [],
+  };
+
+  const view = buildUserInboundSyncView(user, { capability: "gmail" });
+  const plan = buildUserInboundSyncPlan(user, {
+    capability: "gmail",
+    accountId: "gmail-unipile",
+    mode: "quick",
+    now: "2026-06-03T12:00:00.000Z",
+  });
+
+  assert.equal(view.counts.accountCount, 1);
+  assert.equal(view.accounts[0].accountId, "gmail-real");
+  assert.equal(plan.accounts.length, 1);
+  assert.equal(plan.accounts[0].accountId, "gmail-real");
 });
 
 test("buildInboundAutomationStatus does not keep unsupported or bounded surfaces due immediately", () => {

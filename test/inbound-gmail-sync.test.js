@@ -212,6 +212,64 @@ test("buildGmailInboundSyncPayload accepts local datetimes from Gmail capture ou
   );
 });
 
+test("buildGmailInboundSyncPayload canonicalizes duplicate same-mailbox accounts onto the Gmail connector path", () => {
+  const user = {
+    ...rawUser(),
+    accounts: [
+      {
+        ...rawUser().accounts[0],
+        id: "gmail-unipile",
+        harnessConnectionId: "hc-unipile",
+        providerAccountId: "acct-unipile-mail",
+        preferred: true,
+      },
+      {
+        ...rawUser().accounts[0],
+        id: "gmail-real",
+        harnessConnectionId: "hc-gmail",
+        providerAccountId: "acct-gmail-mail",
+        preferred: false,
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "hc-unipile",
+        createdAt: "2026-06-04T16:00:00.000Z",
+        updatedAt: "2026-06-04T16:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: "Codex Unipile",
+        status: "available",
+        notes: null,
+      },
+      {
+        id: "hc-gmail",
+        createdAt: "2026-06-04T16:00:00.000Z",
+        updatedAt: "2026-06-04T16:00:00.000Z",
+        runtime: "codex",
+        connector: "gmail",
+        label: "Codex Gmail",
+        status: "available",
+        notes: null,
+      },
+    ],
+  };
+
+  const built = buildGmailInboundSyncPayload(user, {
+    accountId: "gmail-unipile",
+    capture: {
+      mode: "quick",
+      status: "success",
+      checkedAt: "2026-06-04T16:20:00.000Z",
+      itemCount: 0,
+      error: null,
+      threads: [],
+    },
+  });
+
+  assert.equal(built.payload.accounts[0].accountId, "gmail-real");
+});
+
 test("buildGmailInboundSyncPayload rejects note-only Gmail threads without structured messages", () => {
   assert.throws(() =>
     buildGmailInboundSyncPayload(rawUser(), {

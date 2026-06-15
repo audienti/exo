@@ -1,5 +1,6 @@
 // @ts-check
 
+import { resolveCanonicalGmailAccount } from "./gmail-account-selection.js";
 import { gmailInboundSyncCaptureSchema } from "../schema/inbound.js";
 import { userSchema } from "../schema/user.js";
 
@@ -140,29 +141,7 @@ export function normalizeGmailInboundSyncCapture(rawCapture) {
  * @param {string | null} accountId
  */
 export function resolveGmailAccount(user, accountId) {
-  if (accountId) {
-    const account = user.accounts.find((candidate) => candidate.id === accountId);
-    if (!account) {
-      throw new Error(`User account not found: ${accountId}`);
-    }
-
-    if (account.capability !== "gmail") {
-      throw new Error(`Account ${accountId} is not a Gmail account.`);
-    }
-
-    return account;
-  }
-
-  const gmailAccounts = user.accounts.filter((candidate) => candidate.capability === "gmail");
-  if (gmailAccounts.length === 1) {
-    return gmailAccounts[0];
-  }
-
-  if (!gmailAccounts.length) {
-    throw new Error(`User ${user.label} does not have a Gmail account.`);
-  }
-
-  throw new Error(`User ${user.label} has multiple Gmail accounts. Pass --account explicitly.`);
+  return resolveCanonicalGmailAccount(user, accountId);
 }
 
 /**

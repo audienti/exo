@@ -264,3 +264,87 @@ test("resolveUserConnection prefers provider-matched LinkedIn evidence with prem
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
+
+test("resolveUserConnection canonicalizes duplicate same-mailbox Gmail accounts onto the Gmail connector path", () => {
+  const result = resolveUserConnection({
+    id: "user-3",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    label: "william-main",
+    owner: "operator",
+    notes: null,
+    workingHours: {
+      mode: "always",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "09:00",
+      endLocalTime: "17:00",
+    },
+    accounts: [
+      {
+        id: "gmail-unipile",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "gmail",
+        handle: "william@example.com",
+        label: "William Gmail via Unipile",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-unipile",
+        providerAccountId: "acct-unipile-mail",
+        preferred: true,
+        metadata: null,
+        notes: null,
+        inboundSync: {
+          surfaces: [],
+        },
+      },
+      {
+        id: "gmail-real",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "gmail",
+        handle: "william@example.com",
+        label: "William Gmail",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-gmail",
+        providerAccountId: "acct-gmail-mail",
+        preferred: false,
+        metadata: null,
+        notes: null,
+        inboundSync: {
+          surfaces: [],
+        },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-unipile",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+      {
+        id: "harness-gmail",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        runtime: "codex",
+        connector: "gmail",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+    inboundIgnoreRules: [],
+  }, [], { capability: "gmail" });
+
+  assert.equal(result.resolutionStatus, "resolved");
+  assert.equal(result.resolved?.accountId, "gmail-real");
+  assert.equal(result.resolved?.harnessConnection?.connector, "gmail");
+  assert.equal(result.candidates.length, 1);
+});
