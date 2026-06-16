@@ -10,6 +10,66 @@ import {
 } from "../lib/prospect-contacts.js";
 
 /**
+ * @param {unknown[]} rawMotions
+ */
+export function buildInboundObservationLinkContext(rawMotions) {
+  const motions = rawMotions.map((item) => motionSchema.parse(item));
+  const companyContexts = [];
+  const companyContextsByCompanyId = new Map();
+  const prospectContexts = [];
+  const prospectContextById = new Map();
+  const identityMatchesByKey = new Map();
+  const motionById = new Map();
+  const accountByMotionCompanyKey = new Map();
+
+  for (const motion of motions) {
+    motionById.set(motion.id, motion);
+    for (const account of motion.targetMap.accounts) {
+      const companyContext = {
+        motionId: motion.id,
+        companyId: account.companyId,
+      };
+      companyContexts.push(companyContext);
+      const existingCompanyContexts = companyContextsByCompanyId.get(account.companyId) ?? [];
+      existingCompanyContexts.push(companyContext);
+      companyContextsByCompanyId.set(account.companyId, existingCompanyContexts);
+      accountByMotionCompanyKey.set(`${motion.id}:${account.companyId}`, account);
+
+      for (const rawProspect of account.prospects) {
+        const prospect = withDerivedProspectContacts(rawProspect);
+        const prospectContext = {
+          motionId: motion.id,
+          companyId: account.companyId,
+          prospectId: prospect.id,
+          motion,
+          account,
+          prospect,
+          identityKeys: buildProspectIdentityKeys(prospect),
+        };
+        prospectContexts.push(prospectContext);
+        prospectContextById.set(prospect.id, prospectContext);
+        for (const key of prospectContext.identityKeys) {
+          const matches = identityMatchesByKey.get(key) ?? [];
+          matches.push(prospectContext);
+          identityMatchesByKey.set(key, matches);
+        }
+      }
+    }
+  }
+
+  return {
+    motions,
+    companyContexts,
+    companyContextsByCompanyId,
+    prospectContexts,
+    prospectContextById,
+    identityMatchesByKey,
+    motionById,
+    accountByMotionCompanyKey,
+  };
+}
+
+/**
  * Explicit links are allowed. Only conversation surfaces that are already
  * defined as prospect-scoped may inherit a unique exact identity match from
  * current motion state. Invite and attention surfaces stay global until the
@@ -26,30 +86,11 @@ import {
  *   actorLinkedinPublicId?: string | null | undefined,
  *   actorLinkedinMemberId?: string | null | undefined
  * }} input
+ * @param {ReturnType<typeof buildInboundObservationLinkContext> | null} [linkContext]
  */
-export function resolveInboundObservationLinks(rawMotions, input) {
-  const motions = rawMotions.map((item) => motionSchema.parse(item));
-  const companyContexts = [];
-  const prospectContexts = [];
-
-  for (const motion of motions) {
-    for (const account of motion.targetMap.accounts) {
-      companyContexts.push({
-        motionId: motion.id,
-        companyId: account.companyId,
-      });
-
-      for (const rawProspect of account.prospects) {
-        const prospect = withDerivedProspectContacts(rawProspect);
-        prospectContexts.push({
-          motionId: motion.id,
-          companyId: account.companyId,
-          prospectId: prospect.id,
-          identityKeys: buildProspectIdentityKeys(prospect),
-        });
-      }
-    }
-  }
+export function resolveInboundObservationLinks(rawMotions, input, linkContext = null) {
+  const context = linkContext ?? buildInboundObservationLinkContext(rawMotions);
+  const prospectContextById = context.prospectContextById;
 
   const resolved = {
     motionId: normalizeNullableString(input.motionId),
@@ -58,7 +99,7 @@ export function resolveInboundObservationLinks(rawMotions, input) {
   };
 
   if (resolved.prospectId) {
-    const explicitProspect = prospectContexts.find((context) => context.prospectId === resolved.prospectId) ?? null;
+    const explicitProspect = prospectContextById.get(resolved.prospectId) ?? null;
     if (!explicitProspect) {
       throw new Error(`Inbound observation prospect not found in current motions: ${resolved.prospectId}`);
     }
@@ -67,14 +108,14 @@ export function resolveInboundObservationLinks(rawMotions, input) {
   }
 
   if (resolved.companyId && !resolved.motionId) {
-    const companyMatches = companyContexts.filter((context) => context.companyId === resolved.companyId);
+    const companyMatches = context.companyContextsByCompanyId.get(resolved.companyId) ?? [];
     if (companyMatches.length === 1) {
       resolved.motionId = companyMatches[0].motionId;
     }
   }
 
   const identityMatchedProspect = supportsDeterministicIdentityBinding(input.surfaceKey)
-    ? resolveProspectContextByIdentity(prospectContexts, resolved, input)
+    ? resolveProspectContextByIdentity(context.identityMatchesByKey, resolved, input)
     : null;
   if (identityMatchedProspect) {
     return mergeResolvedLinks(resolved, identityMatchedProspect);
@@ -84,12 +125,15 @@ export function resolveInboundObservationLinks(rawMotions, input) {
 }
 
 /**
- * @param {Array<{
+ * @param {Map<string, Array<{
  *   motionId: string,
  *   companyId: string,
  *   prospectId: string,
+ *   motion: import("../schema/motion.js").motionSchema._type,
+ *   account: import("../schema/target-account.js").targetAccountSchema._type,
+ *   prospect: ReturnType<typeof withDerivedProspectContacts>,
  *   identityKeys: Set<string>
- * }>} prospectContexts
+ * }>>} identityMatchesByKey
  * @param {{ motionId: string | null, companyId: string | null, prospectId: string | null }} resolved
  * @param {{
  *   surfaceKey?: string | null | undefined,
@@ -99,30 +143,28 @@ export function resolveInboundObservationLinks(rawMotions, input) {
  *   actorLinkedinMemberId?: string | null | undefined
  * }} input
  */
-function resolveProspectContextByIdentity(prospectContexts, resolved, input) {
+function resolveProspectContextByIdentity(identityMatchesByKey, resolved, input) {
   const identityKeys = buildInputIdentityKeys(input);
   if (!identityKeys.size) {
     return null;
   }
 
-  const matches = prospectContexts.filter((context) => {
-    if (resolved.motionId && context.motionId !== resolved.motionId) {
-      return false;
-    }
-
-    if (resolved.companyId && context.companyId !== resolved.companyId) {
-      return false;
-    }
-
-    for (const key of context.identityKeys) {
-      if (identityKeys.has(key)) {
-        return true;
+  const matchesByProspectId = new Map();
+  for (const key of identityKeys) {
+    for (const context of identityMatchesByKey.get(key) ?? []) {
+      if (resolved.motionId && context.motionId !== resolved.motionId) {
+        continue;
       }
+
+      if (resolved.companyId && context.companyId !== resolved.companyId) {
+        continue;
+      }
+
+      matchesByProspectId.set(context.prospectId, context);
     }
+  }
 
-    return false;
-  });
-
+  const matches = [...matchesByProspectId.values()];
   return matches.length === 1 ? matches[0] : null;
 }
 

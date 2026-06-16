@@ -248,3 +248,157 @@ test("approved outbound first-touch drafts leave the operator decision lane", ()
   assert.doesNotMatch(html, /Kelly Munson/);
   assert.doesNotMatch(html, /Thought it would be good to connect/);
 });
+
+test("buildDailyView reuses precomputed inbound review items when provided", () => {
+  const daily = buildDailyView(rawUser, [rawMotion()], [rawCompany()], [], [], {
+    now,
+    inbox: {
+      user: { id: rawUser.id, label: rawUser.label, owner: rawUser.owner },
+      surfaces: { accounts: [] },
+      items: [],
+    },
+    inboundReview: {
+      user: { id: rawUser.id, label: rawUser.label, owner: rawUser.owner },
+      surfaces: { accounts: [] },
+      itemizationGaps: [],
+      reviewItems: [
+        {
+          id: "obs-1",
+          state: "needs_reply",
+          kind: "linkedin_dm",
+          observedAt: now,
+          motion: { id: "motion-1", name: "harsh-spare-mongoose" },
+          company: { id: "company-1", name: "DNOW" },
+          prospect: {
+            id: "prospect-1",
+            name: "Kelly Munson",
+            title: "Chief Administrative and Information Officer",
+          },
+          account: { id: "account-1", capability: "linkedin" },
+          actorName: "Kelly Munson",
+          whyItMatters: "A live inbound reply is waiting on the operator.",
+          recommendedAction: "Reply to Kelly Munson now.",
+          decisionOptions: [],
+        },
+      ],
+    },
+  });
+
+  assert.equal(
+    daily.items.some((item) => item.source?.type === "inbound_review" && item.prospect?.id === "prospect-1"),
+    true,
+  );
+});
+
+test("observed pending invites suppress stale first-touch cadence and outbound-capacity send pressure", () => {
+  const user = {
+    ...rawUser,
+    accounts: [
+      {
+        id: "account-1",
+        createdAt: "2026-06-12T10:00:00.000Z",
+        updatedAt: "2026-06-12T10:00:00.000Z",
+        capability: "linkedin",
+        handle: "william-main",
+        label: "William Main",
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-unipile-1",
+        providerAccountId: "provider-linkedin-1",
+        preferred: true,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-unipile-1",
+        createdAt: "2026-06-12T10:00:00.000Z",
+        updatedAt: "2026-06-12T10:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+  };
+  const observations = [
+    {
+      id: "obs-pending",
+      dedupeKey: "obs-pending",
+      userId: "user-1",
+      accountId: "account-1",
+      capability: "linkedin",
+      platform: "linkedin",
+      surfaceKey: "linkedin-sent-invitations",
+      kind: "connection_request_pending",
+      truthLevel: "authoritative",
+      observedAt: "2026-06-11T18:20:00.000Z",
+      recordedAt: "2026-06-11T18:20:00.000Z",
+      eventAt: "2026-06-11T18:18:00.000Z",
+      externalId: "pending-1",
+      actorName: "Kelly Munson",
+      actorTitle: "Chief Administrative and Information Officer",
+      actorCompanyName: "DNOW",
+      actorHandle: "kelly-munson-02aa423b",
+      actorProfileUrl: "https://www.linkedin.com/in/kelly-munson-02aa423b",
+      actorLinkedinPublicId: "kelly-munson-02aa423b",
+      actorLinkedinMemberId: "member-kelly",
+      actorAvatarSourceUrl: null,
+      actorAvatarUrl: null,
+      threadUrl: null,
+      sourceUrl: "https://www.linkedin.com/mynetwork/invitation-manager/sent/",
+      subject: null,
+      summary: "Kelly Munson is still pending on LinkedIn.",
+      motionId: "motion-1",
+      companyId: "company-1",
+      prospectId: "prospect-1",
+      notes: null,
+      messages: [],
+    },
+    {
+      id: "obs-attention",
+      dedupeKey: "obs-attention",
+      userId: "user-1",
+      accountId: "account-1",
+      capability: "linkedin",
+      platform: "linkedin",
+      surfaceKey: "linkedin-profile-views",
+      kind: "profile_view_after_touch",
+      truthLevel: "authoritative",
+      observedAt: "2026-06-11T18:30:00.000Z",
+      recordedAt: "2026-06-11T18:30:00.000Z",
+      eventAt: "2026-06-11T18:29:00.000Z",
+      externalId: "view-1",
+      actorName: "Kelly Munson",
+      actorTitle: "Chief Administrative and Information Officer",
+      actorCompanyName: "DNOW",
+      actorHandle: "kelly-munson-02aa423b",
+      actorProfileUrl: "https://www.linkedin.com/in/kelly-munson-02aa423b",
+      actorLinkedinPublicId: "kelly-munson-02aa423b",
+      actorLinkedinMemberId: "member-kelly",
+      actorAvatarSourceUrl: null,
+      actorAvatarUrl: null,
+      threadUrl: null,
+      sourceUrl: "https://www.linkedin.com/analytics/profile-views/",
+      subject: null,
+      summary: "Kelly Munson viewed our profile after the connection request.",
+      motionId: "motion-1",
+      companyId: "company-1",
+      prospectId: "prospect-1",
+      notes: null,
+      messages: [],
+    },
+  ];
+
+  const daily = buildDailyView(user, [rawMotion()], [rawCompany()], [], observations, { now });
+
+  assert.equal(
+    daily.items.some((item) => item.prospect?.id === "prospect-1" && item.state === "due_now"),
+    false,
+    "expected stale first-touch cadence to stay out of the due-now lane once pending-invite evidence exists",
+  );
+  assert.equal(daily.capacity.linkedin.execution.readyConnectionRequests, 0);
+  assert.equal(daily.capacity.linkedin.execution.trackedPendingInvitations, 1);
+});

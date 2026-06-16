@@ -41,7 +41,11 @@ test("operator does not surface autonomous company research as a fake decision",
 
   assert.equal(model.nextMove, null);
 
-  const html = renderOperatorPage(model, { interactive: true });
+  const html = renderOperatorPage(model, {
+    interactive: true,
+    activeView: "blocked",
+    returnTo: "/operator?view=blocked#blocked",
+  });
   assert.match(html, /No operator decision is waiting right now/i);
   assert.doesNotMatch(html, /Queue for agent/);
 });
@@ -79,7 +83,7 @@ test("operator moves agent status into the header dropdown instead of a blocking
 
   const html = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
   assert.match(html, /data-agent-health="yellow"/);
-  assert.match(html, /<b>0<\/b> in operator queue/i);
+  assert.match(html, /<b>0<\/b> queued/i);
   assert.match(html, /1 queued/i);
   assert.match(html, /Agent work queued/i);
   assert.match(html, /Run agent now/i);
@@ -123,7 +127,11 @@ test("operator uses prospect avatars that already exist on due-now planner work"
   assert.equal(model.nextMove?.subject, "Sue Weinheimer");
   assert.equal(model.nextMove?.avatarUrl, "https://example.com/sue.jpg");
 
-  const html = renderOperatorPage(model, { interactive: true });
+  const html = renderOperatorPage(model, {
+    interactive: true,
+    activeView: "blocked",
+    returnTo: "/operator?view=blocked#blocked",
+  });
   assert.match(html, /https:\/\/example\.com\/sue\.jpg/i);
   assert.match(html, /<img class="avatar" src="https:\/\/example\.com\/sue\.jpg"/i);
 });
@@ -217,7 +225,11 @@ test("operator promotes packet review planner work with review actions", () => {
     "Return",
   ]);
 
-  const html = renderOperatorPage(model, { interactive: true });
+  const html = renderOperatorPage(model, {
+    interactive: true,
+    activeView: "blocked",
+    returnTo: "/operator?view=blocked#blocked",
+  });
   assert.match(html, /Review packet/);
   assert.match(html, /Accept/);
   assert.match(html, /Amend/);
@@ -327,7 +339,11 @@ test("operator does not merge outbound-capacity summary into a person card with 
   assert.equal(model.nextMove?.why, "The planned cadence branch is due and no stronger inbound event has displaced it.");
   assert.equal(model.nextMove?.action, "Compose request");
 
-  const html = renderOperatorPage(model, { interactive: true });
+  const html = renderOperatorPage(model, {
+    interactive: true,
+    activeView: "blocked",
+    returnTo: "/operator?view=blocked#blocked",
+  });
   assert.match(html, /Amresh Munshi/);
   assert.match(html, /LinkedIn is the only verified usable channel/);
   assert.match(html, />Compose request</);
@@ -403,7 +419,11 @@ test("operator renders assignment blockers as live pin actions when blocker acti
     truthAccounts: [],
   });
 
-  const html = renderOperatorPage(model, { interactive: true });
+  const html = renderOperatorPage(model, {
+    interactive: true,
+    activeView: "blocked",
+    returnTo: "/operator?view=blocked#blocked",
+  });
   assert.match(html, /data-exo-writer="assignCompanyUser"/);
   assert.match(html, /class="exo-action exo-action-flat"/);
   assert.match(html, /Assign 6sense/);
@@ -435,9 +455,57 @@ test("operator stale draft blockers link straight to the compose panel", () => {
     truthAccounts: [],
   });
 
-  const html = renderOperatorPage(model, { interactive: true });
-  assert.match(html, /href="\/prospects\/prospect-peter\?return=%2Foperator#compose-prospect-peter"/);
+  const html = renderOperatorPage(model, {
+    interactive: true,
+    activeView: "blocked",
+    returnTo: "/operator?view=blocked#blocked",
+  });
+  assert.match(
+    html,
+    /href="\/prospects\/prospect-peter\?return=%2Foperator%3Fview%3Dblocked%23blocked#compose-prospect-peter"/,
+  );
   assert.doesNotMatch(html, /Review draft.*disabled/);
+});
+
+test("operator capability blockers keep the live repair link", () => {
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-15T17:00:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: {
+      items: [
+        {
+          id: "queue-blocker-gmail",
+          subject: "Acme · Princess",
+          reason: "Exact Gmail inbox required",
+          detail: "william-main has multiple managed Gmail inboxes, so this motion cannot trust one sender implicitly. Pick one Exact Gmail inbox under Execution before email work can run.",
+          blockType: "capability",
+          resolveLabel: "Open motion settings",
+          channel: "email",
+          actions: [],
+          prospectId: "prospect-princess",
+          resolveMode: "detail",
+          resolveHref: "/motions/motion-1/settings#execution",
+        },
+      ],
+    },
+    truthAccounts: [],
+  });
+
+  const html = renderOperatorPage(model, {
+    interactive: true,
+    activeView: "blocked",
+    returnTo: "/operator?view=blocked#blocked",
+  });
+  assert.match(html, /Exact Gmail inbox required/);
+  assert.match(
+    html,
+    /href="\/motions\/motion-1\/settings\?return=%2Foperator%3Fview%3Dblocked%23blocked#execution"/,
+  );
+  assert.doesNotMatch(html, /Open motion settings.*disabled/);
 });
 
 test("operator detail links preserve a return path back to operator", () => {
@@ -950,6 +1018,77 @@ test("queue page shows checked-out agent work distinctly from plain queued work"
   assert.doesNotMatch(html, /Queued for agent<\/span>/i);
 });
 
+test("queue page shows queue age separately from the next due time", () => {
+  const now = Date.now();
+  const queuedAt = new Date(now - (2 * 60 * 60 * 1000)).toISOString();
+  const dueAt = new Date(now + (5 * 60 * 1000)).toISOString();
+
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: new Date(now).toISOString(),
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "task-1",
+          subject: "Justin Robinson",
+          action: "Send Connection Request",
+          why: "Queued for the agent.",
+          queuedAt,
+          dueAt,
+          sourceType: "send_ready",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+  });
+
+  const html = renderQueuePage(model, { interactive: true });
+  assert.match(html, /queued 2h/i);
+  assert.match(html, /due in 5m|due in 4m/i);
+  assert.doesNotMatch(html, /waiting <1m/i);
+});
+
+test("queue page does not invent queue age from a derived due time", () => {
+  const now = Date.now();
+  const dueAt = new Date(now - (10 * 60 * 1000)).toISOString();
+
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: new Date(now).toISOString(),
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "task-1",
+          subject: "Brandon Clements",
+          action: "like_post",
+          why: "Public warmup is ready.",
+          dueAt,
+          queuedAt: null,
+          sourceType: "cadence",
+          taskKind: "send_message",
+          capability: "linkedin",
+          surface: "like_post",
+          via: "public-engagement",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+  });
+
+  const html = renderQueuePage(model, { interactive: true });
+  assert.doesNotMatch(html, /queued 10m|queued 9m/i);
+});
+
 test("queue page folds agent status into a strip and tabs the full surface list", () => {
   const runtime = {
     scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
@@ -1135,16 +1274,18 @@ test("queue page marks send work as gated by failed LinkedIn inbound sync", () =
           sourceType: "inbound_itemization_gap",
           taskKind: "run_inbound_sync",
           capability: "linkedin",
+          surfaceKeys: ["linkedin-sent-invitations", "linkedin-received-invitations"],
         },
         {
           id: "send-1",
           subject: "Brandon Clements",
-          action: "Like post",
-          why: "Public warmup is ready.",
+          action: "send_connection_request",
+          why: "Connection request is ready.",
           dueAt: "2026-06-14T00:44:00.000Z",
           sourceType: "cadence",
           taskKind: "send_message",
           capability: "linkedin",
+          surface: "connection_request",
         },
       ],
       blockers: [],
@@ -1183,7 +1324,9 @@ test("queue page marks send work as gated by failed LinkedIn inbound sync", () =
         {
           capability: "linkedin",
           accountHandle: "williamflanagan",
+          surfaceKey: "linkedin-sent-invitations",
           surfaceLabel: "Sent Invitations",
+          syncTrustStatus: "untrusted",
           lastRunStatus: "failed",
           lastSyncedAt: null,
           lastObservedAt: "2026-06-14T00:30:00.000Z",
@@ -1198,7 +1341,9 @@ test("queue page marks send work as gated by failed LinkedIn inbound sync", () =
         {
           capability: "linkedin",
           accountHandle: "williamflanagan",
+          surfaceKey: "linkedin-received-invitations",
           surfaceLabel: "Received Invitations",
+          syncTrustStatus: "untrusted",
           lastRunStatus: "failed",
           lastSyncedAt: null,
           lastObservedAt: "2026-06-14T00:31:00.000Z",
@@ -1222,8 +1367,8 @@ test("queue page marks send work as gated by failed LinkedIn inbound sync", () =
   });
 
   assert.match(html, /Live sends gated/i);
-  assert.match(html, /7 send tasks are paused until LinkedIn inbound sync is healthy\./i);
-  assert.match(html, /Run 6 inbound sync repair tasks first\./i);
+  assert.match(html, /1 send task are paused until LinkedIn inbound sync is healthy\./i);
+  assert.match(html, /Run 1 inbound sync repair task first\./i);
   assert.match(html, /Latest error: linkedin capture failed\./i);
   assert.doesNotMatch(html, /linkedin capture failed\.\./i);
   assert.match(html, /Live send gated/i);
@@ -1246,6 +1391,735 @@ test("queue page marks send work as gated by failed LinkedIn inbound sync", () =
   assert.match(waitingPanel, /Brandon Clements/i);
 });
 
+test("queue page runtime summary normalizes soft-blocked pass history into partial", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: {
+      status: "blocked",
+      reason: "LinkedIn spacing keeps this outbound action from firing immediately.",
+      endedAt: "2026-06-15T15:41:17.286Z",
+      results: [
+        { kind: "send_message", status: "completed" },
+        { kind: "send_message", status: "blocked" },
+      ],
+      finalQueueCounts: {
+        dueTaskCount: 24,
+        waitingTaskCount: 27,
+        blockerCount: 0,
+      },
+    },
+    queueCount: 24,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-15T15:48:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "send-1",
+          subject: "Tonia Ewing",
+          action: "Send connection request",
+          why: "Ready to send.",
+          dueAt: "2026-06-15T15:41:00.000Z",
+          taskKind: "send_message",
+          capability: "exo",
+          motionName: "harsh-spare-mongoose",
+          actionKey: "send_connection_request",
+          surface: "connection_request",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+  const agentStatus = {
+    state: "partial",
+    checkedAt: "2026-06-15T15:48:00.000Z",
+    current: { active: false, tasks: [], locks: { active: false, lanes: [] } },
+    backlog: {
+      dueTaskCount: 24,
+      waitingTaskCount: 27,
+      blockerCount: 0,
+      dueByKind: [{ kind: "send_message", count: 24 }],
+      waitingByReason: [
+        { waitingReason: "randomized_spacing", count: 27, nextDueAt: "2026-06-15T15:49:00.000Z", taskKinds: [] },
+      ],
+      blockersByReason: [],
+    },
+    throughput: {
+      lastPass: { status: "partial", resultCount: 2, durationSeconds: 60 },
+      last24Hours: { resultCount: 2, recentMotionRunCount: 0 },
+    },
+    partial: {
+      active: true,
+      status: "partial",
+      reason: "The last pass ended before the due queue drained; 24 due tasks remain.",
+      nextAction: "Continue the agent pass to drain 24 due tasks.",
+    },
+    holds: { count: 0, items: [] },
+    inboundSurfaces: { items: [] },
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    generatedAt: "2026-06-15T15:48:00.000Z",
+  });
+
+  assert.match(model.agentRuntime?.lastPassSummary ?? "", /Last pass partial/i);
+  assert.match(html, /Last pass partial/i);
+  assert.doesNotMatch(html, /Last pass blocked/i);
+});
+
+test("queue page activity copy reframes spacing waits as partial queue pressure", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "partial", endedAt: "2026-06-15T15:41:17.286Z" },
+    queueCount: 24,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-15T15:48:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+  const agentStatus = {
+    state: "partial",
+    checkedAt: "2026-06-15T15:48:00.000Z",
+    current: { active: false, tasks: [], locks: { active: false, lanes: [] } },
+    backlog: {
+      dueTaskCount: 24,
+      waitingTaskCount: 27,
+      blockerCount: 0,
+      dueByKind: [],
+      waitingByReason: [],
+      blockersByReason: [],
+    },
+    throughput: {
+      lastPass: { status: "partial", resultCount: 2, durationSeconds: 60 },
+      last24Hours: { resultCount: 2, recentMotionRunCount: 0 },
+    },
+    partial: { active: true, reason: "The last pass ended before the due queue drained; 24 due tasks remain.", nextAction: null },
+    holds: { count: 0, items: [] },
+    inboundSurfaces: { items: [] },
+  };
+  const agentRunLog = {
+    checkedAt: "2026-06-15T15:48:00.000Z",
+    stateDir: "/tmp/exo",
+    entries: [
+      {
+        timestamp: "2026-06-15T15:41:17.286Z",
+        startedAt: "2026-06-15T15:26:01.605Z",
+        endedAt: "2026-06-15T15:41:17.286Z",
+        status: "partial",
+        lane: "transport",
+        taskKind: "multiple",
+        taskKinds: ["send_message"],
+        resultCounts: { total: 2, completed: 1, blocked: 1, failed: 0, noop: 0, partial: 0 },
+        queueCounts: { dueTaskCount: 24, waitingTaskCount: 27, blockerCount: 0 },
+        reason: "LinkedIn spacing keeps this outbound action from firing immediately.",
+        sourceArtifact: { kind: "agent.log", path: "/tmp/exo/agent.log" },
+      },
+    ],
+    warnings: [],
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    agentRunLog,
+    generatedAt: "2026-06-15T15:48:00.000Z",
+  });
+
+  assert.match(html, /Spacing deferred the next send batch; 24 due tasks remained in queue\./i);
+  assert.doesNotMatch(html, /LinkedIn spacing keeps this outbound action from firing immediately\./i);
+});
+
+test("queue page activity shows waiting result counts for retried inbound identity work", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "partial", endedAt: "2026-06-15T18:02:00.000Z" },
+    queueCount: 4,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-15T18:05:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+  const agentStatus = {
+    state: "partial",
+    checkedAt: "2026-06-15T18:05:00.000Z",
+    current: { active: false, tasks: [], locks: { active: false, lanes: [] } },
+    backlog: {
+      dueTaskCount: 4,
+      waitingTaskCount: 6,
+      blockerCount: 0,
+      dueByKind: [],
+      waitingByReason: [],
+      blockersByReason: [],
+    },
+    throughput: {
+      lastPass: { status: "partial", resultCount: 2, durationSeconds: 120 },
+      last24Hours: { resultCount: 2, recentMotionRunCount: 0 },
+    },
+    partial: { active: true, reason: "The last pass ended before the due queue drained; 4 due tasks remain.", nextAction: null },
+    holds: { count: 0, items: [] },
+    inboundSurfaces: { items: [] },
+  };
+  const agentRunLog = {
+    checkedAt: "2026-06-15T18:05:00.000Z",
+    stateDir: "/tmp/exo",
+    entries: [
+      {
+        timestamp: "2026-06-15T18:02:00.000Z",
+        startedAt: "2026-06-15T18:00:00.000Z",
+        endedAt: "2026-06-15T18:02:00.000Z",
+        status: "partial",
+        lane: "transport",
+        taskKind: "multiple",
+        taskKinds: ["resolve_inbound_identity", "send_message"],
+        resultCounts: { total: 2, completed: 1, waiting: 1, blocked: 0, failed: 0, noop: 0, partial: 0 },
+        queueCounts: { dueTaskCount: 4, waitingTaskCount: 6, blockerCount: 0 },
+        reason: null,
+        sourceArtifact: { kind: "agent.log", path: "/tmp/exo/agent.log" },
+      },
+    ],
+    warnings: [],
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    agentRunLog,
+    generatedAt: "2026-06-15T18:05:00.000Z",
+  });
+
+  assert.match(html, /1 completed · 1 waiting/i);
+});
+
+test("queue page activity tab shows current holds and deduped recent failures", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "failed", endedAt: "2026-06-15T15:41:17.286Z" },
+    queueCount: 55,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-15T15:48:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "send-1",
+          subject: "Tonia Ewing",
+          action: "Send connection request",
+          why: "Ready to send.",
+          dueAt: "2026-06-15T15:41:00.000Z",
+          taskKind: "send_message",
+          capability: "exo",
+          motionName: "harsh-spare-mongoose",
+          actionKey: "send_connection_request",
+          surface: "connection_request",
+        },
+      ],
+      blockers: [
+        {
+          reason: "gmail_exact_inbox_required",
+          count: 1,
+        },
+      ],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+  });
+
+  const agentStatus = {
+    state: "blocked",
+    checkedAt: "2026-06-15T15:48:00.000Z",
+    current: { active: false, tasks: [], locks: { active: false, lanes: [] } },
+    backlog: {
+      dueTaskCount: 55,
+      waitingTaskCount: 5,
+      blockerCount: 1,
+      dueByKind: [{ kind: "send_message", count: 40 }],
+      waitingByReason: [],
+      blockersByReason: [{ reason: "gmail_exact_inbox_required", count: 1 }],
+    },
+    throughput: {
+      lastPass: { status: "failed", resultCount: 14, durationSeconds: 900 },
+      last24Hours: { resultCount: 14, recentMotionRunCount: 2 },
+    },
+    partial: { active: false },
+    holds: {
+      count: 1,
+      items: [
+        {
+          kind: "send_circuit_breaker",
+          unavailableUntil: "2026-06-15T16:00:00.000Z",
+          reason: "Multiple Gmail inboxes are mapped for william-main. Pick one exact inbox on this motion before email work can run.",
+        },
+      ],
+    },
+    inboundSurfaces: { items: [] },
+  };
+
+  const agentRunLog = {
+    checkedAt: "2026-06-15T15:48:00.000Z",
+    stateDir: "/tmp/exo",
+    entries: [
+      {
+        timestamp: "2026-06-15T15:41:17.286Z",
+        startedAt: "2026-06-15T15:26:01.605Z",
+        endedAt: "2026-06-15T15:41:17.286Z",
+        status: "failed",
+        lane: "transport",
+        taskKind: "run_inbound_sync",
+        taskKinds: ["run_inbound_sync"],
+        resultCounts: { total: 6, completed: 5, blocked: 0, failed: 1, noop: 0, partial: 0 },
+        queueCounts: { dueTaskCount: 56, waitingTaskCount: 5, blockerCount: 0 },
+        reason: "Could not apply inbound payload for linkedin:acct-1\nCommand failed: node exo inbound sync\nInbound observation motion motion-1 conflicts with resolved prospect context undefined.",
+        sourceArtifact: { kind: "agent.log", path: "/tmp/exo/agent.log" },
+      },
+      {
+        timestamp: "2026-06-15T15:41:17.286Z",
+        startedAt: "2026-06-15T15:26:01.605Z",
+        endedAt: "2026-06-15T15:41:17.286Z",
+        status: "failed",
+        lane: "transport",
+        taskKind: "run_inbound_sync",
+        taskKinds: ["run_inbound_sync"],
+        resultCounts: { total: 6, completed: 5, blocked: 0, failed: 1, noop: 0, partial: 0 },
+        queueCounts: { dueTaskCount: 56, waitingTaskCount: 5, blockerCount: 0 },
+        reason: "Could not apply inbound payload for linkedin:acct-1\nCommand failed: node exo inbound sync\nInbound observation motion motion-1 conflicts with resolved prospect context undefined.",
+        sourceArtifact: { kind: "agent-last-pass", path: "/tmp/exo/agent-last-pass.transport.json" },
+      },
+      {
+        timestamp: "2026-06-15T15:41:06.790Z",
+        startedAt: "2026-06-15T15:26:01.637Z",
+        endedAt: "2026-06-15T15:41:06.790Z",
+        status: "partial",
+        lane: "research",
+        taskKind: "multiple",
+        taskKinds: ["prospect_selection", "company_research"],
+        resultCounts: { total: 8, completed: 8, blocked: 0, failed: 0, noop: 0, partial: 0 },
+        queueCounts: { dueTaskCount: 57, waitingTaskCount: 5, blockerCount: 0 },
+        reason: null,
+        sourceArtifact: { kind: "agent-last-pass", path: "/tmp/exo/agent-last-pass.research.json" },
+      },
+    ],
+    warnings: [],
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    agentRunLog,
+    generatedAt: "2026-06-15T15:48:00.000Z",
+  });
+
+  assert.match(html, /data-tab-target="activity"[^>]*>Activity<span class="count-chip tone-neutral">3<\/span>/i);
+  assert.match(html, /id="queue-views-panel-activity"[^>]*data-tab-panel="activity" hidden/i);
+  assert.match(html, /Current holds/i);
+  assert.match(html, /Send work paused/i);
+  assert.match(html, /Multiple Gmail inboxes are mapped for william-main/i);
+  assert.match(html, /Recent runs/i);
+  assert.match(html, /Transport · Run Inbound Sync/i);
+  assert.match(html, /Inbound observation motion motion-1 conflicts with resolved prospect context undefined\./i);
+  assert.equal(
+    (html.match(/Inbound observation motion motion-1 conflicts with resolved prospect context undefined\./gi) ?? []).length,
+    1,
+  );
+});
+
+test("queue page treats a failed last pass as previous work once a new pass is already running", () => {
+  const runtime = {
+    lock: { active: true, pid: 4242 },
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: true, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: {
+      status: "failed",
+      reason: "Codex task failed: spawnSync /Applications/Codex.app/Contents/Resources/codex ETIMEDOUT",
+      endedAt: "2026-06-15T17:00:00.000Z",
+    },
+    queueCount: 1,
+  };
+
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-15T18:00:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "task-1",
+          subject: "Acme backlog",
+          action: "prospect_selection",
+          why: "Research is due.",
+          dueAt: "2026-06-15T17:55:00.000Z",
+          sourceType: "research_packet",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+
+  const agentStatus = {
+    checkedAt: "2026-06-15T18:00:00.000Z",
+    state: "running",
+    current: {
+      active: true,
+      activeTaskCount: 1,
+      tasks: [
+        {
+          kind: "prospect_selection",
+          action: "prospect_selection",
+          lane: "research",
+          subject: "Acme backlog",
+          startedAt: "2026-06-15T17:58:00.000Z",
+          elapsedSeconds: 120,
+        },
+      ],
+      locks: { active: true, lanes: [] },
+    },
+    backlog: {
+      dueTaskCount: 1,
+      waitingTaskCount: 0,
+      blockerCount: 0,
+      dueByKind: [{ kind: "prospect_selection", count: 1 }],
+      waitingByReason: [],
+      blockersByReason: [],
+    },
+    throughput: {
+      lastPass: {
+        status: "failed",
+        resultCount: 1,
+        durationSeconds: 600,
+        byKind: [],
+      },
+      last24Hours: {
+        resultCount: 1,
+        recentMotionRunCount: 0,
+      },
+    },
+    partial: {
+      active: false,
+      reason: null,
+      nextAction: null,
+    },
+    inboundSurfaces: {
+      count: 0,
+      items: [],
+    },
+    holds: {
+      count: 0,
+      items: [],
+    },
+  };
+
+  const agentRunLog = {
+    checkedAt: "2026-06-15T18:00:00.000Z",
+    stateDir: "/tmp/exo",
+    entries: [
+      {
+        timestamp: "2026-06-15T17:57:00.000Z",
+        startedAt: "2026-06-15T17:47:00.000Z",
+        endedAt: "2026-06-15T17:57:00.000Z",
+        status: "failed",
+        lane: "research",
+        taskKind: "prospect_selection",
+        taskKinds: ["prospect_selection"],
+        resultCounts: { total: 1, completed: 0, blocked: 1, failed: 0, noop: 0, partial: 0 },
+        queueCounts: { dueTaskCount: 1, waitingTaskCount: 0, blockerCount: 0 },
+        reason: "Codex task failed: spawnSync /Applications/Codex.app/Contents/Resources/codex ETIMEDOUT | stderr=OpenAI Codex v0.140.0-alpha.2 -------- user This is one bounded Exo prospect selection packet. Do not inspect the repo.",
+        sourceArtifact: { kind: "agent.log", path: "/tmp/exo/agent.log" },
+      },
+    ],
+    warnings: [],
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    agentRunLog,
+    generatedAt: "2026-06-15T18:00:00.000Z",
+  });
+
+  assert.match(html, /Previous pass failed · 1 result/i);
+  assert.match(html, /Previous pass failed/i);
+  assert.doesNotMatch(html, /Previous pass:\s*Last pass failed/i);
+  assert.match(html, /Codex task timed out before the bounded packet finished\./i);
+  assert.doesNotMatch(html, /This is one bounded Exo prospect selection packet/i);
+});
+
+test("queue page does not gate sends on degraded LinkedIn quick-pass warnings", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "partial", endedAt: "2026-06-14T00:50:00.000Z" },
+    queueCount: 4,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-14T00:53:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "send-1",
+          subject: "Brandon Clements",
+          action: "send_connection_request",
+          why: "Connection request is ready.",
+          dueAt: "2026-06-14T00:44:00.000Z",
+          sourceType: "cadence",
+          taskKind: "send_message",
+          capability: "linkedin",
+          surface: "connection_request",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+  const agentStatus = {
+    checkedAt: "2026-06-14T00:53:00.000Z",
+    state: "partial",
+    current: { active: false, activeTaskCount: 0, tasks: [], locks: { active: false, lanes: [] } },
+    backlog: {
+      dueTaskCount: 4,
+      waitingTaskCount: 0,
+      blockerCount: 0,
+      dueByKind: [
+        { kind: "send_message", count: 1 },
+      ],
+      waitingByReason: [],
+      blockersByReason: [],
+    },
+    throughput: {
+      lastPass: { status: "partial", resultCount: 1, durationSeconds: 4, byKind: [] },
+      last24Hours: { resultCount: 1, recentMotionRunCount: 3 },
+    },
+    partial: {
+      active: true,
+      reason: "No due tasks were available.",
+      nextAction: "Continue the agent pass to drain 4 due tasks.",
+    },
+    inboundSurfaces: {
+      count: 2,
+      items: [
+        {
+          capability: "linkedin",
+          accountHandle: "williamflanagan",
+          surfaceKey: "linkedin-sent-invitations",
+          surfaceLabel: "Sent Invitations",
+          syncTrustStatus: "degraded",
+          lastRunStatus: "warning",
+          lastSyncedAt: "2026-06-14T00:30:00.000Z",
+          lastObservedAt: "2026-06-14T00:30:00.000Z",
+          capturedItemCount: 20,
+          visibleTotalCount: null,
+          observationCount: 20,
+          pageWalkStatus: null,
+          resumeCursor: "cursor-1",
+          resumeStartOffset: null,
+          lastError: "Unipile returned more pending sent invitations than this quick pass itemized.",
+        },
+        {
+          capability: "linkedin",
+          accountHandle: "williamflanagan",
+          surfaceKey: "linkedin-messaging-inbox",
+          surfaceLabel: "Messaging Inbox",
+          syncTrustStatus: "degraded",
+          lastRunStatus: "warning",
+          lastSyncedAt: "2026-06-14T00:31:00.000Z",
+          lastObservedAt: "2026-06-14T00:31:00.000Z",
+          capturedItemCount: 20,
+          visibleTotalCount: null,
+          observationCount: 7,
+          pageWalkStatus: null,
+          resumeCursor: "cursor-2",
+          resumeStartOffset: null,
+          lastError: "Unipile returned more unread LinkedIn chats than this quick pass itemized.",
+        },
+      ],
+    },
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    generatedAt: "2026-06-14T00:53:00.000Z",
+  });
+
+  assert.doesNotMatch(html, /Live sends gated/i);
+  assert.doesNotMatch(html, /Live send gated/i);
+  assert.doesNotMatch(html, /Gated by sync/i);
+  assert.match(html, /Brandon Clements/i);
+  assert.match(html, /data-tab-target="queue"[^>]*>Agent queue<span class="count-chip tone-blue">1<\/span>/i);
+  assert.doesNotMatch(html, /data-tab-target="waiting"/i);
+});
+
+test("queue page does not gate public warmup sends on failed invite sync", () => {
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "verify" },
+    lastPass: { status: "partial", endedAt: "2026-06-14T00:50:00.000Z" },
+    queueCount: 7,
+  };
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-14T00:53:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "sync-1",
+          subject: "LinkedIn sent invitations",
+          action: "Run inbound sync",
+          why: "Repair stale LinkedIn truth before sending.",
+          dueAt: "2026-06-14T00:45:00.000Z",
+          sourceType: "inbound_itemization_gap",
+          taskKind: "run_inbound_sync",
+          capability: "linkedin",
+          surfaceKeys: ["linkedin-sent-invitations"],
+        },
+        {
+          id: "send-1",
+          subject: "Brandon Clements",
+          action: "like_post",
+          why: "Public warmup is ready.",
+          dueAt: "2026-06-14T00:44:00.000Z",
+          sourceType: "cadence",
+          taskKind: "send_message",
+          capability: "linkedin",
+          surface: "like_post",
+          via: "public-engagement",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+    agentRuntime: runtime,
+  });
+  const agentStatus = {
+    checkedAt: "2026-06-14T00:53:00.000Z",
+    state: "partial",
+    current: { active: false, activeTaskCount: 0, tasks: [], locks: { active: false, lanes: [] } },
+    backlog: {
+      dueTaskCount: 7,
+      waitingTaskCount: 0,
+      blockerCount: 0,
+      dueByKind: [
+        { kind: "send_message", count: 1 },
+        { kind: "run_inbound_sync", count: 1 },
+      ],
+      waitingByReason: [],
+      blockersByReason: [],
+    },
+    throughput: {
+      lastPass: { status: "partial", resultCount: 1, durationSeconds: 4, byKind: [] },
+      last24Hours: { resultCount: 1, recentMotionRunCount: 3 },
+    },
+    partial: {
+      active: true,
+      reason: "No due tasks were available.",
+      nextAction: "Continue the agent pass to drain 7 due tasks.",
+    },
+    inboundSurfaces: {
+      count: 2,
+      items: [
+        {
+          capability: "linkedin",
+          accountHandle: "williamflanagan",
+          surfaceKey: "linkedin-sent-invitations",
+          surfaceLabel: "Sent Invitations",
+          syncTrustStatus: "untrusted",
+          lastRunStatus: "failed",
+          lastSyncedAt: null,
+          lastObservedAt: "2026-06-14T00:30:00.000Z",
+          capturedItemCount: 0,
+          visibleTotalCount: null,
+          observationCount: 0,
+          pageWalkStatus: null,
+          resumeCursor: null,
+          resumeStartOffset: null,
+          lastError: "linkedin capture failed.",
+        },
+        {
+          capability: "linkedin",
+          accountHandle: "williamflanagan",
+          surfaceKey: "linkedin-received-invitations",
+          surfaceLabel: "Received Invitations",
+          syncTrustStatus: "untrusted",
+          lastRunStatus: "failed",
+          lastSyncedAt: null,
+          lastObservedAt: "2026-06-14T00:31:00.000Z",
+          capturedItemCount: 0,
+          visibleTotalCount: null,
+          observationCount: 0,
+          pageWalkStatus: null,
+          resumeCursor: null,
+          resumeStartOffset: null,
+          lastError: "linkedin capture failed.",
+        },
+      ],
+    },
+  };
+
+  const html = renderQueuePage(model, {
+    interactive: true,
+    agentRuntime: runtime,
+    agentStatus,
+    generatedAt: "2026-06-14T00:53:00.000Z",
+  });
+
+  assert.doesNotMatch(html, /Live sends gated/i);
+  assert.doesNotMatch(html, /Live send gated/i);
+  assert.doesNotMatch(html, /Gated by sync/i);
+  assert.match(html, /Brandon Clements/i);
+  assert.match(html, /data-tab-target="queue"[^>]*>Agent queue<span class="count-chip tone-blue">2<\/span>/i);
+  assert.doesNotMatch(html, /data-tab-target="waiting"/i);
+});
+
 test("queue page shows a prerequisite card when gated sends have no repair task queued", () => {
   const runtime = {
     scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
@@ -1264,12 +2138,13 @@ test("queue page shows a prerequisite card when gated sends have no repair task 
         {
           id: "send-1",
           subject: "Brandon Clements",
-          action: "Like post",
-          why: "Public warmup is ready.",
+          action: "send_connection_request",
+          why: "Connection request is ready.",
           dueAt: "2026-06-14T00:44:00.000Z",
           sourceType: "cadence",
           taskKind: "send_message",
           capability: "linkedin",
+          surface: "connection_request",
         },
       ],
       blockers: [],
@@ -1305,7 +2180,9 @@ test("queue page shows a prerequisite card when gated sends have no repair task 
         {
           capability: "linkedin",
           accountHandle: "williamflanagan",
+          surfaceKey: "linkedin-sent-invitations",
           surfaceLabel: "Sent Invitations",
+          syncTrustStatus: "untrusted",
           lastRunStatus: "failed",
           lastSyncedAt: null,
           lastObservedAt: "2026-06-14T00:30:00.000Z",
@@ -1518,6 +2395,58 @@ test("agent runtime surfaces an active transport backoff instead of a green queu
   assert.doesNotMatch(queueHtml, /Background agent on/i);
 });
 
+test("agent runtime surfaces an active send circuit breaker instead of a green queued state", () => {
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-15T15:30:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: { items: [] },
+    agentQueue: {
+      items: [
+        {
+          id: "task-1",
+          subject: "Jon Condouret",
+          action: "Send Email",
+          why: "Queued for the agent.",
+          dueAt: "2026-06-15T15:25:00.000Z",
+          sourceType: "send_ready",
+        },
+      ],
+      blockers: [],
+    },
+    blockedQueue: { items: [] },
+    truthAccounts: [],
+  });
+
+  const runtime = {
+    scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
+    routine: { exists: true, sendMode: "live" },
+    hostState: {
+      sendCircuitBreaker: {
+        consecutiveFailures: 2,
+        unavailableUntil: "2099-06-15T17:17:50.670Z",
+        reason: "Multiple Gmail inboxes are mapped for william-main. Pick one exact inbox on this motion before email work can run.",
+      },
+    },
+    queueCount: 48,
+    blockerCount: 0,
+  };
+
+  const operatorHtml = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
+  assert.match(operatorHtml, /data-agent-health="yellow"/);
+  assert.match(operatorHtml, /Agent is blocked/i);
+  assert.match(operatorHtml, /Send work is paused right now\./i);
+  assert.match(operatorHtml, /Multiple Gmail inboxes are mapped for william-main/i);
+  assert.doesNotMatch(operatorHtml, /Background agent on/i);
+
+  const queueHtml = renderQueuePage(model, { interactive: true, agentRuntime: runtime });
+  assert.match(queueHtml, /Agent is blocked/i);
+  assert.match(queueHtml, /Send work is paused right now\./i);
+  assert.match(queueHtml, /Multiple Gmail inboxes are mapped for william-main/i);
+  assert.doesNotMatch(queueHtml, /Background agent on/i);
+});
+
 test("agent runtime prefers live browser backoff over a stale failed last-pass transcript", () => {
   const model = buildOperatorViewModel({
     user: { id: "user-1", label: "william-main", owner: "William" },
@@ -1670,13 +2599,13 @@ test("agent runtime focuses failed status on the real timed out lane instead of 
   assert.doesNotMatch(html, /spawnSync zsh ETIMEDOUT/i);
 });
 
-test("agent runtime spells out that verify mode will not send already-proved drafts", () => {
+test("agent runtime spells out that verify mode only holds unreviewed outbound copy", () => {
   const runtime = {
     scheduler: { kind: "launchd", installed: true, loaded: true, running: false, runIntervalSeconds: 900 },
     routine: { exists: true, sendMode: "verify" },
     lastPass: {
       status: "noop",
-      reason: "Verify mode had no unverified send_message tasks left to prove.",
+      reason: "Verify mode had no unverified outbound copy send_message tasks left to prove.",
       endedAt: "2026-06-04T10:17:27.465Z",
     },
     queueCount: 2,
@@ -1717,11 +2646,11 @@ test("agent runtime spells out that verify mode will not send already-proved dra
   });
 
   const operatorHtml = renderOperatorPage(model, { interactive: true, agentRuntime: runtime });
-  assert.match(operatorHtml, /Agent-authored drafts are waiting in review only/i);
-  assert.match(operatorHtml, /2 queued agent-authored sends already have fresh proof/i);
-  assert.match(operatorHtml, /Review only will not auto-send those agent-authored drafts\./i);
-  assert.match(operatorHtml, /Operator-authored, edited, or approved drafts still send live\./i);
-  assert.match(operatorHtml, /Switch the agent out of review only when you want the next pass to auto-send proved agent-authored drafts\./i);
+  assert.match(operatorHtml, /Unreviewed outbound copy is waiting in review only/i);
+  assert.match(operatorHtml, /2 unreviewed copy sends already have fresh proof/i);
+  assert.match(operatorHtml, /Review only will not auto-send unreviewed outbound copy\./i);
+  assert.match(operatorHtml, /Operator-authored, edited, or approved copy, non-copy actions, and retrieval still run live\./i);
+  assert.match(operatorHtml, /Switch the agent out of review only when you want proved unreviewed outbound copy to send automatically\./i);
   assert.match(operatorHtml, />Run review pass</i);
   assert.match(operatorHtml, /Installed: yes/i);
   assert.doesNotMatch(operatorHtml, />Run agent now</i);
@@ -1730,11 +2659,11 @@ test("agent runtime spells out that verify mode will not send already-proved dra
   const introStart = queueHtml.indexOf("<h1>Agent queue</h1>");
   const runtimeBarStart = queueHtml.indexOf('<details class="agent-bar');
   const introHtml = queueHtml.slice(introStart, runtimeBarStart);
-  assert.match(queueHtml, /Agent-authored drafts are waiting in review only/i);
-  assert.match(queueHtml, /2 queued agent-authored sends already have fresh proof/i);
-  assert.match(queueHtml, /Review only will not auto-send those agent-authored drafts\./i);
+  assert.match(queueHtml, /Unreviewed outbound copy is waiting in review only/i);
+  assert.match(queueHtml, /2 unreviewed copy sends already have fresh proof/i);
+  assert.match(queueHtml, /Review only will not auto-send unreviewed outbound copy\./i);
   assert.match(queueHtml, />Run review pass</i);
-  assert.match(queueHtml, /Next action: Switch the agent out of review only when you want the next pass to auto-send proved agent-authored drafts\./i);
+  assert.match(queueHtml, /Next action: Switch the agent out of review only when you want proved unreviewed outbound copy to send automatically\./i);
   assert.doesNotMatch(queueHtml, />Run agent now</i);
   assert.match(introHtml, /Run review pass/i);
   assert.match(introHtml, /Review only/i);
@@ -1848,6 +2777,397 @@ test("operator hides empty blocked and stale lanes instead of rendering empty st
   assert.doesNotMatch(html, /<b>0<\/b> stale/i);
 });
 
+test("operator stats deep-link into the blocked lane and keep the queue copy compact", () => {
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-06T11:05:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: { checklist: [] },
+    decisionQueue: {
+      items: [
+        {
+          id: "obs-1",
+          subject: "Queued Person",
+          motionId: "motion-1",
+          motionName: "harsh-spare-mongoose",
+          recommendedAction: "Reply now.",
+          state: "needs_reply",
+          observedAt: "2026-06-06T11:00:00.000Z",
+          surfaceKey: "messaging_inbox",
+        },
+      ],
+    },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: {
+      items: [
+        {
+          id: "blocked-1",
+          subject: "LinkedIn",
+          reason: "Capability not ready",
+          detail: "LinkedIn needs a trusted account path before governed work can resume.",
+          blockType: "capability",
+          resolveLabel: "Fix capability",
+          channel: "linkedin",
+        },
+      ],
+    },
+    truthAccounts: [],
+  });
+
+  const html = renderOperatorPage(model, {
+    interactive: true,
+    activeView: "blocked",
+    returnTo: "/operator?view=blocked#blocked",
+  });
+
+  assert.match(html, /<b>1<\/b> queued/i);
+  assert.doesNotMatch(html, /in operator queue/i);
+  assert.match(html, /href="\/operator\?view=blocked#blocked"/);
+  assert.match(html, /class="seg-tab is-active"[^>]*id="operator-views-tab-blocked"/);
+});
+
+test("operator can isolate work to a single motion and preserve that filtered return path", () => {
+  const html = renderOperatorPage({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-06T11:05:00.000Z",
+    regenerateCommand: "exo ui",
+    counts: { decisions: 3, queue: 0, blocked: 0, stale: 0, agendaLeft: 0 },
+    agentRuntime: null,
+    nextMove: {
+      title: "Reply to Alpha Person.",
+      subject: "Alpha Person",
+      prospectId: null,
+      personId: "alpha-person",
+      avatarUrl: null,
+      subtitle: "CEO @ Alpha Co",
+      motionId: "motion-alpha",
+      motionName: "alpha-motion",
+      motionStatus: "active",
+      truth: "checked",
+      truthAt: "2m ago",
+      surface: "messaging inbox",
+      action: "Reply now",
+      actionMode: "compose",
+      actionStatus: "due now",
+      actionWriter: null,
+      actionArgs: null,
+      actionHref: "https://www.linkedin.com/in/alpha-person/",
+      why: "Alpha needs a fast reply.",
+      previewLabel: null,
+      previewSubject: null,
+      previewText: null,
+      backlogCompanies: null,
+      actions: [],
+    },
+    decisions: [
+      {
+        id: "beta-1",
+        person: "Beta Person",
+        prospectId: null,
+        personId: "beta-person",
+        initials: "BP",
+        avatarUrl: null,
+        role: "VP Growth",
+        company: "Beta Co",
+        roleLine: "VP Growth · Beta Co",
+        motionId: "motion-beta",
+        motionName: "beta-motion",
+        stakes: null,
+        summary: "Only beta task.",
+        truth: "checked",
+        truthAt: "3m ago",
+        surface: "messaging inbox",
+        actionStatus: "due now",
+        primaryActionLabel: "Open",
+        primaryActionMode: "detail",
+        primaryHref: "https://www.linkedin.com/in/beta-person/",
+        secondaryActionLabel: "Ignore",
+        secondaryHref: null,
+        why: null,
+        previewLabel: null,
+        previewSubject: null,
+        previewText: null,
+        actions: [],
+      },
+      {
+        id: "alpha-2",
+        person: "Alpha Queue",
+        prospectId: null,
+        personId: "alpha-queue",
+        initials: "AQ",
+        avatarUrl: null,
+        role: "CMO",
+        company: "Alpha Co",
+        roleLine: "CMO · Alpha Co",
+        motionId: "motion-alpha",
+        motionName: "alpha-motion",
+        stakes: null,
+        summary: "Only alpha task.",
+        truth: "checked",
+        truthAt: "4m ago",
+        surface: "received invitations",
+        actionStatus: "needs decision",
+        primaryActionLabel: "Open",
+        primaryActionMode: "detail",
+        primaryHref: "https://www.linkedin.com/in/alpha-queue/",
+        secondaryActionLabel: "Ignore",
+        secondaryHref: null,
+        why: null,
+        previewLabel: null,
+        previewSubject: null,
+        previewText: null,
+        actions: [],
+      },
+    ],
+    queue: [],
+    blocked: [],
+    stale: [],
+    agenda: [],
+  }, {
+    interactive: true,
+    activeView: "motions",
+    selectedMotionId: "motion-beta",
+    motionChoices: [
+      { id: "motion-alpha", name: "alpha-motion", offerLabel: "Alpha target", offerHost: "alpha.example.com", icpSummary: "Founder-led teams" },
+      { id: "motion-beta", name: "beta-motion", offerLabel: "Beta target", offerHost: "beta.example.com", icpSummary: "Revenue teams" },
+    ],
+    returnTo: "/operator?view=motions&motion=motion-beta#motions",
+  });
+
+  assert.match(html, /seg-motion-picker is-active/);
+  assert.match(html, /By motion/);
+  assert.match(html, /Beta target/);
+  assert.match(html, /beta\.example\.com/);
+  assert.match(html, /ICP · Revenue teams/);
+  assert.match(html, /NEXT MOVE/);
+  assert.match(html, /data-tab-panel="motions"[\s\S]*Only beta task\./);
+  assert.match(html, /data-tab-panel="motions"[\s\S]*The first queued action is promoted above\./);
+  assert.doesNotMatch(html, /data-tab-panel="motions"[\s\S]*Only alpha task\./);
+  assert.match(html, /Clear to all motions/);
+  assert.match(html, /href="\/operator\?view=motions#motions"/);
+  assert.match(html, /href="\/people\/beta-person\?return=%2Foperator%3Fview%3Dmotions%26motion%3Dmotion-beta%23motions"/);
+});
+
+test("operator motion tab shows an active-motion dropdown before any filter is chosen", () => {
+  const html = renderOperatorPage({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-06T11:05:00.000Z",
+    regenerateCommand: "exo ui",
+    counts: { decisions: 2, queue: 0, blocked: 0, stale: 0, agendaLeft: 0 },
+    agentRuntime: null,
+    nextMove: null,
+    decisions: [
+      {
+        id: "alpha-1",
+        person: "Alpha Person",
+        prospectId: null,
+        personId: "alpha-person",
+        initials: "AP",
+        avatarUrl: null,
+        role: "CEO",
+        company: "Alpha Co",
+        roleLine: "CEO · Alpha Co",
+        motionId: "motion-alpha",
+        motionName: "alpha-motion",
+        stakes: null,
+        summary: "Alpha task.",
+        truth: "checked",
+        truthAt: "2m ago",
+        surface: "messaging inbox",
+        actionStatus: "due now",
+        primaryActionLabel: "Open",
+        primaryActionMode: "detail",
+        primaryHref: "https://www.linkedin.com/in/alpha-person/",
+        secondaryActionLabel: "Ignore",
+        secondaryHref: null,
+        why: null,
+        previewLabel: null,
+        previewSubject: null,
+        previewText: null,
+        actions: [],
+      },
+      {
+        id: "beta-1",
+        person: "Beta Person",
+        prospectId: null,
+        personId: "beta-person",
+        initials: "BP",
+        avatarUrl: null,
+        role: "VP Growth",
+        company: "Beta Co",
+        roleLine: "VP Growth · Beta Co",
+        motionId: "motion-beta",
+        motionName: "beta-motion",
+        stakes: null,
+        summary: "Beta task.",
+        truth: "checked",
+        truthAt: "3m ago",
+        surface: "messaging inbox",
+        actionStatus: "due now",
+        primaryActionLabel: "Open",
+        primaryActionMode: "detail",
+        primaryHref: "https://www.linkedin.com/in/beta-person/",
+        secondaryActionLabel: "Ignore",
+        secondaryHref: null,
+        why: null,
+        previewLabel: null,
+        previewSubject: null,
+        previewText: null,
+        actions: [],
+      },
+    ],
+    queue: [],
+    blocked: [],
+    stale: [],
+    agenda: [],
+  }, {
+    interactive: true,
+    activeView: "motions",
+    motionChoices: [
+      { id: "motion-alpha", name: "alpha-motion", offerLabel: "Alpha target", offerHost: "alpha.example.com", icpSummary: "Founder-led teams" },
+      { id: "motion-beta", name: "beta-motion", offerLabel: "Beta target", offerHost: "beta.example.com", icpSummary: "Revenue teams" },
+      { id: "motion-empty", name: "empty-motion", offerLabel: "Empty target", offerHost: "empty.example.com", icpSummary: "No current queue" },
+    ],
+    returnTo: "/operator?view=motions#motions",
+  });
+
+  assert.match(html, /All motions/);
+  assert.match(html, /Show operator work grouped across every active motion\./);
+  assert.doesNotMatch(html, /ICP · Show operator work grouped across every active motion\./);
+  assert.match(html, /Alpha target/);
+  assert.match(html, /alpha\.example\.com/);
+  assert.match(html, /ICP · Founder-led teams/);
+  assert.match(html, /Empty target/);
+  assert.match(html, /Beta task\./);
+  assert.match(html, /Alpha task\./);
+  assert.doesNotMatch(html, /Select an active motion to filter operator work\./);
+  assert.doesNotMatch(html, /<select class="op-motion-select-input"/);
+});
+
+test("operator tab panels explicitly hide inactive views in authored CSS", () => {
+  const html = renderOperatorPage({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-06T11:05:00.000Z",
+    regenerateCommand: "exo ui",
+    counts: { decisions: 1, queue: 0, blocked: 1, stale: 0, agendaLeft: 0 },
+    agentRuntime: null,
+    nextMove: null,
+    decisions: [
+      {
+        id: "alpha-1",
+        person: "Alpha Person",
+        prospectId: null,
+        personId: "alpha-person",
+        initials: "AP",
+        avatarUrl: null,
+        role: "CEO",
+        company: "Alpha Co",
+        roleLine: "CEO · Alpha Co",
+        motionId: "motion-alpha",
+        motionName: "alpha-motion",
+        stakes: null,
+        summary: "Alpha task.",
+        truth: "checked",
+        truthAt: "2m ago",
+        surface: "messaging inbox",
+        actionStatus: "due now",
+        primaryActionLabel: "Open",
+        primaryActionMode: "detail",
+        primaryHref: "https://www.linkedin.com/in/alpha-person/",
+        secondaryActionLabel: "Ignore",
+        secondaryHref: null,
+        why: null,
+        previewLabel: null,
+        previewSubject: null,
+        previewText: null,
+        actions: [],
+      },
+    ],
+    queue: [],
+    blocked: [
+      {
+        id: "blocked-1",
+        label: "Prospeo",
+        kind: "account",
+        blocker: "Needs reconnect",
+        summary: "Reconnect account.",
+        href: "/connections",
+      },
+    ],
+    stale: [],
+    agenda: [],
+  }, {
+    interactive: true,
+    activeView: "motions",
+    motionChoices: [{ id: "motion-alpha", name: "alpha-motion" }],
+    returnTo: "/operator?view=motions#motions",
+  });
+
+  assert.match(html, /\.op-view-panel\[hidden\]\{display:none\}/);
+  assert.match(html, /data-tab-panel="queue" hidden/);
+  assert.match(html, /data-tab-panel="blocked" hidden/);
+  assert.doesNotMatch(html, /data-tab-panel="motions" hidden/);
+});
+
+test("operator motion dropdown can resolve queued work by motion name when ids are missing on the cards", () => {
+  const html = renderOperatorPage({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-06T11:05:00.000Z",
+    regenerateCommand: "exo ui",
+    counts: { decisions: 1, queue: 0, blocked: 0, stale: 0, agendaLeft: 0 },
+    agentRuntime: null,
+    nextMove: null,
+    decisions: [
+      {
+        id: "harsh-1",
+        person: "Queue Person",
+        prospectId: null,
+        personId: "queue-person",
+        initials: "QP",
+        avatarUrl: null,
+        role: "CEO",
+        company: "BuyerCo",
+        roleLine: "CEO · BuyerCo",
+        motionId: null,
+        motionName: "harsh-spare-mongoose",
+        stakes: null,
+        summary: "Motion-filtered work.",
+        truth: "checked",
+        truthAt: "2m ago",
+        surface: "messaging inbox",
+        actionStatus: "due now",
+        primaryActionLabel: "Open",
+        primaryActionMode: "detail",
+        primaryHref: "https://www.linkedin.com/in/queue-person/",
+        secondaryActionLabel: "Ignore",
+        secondaryHref: null,
+        why: null,
+        previewLabel: null,
+        previewSubject: null,
+        previewText: null,
+        actions: [],
+      },
+    ],
+    queue: [],
+    blocked: [],
+    stale: [],
+    agenda: [],
+  }, {
+    interactive: true,
+    activeView: "motions",
+    selectedMotionId: "motion-harsh",
+    motionChoices: [
+      { id: "motion-harsh", name: "harsh-spare-mongoose", offerLabel: "Harsh target", offerHost: "harsh.example.com", icpSummary: "CEO operators" },
+    ],
+    returnTo: "/operator?view=motions&motion=motion-harsh#motions",
+  });
+
+  assert.match(html, /Harsh target/);
+  assert.match(html, /harsh\.example\.com/);
+  assert.match(html, /Motion-filtered work\./);
+  assert.doesNotMatch(html, /No operator work is queued for this motion right now\./);
+});
+
 test("operator merges due-now planner work into the main action queue without duplicating inbound review", () => {
   const model = buildOperatorViewModel({
     user: { id: "user-1", label: "william-main", owner: "William" },
@@ -1903,6 +3223,64 @@ test("operator merges due-now planner work into the main action queue without du
   assert.match(html, /The first queued action is promoted above\./i);
   assert.doesNotMatch(html, /Reply to Tony Robbins and move the branch into an active conversation/i);
   assert.doesNotMatch(html, /Due now<\/h2>/i);
+});
+
+test("operator decision cards fall back to the motion assignment instead of rendering unassigned", () => {
+  const model = buildOperatorViewModel({
+    user: { id: "user-1", label: "william-main", owner: "William" },
+    generatedAt: "2026-06-04T11:05:00.000Z",
+    regenerateCommand: "exo ui",
+    operatorSummary: {
+      checklist: [
+        {
+          action: "Review another branch first.",
+          subject: "BuyerCo / Jordan Example",
+        },
+      ],
+      nextMove: "Review another branch first.",
+    },
+    decisionQueue: { items: [] },
+    agentQueue: { items: [], blockers: [] },
+    blockedQueue: { items: [] },
+    dueNowItems: [
+      {
+        state: "due_now",
+        source: { type: "cadence" },
+        motion: { id: "motion-1", name: "growmance" },
+        company: { id: "company-2", name: "BuyerCo" },
+        prospect: { id: "prospect-2", name: "Jordan Example" },
+        recommendedAction: "Review another branch first.",
+        dueAt: "2026-06-04T11:05:00.000Z",
+      },
+      {
+        state: "due_now",
+        source: { type: "cadence" },
+        motion: { id: "motion-1", name: "growmance" },
+        company: { id: "company-1", name: "Sleek Analytics" },
+        prospect: { id: "prospect-1", name: "Abbas Aga" },
+        recommendedAction: "Ready for first-touch decision via verified LinkedIn profile.",
+        dueAt: "2026-06-04T11:06:00.000Z",
+      },
+    ],
+    waitingItems: [],
+    truthAccounts: [],
+    rawMotions: [
+      {
+        id: "motion-1",
+        engagementUserAssignment: {
+          userId: "user-1",
+          label: "william-main",
+        },
+      },
+    ],
+  });
+
+  const html = renderOperatorPage(model, { interactive: true });
+  assert.equal(model.decisions[0]?.motionId, "motion-1");
+  assert.equal(model.decisions[0]?.ownerLabel, "william-main");
+  assert.match(html, /Abbas Aga/i);
+  assert.match(html, /william-main/i);
+  assert.doesNotMatch(html, /owner-tag unassigned/i);
 });
 
 test("operator suppresses fresh connection-request decisions while public warmup is already queued", () => {

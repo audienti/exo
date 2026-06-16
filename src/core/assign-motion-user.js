@@ -3,6 +3,7 @@
 import { browserProfileSchema } from "../schema/browser-profile.js";
 import { motionSchema } from "../schema/motion.js";
 import { userSchema } from "../schema/user.js";
+import { resolveAssignmentAccountRefs } from "./assignment-account-refs.js";
 
 /**
  * @param {unknown} rawMotion
@@ -46,24 +47,4 @@ function normalizeNullableString(value) {
 
   const normalized = value.trim();
   return normalized.length ? normalized : null;
-}
-
-/**
- * @param {import("../schema/user.js").userSchema._type} user
- * @param {string[] | null | undefined} rawAccountRefs
- */
-function resolveAssignmentAccountRefs(user, rawAccountRefs) {
-  const availableRefs = new Set(user.accounts.map((account) => `${account.capability}:${account.handle}`));
-  const providedRefs = (rawAccountRefs ?? [])
-    .map((value) => normalizeNullableString(value))
-    .filter(Boolean);
-  const refs = providedRefs.length ? [...new Set(providedRefs)] : [...availableRefs];
-
-  for (const ref of refs) {
-    if (!availableRefs.has(ref)) {
-      throw new Error(`User ${user.label} does not have a connected account for ${ref}.`);
-    }
-  }
-
-  return refs;
 }

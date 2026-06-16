@@ -15,7 +15,7 @@ const AUTONOMOUS_LINKEDIN_PUBLIC_SURFACES = new Set(["like_post", "create_commen
  * @param {any} rawMotion
  * @param {any[]} rawProfiles
  * @param {any[]} rawUsers
- * @param {{ prospectId: string, surface?: string|null, runtime?: string|null, branches?: Array<{ motion: any, account: any, prospect: any }>, now?: string | null }} input
+ * @param {{ prospectId: string, surface?: string|null, runtime?: string|null, branches?: Array<{ motion: any, account: any, prospect: any }>, now?: string | null, ignoreDispatchGate?: boolean }} input
  */
 export function buildSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, input) {
   if (AUTONOMOUS_LINKEDIN_PUBLIC_SURFACES.has(String(input.surface ?? ""))) {
@@ -27,6 +27,7 @@ export function buildSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, i
     return buildEmailSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, {
       ...context,
       runtime: input.runtime ?? null,
+      ignoreDispatchGate: Boolean(input.ignoreDispatchGate),
     });
   }
   return buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, {
@@ -84,7 +85,7 @@ function buildEmailSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, con
   const threadUrl = resolveGmailThreadUrl(prospect);
   const writeback = `exo actions result --action ${EMAIL_ACTION} --result sent --company ${company.id} --prospect ${prospect.id} --motion ${motion.id} --surface ${draft.surface}`;
 
-  const blocked = (reason) => ({
+  const blocked = (reason, extra = {}) => ({
     status: "blocked",
     action: EMAIL_ACTION,
     prospectName: prospect.name,
@@ -92,6 +93,7 @@ function buildEmailSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, con
     channel: "email",
     surface: draft.surface,
     writeback: null,
+    ...extra,
   });
 
   if (!recipientEmail) return blocked(`${prospect.name} has no email address to message.`);
@@ -105,7 +107,19 @@ function buildEmailSendHandoff(rawCompany, rawMotion, rawProfiles, rawUsers, con
   });
   const transport = execution.transport ?? {};
   if (transport.status === "blocked") {
-    return blocked(transport.blocker ?? transport.reason ?? "No governed Gmail execution path — assign a user/account to this company first.");
+    return blocked(
+      transport.blocker ?? transport.reason ?? "No governed Gmail execution path — assign a user/account to this company first.",
+      {
+        reasonCode: transport.blockerCode ?? "execution_path_blocked",
+        operatorReason: transport.operatorReason ?? null,
+        detail: transport.blockerDetail ?? null,
+        resolveHint: transport.resolveHint ?? null,
+        resolveHref: transport.resolveHref ?? null,
+        resolveLabel: transport.resolveLabel ?? null,
+        resolveMode: transport.resolveMode ?? null,
+        blockType: transport.blockType ?? null,
+      },
+    );
   }
 
   if (execution.resolvedAccount?.sourceType !== "harness-connection" || !execution.resolvedAccount?.harnessConnection) {

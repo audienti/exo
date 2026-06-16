@@ -27,20 +27,21 @@ import { renderAgentRuntimeBar, renderAgentRuntimeMeta } from "./render-agent-ru
 
 /**
  * @param {import("../core/build-operator-view.js").OperatorViewModel} model
- * @param {{ interactive?: boolean, generatedAt?: string, agentStatus?: any }} [meta]
+ * @param {{ interactive?: boolean, generatedAt?: string, agentStatus?: any, agentRunLog?: any }} [meta]
  * @returns {string}
  */
 export function renderQueuePage(model, meta = {}) {
   const runtime = model.agentRuntime ?? meta.agentRuntime ?? null;
   const agentStatus = meta.agentStatus ?? null;
-  const liveSendGate = buildLiveSendGate(agentStatus);
+  const liveSendGate = buildLiveSendGate(agentStatus, model.queue);
   const queueGroups = buildQueueGroups(model.queue, liveSendGate);
+  const activity = buildQueueActivity(meta.agentRunLog ?? null, agentStatus);
   const oldestWait = oldestWaitingLabel(queueGroups.actionable);
   const body =
     `<div class="op-wrap feed">` +
     renderIntro(model, oldestWait, runtime, queueGroups) +
     renderQueueRuntimePanel(runtime, agentStatus, meta, liveSendGate) +
-    renderQueueTabs(model, agentStatus, oldestWait, meta, liveSendGate, queueGroups) +
+    renderQueueTabs(model, agentStatus, oldestWait, meta, liveSendGate, queueGroups, activity) +
     renderFooter(model) +
     `</div>`;
 
@@ -235,9 +236,10 @@ function renderThroughputCell(status) {
   const duration = Number.isFinite(lastPass?.durationSeconds)
     ? formatDurationSeconds(Number(lastPass.durationSeconds))
     : null;
+  const passPrefix = status?.current?.active ? "Previous pass" : "Last pass";
   const passLine = lastPass
     ? [
-      `Last pass ${titleize(lastPass.status ?? "unknown").toLowerCase()}`,
+      `${passPrefix} ${titleize(lastPass.status ?? "unknown").toLowerCase()}`,
       countLabel(lastPass.resultCount, "result"),
       duration,
     ].filter(Boolean).join(" · ")
@@ -276,13 +278,15 @@ function renderPartialCell(status, liveSendGate = null) {
  * @param {import("../core/build-operator-view.js").OperatorViewModel} model
  * @param {any} status
  * @param {string | null} oldestWait
- * @param {{ generatedAt?: string }} meta
+ * @param {{ generatedAt?: string, agentRunLog?: any }} meta
  * @param {ReturnType<typeof buildLiveSendGate>} [liveSendGate]
  * @param {{ actionable: import("../core/build-operator-view.js").OperatorQueueItem[], waiting: import("../core/build-operator-view.js").OperatorQueueItem[] }} [queueGroups]
+ * @param {ReturnType<typeof buildQueueActivity>} [activity]
  */
-function renderQueueTabs(model, status, oldestWait, meta = {}, liveSendGate = null, queueGroups = undefined) {
+function renderQueueTabs(model, status, oldestWait, meta = {}, liveSendGate = null, queueGroups = undefined, activity = undefined) {
   const surfaces = Array.isArray(status?.inboundSurfaces?.items) ? status.inboundSurfaces.items : [];
   const groups = queueGroups ?? buildQueueGroups(model.queue, liveSendGate);
+  const activityView = activity ?? buildQueueActivity(meta.agentRunLog ?? null, status);
   const tabItems = [
     {
       target: "queue",
@@ -308,6 +312,12 @@ function renderQueueTabs(model, status, oldestWait, meta = {}, liveSendGate = nu
     panelId: "queue-views-panel-surfaces",
     count: surfaces.length,
   });
+  tabItems.push({
+    target: "activity",
+    label: "Activity",
+    panelId: "queue-views-panel-activity",
+    count: activityView.count,
+  });
   const tabs = segTabs({
     tabsetId: "queue-views",
     ariaLabel: "Queue views",
@@ -328,6 +338,7 @@ function renderQueueTabs(model, status, oldestWait, meta = {}, liveSendGate = nu
     `<div id="queue-views-panel-queue" class="sec-body" role="tabpanel" aria-labelledby="queue-views-tab-queue" data-tab-panel="queue">${renderQueue(groups.actionable, liveSendGate)}</div>` +
     waitingPanel +
     `<div id="queue-views-panel-surfaces" class="sec-body sec-body-list" role="tabpanel" aria-labelledby="queue-views-tab-surfaces" data-tab-panel="surfaces" hidden>${renderSurfacesPanel(surfaces, meta)}</div>` +
+    `<div id="queue-views-panel-activity" class="sec-body sec-body-list" role="tabpanel" aria-labelledby="queue-views-tab-activity" data-tab-panel="activity" hidden>${renderActivityPanel(activityView, meta)}</div>` +
     `</section>`
   );
 }
@@ -351,6 +362,135 @@ function renderSurfacesPanel(surfaces, meta = {}) {
     `<div class="ws-surfaces">${sorted.map((surface) => renderInboundSurfaceRow(surface, meta)).join("")}</div>` +
     `</div>`
   );
+}
+
+/**
+ * @param {any} agentRunLog
+ * @param {any} status
+ */
+function buildQueueActivity(agentRunLog, status) {
+  const holds = Array.isArray(status?.holds?.items) ? status.holds.items : [];
+  const entries = collapseRunLogEntries(Array.isArray(agentRunLog?.entries) ? agentRunLog.entries : [])
+    .slice(0, 10);
+  return {
+    holds,
+    entries,
+    count: holds.length + entries.length,
+  };
+}
+
+/**
+ * @param {{ holds: any[], entries: any[] }} activity
+ * @param {{ generatedAt?: string }} meta
+ */
+function renderActivityPanel(activity, meta = {}) {
+  const holds = Array.isArray(activity?.holds) ? activity.holds : [];
+  const entries = Array.isArray(activity?.entries) ? activity.entries : [];
+  if (!holds.length && !entries.length) {
+    return emptyState({ icon: "clock", message: "No recent agent activity recorded yet." });
+  }
+  return (
+    `<div class="ws-panel">` +
+    (holds.length
+      ? `<div class="pulse-cap">Current holds</div>${holds.map((hold) => renderActivityHoldCard(hold, meta)).join("")}`
+      : "") +
+    (entries.length
+      ? `<div class="pulse-cap"${holds.length ? ` style="margin-top:14px"` : ""}>Recent runs</div>${entries.map((entry) => renderActivityEntryCard(entry, meta)).join("")}`
+      : "") +
+    `</div>`
+  );
+}
+
+/**
+ * @param {any} hold
+ * @param {{ generatedAt?: string }} meta
+ */
+function renderActivityHoldCard(hold, meta = {}) {
+  const until = formatRelative(hold?.unavailableUntil, meta.generatedAt ?? undefined);
+  const chips = [
+    `<span class="cap-ref">${iconSvg("alert", 11)}${escapeHtml(titleize(hold?.kind ?? "hold"))}</span>`,
+    until ? `<span class="surface-ref">${iconSvg("clock", 11)}until ${escapeHtml(until)}</span>` : null,
+  ].filter(Boolean).join("");
+  return card({
+    className: "q-card",
+    children:
+      `<div class="row-top">` +
+      avatar({ initials: "HL", name: "Hold", size: 30, accent: "#ef4444" }) +
+      `<div class="row-id">` +
+      `<div class="row-name">${escapeHtml(describeHoldKind(hold))}</div>` +
+      `<div class="row-role">Current blocker</div>` +
+      `</div>` +
+      stateDot("blocked", "Blocked") +
+      `</div>` +
+      `<p class="row-note">${escapeHtml(hold?.reason ?? "The agent is waiting on this hold to clear.")}</p>` +
+      `<div class="row-chips">${chips}</div>` +
+      `<div class="row-actions"><span class="q-agent">${iconSvg("alert", 11)}Blocking new send work</span></div>`,
+  });
+}
+
+/**
+ * @param {any} entry
+ * @param {{ generatedAt?: string }} meta
+ */
+function renderActivityEntryCard(entry, meta = {}) {
+  const when = formatRelative(entry?.timestamp ?? entry?.endedAt ?? entry?.startedAt, meta.generatedAt ?? undefined);
+  const title = describeRunEntryTitle(entry);
+  const reason = summarizeRunEntryReason(entry);
+  const outcome = describeRunEntryOutcome(entry);
+  const queue = describeRunEntryQueue(entry);
+  const source = describeRunEntrySource(entry);
+  const chips = [
+    entry?.lane ? `<span class="cap-ref">${iconSvg("cpu", 11)}${escapeHtml(titleize(entry.lane))}</span>` : null,
+    entry?.taskKind ? `<span class="surface-ref">${iconSvg("queue", 11)}${escapeHtml(titleize(entry.taskKind))}</span>` : null,
+    outcome ? `<span class="surface-ref">${iconSvg("check", 11)}${escapeHtml(outcome)}</span>` : null,
+    queue ? `<span class="surface-ref">${iconSvg("clock", 11)}${escapeHtml(queue)}</span>` : null,
+  ].filter(Boolean).join("");
+  return card({
+    className: "q-card",
+    children:
+      `<div class="row-top">` +
+      avatar({
+        initials: initials((entry?.lane ?? entry?.taskKind ?? "AG").replace(/[_-]+/g, " ")),
+        name: title,
+        size: 30,
+        accent: activityToneColor(entry?.status),
+      }) +
+      `<div class="row-id">` +
+      `<div class="row-name">${escapeHtml(title)}</div>` +
+      `<div class="row-role">${escapeHtml(when ? `${titleize(entry?.status ?? "recorded")} ${when}` : titleize(entry?.status ?? "recorded"))}</div>` +
+      `</div>` +
+      stateDot(activityTone(entry?.status), titleize(entry?.status ?? "recorded")) +
+      `</div>` +
+      `<p class="row-note">${escapeHtml(reason ?? "Run recorded without a detailed reason.")}</p>` +
+      `<div class="row-chips">${chips}</div>` +
+      `<div class="row-actions"><span class="q-agent">${iconSvg("cpu", 11)}${escapeHtml(source)}</span></div>`,
+  });
+}
+
+/**
+ * @param {any[]} entries
+ * @returns {any[]}
+ */
+function collapseRunLogEntries(entries) {
+  const collapsed = [];
+  const seen = new Set();
+  for (const entry of entries) {
+    const key = [
+      entry?.timestamp ?? entry?.endedAt ?? entry?.startedAt ?? "",
+      entry?.status ?? "",
+      entry?.lane ?? "",
+      entry?.taskKind ?? "",
+      Array.isArray(entry?.taskKinds) ? entry.taskKinds.join(",") : "",
+      summarizeRunEntryReason(entry) ?? "",
+      entry?.motionId ?? "",
+      entry?.companyId ?? "",
+      entry?.prospectId ?? "",
+    ].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    collapsed.push(entry);
+  }
+  return collapsed;
 }
 
 /**
@@ -399,8 +539,9 @@ function renderQueue(queue, liveSendGate = null, emptyMessage = "Agent queue emp
   if (!queue.length) {
     return emptyState({ icon: "cpu", message: emptyMessage });
   }
-  // Oldest waits at the top so the operator scans for stuck work first.
-  const sorted = [...queue].sort((a, b) => waitMillis(b.dueAtIso) - waitMillis(a.dueAtIso));
+  // Oldest queued work stays at the top so the operator scans for stuck items
+  // first, even when pacing moved the next due time forward later.
+  const sorted = [...queue].sort((a, b) => queueAgeMillis(b) - queueAgeMillis(a));
   return sorted.map((item) => renderQueueItem(item, liveSendGate)).join("");
 }
 
@@ -444,7 +585,9 @@ function buildLiveSendPrerequisiteQueueItem(liveSendGate) {
     taskKind: "run_inbound_sync",
     dueAt: null,
     dueAtIso: null,
+    queuedAtIso: null,
     waitingFor: null,
+    dueIn: null,
     checkoutState: null,
     checkedOutBy: null,
     checkedOutAt: null,
@@ -464,6 +607,9 @@ function renderQueueItem(q, liveSendGate = null) {
   const waitChip = q.waitingFor
     ? `<span class="surface-ref">${iconSvg("clock", 11)}${escapeHtml(q.waitingFor)}</span>`
     : null;
+  const dueChip = q.dueIn
+    ? `<span class="surface-ref">${iconSvg("clock", 11)}${escapeHtml(q.dueIn)}</span>`
+    : null;
   const checkoutChip = q.checkoutState === "checked_out"
     ? `<span class="surface-ref">${iconSvg("cpu", 11)}Checked out${q.checkedOutBy ? ` · ${escapeHtml(q.checkedOutBy)}` : ""}</span>`
     : null;
@@ -474,6 +620,7 @@ function renderQueueItem(q, liveSendGate = null) {
     `<span class="cap-ref">${iconSvg("cpu", 11)}${escapeHtml(q.capability)}</span>`,
     q.motionName ? stateDot("active", q.motionName) : null,
     waitChip,
+    dueChip,
     checkoutChip,
     gateChip,
   ]
@@ -520,24 +667,40 @@ function renderQueueItem(q, liveSendGate = null) {
  * implying every due send is runnable.
  *
  * @param {any} status
+ * @param {import("../core/build-operator-view.js").OperatorQueueItem[]} queue
  */
-function buildLiveSendGate(status) {
+function buildLiveSendGate(status, queue) {
   if (!status || typeof status !== "object") return null;
-  const backlog = status.backlog ?? {};
-  const sendCount = countGroup(backlog.dueByKind, "kind", "send_message");
-  if (sendCount <= 0) return null;
-  const failedLinkedInSurfaces = unhealthyLinkedInSurfaces(status);
-  if (failedLinkedInSurfaces.length <= 0) return null;
+  const blockingSurfaces = unhealthyLinkedInSurfaces(status);
+  if (blockingSurfaces.length <= 0) return null;
+  const blockingSurfaceByKey = new Map(blockingSurfaces.map((surface) => [surface.surfaceKey, surface]));
+  const gatedItems = queue.filter((item) => {
+    if (item.taskKind !== "send_message") return false;
+    const surfaceKeys = requiredLinkedinGateSurfaceKeys(item);
+    return surfaceKeys.some((surfaceKey) => blockingSurfaceByKey.has(surfaceKey));
+  });
+  if (gatedItems.length <= 0) return null;
 
-  const syncRepairCount = countGroup(backlog.dueByKind, "kind", "run_inbound_sync");
-  const firstError = normalizeSentence(failedLinkedInSurfaces.find((surface) => surface?.lastError)?.lastError ?? null);
+  const relevantBlockingSurfaceKeys = unique(
+    gatedItems.flatMap((item) => requiredLinkedinGateSurfaceKeys(item))
+      .filter((surfaceKey) => blockingSurfaceByKey.has(surfaceKey)),
+  );
+  const relevantBlockingSurfaces = relevantBlockingSurfaceKeys
+    .map((surfaceKey) => blockingSurfaceByKey.get(surfaceKey))
+    .filter(Boolean);
+  const syncRepairCount = queue.filter((item) =>
+    item.taskKind === "run_inbound_sync"
+    && item.surfaceKeys?.some((surfaceKey) => relevantBlockingSurfaceKeys.includes(surfaceKey))
+  ).length;
+  const firstError = normalizeSentence(relevantBlockingSurfaces.find((surface) => surface?.lastError)?.lastError ?? null);
   const repairSentence = syncRepairCount > 0
     ? `Run ${countLabel(syncRepairCount, "inbound sync repair task")} first.`
     : "Repair LinkedIn inbound sync before sending.";
   const errorSentence = firstError ? ` Latest error: ${firstError}` : "";
   return {
+    gatedIds: new Set(gatedItems.map((item) => item.id)),
     headline: "Live sends gated",
-    detail: `${countLabel(sendCount, "send task")} are paused until LinkedIn inbound sync is healthy. ${repairSentence}${errorSentence}`,
+    detail: `${countLabel(gatedItems.length, "send task")} are paused until LinkedIn inbound sync is healthy. ${repairSentence}${errorSentence}`,
     prerequisiteAction: repairSentence,
     partialReason: "Live sends paused until inbound sync is healthy.",
     partialNextAction: `${repairSentence} Do not send from stale LinkedIn truth.`,
@@ -559,8 +722,10 @@ function unhealthyLinkedInSurfaces(status) {
   const surfaces = Array.isArray(status?.inboundSurfaces?.items) ? status.inboundSurfaces.items : [];
   return surfaces.filter((surface) => {
     const capability = String(surface?.capability ?? "").trim().toLowerCase();
+    const syncTrustStatus = String(surface?.syncTrustStatus ?? "").trim().toLowerCase();
     const lastRunStatus = String(surface?.lastRunStatus ?? "").trim().toLowerCase();
-    return capability === "linkedin" && (Boolean(surface?.lastError) || lastRunStatus === "failed");
+    return capability === "linkedin"
+      && (syncTrustStatus === "untrusted" || lastRunStatus === "failed" || lastRunStatus === "never");
   });
 }
 
@@ -583,7 +748,36 @@ function countGroup(groups, keyName, expected) {
  * @param {ReturnType<typeof buildLiveSendGate>} liveSendGate
  */
 function isLiveSendQueueItem(q, liveSendGate) {
-  return Boolean(liveSendGate) && q.taskKind === "send_message";
+  return Boolean(liveSendGate) && liveSendGate.gatedIds instanceof Set && liveSendGate.gatedIds.has(q.id);
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorQueueItem} item
+ * @returns {string[]}
+ */
+function requiredLinkedinGateSurfaceKeys(item) {
+  const action = String(item.actionKey ?? "").trim().toLowerCase();
+  const surface = String(item.surface ?? "").trim().toLowerCase();
+  if (action === "send_connection_request" || surface === "connection_request") {
+    return ["linkedin-sent-invitations", "linkedin-received-invitations"];
+  }
+  if (
+    action === "send_direct_message"
+    || action === "in_mail_message"
+    || surface === "post_accept_message"
+    || surface === "follow_up_direct_message"
+  ) {
+    return ["linkedin-messaging-inbox"];
+  }
+  return [];
+}
+
+/**
+ * @param {string[]} values
+ * @returns {string[]}
+ */
+function unique(values) {
+  return [...new Set(values.filter(Boolean))];
 }
 
 /** @param {import("../core/build-operator-view.js").OperatorViewModel} model */
@@ -616,6 +810,160 @@ function renderWaitingGroups(groups) {
     const label = `${group?.count ?? 0} ${titleize(group?.waitingReason ?? "waiting")}${due ? `, next ${due}` : ""}`;
     return escapeHtml(label);
   }).join(" · ");
+}
+
+/** @param {any} hold */
+function describeHoldKind(hold) {
+  switch (String(hold?.kind ?? "").trim().toLowerCase()) {
+    case "send_circuit_breaker":
+      return "Send work paused";
+    case "canary_cooldown":
+      return "Canary cooldown";
+    case "runtime_usage_limit":
+      return "Runtime usage limit";
+    default:
+      if (String(hold?.kind ?? "").startsWith("browser_backoff:")) {
+        const lane = String(hold.kind).split(":")[1] ?? "browser";
+        return `${titleize(lane)} lane backoff`;
+      }
+      return titleize(hold?.kind ?? "hold");
+  }
+}
+
+/** @param {any} entry */
+function describeRunEntryTitle(entry) {
+  const lane = entry?.lane ? titleize(entry.lane) : null;
+  const task = entry?.taskKind ? titleize(entry.taskKind) : null;
+  if (lane && task) return `${lane} · ${task}`;
+  if (task) return task;
+  if (lane) return `${lane} pass`;
+  return "Agent activity";
+}
+
+const RUN_OUTCOME_STATUS_KEYS = ["completed", "waiting", "blocked", "failed", "partial", "noop"];
+
+/** @param {any} entry */
+function describeRunEntryOutcome(entry) {
+  const counts = entry?.resultCounts ?? {};
+  const parts = RUN_OUTCOME_STATUS_KEYS
+    .filter((key) => Number(counts[key]) > 0)
+    .map((key) => `${counts[key]} ${key}`);
+  const breakdownSum = RUN_OUTCOME_STATUS_KEYS.reduce((sum, key) => sum + counts[key], 0);
+  if (Number(counts.total) > 0 && breakdownSum === 0) {
+    parts.push(`${counts.total} recorded`);
+  }
+  return parts.join(" · ") || null;
+}
+
+/** @param {any} entry */
+function describeRunEntryQueue(entry) {
+  const queue = entry?.queueCounts;
+  if (!queue || typeof queue !== "object") return null;
+  return [
+    Number.isFinite(queue.dueTaskCount) ? `${queue.dueTaskCount} due` : null,
+    Number.isFinite(queue.waitingTaskCount) ? `${queue.waitingTaskCount} waiting` : null,
+    Number.isFinite(queue.blockerCount) && queue.blockerCount > 0 ? `${queue.blockerCount} blockers` : null,
+  ].filter(Boolean).join(" · ");
+}
+
+/** @param {any} entry */
+function describeRunEntrySource(entry) {
+  switch (String(entry?.sourceArtifact?.kind ?? "").trim().toLowerCase()) {
+    case "agent.log":
+      return "Source: agent log";
+    case "agent-last-pass":
+      return "Source: last pass summary";
+    case "agent-host-state":
+      return "Source: host state";
+    default:
+      return "Source: agent activity";
+  }
+}
+
+/** @param {any} entry */
+function summarizeRunEntryReason(entry) {
+  const normalizedStatus = String(entry?.status ?? "").trim().toLowerCase();
+  const reason = typeof entry?.reason === "string" ? entry.reason : "";
+  if (!reason.trim()) {
+    return normalizedStatus === "running"
+      ? "Current run is in progress."
+      : describeRunEntryOutcome(entry);
+  }
+
+  const compactReason = stripNoisyExecStreams(reason);
+  if (normalizedStatus === "partial"
+    && /LinkedIn spacing keeps this outbound action from firing immediately\./i.test(compactReason)) {
+    const dueTaskCount = Number.isFinite(entry?.queueCounts?.dueTaskCount)
+      ? Number(entry.queueCounts.dueTaskCount)
+      : null;
+    return dueTaskCount && dueTaskCount > 0
+      ? `Spacing deferred the next send batch; ${dueTaskCount} due task${dueTaskCount === 1 ? "" : "s"} remained in queue.`
+      : "Spacing deferred the next send batch.";
+  }
+  const exoTimeoutCommand = compactReason.match(/^Exo command failed:\s*(.+?)\nspawnSync\s+.+?\sETIMEDOUT/i);
+  if (exoTimeoutCommand) {
+    return `Timed out while running: ${exoTimeoutCommand[1].trim()}`;
+  }
+  if (/^Codex task failed:\s*spawnSync\s+.+?\sETIMEDOUT/i.test(compactReason)) {
+    return "Codex task timed out before the bounded packet finished.";
+  }
+
+  const lines = compactReason
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^Command failed:/i.test(line))
+    .filter((line) => !/^\(node:\d+\)\s*ExperimentalWarning/i.test(line))
+    .filter((line) => !/^\(Use `node --trace-warnings/i.test(line))
+    .filter((line) => !/^\|\s*stderr=/i.test(line));
+  const cleaned = lines[lines.length - 1] ?? compactReason.trim();
+  return cleaned.replace(/\s+/g, " ");
+}
+
+/**
+ * Trim bulky stdout/stderr payloads from persisted exec failures so the
+ * activity log surfaces the actual governed issue instead of a raw transcript.
+ *
+ * @param {string} reason
+ */
+function stripNoisyExecStreams(reason) {
+  return reason
+    .replace(/\s+\|\s+stdout=[\s\S]*?(?=\s+\|\s+stderr=|$)/gi, "")
+    .replace(/\s+\|\s+stderr=[\s\S]*$/gi, "")
+    .trim();
+}
+
+/** @param {string | null | undefined} status */
+function activityTone(status) {
+  switch (String(status ?? "").trim().toLowerCase()) {
+    case "failed":
+    case "blocked":
+      return "blocked";
+    case "partial":
+      return "paused";
+    case "completed":
+    case "recorded":
+    case "running":
+      return "active";
+    case "noop":
+      return "waiting";
+    default:
+      return "waiting";
+  }
+}
+
+/** @param {string | null | undefined} status */
+function activityToneColor(status) {
+  switch (activityTone(status)) {
+    case "blocked":
+      return "#ef4444";
+    case "paused":
+      return "#f59e0b";
+    case "active":
+      return "#3b82f6";
+    default:
+      return "#64748b";
+  }
 }
 
 /** @param {any} value */
@@ -670,7 +1018,7 @@ function formatCapturedCount(surface) {
 function oldestWaitingLabel(queue) {
   let oldest = 0;
   for (const item of queue) {
-    const ms = waitMillis(item.dueAtIso);
+    const ms = queueAgeMillis(item);
     if (ms > oldest) oldest = ms;
   }
   if (oldest <= 0) return null;
@@ -681,6 +1029,11 @@ function oldestWaitingLabel(queue) {
   if (oldest < hour) return `${Math.round(oldest / minute)}m`;
   if (oldest < day) return `${Math.round(oldest / hour)}h`;
   return `${Math.round(oldest / day)}d`;
+}
+
+/** @param {import("../core/build-operator-view.js").OperatorQueueItem} item */
+function queueAgeMillis(item) {
+  return waitMillis(item.queuedAtIso ?? item.dueAtIso);
 }
 
 /** @param {string | null | undefined} iso */

@@ -85,6 +85,14 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
     writeback: null,
     ...extra,
   });
+  const waiting = (reason, extra = {}) => ({
+    status: "waiting",
+    action,
+    prospectName: prospect.name,
+    reason,
+    writeback: null,
+    ...extra,
+  });
   if (!recipientUrl && !publicTarget?.url) return blocked(`${prospect.name} has no LinkedIn profile URL to message.`);
   if ((action === DM_ACTION || action === POST_COMMENT_ACTION || action === COMMENT_REPLY_ACTION) && !normalizedMessage.trim().length) {
     return blocked(`${prospect.name} has no sendable LinkedIn draft body for ${surface}.`);
@@ -123,7 +131,16 @@ export function buildLinkedinSendHandoff(rawCompany, rawMotion, rawProfiles, raw
     senderAccount: execution.resolvedAccount,
     branches: input.branches ?? [],
   });
-  if (dispatchGate.status !== "allow") {
+  if (!input.ignoreDispatchGate && dispatchGate.status === "wait") {
+    return waiting(dispatchGate.reason, {
+      reasonCode: dispatchGate.reasonCode,
+      blockReason: dispatchGate.blockReason,
+      waitingReason: dispatchGate.waitingReason,
+      nextDueAt: dispatchGate.nextDueAt,
+      dispatchGate,
+    });
+  }
+  if (!input.ignoreDispatchGate && dispatchGate.status !== "allow") {
     return blocked(dispatchGate.reason, {
       reasonCode: dispatchGate.reasonCode,
       blockReason: dispatchGate.blockReason,
@@ -274,6 +291,7 @@ function resolveLinkedinPublicTarget(prospect, surface) {
     url: targetUrl,
     targetKind: selection.targetKind,
     summary: selection.summary ?? null,
+    snippet: selection.snippet ?? null,
     rationale: selection.selectionReason ?? selection.rationale ?? null,
   };
 }
@@ -285,7 +303,7 @@ function resolveLinkedinPublicTarget(prospect, surface) {
  *   action: string,
  *   prospectName: string,
  *   recipientUrl: string | null,
- *   publicTarget: { url: string, targetKind: string, summary: string | null, rationale: string | null } | null,
+ *   publicTarget: { url: string, targetKind: string, summary: string | null, snippet?: string | null, rationale: string | null } | null,
  *   fallbackTarget: { url: string, targetKind: string, summary: string | null, rationale: string | null } | null,
  *   writeback: string,
  *   hasConnectionNote: boolean,

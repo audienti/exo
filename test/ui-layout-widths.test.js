@@ -45,6 +45,21 @@ test("wide workspace surfaces drop the desktop max-width clamps", () => {
   assert.ok(html.includes(".canvas.is-detail .exec-two,"));
 });
 
+test("motion picker dropdown stays inside the main canvas width", () => {
+  const html = renderShell({
+    title: "Exo — Operator",
+    activeId: "operator",
+    sectionLabel: "Operator",
+    body: '<div class="op-wrap"></div>',
+  });
+
+  assert.ok(html.includes(".exo-root{display:grid;grid-template-columns:212px 1fr;height:100vh;--exo-nav-width:212px}"));
+  assert.ok(html.includes(".exo-root.nav-collapsed{grid-template-columns:58px 1fr;--exo-nav-width:58px}"));
+  assert.ok(html.includes(".seg-motion-picker{position:relative;display:flex;min-width:0}"));
+  assert.ok(html.includes(".seg-motion-menu{position:absolute;top:calc(100% + 8px);left:0;right:auto;width:min(430px,calc(100vw - var(--exo-nav-width) - 40px));"));
+  assert.ok(html.includes("min-width:min(340px,calc(100vw - var(--exo-nav-width) - 40px));max-width:calc(100vw - var(--exo-nav-width) - 40px);"));
+});
+
 test("renderShell includes the shared Exo favicon metadata", () => {
   const html = renderShell({
     title: "Exo",

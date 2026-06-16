@@ -1,12 +1,12 @@
 // @ts-check
 
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
 import { buildLaunchAgentLabel } from "./agent-routine.js";
+import { buildStateDirSuffix } from "./state-dir-suffix.js";
 
 const DEFAULT_AGENT_RUN_LOCK_ROOT = "/tmp";
 
@@ -135,20 +135,4 @@ function isPidAlive(pid) {
   } catch {
     return false;
   }
-}
-
-/**
- * @param {string | null | undefined} stateDir
- */
-function buildStateDirSuffix(stateDir) {
-  if (!stateDir || !stateDir.trim()) {
-    return "";
-  }
-
-  const digest = crypto
-    .createHash("sha1")
-    .update(path.resolve(stateDir.trim()))
-    .digest("hex")
-    .slice(0, 10);
-  return `.${digest}`;
 }

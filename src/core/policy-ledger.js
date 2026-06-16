@@ -165,10 +165,32 @@ export function compileEffectivePolicy(input) {
  * @param {ReturnType<typeof compileEffectivePolicy>} effectivePolicy
  */
 export function filterInboundObservationsForPolicy(observations, rawUser, effectivePolicy) {
-  return observations.filter((observation) =>
-    !matchesObservationAgainstPolicy(observation, rawUser, effectivePolicy)
-    && !matchesSurfaceAgainstPolicy(observation, effectivePolicy)
-  );
+  const hasIdentityPolicies = hasEffectiveIdentityPolicies(effectivePolicy);
+  const hasHiddenSurfacePolicies = hasEffectiveHiddenSurfacePolicies(effectivePolicy);
+  if (!hasIdentityPolicies && !hasHiddenSurfacePolicies) {
+    return observations;
+  }
+
+  const user = hasIdentityPolicies ? userSchema.parse(rawUser) : null;
+  const accountsById = user ? buildUserAccountIndex(user) : null;
+  const filtered = [];
+
+  for (const rawObservation of observations) {
+    if (hasHiddenSurfacePolicies && matchesSurfaceAgainstPolicy(rawObservation, effectivePolicy)) {
+      continue;
+    }
+
+    if (user && accountsById) {
+      const observation = inboundObservationSchema.parse(rawObservation);
+      if (matchesParsedObservationAgainstPolicy(observation, user, effectivePolicy, accountsById)) {
+        continue;
+      }
+    }
+
+    filtered.push(rawObservation);
+  }
+
+  return filtered;
 }
 
 /**
@@ -177,12 +199,32 @@ export function filterInboundObservationsForPolicy(observations, rawUser, effect
  * @param {ReturnType<typeof compileEffectivePolicy>} effectivePolicy
  */
 export function filterInboundCuesForPolicy(cues, rawUser, effectivePolicy) {
-  return cues
-    .map((cue) => inboundCueSchema.parse(cue))
-    .filter((cue) =>
-      !matchesCueAgainstPolicy(cue, rawUser, effectivePolicy)
-      && !matchesSurfaceAgainstPolicy(cue, effectivePolicy)
-    );
+  const hasIdentityPolicies = hasEffectiveIdentityPolicies(effectivePolicy);
+  const hasHiddenSurfacePolicies = hasEffectiveHiddenSurfacePolicies(effectivePolicy);
+  if (!hasIdentityPolicies && !hasHiddenSurfacePolicies) {
+    return cues;
+  }
+
+  const user = hasIdentityPolicies ? userSchema.parse(rawUser) : null;
+  const accountsById = user ? buildUserAccountIndex(user) : null;
+  const filtered = [];
+
+  for (const rawCue of cues) {
+    if (hasHiddenSurfacePolicies && matchesSurfaceAgainstPolicy(rawCue, effectivePolicy)) {
+      continue;
+    }
+
+    if (user && accountsById) {
+      const cue = inboundCueSchema.parse(rawCue);
+      if (matchesCueAgainstPolicyWithUser(cue, user, effectivePolicy, accountsById)) {
+        continue;
+      }
+    }
+
+    filtered.push(rawCue);
+  }
+
+  return filtered;
 }
 
 /**
@@ -193,9 +235,7 @@ export function filterInboundCuesForPolicy(cues, rawUser, effectivePolicy) {
 export function matchesObservationAgainstPolicy(rawObservation, rawUser, effectivePolicy) {
   const observation = inboundObservationSchema.parse(rawObservation);
   const user = userSchema.parse(rawUser);
-  const account = user.accounts.find((candidate) => candidate.id === observation.accountId) ?? null;
-  return effectivePolicy.effective.ignoredIdentities.some((selector) => matchesIdentitySelector(selector, observation, account))
-    || effectivePolicy.effective.suppressedIdentities.some((selector) => matchesIdentitySelector(selector, observation, account));
+  return matchesParsedObservationAgainstPolicy(observation, user, effectivePolicy, buildUserAccountIndex(user));
 }
 
 /**
@@ -204,7 +244,11 @@ export function matchesObservationAgainstPolicy(rawObservation, rawUser, effecti
  */
 export function applyViewPolicyToUser(rawUser, effectivePolicy) {
   const user = userSchema.parse(rawUser);
-  return userSchema.parse({
+  if (!hasEffectiveHiddenSurfacePolicies(effectivePolicy)) {
+    return user;
+  }
+
+  return {
     ...user,
     accounts: user.accounts.map((account) => ({
       ...account,
@@ -217,7 +261,7 @@ export function applyViewPolicyToUser(rawUser, effectivePolicy) {
         )),
       },
     })),
-  });
+  };
 }
 
 /**
@@ -326,28 +370,8 @@ function applyPolicyEvent(ignored, suppressed, hidden, event, options = {}) {
  */
 function matchesCueAgainstPolicy(rawCue, rawUser, effectivePolicy) {
   const cue = inboundCueSchema.parse(rawCue);
-  const pseudoObservation = {
-    ...cue,
-    truthLevel: "authoritative",
-    kind: "thread_updated",
-    eventAt: null,
-    externalId: null,
-    actorName: null,
-    actorTitle: null,
-    actorCompanyName: null,
-    actorHandle: null,
-    actorProfileUrl: null,
-    actorLinkedinPublicId: null,
-    actorLinkedinMemberId: null,
-    actorAvatarSourceUrl: null,
-    actorAvatarUrl: null,
-    threadUrl: null,
-    sourceUrl: null,
-    subject: null,
-    notes: cue.notes ?? null,
-    messages: [],
-  };
-  return matchesObservationAgainstPolicy(pseudoObservation, rawUser, effectivePolicy);
+  const user = userSchema.parse(rawUser);
+  return matchesCueAgainstPolicyWithUser(cue, user, effectivePolicy, buildUserAccountIndex(user));
 }
 
 /**
@@ -379,6 +403,82 @@ function matchesHiddenSurface(capability, surfaceKey, effectivePolicy) {
     surface.capability === normalizedCapability
     && surface.surfaceKey === normalizedSurfaceKey
   );
+}
+
+/**
+ * @param {import("../schema/user.js").userSchema._type} user
+ */
+function buildUserAccountIndex(user) {
+  return new Map(user.accounts.map((account) => [account.id, account]));
+}
+
+/**
+ * @param {ReturnType<typeof compileEffectivePolicy>} effectivePolicy
+ */
+function hasEffectiveIdentityPolicies(effectivePolicy) {
+  return effectivePolicy.effective.ignoredIdentities.length > 0
+    || effectivePolicy.effective.suppressedIdentities.length > 0;
+}
+
+/**
+ * @param {ReturnType<typeof compileEffectivePolicy>} effectivePolicy
+ */
+function hasEffectiveHiddenSurfacePolicies(effectivePolicy) {
+  return effectivePolicy.effective.hiddenSurfaces.length > 0;
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundObservationSchema._type} observation
+ * @param {import("../schema/user.js").userSchema._type} user
+ * @param {ReturnType<typeof compileEffectivePolicy>} effectivePolicy
+ * @param {Map<string, import("../schema/user.js").userConnectedAccountSchema._type>} accountsById
+ */
+function matchesParsedObservationAgainstPolicy(observation, user, effectivePolicy, accountsById) {
+  const account = accountsById.get(observation.accountId) ?? null;
+  return effectivePolicy.effective.ignoredIdentities.some((selector) => matchesIdentitySelector(selector, observation, account))
+    || effectivePolicy.effective.suppressedIdentities.some((selector) => matchesIdentitySelector(selector, observation, account));
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundCueSchema._type} cue
+ * @param {import("../schema/user.js").userSchema._type} user
+ * @param {ReturnType<typeof compileEffectivePolicy>} effectivePolicy
+ * @param {Map<string, import("../schema/user.js").userConnectedAccountSchema._type>} accountsById
+ */
+function matchesCueAgainstPolicyWithUser(cue, user, effectivePolicy, accountsById) {
+  return matchesParsedObservationAgainstPolicy(
+    buildCuePseudoObservation(cue),
+    user,
+    effectivePolicy,
+    accountsById,
+  );
+}
+
+/**
+ * @param {import("../schema/inbound.js").inboundCueSchema._type} cue
+ */
+function buildCuePseudoObservation(cue) {
+  return {
+    ...cue,
+    truthLevel: "authoritative",
+    kind: "thread_updated",
+    eventAt: null,
+    externalId: null,
+    actorName: null,
+    actorTitle: null,
+    actorCompanyName: null,
+    actorHandle: null,
+    actorProfileUrl: null,
+    actorLinkedinPublicId: null,
+    actorLinkedinMemberId: null,
+    actorAvatarSourceUrl: null,
+    actorAvatarUrl: null,
+    threadUrl: null,
+    sourceUrl: null,
+    subject: null,
+    notes: cue.notes ?? null,
+    messages: [],
+  };
 }
 
 /**

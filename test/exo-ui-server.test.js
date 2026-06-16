@@ -238,6 +238,130 @@ test("ui projection cache collapses concurrent builds for the same state revisio
   assert.equal(first, second);
 });
 
+test("ui projection cache keeps motions scope separate when each scope builds first", async (t) => {
+  resetWorkspaceProjectionCacheForTests();
+  t.after(() => resetWorkspaceProjectionCacheForTests());
+
+  const input = {
+    userId: "user-1",
+    capability: "linkedin",
+    regenerateCommand: "exo ui",
+  };
+  let workspaceBuildCount = 0;
+  let motionsBuildCount = 0;
+
+  const buildWorkspace = () => {
+    workspaceBuildCount += 1;
+    return {
+      data: {
+        user: { id: "user-1" },
+        generatedAt: "2026-06-05T13:00:00.000Z",
+      },
+      html: "<p>workspace</p>",
+    };
+  };
+  const buildMotions = () => {
+    motionsBuildCount += 1;
+    return {
+      data: {
+        user: { id: "user-1" },
+        generatedAt: "2026-06-05T13:00:00.000Z",
+        motionSummaries: [],
+        motionDetails: [],
+      },
+      html: "",
+    };
+  };
+
+  const motionsProjection = await resolveWorkspaceProjectionForUi(input, {
+    buildProjection: buildMotions,
+    cacheScope: "motions",
+    stateRevision: "rev-1",
+  });
+  const workspaceProjection = await resolveWorkspaceProjectionForUi(input, {
+    buildProjection: buildWorkspace,
+    stateRevision: "rev-1",
+  });
+  const cachedMotionsProjection = await resolveWorkspaceProjectionForUi(input, {
+    buildProjection: buildMotions,
+    cacheScope: "motions",
+    stateRevision: "rev-1",
+  });
+  const cachedWorkspaceProjection = await resolveWorkspaceProjectionForUi(input, {
+    buildProjection: buildWorkspace,
+    stateRevision: "rev-1",
+  });
+
+  assert.equal(workspaceBuildCount, 1);
+  assert.equal(motionsBuildCount, 1);
+  assert.equal(cachedWorkspaceProjection, workspaceProjection);
+  assert.equal(cachedMotionsProjection, motionsProjection);
+  assert.notEqual(motionsProjection, workspaceProjection);
+});
+
+test("ui projection cache lets motions scope reuse an existing workspace projection", async (t) => {
+  resetWorkspaceProjectionCacheForTests();
+  t.after(() => resetWorkspaceProjectionCacheForTests());
+
+  const input = {
+    userId: "user-1",
+    capability: "linkedin",
+    regenerateCommand: "exo ui",
+  };
+  let workspaceBuildCount = 0;
+  let motionsBuildCount = 0;
+
+  const buildWorkspace = () => {
+    workspaceBuildCount += 1;
+    return {
+      data: {
+        user: { id: "user-1", label: "Route User" },
+        generatedAt: "2026-06-05T13:00:00.000Z",
+        regenerateCommand: "exo ui",
+        motionSummaries: [{ id: "motion-1", name: "Motion 1" }],
+        motionDetails: [{ motionId: "motion-1", motionName: "Motion 1" }],
+        reviewItems: [{ id: "review-1" }],
+        agentStatus: { queueCount: 1 },
+      },
+      html: "<p>workspace</p>",
+    };
+  };
+  const buildMotions = () => {
+    motionsBuildCount += 1;
+    return {
+      data: {
+        user: { id: "user-1" },
+        generatedAt: "2026-06-05T13:00:00.000Z",
+        motionSummaries: [],
+        motionDetails: [],
+      },
+      html: "",
+    };
+  };
+
+  await resolveWorkspaceProjectionForUi(input, {
+    buildProjection: buildWorkspace,
+    stateRevision: "rev-1",
+  });
+  const motionsProjection = await resolveWorkspaceProjectionForUi(input, {
+    buildProjection: buildMotions,
+    cacheScope: "motions",
+    stateRevision: "rev-1",
+  });
+  const cachedMotionsProjection = await resolveWorkspaceProjectionForUi(input, {
+    buildProjection: buildMotions,
+    cacheScope: "motions",
+    stateRevision: "rev-1",
+  });
+
+  assert.equal(workspaceBuildCount, 1);
+  assert.equal(motionsBuildCount, 0);
+  assert.deepEqual(motionsProjection.data.motionSummaries, [{ id: "motion-1", name: "Motion 1" }]);
+  assert.deepEqual(motionsProjection.data.reviewItems, [{ id: "review-1" }]);
+  assert.deepEqual(motionsProjection.data.agentStatus, { queueCount: 1 });
+  assert.equal(cachedMotionsProjection, motionsProjection);
+});
+
 test("ui projection cache invalidates when a second WAL-backed motion write changes the state revision", async (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-ui-wal-"));
   const previousStateDir = process.env.EXO_STATE_DIR;
@@ -1082,6 +1206,164 @@ test("motions route passes execution users into the new-motion intake form", asy
   assert.doesNotMatch(html, /No execution users available/);
 });
 
+test("motions route requests the lightweight motions projection scope", async () => {
+  let projectionOptions = null;
+
+  await renderRoute("/motions", { userId: "user-1", capability: "linkedin" }, {
+    resolveWorkspaceProjectionForUi: async (_input, options) => {
+      projectionOptions = options ?? null;
+      return {
+        data: {
+          user: { id: "user-1", label: "Launch User", owner: "William" },
+          generatedAt: "2026-06-07T10:00:00.000Z",
+          motionSummaries: [],
+          motionDetails: [],
+          reviewItems: [],
+        },
+        html: "",
+      };
+    },
+  });
+
+  assert.equal(projectionOptions?.cacheScope, "motions");
+  assert.equal(typeof projectionOptions?.buildProjection, "function");
+});
+
+test("queue route requests the lightweight queue projection scope", async () => {
+  let projectionOptions = null;
+
+  const html = await renderRoute("/queue", { userId: "user-1", capability: "linkedin" }, {
+    resolveWorkspaceProjectionForUi: async (_input, options) => {
+      projectionOptions = options ?? null;
+      return {
+        data: {
+          user: { id: "user-1", label: "Launch User", owner: "William" },
+          generatedAt: "2026-06-07T10:00:00.000Z",
+          operatorSummary: null,
+          decisionQueue: { itemCount: 0, items: [] },
+          agentQueue: { itemCount: 0, items: [], tasks: [], waiting: [], waitingItems: [], blockers: [] },
+          blockedQueue: null,
+          dueNowItems: [],
+          waitingItems: [],
+          truthAccounts: [],
+          rawMotions: [],
+          reviewItems: [],
+          agentStatus: null,
+        },
+        html: "",
+      };
+    },
+  });
+
+  assert.equal(projectionOptions?.cacheScope, "queue");
+  assert.equal(typeof projectionOptions?.buildProjection, "function");
+  assert.match(html, /Agent queue/);
+});
+
+test("company research brief route renders without waiting on workspace projection", async () => {
+  await withSeededRouteUser(async () => {
+    const motionId = "motion-research-brief-ui";
+    const companyId = "company-research-brief-ui";
+    const company = buildCompanyView({
+      id: companyId,
+      createdAt: fixtureNow,
+      updatedAt: fixtureNow,
+      name: "Research Brief Co",
+      domain: "research-brief.example",
+      linkedinCompanyUrl: null,
+      websiteUrl: "https://research-brief.example",
+    }, { motionIds: [motionId] });
+    const motion = buildMotionView({
+      id: motionId,
+      name: "research-brief-motion",
+    });
+    insertCompany(company);
+    insertMotion(motion);
+
+    const html = await renderRoute(
+      `/companies/${companyId}/research-brief/${motionId}`,
+      { userId: "user-1", capability: "linkedin" },
+      {
+        resolveWorkspaceProjectionForUi: async () => {
+          throw new Error("workspace projection should not run for research brief route");
+        },
+      },
+    );
+
+    assert.match(html, /COMPANY RESEARCH BRIEF/);
+    assert.match(html, /Research Brief Co/);
+  });
+});
+
+test("company detail route renders without waiting on workspace projection", async () => {
+  await withSeededRouteUser(async () => {
+    const motionId = "motion-company-detail-ui";
+    const companyId = "company-company-detail-ui";
+    const prospectId = "prospect-company-detail-ui";
+    const company = buildCompanyView({
+      id: companyId,
+      createdAt: fixtureNow,
+      updatedAt: fixtureNow,
+      name: "Company Detail Co",
+      domain: "company-detail.example",
+      linkedinCompanyUrl: null,
+      websiteUrl: "https://company-detail.example",
+    }, { motionIds: [motionId] });
+    const prospect = buildProspect({
+      id: prospectId,
+      name: "Casey Detail",
+      title: "VP Revenue",
+      cadenceState: {
+        status: "ready",
+        currentStep: "value-add-email",
+        nextAction: "Ready for operator review.",
+      },
+      linkedinProfileSnapshot: {
+        connectionDegree: 1,
+      },
+    });
+    const account = buildTargetAccount({
+      companyId,
+      companyName: company.name,
+      domain: company.domain,
+      websiteUrl: company.websiteUrl,
+      queueState: {
+        status: "discovered",
+        source: "manual",
+        updatedAt: fixtureNow,
+        notes: null,
+      },
+      prospects: [prospect],
+    });
+    const motion = buildMotionView({
+      id: motionId,
+      name: "company-detail-motion",
+      targetMap: {
+        status: "ready",
+        accounts: [account],
+        segments: [],
+      },
+    });
+    insertCompany(company);
+    insertMotion(motion);
+
+    const html = await renderRoute(
+      `/companies/${companyId}`,
+      { userId: "user-1", capability: "linkedin" },
+      {
+        resolveWorkspaceProjectionForUi: async () => {
+          throw new Error("workspace projection should not run for company detail route");
+        },
+      },
+    );
+
+    assert.match(html, /Company Detail Co/);
+    assert.match(html, /Casey Detail/);
+    assert.match(html, /Open brief/);
+    assert.match(html, new RegExp(`href="\\/companies\\/${companyId}\\/research-brief\\/${motionId}"`));
+  });
+});
+
 test("motion detail route renders governed account, prospect, and packet review actions", async () => {
   await withSeededRouteUser(async () => {
     const motionId = "motion-lifecycle-ui";
@@ -1217,9 +1499,13 @@ test("motion detail route renders governed account, prospect, and packet review 
     assert.match(html, /Priya Lifecycle/);
     assert.match(html, /data-exo-writer="setAccountDisposition"/);
     assert.match(html, /data-exo-writer="setProspectDisposition"/);
+    assert.match(html, /name="lifecycleReason"[^>]*hidden[^>]*aria-hidden="true"/);
+    assert.match(html, /data-exo-reveal-field="lifecycleReason"/);
     assert.match(html, /Packet review/);
     assert.match(html, /company_research:company-lifecycle-ui/);
     assert.match(html, /data-exo-writer="resolvePacketReview"/);
+    assert.match(html, /name="packetReviewReason"[^>]*hidden[^>]*aria-hidden="true"/);
+    assert.match(html, /data-exo-reveal-field="packetReviewReason"/);
     assert.match(html, /Accept/);
     assert.match(html, /Amend/);
     assert.match(html, /Return/);
@@ -1555,6 +1841,109 @@ test("operator route recovers to the one execution-ready user when the bound use
   });
 
   assert.equal(projectedUserId, "user-ready");
+});
+
+test("operator route motion picker shows compact offer and ICP context for active motions", async () => {
+  await withSeededRouteUser(async () => {
+    insertMotion(buildMotionView({
+      id: "motion-grow",
+      name: "gentle-ancient-lizard",
+      offer: { sourceUrl: "https://audienti.com/growmance/", offerNotes: null },
+      offerThesis: {
+        sourceUrl: "https://audienti.com/growmance/",
+        sourceTitle: "Growmance | Audienti",
+        sourceDescription: null,
+        sourceSummary: "",
+        offerNotes: null,
+        problemThesis: null,
+        buyerImpactThesis: null,
+        likelyTriggerThesis: null,
+        likelyRoleThesis: null,
+        likelySegmentThesis: null,
+        status: "seeded",
+      },
+      audienceHypotheses: [
+        {
+          id: "aud-grow",
+          name: "Startup founders, early people building products, etc.",
+          companyCriteria: [],
+          roleCriteria: [],
+          notes: null,
+          confidence: "unknown",
+        },
+      ],
+    }));
+    insertMotion(buildMotionView({
+      id: "motion-knit",
+      name: "harsh-spare-mongoose",
+      offer: { sourceUrl: "https://www.knitit.ai/", offerNotes: null },
+      offerThesis: {
+        sourceUrl: "https://www.knitit.ai/",
+        sourceTitle: "Knit.ai: Vendor Accountability with Data",
+        sourceDescription: null,
+        sourceSummary: "",
+        offerNotes: null,
+        problemThesis: null,
+        buyerImpactThesis: null,
+        likelyTriggerThesis: null,
+        likelyRoleThesis: null,
+        likelySegmentThesis: null,
+        status: "seeded",
+      },
+      audienceHypotheses: [
+        {
+          id: "aud-knit",
+          name: "Director or Senior Manager owning technology vendor management, contract management, renewals, or vendor negotiations at companies with more than 1,000 employees and more than 100 million USD in revenue",
+          companyCriteria: [],
+          roleCriteria: [],
+          notes: null,
+          confidence: "unknown",
+        },
+      ],
+      targetingProfile: {
+        geolocations: [],
+        icpTypes: ["enterprise"],
+        industries: [],
+        companyTypes: [],
+        companyShapes: [],
+        companySizes: [],
+        targetTitles: [],
+        roleFamilies: [],
+        segmentVariants: [],
+        stakeholderTargetCount: 3,
+      },
+    }));
+
+    const html = await renderRoute("/operator?view=motions&motion=motion-grow#motions", { userId: "user-1", capability: "linkedin" }, {
+      resolveWorkspaceProjectionForUi: async () => ({
+        data: {
+          user: { id: "user-1", label: "Route User", owner: "William" },
+          generatedAt: fixtureNow,
+          operatorSummary: { checklist: [] },
+          decisionQueue: { items: [] },
+          agentQueue: { items: [], blockers: [] },
+          blockedQueue: { items: [] },
+          dueNowItems: [],
+          waitingItems: [],
+          truthAccounts: [],
+          motionSummaries: [
+            { id: "motion-grow", name: "gentle-ancient-lizard", status: "active" },
+            { id: "motion-knit", name: "harsh-spare-mongoose", status: "active" },
+          ],
+        },
+        html: "",
+      }),
+    });
+
+    assert.match(html, /By motion/);
+    assert.match(html, /Growmance/);
+    assert.doesNotMatch(html, /Growmance \| Audienti/);
+    assert.match(html, /audienti\.com/);
+    assert.match(html, /ICP · Startup founders, early people building products/);
+    assert.match(html, /Knit\.ai: Vendor Accountability with Data/);
+    assert.match(html, /ICP · Director or Senior Manager owning technology vendor/);
+    assert.match(html, /enterprise/);
+  });
 });
 
 test("ui root redirects to /operator", async (t) => {

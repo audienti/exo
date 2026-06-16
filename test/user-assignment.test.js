@@ -177,6 +177,90 @@ function userFixture() {
   };
 }
 
+function multiInboxUserFixture() {
+  return {
+    ...userFixture(),
+    accounts: [
+      {
+        ...userFixture().accounts[0],
+        id: "linkedin-1",
+      },
+      {
+        id: "gmail-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "gmail",
+        handle: "operator@audienti.com",
+        label: null,
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-gmail-1",
+        providerAccountId: "acct-gmail-1",
+        preferred: false,
+        notes: null,
+        automationControls: {
+          weeklyQuotas: {
+            profileVisits: null,
+            invitations: null,
+            messages: null,
+          },
+        },
+        inboundSync: {
+          surfaces: [],
+        },
+      },
+      {
+        id: "gmail-2",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "gmail",
+        handle: "operator@knitit.ai",
+        label: null,
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-gmail-2",
+        providerAccountId: "acct-gmail-2",
+        preferred: false,
+        notes: null,
+        automationControls: {
+          weeklyQuotas: {
+            profileVisits: null,
+            invitations: null,
+            messages: null,
+          },
+        },
+        inboundSync: {
+          surfaces: [],
+        },
+      },
+      {
+        id: "hubspot-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "hubspot",
+        handle: "245546701",
+        label: null,
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-hubspot-1",
+        providerAccountId: "acct-hubspot-1",
+        preferred: false,
+        notes: null,
+        automationControls: {
+          weeklyQuotas: {
+            profileVisits: null,
+            invitations: null,
+            messages: null,
+          },
+        },
+        inboundSync: {
+          surfaces: [],
+        },
+      },
+    ],
+  };
+}
+
 test("assignCompanyUser clears legacy profile assignment even when the user has a browser-profile account", () => {
   const updated = assignCompanyUser(companyFixture(), userFixture(), [profileFixture()], {
     assignedBy: "test",
@@ -213,4 +297,38 @@ test("assignMotionUser rejects account refs that are not mapped onto the user", 
     reason: "Pin the exact account",
     accountRefs: ["gmail:not-mapped@example.com"],
   }), /does not have a connected account/i);
+});
+
+test("assignMotionUser defaults only unambiguous capability refs for a multi-inbox user", () => {
+  const updated = assignMotionUser(motionFixture(), multiInboxUserFixture(), [profileFixture()], {
+    assignedBy: "test",
+    reason: "Pin the operator",
+  });
+
+  assert.deepEqual(updated.engagementUserAssignment?.accountRefs, [
+    "linkedin:operator-linkedin",
+    "hubspot:245546701",
+  ]);
+});
+
+test("assignCompanyUser merges one explicit gmail ref with the user's singleton capability refs", () => {
+  const updated = assignCompanyUser(companyFixture(), multiInboxUserFixture(), [profileFixture()], {
+    assignedBy: "test",
+    reason: "Pin the exact inbox",
+    accountRefs: ["gmail:operator@audienti.com"],
+  });
+
+  assert.deepEqual(updated.engagementUserAssignment?.accountRefs, [
+    "linkedin:operator-linkedin",
+    "hubspot:245546701",
+    "gmail:operator@audienti.com",
+  ]);
+});
+
+test("assignMotionUser rejects more than one exact account ref for the same capability", () => {
+  assert.throws(() => assignMotionUser(motionFixture(), multiInboxUserFixture(), [profileFixture()], {
+    assignedBy: "test",
+    reason: "Pin every inbox",
+    accountRefs: ["gmail:operator@audienti.com", "gmail:operator@knitit.ai"],
+  }), /keep only one exact gmail account per assignment/i);
 });

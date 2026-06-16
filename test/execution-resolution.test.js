@@ -3,7 +3,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { buildCompanyExecutionView } from "../src/core/build-company-execution-view.js";
 import { resolveScopedExecutionAssignment } from "../src/core/resolve-scoped-execution-assignment.js";
+import { buildMotionView } from "./support/normalized-fixtures.js";
 
 function companyFixture() {
   return {
@@ -313,6 +315,70 @@ test("resolveScopedExecutionAssignment honors a company-level pinned gmail accou
   assert.equal(resolution.resolvedAccount?.handle, "secondary-gmail@example.com");
   assert.equal(resolution.resolvedAccount?.providerAccountId, "acct-mail-2");
   assert.equal(resolution.accountResolution?.status, "resolved");
+});
+
+test("buildCompanyExecutionView requires an exact Gmail inbox pin when a motion-scoped user owns multiple inboxes", () => {
+  const managedUser = {
+    ...userFixture(),
+    accounts: [
+      managedAccountFixture({
+        id: "gmail-1",
+        capability: "gmail",
+        handle: "operator-gmail@example.com",
+        providerAccountId: "acct-mail-1",
+      }),
+      managedAccountFixture({
+        id: "gmail-2",
+        capability: "gmail",
+        handle: "secondary-gmail@example.com",
+        providerAccountId: "acct-mail-2",
+      }),
+      managedAccountFixture({
+        id: "linkedin-1",
+        capability: "linkedin",
+        handle: "williamflanagan",
+        providerAccountId: "acct-linkedin-1",
+        preferred: true,
+      }),
+    ],
+    harnessConnections: [
+      {
+        ...managedHarnessFixture(),
+        id: "harness-1",
+        connector: "gmail",
+      },
+    ],
+  };
+  const motion = buildMotionView({
+    id: "motion-1",
+    name: "Motion One",
+    engagementUserAssignment: {
+      userId: "user-1",
+      label: "Operator",
+      owner: "operator",
+      accountRefs: ["linkedin:williamflanagan"],
+      assignedAt: "2026-06-01T00:00:00.000Z",
+      assignedBy: "test",
+      reason: "Use the governed connector",
+      sticky: true,
+    },
+  });
+
+  const execution = buildCompanyExecutionView(companyFixture(), null, [], {
+    capability: "gmail",
+    rawMotion: motion,
+    rawUsers: [managedUser],
+  });
+
+  assert.equal(execution.assignmentSource, "motion-user");
+  assert.equal(execution.transport.status, "blocked");
+  assert.equal(execution.transport.blockerCode, "gmail_exact_inbox_required");
+  assert.equal(execution.transport.operatorReason, "Exact Gmail inbox required");
+  assert.match(execution.transport.blocker ?? "", /Multiple Gmail inboxes are mapped for Operator/);
+  assert.match(execution.transport.blockerDetail ?? "", /Pick one Exact Gmail inbox under Execution/);
+  assert.equal(execution.transport.resolveLabel, "Open motion settings");
+  assert.equal(execution.transport.resolveMode, "detail");
+  assert.equal(execution.transport.resolveHref, "/motions/motion-1/settings#execution");
 });
 
 test("resolveScopedExecutionAssignment fails closed when the company-assigned user no longer exists", () => {

@@ -9,6 +9,7 @@ import path from "node:path";
 
 import { buildNodeTestEnv } from "../scripts/node-test-runtime.js";
 import { buildAgentRunLog } from "../src/core/agent-run-log.js";
+import { buildAgentRunLockDir } from "../src/lib/agent-run-lock.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const cliPath = path.join(repoRoot, "src", "cli", "index.js");
@@ -25,6 +26,12 @@ function makeStateDir(prefix) {
 function writeJson(filePath, payload) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(payload, null, 2));
+}
+
+function writeActiveRunLock(stateDir, lane = null) {
+  const lockDir = buildAgentRunLockDir({ stateDir, lane });
+  fs.mkdirSync(lockDir, { recursive: true });
+  fs.writeFileSync(path.join(lockDir, "pid"), `${process.pid}\n`, "utf8");
 }
 
 test("buildAgentRunLog returns an empty stable contract when artifacts are missing", () => {
@@ -78,7 +85,7 @@ test("buildAgentRunLog skips malformed agent.log JSON blocks and keeps parseable
     });
 
     assert.equal(runLog.entries.length, 1);
-    assert.equal(runLog.entries[0].status, "completed");
+    assert.equal(runLog.entries[0].status, "partial");
     assert.equal(runLog.entries[0].lane, "transport");
     assert.equal(runLog.entries[0].taskKind, "run_inbound_sync");
     assert.equal(runLog.entries[0].resultCounts.total, 1);
@@ -240,6 +247,47 @@ test("buildAgentRunLog normalizes last-pass and host-state facts into recent ent
   }
 });
 
+test("buildAgentRunLog keeps waiting result counts for retried inbound identity work", () => {
+  const fixture = makeStateDir("exo-agent-run-log-waiting-");
+
+  try {
+    writeJson(path.join(fixture.stateDir, "agent-last-pass.json"), {
+      status: "partial",
+      startedAt: "2026-06-15T18:00:00.000Z",
+      endedAt: "2026-06-15T18:02:00.000Z",
+      results: [
+        { kind: "resolve_inbound_identity", status: "waiting" },
+        { kind: "send_message", status: "completed" },
+      ],
+      finalQueueCounts: {
+        dueTaskCount: 4,
+        waitingTaskCount: 6,
+        blockerCount: 0,
+      },
+    });
+
+    const runLog = buildAgentRunLog({
+      stateDir: fixture.stateDir,
+      now: "2026-06-15T18:05:00.000Z",
+      limit: 10,
+    });
+
+    const mergedPass = runLog.entries.find((entry) =>
+      entry.sourceArtifact.kind === "agent-last-pass"
+      && entry.lane === null
+    );
+    assert.ok(mergedPass);
+    assert.equal(mergedPass.status, "partial");
+    assert.equal(mergedPass.resultCounts.total, 2);
+    assert.equal(mergedPass.resultCounts.completed, 1);
+    assert.equal(mergedPass.resultCounts.waiting, 1);
+    assert.equal(mergedPass.resultCounts.blocked, 0);
+    assert.equal(mergedPass.resultCounts.failed, 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("buildAgentRunLog preserves transport and config reasons from last-pass results", () => {
   const fixture = makeStateDir("exo-agent-run-log-runtime-truth-");
 
@@ -347,10 +395,46 @@ test("buildAgentRunLog preserves transport and config reasons from last-pass res
   }
 });
 
+test("buildAgentRunLog normalizes blocked pass artifacts with no remaining blockers into partial", () => {
+  const fixture = makeStateDir("exo-agent-run-log-soft-blocked-");
+
+  try {
+    writeJson(path.join(fixture.stateDir, "agent-last-pass.json"), {
+      status: "blocked",
+      reason: "LinkedIn spacing keeps this outbound action from firing immediately.",
+      startedAt: "2026-06-11T14:20:00.000Z",
+      endedAt: "2026-06-11T14:21:00.000Z",
+      results: [
+        { kind: "send_message", status: "completed" },
+        { kind: "send_message", status: "blocked" },
+      ],
+      finalQueueCounts: {
+        dueTaskCount: 3,
+        waitingTaskCount: 2,
+        blockerCount: 0,
+      },
+    });
+
+    const runLog = buildAgentRunLog({
+      stateDir: fixture.stateDir,
+      now: "2026-06-11T14:22:00.000Z",
+    });
+
+    assert.equal(runLog.entries.length, 1);
+    assert.equal(runLog.entries[0].status, "partial");
+    assert.equal(runLog.entries[0].reason, null);
+    assert.equal(runLog.entries[0].resultCounts.blocked, 1);
+    assert.equal(runLog.entries[0].queueCounts?.blockerCount, 0);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("buildAgentRunLog surfaces active task leases as running entries", () => {
   const fixture = makeStateDir("exo-agent-run-log-active-");
 
   try {
+    writeActiveRunLock(fixture.stateDir);
     writeJson(path.join(fixture.stateDir, "agent-host-state.json"), {
       taskLeases: [
         {
@@ -403,10 +487,51 @@ test("buildAgentRunLog surfaces active task leases as running entries", () => {
   }
 });
 
+test("buildAgentRunLog drops stale task leases when no live runner lock exists", () => {
+  const fixture = makeStateDir("exo-agent-run-log-stale-");
+
+  try {
+    writeJson(path.join(fixture.stateDir, "agent-host-state.json"), {
+      taskLeases: [
+        {
+          taskKind: "run_inbound_sync",
+          fingerprint: "lease-fingerprint-stale",
+          workerLabel: "worker@example.local",
+          acquiredAt: "2026-06-11T15:00:00.000Z",
+          expiresAt: "2026-06-11T15:10:00.000Z",
+          userId: "user-1",
+          accountId: "account-1",
+          capability: "linkedin",
+          surface: "linkedin-followers-list",
+          subject: "LinkedIn inbound truth",
+          action: "run_inbound_sync",
+        },
+      ],
+    });
+
+    const runLog = buildAgentRunLog({
+      stateDir: fixture.stateDir,
+      now: "2026-06-11T15:02:30.000Z",
+      limit: 10,
+    });
+
+    assert.equal(
+      runLog.entries.some((entry) =>
+        entry.sourceArtifact.kind === "agent-host-state"
+        && entry.sourceArtifact.section === "taskLeases"
+      ),
+      false,
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("agent run-log command exposes active task lease entries", () => {
   const fixture = makeStateDir("exo-agent-run-log-cli-");
 
   try {
+    writeActiveRunLock(fixture.stateDir);
     writeJson(path.join(fixture.stateDir, "agent-host-state.json"), {
       taskLeases: [
         {
@@ -459,6 +584,7 @@ test("agent run-log command stays bounded when agent.log has a large malformed h
   const fixture = makeStateDir("exo-agent-run-log-large-");
 
   try {
+    writeActiveRunLock(fixture.stateDir);
     writeJson(path.join(fixture.stateDir, "agent-host-state.json"), {
       taskLeases: [
         {

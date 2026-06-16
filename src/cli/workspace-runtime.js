@@ -34,68 +34,53 @@ import {
   upsertInboundObservation,
 } from "../db/database.js";
 import { getHomeStateDir } from "../db/paths.js";
-import { pruneExpiredBrowserBackoffs } from "../lib/agent-host-state.js";
+import { pruneInactiveTaskLeases } from "../lib/agent-host-state.js";
 import { buildUserWorkspaceContext, filterWorkspaceObservationsForUser } from "../core/workspace-context.js";
-import { buildWorkspaceModel } from "../../prototype/build-motion-workspace.mjs";
+import { buildMotionProjectionData, buildQueueProjectionData, buildWorkspaceModel } from "../../prototype/build-motion-workspace.mjs";
 
 const DEFAULT_WORKSPACE_SERVER_HOST = "127.0.0.1";
 const DEFAULT_WORKSPACE_SERVER_PORT = 4312;
+const MOTION_ROUTE_REVIEW_STATES = new Set([
+  "needs_reply",
+  "ready_for_reply",
+  "thread_change_review",
+  "ready_for_post_accept",
+  "needs_claim",
+  "needs_decision",
+  "needs_status_reconciliation",
+]);
 
 /**
  * @param {{ userId: string, capability?: string | null, regenerateCommand: string, interactive?: { enabled?: boolean, actionEndpoint?: string, workerLabel?: string } | null }} input
  */
 export function buildWorkspaceProjection(input) {
-  const user = findUserById(input.userId);
-  if (!user) {
-    throw new Error(`User not found: ${input.userId}`);
-  }
-
-  const capability = input.capability ?? "linkedin";
-  const motions = listMotions();
-  const companies = listCompanies();
-  const browserProfiles = listBrowserProfiles();
-  const users = listUsers();
-  const observations = listInboundObservations({
-    userId: user.id,
-  });
+  const shared = loadWorkspaceProjectionContext(input);
+  const {
+    user,
+    capability,
+    motions,
+    companies,
+    browserProfiles,
+    users,
+    workspaceContext,
+    now,
+    inbox,
+    inboundReview,
+    daily,
+    reports,
+  } = shared;
   const allObservations = listInboundObservations();
-  const cues = listInboundCues({
-    userId: user.id,
-    status: "open",
-  });
-  const workspaceContext = buildUserWorkspaceContext(user, {
-    rawObservations: observations,
-    rawCues: cues,
-  });
-  const now = new Date().toISOString();
   const filteredAllObservations = filterWorkspaceObservationsForUser(
     allObservations,
     user,
     workspaceContext.effectivePolicy,
   );
   const stateDir = getHomeStateDir();
-  const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")), now);
-  const lastPass = readJsonIfExists(path.join(stateDir, "agent-last-pass.json"));
-
-  const inboundReview = buildInboundReviewView(workspaceContext.user, workspaceContext.observations, motions, companies);
-  const inbox = buildInboxView(workspaceContext.user, workspaceContext.observations, motions, companies);
-  const daily = buildDailyView(workspaceContext.user, motions, companies, browserProfiles, workspaceContext.observations, {
+  const hostState = pruneInactiveTaskLeases(readJsonIfExists(path.join(stateDir, "agent-host-state.json")), {
+    stateDir,
     now,
-    rawUsers: users,
-    rawCues: workspaceContext.cues,
-    capacityAccounts: listOutboundCapacityAccounts({
-      executionUserId: user.id,
-    }),
-    prospectBranches: listPlannerProspectBranches({
-      executionUserId: user.id,
-      now,
-    }),
   });
-  const reports = motions.map((motion) =>
-    buildMotionReport(motion, companies, browserProfiles, users, {
-      capability,
-    }),
-  );
+  const lastPass = readJsonIfExists(path.join(stateDir, "agent-last-pass.json"));
   const agentQueue = buildAgentQueue({
     motions,
     companies,
@@ -103,6 +88,7 @@ export function buildWorkspaceProjection(input) {
     users,
     observations: filteredAllObservations,
     cues: workspaceContext.cues,
+    inboundReviewsByUserId: new Map([[user.id, inboundReview]]),
     prospectBranches: listAgentQueueProspectBranches(),
     hostState,
   });
@@ -127,6 +113,219 @@ export function buildWorkspaceProjection(input) {
     regenerateCommand: input.regenerateCommand,
     interactive: input.interactive ?? null,
   });
+}
+
+/**
+ * Lightweight projection for motions routes in the interactive UI.
+ *
+ * @param {{ userId: string, capability?: string | null, regenerateCommand: string }} input
+ */
+export function buildMotionRoutesProjection(input) {
+  const shared = loadWorkspaceProjectionContext(input, { lightweightInboundReview: true });
+  return {
+    html: "",
+    data: buildMotionProjectionData({
+      user: shared.user,
+      inboundReview: shared.inboundReview,
+      daily: shared.daily,
+      reports: shared.reports,
+      regenerateCommand: input.regenerateCommand,
+    }),
+  };
+}
+
+/**
+ * Queue route projection for the interactive UI.
+ *
+ * This route only renders autonomous agent work and runtime telemetry. It
+ * should not pay for motion reports, prospect lanes, daily planner lanes, or
+ * full workspace HTML just to show an empty queue.
+ *
+ * @param {{ userId: string, capability?: string | null, regenerateCommand: string }} input
+ */
+export function buildQueueRoutesProjection(input) {
+  const user = findUserById(input.userId);
+  if (!user) {
+    throw new Error(`User not found: ${input.userId}`);
+  }
+
+  const motions = listMotions();
+  const companies = listCompanies();
+  const browserProfiles = listBrowserProfiles();
+  const users = listUsers();
+  const observations = listInboundObservations({
+    userId: user.id,
+  });
+  const cues = listInboundCues({
+    userId: user.id,
+    status: "open",
+  });
+  const workspaceContext = buildUserWorkspaceContext(user, {
+    rawObservations: observations,
+    rawCues: cues,
+  });
+  const now = new Date().toISOString();
+  const inboundReview = buildInboundReviewView(workspaceContext.user, workspaceContext.observations, motions, companies);
+  const stateDir = getHomeStateDir();
+  const hostState = pruneInactiveTaskLeases(readJsonIfExists(path.join(stateDir, "agent-host-state.json")), {
+    stateDir,
+    now,
+  });
+  const lastPass = readJsonIfExists(path.join(stateDir, "agent-last-pass.json"));
+  const agentQueue = buildAgentQueue({
+    motions,
+    companies,
+    profiles: browserProfiles,
+    users,
+    observations: workspaceContext.observations,
+    cues: workspaceContext.cues,
+    inboundReviewsByUserId: new Map([[user.id, inboundReview]]),
+    prospectBranches: listAgentQueueProspectBranches({
+      executionUserId: user.id,
+      now,
+    }),
+    hostState,
+  });
+  const agentStatus = buildAgentStatusReport({
+    stateDir,
+    queue: agentQueue,
+    hostState,
+    users,
+    lastPass,
+    now,
+  });
+
+  return {
+    html: "",
+    data: buildQueueProjectionData({
+      user,
+      generatedAt: now,
+      agentQueue,
+      agentStatus,
+      regenerateCommand: input.regenerateCommand,
+      rawMotions: motions,
+    }),
+  };
+}
+
+/**
+ * Shared state needed to derive either the full workspace projection or the
+ * lighter motions-route slice.
+ *
+ * @param {{ userId: string, capability?: string | null }} input
+ * @param {{ lightweightInboundReview?: boolean }} [options]
+ */
+function loadWorkspaceProjectionContext(input, options = {}) {
+  const user = findUserById(input.userId);
+  if (!user) {
+    throw new Error(`User not found: ${input.userId}`);
+  }
+
+  const capability = input.capability ?? "linkedin";
+  const motions = listMotions();
+  const companies = listCompanies();
+  const browserProfiles = listBrowserProfiles();
+  const users = listUsers();
+  const observations = listInboundObservations({
+    userId: user.id,
+  });
+  const cues = listInboundCues({
+    userId: user.id,
+    status: "open",
+  });
+  const workspaceContext = buildUserWorkspaceContext(user, {
+    rawObservations: observations,
+    rawCues: cues,
+  });
+  const now = new Date().toISOString();
+  const inbox = buildInboxView(workspaceContext.user, workspaceContext.observations, motions, companies);
+  const inboundReview = options.lightweightInboundReview
+    ? buildMotionRoutesReviewViewFromInbox(inbox)
+    : buildInboundReviewView(workspaceContext.user, workspaceContext.observations, motions, companies);
+  const daily = buildDailyView(workspaceContext.user, motions, companies, browserProfiles, workspaceContext.observations, {
+    now,
+    rawUsers: users,
+    rawCues: workspaceContext.cues,
+    inbox,
+    inboundReview,
+    capacityAccounts: listOutboundCapacityAccounts({
+      executionUserId: user.id,
+    }),
+    prospectBranches: listPlannerProspectBranches({
+      executionUserId: user.id,
+      now,
+    }),
+  });
+  const reports = motions.map((motion) =>
+    buildMotionReport(motion, companies, browserProfiles, users, {
+      capability,
+    }),
+  );
+
+  return {
+    user,
+    capability,
+    motions,
+    companies,
+    browserProfiles,
+    users,
+    workspaceContext,
+    now,
+    inbox,
+    inboundReview,
+    daily,
+    reports,
+  };
+}
+
+/**
+ * Motion routes only need review rows that feed per-motion counts, planner
+ * due-now summaries, and cleanup-badge visibility. Reuse the inbox items we
+ * already built instead of scanning the same observation set again.
+ *
+ * @param {ReturnType<typeof buildInboxView>} inbox
+ */
+export function buildMotionRoutesReviewViewFromInbox(inbox) {
+  const reviewItems = (inbox.items ?? [])
+    .filter((item) => MOTION_ROUTE_REVIEW_STATES.has(item.reviewState ?? ""))
+    .map((item) => ({
+      id: item.id,
+      state: item.reviewState,
+      kind: item.kind,
+      observedAt: item.observedAt,
+      motion: item.motion ?? null,
+      company: item.company ?? null,
+      prospect: item.prospect ?? null,
+      account: item.account ?? null,
+      actorName: item.actorName ?? null,
+      whyItMatters: item.whyItMatters ?? null,
+      recommendedAction: item.recommendedAction ?? null,
+      decisionOptions: [],
+    }));
+
+  return {
+    user: inbox.user ?? null,
+    counts: {
+      reviewItemCount: reviewItems.length,
+      highPriorityCount: reviewItems.filter((item) => item.state === "needs_reply" || item.state === "ready_for_reply").length,
+      mediumPriorityCount: 0,
+      lowPriorityCount: 0,
+      decisionItemCount: reviewItems.filter((item) =>
+        item.state === "needs_decision" || item.state === "needs_status_reconciliation",
+      ).length,
+      signalItemCount: 0,
+      itemizationGapCount: 0,
+    },
+    surfaces: {
+      accountCount: 0,
+      enabledSurfaceCount: 0,
+      uncheckedSurfaceCount: 0,
+      itemizationGapCount: 0,
+      accounts: [],
+    },
+    reviewItems,
+    itemizationGaps: [],
+  };
 }
 
 /**
@@ -295,13 +494,27 @@ function runAssignCompanyUserAction(action) {
   const updated = assignCompanyUser(rawCompany, rawUser, listBrowserProfiles(), {
     assignedBy: "workspace-ui",
     reason: action.reason ?? "Make ready outbound branches executable",
-    browserCapability: action.browserCapability ?? "linkedin",
+    accountRefs: resolveActionAccountRefs(action),
   });
   updateCompany(updated);
 
   return {
     message: `Pinned ${updated.name} to ${updated.engagementUserAssignment?.label ?? "the selected user"}.`,
   };
+}
+
+/**
+ * @param {{ accountRef?: string, accountRefs?: string[] }} action
+ */
+function resolveActionAccountRefs(action) {
+  const fromArray = Array.isArray(action.accountRefs)
+    ? action.accountRefs
+    : [];
+  const fromSingle = typeof action.accountRef === "string" ? [action.accountRef] : [];
+  const refs = [...fromArray, ...fromSingle]
+    .map((value) => typeof value === "string" ? value.trim() : "")
+    .filter(Boolean);
+  return refs.length ? refs : null;
 }
 
 /**

@@ -28,6 +28,17 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
   const resolvedAccount = scoped.resolvedAccount;
   const resolvedProfile = scoped.resolvedProfile;
   const accountResolution = scoped.accountResolution ?? null;
+  const transport = buildTransportPlan({
+    company,
+    motion,
+    capability,
+    assignmentSource: scoped.source,
+    assignedUser: scoped.assignedUser,
+    userAssignmentRecord: scoped.userAssignmentRecord,
+    resolvedAccount,
+    resolvedProfile,
+    accountResolution
+  });
 
   return {
     company: {
@@ -102,13 +113,7 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
           verifiedCapabilities: resolvedProfile.verifiedCapabilities
         }
       : null,
-    transport: buildTransportPlan({
-      company,
-      capability,
-      resolvedAccount,
-      resolvedProfile,
-      accountResolution
-    }),
+    transport,
     knowledgeRefs: [
       "docs/browser-profiles.md",
       "docs/agent-usage.md"
@@ -119,7 +124,11 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
 /**
  * @param {{
  *   company: import("../schema/company.js").companySchema._type,
+ *   motion: import("../schema/motion.js").motionSchema._type | null,
  *   capability: import("../schema/browser-profile.js").browserProfileCapabilitySchema._type,
+ *   assignmentSource: string,
+ *   assignedUser: import("../schema/user.js").userSchema._type | null,
+ *   userAssignmentRecord: { accountRefs?: string[] | null } | null,
  *   resolvedAccount: {
  *     accountId: string,
  *     capability: string,
@@ -137,7 +146,17 @@ export function buildCompanyExecutionView(rawCompany, rawUser, rawProfiles, inpu
  * }} input
  */
 function buildTransportPlan(input) {
-  const { company, capability, resolvedAccount, resolvedProfile, accountResolution } = input;
+  const {
+    company,
+    motion,
+    capability,
+    assignmentSource,
+    assignedUser,
+    userAssignmentRecord,
+    resolvedAccount,
+    resolvedProfile,
+    accountResolution
+  } = input;
 
   if (resolvedAccount?.sourceType === "harness-connection" && resolvedAccount.harnessConnection) {
     return {
@@ -170,6 +189,41 @@ function buildTransportPlan(input) {
     };
   }
 
+  const exactGmailInboxBlocker = buildExactGmailInboxBlocker({
+    company,
+    motion,
+    capability,
+    assignmentSource,
+    assignedUser,
+    userAssignmentRecord,
+    accountResolution
+  });
+  if (exactGmailInboxBlocker) {
+    return {
+      status: "blocked",
+      mode: "unresolved",
+      preferredTransport: null,
+      fallbackTransport: null,
+      runtimeChecks: [
+        "Pick one exact Gmail inbox on the governing scope before you act.",
+        "Do not let Gmail default implicitly across multiple connected inboxes.",
+        "Write back the real outcome to Exo immediately after the action."
+      ],
+      failureClasses: [
+        {
+          key: exactGmailInboxBlocker.blockerCode,
+          symptom: "A governed Gmail sender exists, but several exact inboxes are mapped for the assigned user and this scope has not pinned one.",
+          operatorRule: "Treat this as a scoped identity failure. Open the named settings surface and pin one exact Gmail inbox before retrying the business action."
+        }
+      ],
+      recoveryHints: [
+        exactGmailInboxBlocker.resolveHint,
+        "Do not silently fall back to another connected inbox or another transport."
+      ],
+      ...exactGmailInboxBlocker,
+    };
+  }
+
   if (accountResolution?.sourceType === "harness-connection" && accountResolution.status !== "resolved") {
     return {
       status: "blocked",
@@ -192,7 +246,15 @@ function buildTransportPlan(input) {
         "Claim the discovered managed account with its providerAccountId or mark one exact managed account preferred.",
         "Do not silently fall back to another connected account or another transport."
       ],
-      blocker: accountResolution.reason
+      blocker: accountResolution.reason,
+      blockerCode: "managed_account_identity_unresolved",
+      operatorReason: "Managed account identity unresolved",
+      blockerDetail: accountResolution.reason,
+      resolveHint: "Claim or pin one exact managed account before retrying the business action.",
+      resolveHref: null,
+      resolveLabel: "Review execution",
+      resolveMode: null,
+      blockType: "capability"
     };
   }
 
@@ -214,7 +276,15 @@ function buildTransportPlan(input) {
         }
       ],
       recoveryHints: [],
-      blocker: `Profile-backed ${capability} accounts are no longer supported for ${company.name}. Map a managed connector account instead.`
+      blocker: `Profile-backed ${capability} accounts are no longer supported for ${company.name}. Map a managed connector account instead.`,
+      blockerCode: "legacy_browser_profile_unsupported",
+      operatorReason: "Capability not ready",
+      blockerDetail: `Profile-backed ${capability} accounts are no longer supported for ${company.name}. Map a managed connector account instead.`,
+      resolveHint: `Map a managed ${capability} connector account before retrying ${company.name}.`,
+      resolveHref: null,
+      resolveLabel: "Review execution",
+      resolveMode: null,
+      blockType: "capability"
     };
   }
 
@@ -235,6 +305,99 @@ function buildTransportPlan(input) {
       }
     ],
     recoveryHints: [],
-    blocker: `No resolved managed connector account exists for ${company.name} on ${capability}.`
+    blocker: `No resolved managed connector account exists for ${company.name} on ${capability}.`,
+    blockerCode: "missing_execution_path",
+    operatorReason: "Capability not ready",
+    blockerDetail: `No resolved managed connector account exists for ${company.name} on ${capability}.`,
+    resolveHint: `Resolve one exact managed ${capability} connector account before retrying ${company.name}.`,
+    resolveHref: null,
+    resolveLabel: "Review execution",
+    resolveMode: null,
+    blockType: "capability"
   };
+}
+
+/**
+ * @param {{
+ *   company: import("../schema/company.js").companySchema._type,
+ *   motion: import("../schema/motion.js").motionSchema._type | null,
+ *   capability: import("../schema/browser-profile.js").browserProfileCapabilitySchema._type,
+ *   assignmentSource: string,
+ *   assignedUser: import("../schema/user.js").userSchema._type | null,
+ *   userAssignmentRecord: { accountRefs?: string[] | null } | null,
+ *   accountResolution: { status: string, reason: string, sourceType: string | null } | null
+ * }} input
+ */
+function buildExactGmailInboxBlocker(input) {
+  const {
+    company,
+    motion,
+    capability,
+    assignmentSource,
+    assignedUser,
+    userAssignmentRecord,
+    accountResolution
+  } = input;
+  if (capability !== "gmail") {
+    return null;
+  }
+  if (accountResolution?.sourceType !== "harness-connection" || accountResolution.status !== "identity_ambiguous") {
+    return null;
+  }
+  const scopedGmailRefs = (userAssignmentRecord?.accountRefs ?? [])
+    .filter((ref) => typeof ref === "string" && ref.startsWith("gmail:"));
+  if (scopedGmailRefs.length > 0) {
+    return null;
+  }
+
+  const target = resolveExactGmailInboxTarget({ company, motion, assignmentSource });
+  const assignedLabel = normalizeNonEmptyString(assignedUser?.label) ?? "the assigned user";
+  const scopeLabel = target.kind === "motion" ? "this motion" : "this company";
+  const openLabel = target.kind === "motion" ? "Open motion settings" : "Open company";
+  const resolveHint = target.kind === "motion"
+    ? "Open motion settings and pick one Exact Gmail inbox under Execution."
+    : "Open the company and pick one Exact Gmail inbox under Execution.";
+
+  return {
+    blocker: `Multiple Gmail inboxes are mapped for ${assignedLabel}. Pick one exact inbox on ${scopeLabel} before email work can run.`,
+    blockerCode: "gmail_exact_inbox_required",
+    operatorReason: "Exact Gmail inbox required",
+    blockerDetail: `${assignedLabel} has multiple managed Gmail inboxes, so ${scopeLabel} cannot trust one sender implicitly. Pick one Exact Gmail inbox under Execution before email work can run.`,
+    resolveHint,
+    resolveHref: target.href,
+    resolveLabel: openLabel,
+    resolveMode: "detail",
+    blockType: "capability"
+  };
+}
+
+/**
+ * @param {{
+ *   company: import("../schema/company.js").companySchema._type,
+ *   motion: import("../schema/motion.js").motionSchema._type | null,
+ *   assignmentSource: string
+ * }} input
+ */
+function resolveExactGmailInboxTarget(input) {
+  if (input.assignmentSource === "company-user") {
+    return {
+      kind: "company",
+      href: `/companies/${encodeURIComponent(input.company.id)}`
+    };
+  }
+  if (input.motion) {
+    return {
+      kind: "motion",
+      href: `/motions/${encodeURIComponent(input.motion.id)}/settings#execution`
+    };
+  }
+  return {
+    kind: "company",
+    href: `/companies/${encodeURIComponent(input.company.id)}`
+  };
+}
+
+/** @param {unknown} value */
+function normalizeNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length ? value.trim() : null;
 }

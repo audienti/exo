@@ -43,12 +43,17 @@ const CONTACT_CONFIDENCE_SCORE = {
 };
 
 /**
- * @param {{ prospectPrepLanes: any[], engagementLanes: any[], motionDetails: any[], now?: string, query?: string | null }} input
+ * @param {{ prospectPrepLanes: any[], engagementLanes: any[], motionDetails: any[], rawMotions?: any[], now?: string, query?: string | null }} input
  */
 export function buildProspectsViewModel(input) {
   const now = input.now ?? new Date().toISOString();
   const ownerByProspect = new Map();
   const ownerByCompany = new Map();
+  const ownerByMotion = new Map(
+    (input.rawMotions ?? [])
+      .filter((motion) => motion && typeof motion.id === "string" && motion.engagementUserAssignment?.label)
+      .map((motion) => [motion.id, motion.engagementUserAssignment.label]),
+  );
   const industryByCompany = new Map();
   const premiseByMotion = new Map();
   const signalMetaByMotion = new Map();
@@ -115,7 +120,15 @@ export function buildProspectsViewModel(input) {
   const baseInventory = [...merged.values()]
     .map((raw) => ({
       raw,
-      prospect: shapeProspect(raw, { ownerByProspect, ownerByCompany, industryByCompany, premiseByMotion, signalMetaByMotion, now }),
+      prospect: shapeProspect(raw, {
+        ownerByProspect,
+        ownerByCompany,
+        ownerByMotion,
+        industryByCompany,
+        premiseByMotion,
+        signalMetaByMotion,
+        now,
+      }),
     }))
     .filter(({ raw, prospect }) => shouldIncludeProspect(raw, prospect))
     .map(({ prospect }) => prospect)
@@ -181,6 +194,7 @@ export function buildProspectsViewModel(input) {
  * @param {{
  *   ownerByProspect: Map<string,string>,
  *   ownerByCompany: Map<string,string>,
+ *   ownerByMotion: Map<string,string>,
  *   industryByCompany: Map<string,string>,
  *   premiseByMotion: Map<string,any>,
  *   signalMetaByMotion: Map<string, Map<string, { id: string, question: string | null, whyItMatters: string, scope: string }>>,
@@ -226,7 +240,10 @@ function shapeProspect(raw, ctx) {
     branch,
     branchLabel: normalizeBranchLabel(branch, raw.engagementLane?.label ?? null),
     actionIntents: intents,
-    owner: ctx.ownerByProspect.get(raw.prospectId) ?? ctx.ownerByCompany.get(raw.companyId) ?? null,
+    owner: ctx.ownerByProspect.get(raw.prospectId)
+      ?? ctx.ownerByCompany.get(raw.companyId)
+      ?? ctx.ownerByMotion.get(raw.motionId)
+      ?? null,
     ageLabel: relativeDays(raw.profileViewedAt),
     premise: ctx.premiseByMotion.get(raw.motionId) ?? null,
     whyRelevant: raw.whyRelevant ?? null,

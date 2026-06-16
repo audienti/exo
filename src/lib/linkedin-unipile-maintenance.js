@@ -214,60 +214,526 @@ export function runLinkedinMaintenanceWithUnipile(task, options = {}) {
  *   baseUrl?: string | null,
  *   apiKey?: string | null,
  *   allowDirectUnipileHttp?: boolean | null,
+ *   httpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
  *   httpPostImpl?: ((url: string, headers: Record<string, string>, bodyText: string) => { status: number, bodyText: string } | null) | null,
  * }} [options]
  */
 export function runLinkedinSendWithUnipile(handoff, options = {}) {
-  const context = resolveLinkedinConnectionRequestSendContext(handoff, options);
-  if (context.status !== "ready") {
-    return context;
-  }
+  const action = normalizeNullableString(handoff?.action);
+  if (action === "send_connection_request") {
+    const context = resolveLinkedinConnectionRequestSendContext(handoff, options);
+    if (context.status !== "ready") {
+      return context;
+    }
 
-  const { apiKey: configuredApiKey } = readUnipileConfig(options.codexHome ?? null);
-  const apiKey = normalizeNullableString(options.apiKey) ?? configuredApiKey;
-  if (!apiKey) {
-    return {
-      status: "blocked",
-      reason: "send_connection_request requires UNIPILE_API_KEY in the local Codex environment.",
+    const { apiKey: configuredApiKey } = readUnipileConfig(options.codexHome ?? null);
+    const apiKey = normalizeNullableString(options.apiKey) ?? configuredApiKey;
+    if (!apiKey) {
+      return {
+        status: "blocked",
+        reason: "send_connection_request requires UNIPILE_API_KEY in the local Codex environment.",
+      };
+    }
+
+    const requestBody = {
+      provider_id: context.recipientProviderId,
+      account_id: context.providerAccountId,
     };
-  }
+    if (context.message) {
+      requestBody.message = context.message;
+    }
 
-  const requestBody = {
-    provider_id: context.recipientProviderId,
-    account_id: context.providerAccountId,
-  };
-  if (context.message) {
-    requestBody.message = context.message;
-  }
+    const response = requestUnipileJson({
+      method: "POST",
+      url: new URL("/api/v1/users/invite", context.baseUrl).toString(),
+      apiKey,
+      bodyText: JSON.stringify(requestBody),
+      allowDirectUnipileHttp: options.allowDirectUnipileHttp === true,
+      httpPostImpl: options.httpPostImpl ?? null,
+    });
+    if (!response.ok) {
+      return {
+        status: "blocked",
+        reason: buildMaintenanceFailureReason("send_connection_request", response),
+        provider: "unipile",
+        responseStatus: response.status,
+        result: response.parsed,
+      };
+    }
 
-  const response = requestUnipileJson({
-    method: "POST",
-    url: new URL("/api/v1/users/invite", context.baseUrl).toString(),
-    apiKey,
-    bodyText: JSON.stringify(requestBody),
-    allowDirectUnipileHttp: options.allowDirectUnipileHttp === true,
-    httpPostImpl: options.httpPostImpl ?? null,
-  });
-  if (!response.ok) {
     return {
-      status: "blocked",
-      reason: buildMaintenanceFailureReason("send_connection_request", response),
+      status: "sent",
       provider: "unipile",
       responseStatus: response.status,
+      invitationId: normalizeNullableString(response.parsed?.id)
+        ?? normalizeNullableString(response.parsed?.invitation_id)
+        ?? normalizeNullableString(response.parsed?.invitationId)
+        ?? null,
       result: response.parsed,
     };
   }
 
+  if (action === "like_post" || action === "create_comment_reaction") {
+    const context = resolveLinkedinPublicReactionSendContext(handoff, options);
+    if (context.status !== "ready") {
+      return context;
+    }
+
+    const { apiKey: configuredApiKey } = readUnipileConfig(options.codexHome ?? null);
+    const apiKey = normalizeNullableString(options.apiKey) ?? configuredApiKey;
+    if (!apiKey) {
+      return {
+        status: "blocked",
+        reason: `${action} requires UNIPILE_API_KEY in the local Codex environment.`,
+      };
+    }
+
+    const postUrl = new URL(`/api/v1/posts/${encodeURIComponent(context.postLookupId)}`, context.baseUrl);
+    postUrl.searchParams.set("account_id", context.providerAccountId);
+    const postResponse = requestUnipileJson({
+      method: "GET",
+      url: postUrl.toString(),
+      apiKey,
+      allowDirectUnipileHttp: options.allowDirectUnipileHttp === true,
+      httpGetImpl: options.httpGetImpl ?? null,
+    });
+    if (!postResponse.ok) {
+      return {
+        status: "blocked",
+        reason: buildMaintenanceFailureReason(`${action}_post_lookup`, postResponse),
+        provider: "unipile",
+        responseStatus: postResponse.status,
+        result: postResponse.parsed,
+      };
+    }
+
+    const post = Array.isArray(postResponse.parsed) ? postResponse.parsed[0] : postResponse.parsed;
+    const socialId = normalizeNullableString(post?.social_id);
+    if (!socialId) {
+      return {
+        status: "unsupported",
+        reason: `${action} requires the Unipile post lookup response to include social_id.`,
+        provider: "unipile",
+        responseStatus: postResponse.status,
+        result: postResponse.parsed,
+      };
+    }
+    if (post?.permissions && post.permissions.can_react === false) {
+      return {
+        status: "unavailable",
+        reason: "Unipile reports that the stored LinkedIn post cannot be reacted to by the governed account.",
+        provider: "unipile",
+        responseStatus: postResponse.status,
+        usedTargetUrl: context.targetUrl,
+        result: postResponse.parsed,
+      };
+    }
+
+    let commentId = context.commentId;
+    let commentResolution = null;
+    if (action === "create_comment_reaction" && !commentId) {
+      commentResolution = resolveLinkedinPublicReactionCommentId({
+        socialId,
+        context,
+        apiKey,
+        httpGetImpl: options.httpGetImpl ?? null,
+        allowDirectUnipileHttp: options.allowDirectUnipileHttp === true,
+      });
+      if (commentResolution.status !== "ready") {
+        return commentResolution;
+      }
+      commentId = commentResolution.commentId;
+    }
+
+    const requestBody = {
+      account_id: context.providerAccountId,
+      post_id: socialId,
+      reaction_type: "like",
+    };
+    if (commentId) {
+      requestBody.comment_id = commentId;
+    }
+    const reactionResponse = requestUnipileJson({
+      method: "POST",
+      url: new URL("/api/v1/posts/reaction", context.baseUrl).toString(),
+      apiKey,
+      bodyText: JSON.stringify(requestBody),
+      allowDirectUnipileHttp: options.allowDirectUnipileHttp === true,
+      httpPostImpl: options.httpPostImpl ?? null,
+    });
+    if (!reactionResponse.ok) {
+      return {
+        status: "blocked",
+        reason: buildMaintenanceFailureReason(action, reactionResponse),
+        provider: "unipile",
+        responseStatus: reactionResponse.status,
+        usedTargetUrl: context.targetUrl,
+        result: reactionResponse.parsed,
+      };
+    }
+
+    return {
+      status: "sent",
+      provider: "unipile",
+      responseStatus: reactionResponse.status,
+      postSocialId: socialId,
+      commentId,
+      commentResolution,
+      usedTargetUrl: context.targetUrl,
+      result: reactionResponse.parsed,
+    };
+  }
+
   return {
-    status: "sent",
-    provider: "unipile",
-    responseStatus: response.status,
-    invitationId: normalizeNullableString(response.parsed?.id)
-      ?? normalizeNullableString(response.parsed?.invitation_id)
-      ?? normalizeNullableString(response.parsed?.invitationId)
-      ?? null,
-    result: response.parsed,
+    status: "unsupported",
+    reason: "Direct Unipile send supports send_connection_request and resolvable public LinkedIn reactions only.",
   };
+}
+
+/**
+ * @param {any} handoff
+ * @param {{ codexHome?: string | null, baseUrl?: string | null }} [options]
+ */
+function resolveLinkedinPublicReactionSendContext(handoff, options = {}) {
+  const action = normalizeNullableString(handoff?.action);
+  if (action !== "like_post" && action !== "create_comment_reaction") {
+    return {
+      status: "unsupported",
+      reason: "Direct Unipile public reactions only support like_post and create_comment_reaction.",
+    };
+  }
+
+  const channel = normalizeNullableString(handoff?.channel)?.toLowerCase() ?? null;
+  if (channel && channel !== "linkedin") {
+    return {
+      status: "unsupported",
+      reason: `Direct Unipile public reaction requires a LinkedIn handoff. Resolved channel ${channel}.`,
+    };
+  }
+
+  const connector = normalizeConnectorKey(handoff?.connector);
+  if (connector && connector !== "unipile") {
+    return {
+      status: "unsupported",
+      reason: `Direct Unipile public reaction requires a Unipile connector. Resolved connector ${handoff.connector}.`,
+    };
+  }
+
+  const providerAccountId = normalizeNullableString(handoff?.senderAccount?.providerAccountId)
+    ?? normalizeNullableString(handoff?.providerAccountId)
+    ?? normalizeNullableString(handoff?.executionPolicy?.sameCredentialHttpFallbackAccountId);
+  if (!providerAccountId) {
+    return {
+      status: "blocked",
+      reason: `${action} requires senderAccount.providerAccountId for the governed LinkedIn account.`,
+    };
+  }
+
+  const targetUrl = normalizeNullableString(handoff?.publicTarget?.url)
+    ?? normalizeNullableString(handoff?.recipient?.profileUrl)
+    ?? normalizeNullableString(handoff?.recipientUrl);
+  if (!targetUrl) {
+    return {
+      status: "unsupported",
+      reason: `${action} requires a stored LinkedIn public target URL.`,
+    };
+  }
+
+  const targetKind = normalizeNullableString(handoff?.publicTarget?.targetKind)?.toLowerCase() ?? null;
+  if (action === "like_post" && targetKind === "comment") {
+    return {
+      status: "unsupported",
+      reason: "like_post direct reaction requires a post target, not a comment target.",
+    };
+  }
+  if (action === "create_comment_reaction" && targetKind && targetKind !== "comment") {
+    return {
+      status: "unsupported",
+      reason: "create_comment_reaction direct reaction requires a comment target.",
+    };
+  }
+
+  const commentId = normalizeNullableString(handoff?.publicTarget?.commentId)
+    ?? normalizeNullableString(handoff?.publicTarget?.comment_id)
+    ?? normalizeNullableString(handoff?.commentId)
+    ?? null;
+
+  const postLookupId = extractLinkedinPostLookupId(targetUrl);
+  if (!postLookupId) {
+    return {
+      status: "unsupported",
+      reason: `${action} requires a LinkedIn post URL containing an activity, ugcPost, or share id.`,
+    };
+  }
+
+  const config = readUnipileConfig(options.codexHome ?? null);
+  const baseUrl = normalizeNullableString(options.baseUrl)
+    ?? (config.baseUrlSource === "default" ? null : config.baseUrl);
+  if (!baseUrl) {
+    return {
+      status: "blocked",
+      reason: `${action} requires a configured Unipile base URL.`,
+    };
+  }
+
+  return {
+    status: "ready",
+    providerAccountId,
+    targetUrl,
+    targetKind,
+    postLookupId,
+    commentId,
+    commentHints: buildCommentResolutionHints(handoff),
+    baseUrl,
+  };
+}
+
+/**
+ * @param {{
+ *   socialId: string,
+ *   context: {
+ *     baseUrl: string,
+ *     providerAccountId: string,
+ *     targetUrl: string,
+ *     commentHints?: ReturnType<typeof buildCommentResolutionHints>,
+ *   },
+ *   apiKey: string,
+ *   allowDirectUnipileHttp?: boolean,
+ *   httpGetImpl?: ((url: string, headers: Record<string, string>) => { status: number, bodyText: string } | null) | null,
+ * }} input
+ */
+function resolveLinkedinPublicReactionCommentId(input) {
+  const commentsUrl = new URL(`/api/v1/posts/${encodeURIComponent(input.socialId)}/comments`, input.context.baseUrl);
+  commentsUrl.searchParams.set("account_id", input.context.providerAccountId);
+  commentsUrl.searchParams.set("limit", "100");
+  commentsUrl.searchParams.set("sort_by", "MOST_RECENT");
+  const commentsResponse = requestUnipileJson({
+    method: "GET",
+    url: commentsUrl.toString(),
+    apiKey: input.apiKey,
+    allowDirectUnipileHttp: input.allowDirectUnipileHttp === true,
+    httpGetImpl: input.httpGetImpl ?? null,
+  });
+  if (!commentsResponse.ok) {
+    return {
+      status: "blocked",
+      reason: buildMaintenanceFailureReason("create_comment_reaction_comment_lookup", commentsResponse),
+      provider: "unipile",
+      responseStatus: commentsResponse.status,
+      result: commentsResponse.parsed,
+    };
+  }
+
+  const comments = extractUnipileItems(commentsResponse.parsed);
+  const match = selectLinkedinCommentMatch(comments, input.context.commentHints);
+  if (!match.commentId) {
+    return {
+      status: "unsupported",
+      reason: match.reason,
+      provider: "unipile",
+      responseStatus: commentsResponse.status,
+      usedTargetUrl: input.context.targetUrl,
+      result: {
+        commentCount: comments.length,
+      },
+    };
+  }
+
+  return {
+    status: "ready",
+    provider: "unipile",
+    responseStatus: commentsResponse.status,
+    commentId: match.commentId,
+    matchReason: match.reason,
+    result: {
+      commentCount: comments.length,
+    },
+  };
+}
+
+/** @param {any} handoff */
+function buildCommentResolutionHints(handoff) {
+  return {
+    recipientName: normalizeNullableString(handoff?.recipient?.name),
+    recipientPublicId: normalizeNullableString(handoff?.recipient?.publicId),
+    targetSummary: normalizeNullableString(handoff?.publicTarget?.summary),
+    targetSnippet: normalizeNullableString(handoff?.publicTarget?.snippet),
+    targetRationale: normalizeNullableString(handoff?.publicTarget?.rationale),
+  };
+}
+
+/** @param {any} parsed */
+function extractUnipileItems(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed?.items)) return parsed.items;
+  if (Array.isArray(parsed?.data)) return parsed.data;
+  if (Array.isArray(parsed?.comments)) return parsed.comments;
+  if (Array.isArray(parsed?.elements)) return parsed.elements;
+  return [];
+}
+
+/**
+ * @param {any[]} comments
+ * @param {ReturnType<typeof buildCommentResolutionHints> | null | undefined} hints
+ */
+function selectLinkedinCommentMatch(comments, hints) {
+  const scored = comments
+    .map((comment) => {
+      const commentId = normalizeNullableString(comment?.id)
+        ?? normalizeNullableString(comment?.comment_id)
+        ?? normalizeNullableString(comment?.commentId)
+        ?? normalizeNullableString(comment?.social_id)
+        ?? null;
+      if (!commentId) return null;
+      const score = scoreLinkedinCommentMatch(comment, hints);
+      return {
+        commentId,
+        score,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.score - left.score);
+
+  const best = scored[0] ?? null;
+  if (!best || best.score < 3) {
+    return {
+      commentId: null,
+      reason: "create_comment_reaction could not resolve a unique LinkedIn comment id from the stored target evidence.",
+    };
+  }
+
+  const tiedBest = scored.filter((candidate) => candidate.score === best.score);
+  if (tiedBest.length > 1) {
+    return {
+      commentId: null,
+      reason: "create_comment_reaction matched multiple LinkedIn comments with equal confidence; refusing to react to an ambiguous target.",
+    };
+  }
+
+  return {
+    commentId: best.commentId,
+    reason: "matched_stored_comment_evidence",
+  };
+}
+
+/**
+ * @param {any} comment
+ * @param {ReturnType<typeof buildCommentResolutionHints> | null | undefined} hints
+ */
+function scoreLinkedinCommentMatch(comment, hints) {
+  let score = 0;
+  const author = comment?.author ?? comment?.actor ?? comment?.user ?? null;
+  const authorPublicId = normalizeNullableString(author?.public_identifier)
+    ?? normalizeNullableString(author?.publicIdentifier)
+    ?? normalizeNullableString(author?.public_id)
+    ?? null;
+  const authorName = normalizeNullableString(author?.name)
+    ?? normalizeNullableString(comment?.author_name)
+    ?? null;
+  if (hints?.recipientPublicId && authorPublicId && normalizeTextForMatch(authorPublicId) === normalizeTextForMatch(hints.recipientPublicId)) {
+    score += 100;
+  }
+  if (hints?.recipientName && authorName && normalizeTextForMatch(authorName) === normalizeTextForMatch(hints.recipientName)) {
+    score += 50;
+  }
+
+  const text = normalizeNullableString(comment?.text)
+    ?? normalizeNullableString(comment?.body)
+    ?? normalizeNullableString(comment?.message)
+    ?? normalizeNullableString(comment?.content)
+    ?? "";
+  score += countOverlappingMeaningfulTokens(text, [
+    hints?.targetSnippet,
+    hints?.targetSummary,
+    hints?.targetRationale,
+  ]);
+  return score;
+}
+
+/**
+ * @param {string | null | undefined} text
+ * @param {Array<string | null | undefined>} hintTexts
+ */
+function countOverlappingMeaningfulTokens(text, hintTexts) {
+  const textTokens = new Set(tokenizeMeaningfulText(text));
+  if (!textTokens.size) return 0;
+  const hintTokens = new Set(hintTexts.flatMap((hint) => tokenizeMeaningfulText(hint)));
+  let overlap = 0;
+  for (const token of hintTokens) {
+    if (textTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap;
+}
+
+/** @param {string | null | undefined} value */
+function tokenizeMeaningfulText(value) {
+  const normalized = normalizeTextForMatch(value);
+  if (!normalized) return [];
+  const stopWords = new Set([
+    "about",
+    "after",
+    "asked",
+    "asking",
+    "comment",
+    "commented",
+    "clearly",
+    "connect",
+    "contact",
+    "email",
+    "have",
+    "into",
+    "need",
+    "reply",
+    "should",
+    "stored",
+    "that",
+    "this",
+    "thread",
+    "with",
+  ]);
+  return normalized
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4 && !stopWords.has(token));
+}
+
+/** @param {string | null | undefined} value */
+function normalizeTextForMatch(value) {
+  return normalizeNullableString(value)
+    ?.toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    ?? "";
+}
+
+/** @param {string | null | undefined} rawUrl */
+function extractLinkedinPostLookupId(rawUrl) {
+  const value = normalizeNullableString(rawUrl);
+  if (!value) return null;
+
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    decoded = value;
+  }
+
+  const ugcPost = decoded.match(/(?:urn:li:ugcPost:|ugcPost[-_:])(\d{8,})/i);
+  if (ugcPost?.[1]) {
+    return `urn:li:ugcPost:${ugcPost[1]}`;
+  }
+
+  const share = decoded.match(/(?:urn:li:share:|share[-_:])(\d{8,})/i);
+  if (share?.[1]) {
+    return `urn:li:share:${share[1]}`;
+  }
+
+  const activity = decoded.match(/(?:urn:li:activity:|activity[-_:])(\d{8,})/i);
+  return activity?.[1] ?? null;
 }
 
 /**

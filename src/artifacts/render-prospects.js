@@ -411,7 +411,7 @@ function renderProspectLifecyclePanel(p, meta = {}) {
     stateDot(disposition === "active" && accountDisposition === "active" ? "active" : "waiting", status) +
     `</div>` +
     `<div class="lifecycle-actions">` +
-    `<input class="compose-input lifecycle-reason" name="lifecycleReason" placeholder="Reason for nurture or terminal state" autocomplete="off" />` +
+    `<input class="compose-input lifecycle-reason" name="lifecycleReason" placeholder="Reason" autocomplete="off" hidden aria-hidden="true" />` +
     lifecycleActions +
     packetActions +
     `</div>` +
@@ -473,6 +473,7 @@ function renderProspectDispositionButton(p, disposition, label, icon, variant) {
     label,
     title: intent.command,
     fields: "lifecycleReason:reason",
+    revealField: { name: "lifecycleReason", placeholder: "Reason" },
   });
 }
 
@@ -489,9 +490,9 @@ function renderProspectPacketReviewActions(p) {
   return (
     `<span class="lifecycle-sep">Packet review</span>` +
     liveActionBtn({ writer: accept.writer, args: accept.args, variant: "primary", size: "sm", icon: "check", label: "Accept packet", title: accept.command }) +
-    liveActionBtn({ writer: nurture.writer, args: nurture.args, variant: "secondary", size: "sm", icon: "clock", label: "Packet nurture", title: nurture.command, fields: "lifecycleReason:reason" }) +
-    liveActionBtn({ writer: terminal.writer, args: terminal.args, variant: "danger", size: "sm", icon: "x", label: "Packet not a fit", title: terminal.command, fields: "lifecycleReason:reason" }) +
-    liveActionBtn({ writer: returned.writer, args: returned.args, variant: "ghost", size: "sm", icon: "refresh", label: "Return packet", title: returned.command, fields: "lifecycleReason:notes" })
+    liveActionBtn({ writer: nurture.writer, args: nurture.args, variant: "secondary", size: "sm", icon: "clock", label: "Packet nurture", title: nurture.command, fields: "lifecycleReason:reason", revealField: { name: "lifecycleReason", placeholder: "Reason" } }) +
+    liveActionBtn({ writer: terminal.writer, args: terminal.args, variant: "danger", size: "sm", icon: "x", label: "Packet not a fit", title: terminal.command, fields: "lifecycleReason:reason", revealField: { name: "lifecycleReason", placeholder: "Reason" } }) +
+    liveActionBtn({ writer: returned.writer, args: returned.args, variant: "ghost", size: "sm", icon: "refresh", label: "Return packet", title: returned.command, fields: "lifecycleReason:notes", revealField: { name: "lifecycleReason", placeholder: "Return note" } })
   );
 }
 

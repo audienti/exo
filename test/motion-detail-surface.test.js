@@ -35,6 +35,111 @@ function runCli(stateDir, args) {
   });
 }
 
+/**
+ * @param {string} iso
+ */
+function formatLocalActivityStamp(iso) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(iso));
+}
+
+test("motion detail exposes explicit stage progress and a deeper recent activity window", () => {
+  const model = buildMotionsViewModel({
+    motionSummaries: [
+      {
+        id: "motion-stage",
+        name: "motion-stage",
+        status: "active",
+        overallStage: "needs-company-research",
+        companyCount: 1,
+        prospectCount: 1,
+        dueNowCount: 1,
+      },
+    ],
+    motionDetails: [
+      {
+        motionId: "motion-stage",
+        motionName: "motion-stage",
+        motionStatus: "active",
+        overallStage: "needs-company-research",
+        offer: { title: "Offer" },
+        premise: { statement: "Premise" },
+        strategyState: { tone: "warning" },
+        signals: [],
+        audiences: [],
+        companies: [],
+        backlogCompanies: [
+          {
+            companyId: "co-1",
+            companyName: "Example Co",
+            domain: "example.com",
+            prospectCount: 1,
+            stage: "needs-company-research",
+            queueStatus: "queued_for_research",
+          },
+        ],
+        people: [],
+        plan: {
+          nextSteps: [],
+          dueNowCount: 1,
+          readyToSendCount: 0,
+          messageTestReadyCount: 1,
+          companyCount: 1,
+          prospectCount: 1,
+        },
+      },
+    ],
+    rawMotions: [
+      {
+        id: "motion-stage",
+        targetMap: {
+          accounts: [
+            {
+              companyId: "co-1",
+              companyName: "Example Co",
+              signalMatches: [],
+              prospects: [
+                {
+                  id: "pros-1",
+                  name: "Taylor Example",
+                  title: "Director",
+                  touches: Array.from({ length: 14 }, (_, index) => ({
+                    surface: "connection_request",
+                    direction: "outbound",
+                    outcome: "sent",
+                    occurredAt: new Date(Date.UTC(2026, 5, 1, 12, index)).toISOString(),
+                    summary: `Touch ${index + 1}`,
+                  })),
+                  drafts: [],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ],
+    rawCompanies: [],
+  });
+
+  assert.equal(model.details[0].plan.stageLabel, "Company research");
+  assert.equal(model.details[0].plan.stagePosition, 4);
+  assert.equal(model.details[0].plan.stageTotal, 7);
+  assert.equal(model.details[0].activity.totalEventCount, 14);
+  assert.equal(model.details[0].activity.events.length, 12);
+
+  const html = renderMotionDetailPage(model.details[0], { interactive: true });
+  assert.match(html, /Motion stage/);
+  assert.match(html, /Company research/);
+  assert.match(html, /4 of 7/);
+  assert.match(html, /Showing latest 12 of 14 recorded items\./);
+  assert.doesNotMatch(html, /42%\s*<\/em><em>Stage readiness/);
+});
+
 test("motion detail surface data flows through motion and workspace reports", () => {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-motion-detail-"));
   const workspacePath = path.join(stateDir, "workspace.html");
@@ -257,6 +362,16 @@ test("motion detail surface data flows through motion and workspace reports", ()
     assert.equal(motionsJson.motions[0].activity.outboundTouchCount, 1);
     assert.equal(motionsJson.motions[0].activity.stagedDraftCount, 1);
     assert.equal(motionsJson.details[0].activity.events.length, 2);
+    const motionDetailPageHtml = renderMotionDetailPage(motionsJson.details[0], { interactive: true });
+    assert.match(motionDetailPageHtml, new RegExp(`data-tabset="motion-workviews-${motion.id}"`));
+    assert.match(
+      motionDetailPageHtml,
+      new RegExp(`role="tab"[^>]*aria-selected="true"[^>]*data-tab-target="motion-${motion.id}-activity"`),
+    );
+    assert.match(motionDetailPageHtml, /Motion activity/);
+    assert.match(motionDetailPageHtml, /Viewed Riley Stone before deciding on the opening move\./);
+    assert.ok(motionDetailPageHtml.includes(formatLocalActivityStamp("2026-05-31T12:00:00.000Z")));
+    assert.doesNotMatch(motionDetailPageHtml, /2026-05-31 12:00Z/);
 
     runCli(stateDir, ["report", "motions", "--user", user.id, "--out", motionsPath]);
     const motionsHtml = fs.readFileSync(motionsPath, "utf8");
@@ -264,6 +379,8 @@ test("motion detail surface data flows through motion and workspace reports", ()
     assert.match(motionsHtml, /1 recorded touch/);
     assert.match(motionsHtml, /1 staged draft/);
     assert.match(motionsHtml, /Viewed Riley Stone before deciding on the opening move\./);
+    assert.ok(motionsHtml.includes(formatLocalActivityStamp("2026-05-31T12:00:00.000Z")));
+    assert.doesNotMatch(motionsHtml, /2026-05-31 12:00Z/);
   } finally {
     fs.rmSync(stateDir, { recursive: true, force: true });
   }

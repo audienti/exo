@@ -11,21 +11,31 @@
 
 import { buildMotionPacketSummary } from "../lib/motion-packets.js";
 
-/**
- * Stage → readiness fraction. Honest, monotonic ordering of the targeting loop.
- * @type {Record<string, number>}
- */
-const STAGE_READINESS = {
-  "needs-motion-definition": 0.08,
-  "needs-company-targeting": 0.2,
-  "needs-company-identity": 0.3,
-  "needs-company-research": 0.42,
-  "needs-prospect-selection": 0.55,
-  "needs-cadence": 0.74,
-  "targeting-ready": 0.92,
-  paused: 0.5,
-  archived: 0.0,
-};
+const TARGETING_STAGE_SEQUENCE = [
+  { key: "needs-motion-definition", label: "Motion definition" },
+  { key: "needs-company-targeting", label: "Company targeting" },
+  { key: "needs-company-identity", label: "Company identity" },
+  { key: "needs-company-research", label: "Company research" },
+  { key: "needs-prospect-selection", label: "Prospect selection" },
+  { key: "needs-cadence", label: "Cadence setup" },
+  { key: "targeting-ready", label: "Targeting ready" },
+];
+
+const TARGETING_STAGE_TOTAL = TARGETING_STAGE_SEQUENCE.length;
+const STAGE_META = Object.fromEntries(
+  TARGETING_STAGE_SEQUENCE.map((stage, index) => [
+    stage.key,
+    {
+      key: stage.key,
+      label: stage.label,
+      position: index + 1,
+      total: TARGETING_STAGE_TOTAL,
+      progress: (index + 1) / TARGETING_STAGE_TOTAL,
+    },
+  ]),
+);
+
+const MAX_RECENT_ACTIVITY_EVENTS = 12;
 
 /** strategyState.tone → truth axis */
 const TONE_TRUTH = {
@@ -54,7 +64,7 @@ export function buildMotionsViewModel(input) {
   const rawCompanies = input.rawCompanies ?? [];
 
   const motions = input.motionSummaries.map((summary) => {
-    const readiness = STAGE_READINESS[summary.overallStage] ?? 0.15;
+    const stage = resolveStageMeta(summary.overallStage ?? summary.status);
     const detail = detailById.get(summary.id) ?? null;
     const rawMotion = rawMotionById.get(summary.id) ?? null;
     const blocker = deriveListBlocker(summary, detail, rawMotion);
@@ -64,7 +74,11 @@ export function buildMotionsViewModel(input) {
       state: STATUS_STATE[summary.status] ?? "draft",
       sourceUrl: detail?.offer?.url ?? null,
       truth: deriveTruth(detail),
-      readiness,
+      readiness: stage.progress,
+      stageKey: stage.key,
+      stageLabel: stage.label,
+      stagePosition: stage.position,
+      stageTotal: stage.total,
       // Concise strategy summary for the card: what the offer is, what the
       // premise claims, and how many signals back it.
       offerTitle: detail?.offer?.title ?? null,
@@ -191,14 +205,14 @@ function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, k
     signal: person.signalLabel ?? person.signalQuestion ?? "",
     branch: mapBranchState(person.branchState?.key),
     branchLabel: person.branchState?.label ?? null,
-    owner: person.ownerLabel ?? null,
+    owner: person.ownerLabel ?? rawMotion?.engagementUserAssignment?.label ?? null,
     queueStatus: person.queueStatus ?? null,
     crossMotionOwner: person.crossMotionOwner ?? null,
   }));
   const reviewPackets = shapeReviewPackets(rawMotion, rawCompanies, detail);
 
   const plan = detail.plan ?? {};
-  const readiness = STAGE_READINESS[detail.overallStage] ?? 0.15;
+  const stage = resolveStageMeta(detail.overallStage ?? detail.motionStatus);
 
   return {
     id: detail.motionId,
@@ -237,9 +251,20 @@ function shapeDetail(detail, _total, rawMotion = null, blocker = { text: null, k
         tone: mapStepTone(step.tone),
       })),
       actionsRun: plan.dueNowCount ?? 0,
+      waitingCount: plan.waitingCount ?? 0,
+      reviewCount: plan.reviewCount ?? 0,
       drafts: plan.messageTestReadyCount ?? 0,
-      readiness,
+      readiness: stage.progress,
+      stageKey: stage.key,
+      stageLabel: stage.label,
+      stagePosition: stage.position,
+      stageTotal: stage.total,
       readyToSend: plan.readyToSendCount ?? 0,
+      companyCount: plan.companyCount ?? 0,
+      prospectCount: plan.prospectCount ?? 0,
+      recentPostReadyCount: plan.recentPostReadyCount ?? 0,
+      emailFallbackCount: plan.emailFallbackCount ?? 0,
+      stage: detail.overallStage ?? "unknown",
       packet: derivePacketState(plan),
     },
   };
@@ -338,6 +363,7 @@ function summarizeMotionActivity(rawMotion) {
     outboundTouchCount: 0,
     stagedDraftCount: 0,
     latestAt: null,
+    totalEventCount: 0,
     events: [],
   };
   if (!rawMotion?.targetMap?.accounts?.length) return summary;
@@ -368,7 +394,8 @@ function summarizeMotionActivity(rawMotion) {
   }
 
   summary.events.sort((left, right) => (left.at < right.at ? 1 : left.at > right.at ? -1 : 0));
-  summary.events = summary.events.slice(0, 5);
+  summary.totalEventCount = summary.events.length;
+  summary.events = summary.events.slice(0, MAX_RECENT_ACTIVITY_EVENTS);
   return summary;
 }
 
@@ -421,6 +448,44 @@ function normalizeIso(value) {
   if (!value) return null;
   const iso = String(value);
   return /^\d{4}-\d{2}-\d{2}T/.test(iso) ? iso : null;
+}
+
+/** @param {string | null | undefined} stage */
+function resolveStageMeta(stage) {
+  const normalized = String(stage ?? "").trim();
+  if (STAGE_META[normalized]) return STAGE_META[normalized];
+  if (normalized === "paused") {
+    return {
+      key: "paused",
+      label: "Paused",
+      position: null,
+      total: TARGETING_STAGE_TOTAL,
+      progress: 0.5,
+    };
+  }
+  if (normalized === "archived") {
+    return {
+      key: "archived",
+      label: "Archived",
+      position: null,
+      total: TARGETING_STAGE_TOTAL,
+      progress: 0,
+    };
+  }
+  return {
+    key: normalized || "unknown",
+    label: humanizeStage(normalized || "unknown"),
+    position: null,
+    total: TARGETING_STAGE_TOTAL,
+    progress: 0.15,
+  };
+}
+
+/** @param {string} stage */
+function humanizeStage(stage) {
+  return String(stage)
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 /** @param {{ surface?: string | null, direction?: string | null, outcome?: string | null }} touch */

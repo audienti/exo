@@ -5,8 +5,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { buildAgentQueue } from "../core/build-agent-queue.js";
 import { probeRuntimeConnectorAvailability } from "../core/probe-user-harness-connections.js";
-import { BROWSER_TRANSPORT_TASK_KINDS } from "./agent-host-state.js";
+import { BROWSER_TRANSPORT_TASK_KINDS, pruneInactiveTaskLeases } from "./agent-host-state.js";
 import {
+  listAgentQueueProspectBranches,
   listBrowserProfiles,
   listCompanies,
   listInboundCues,
@@ -19,6 +20,9 @@ import {
  * @param {{ stateDir: string, codexHome: string }} input
  */
 export function buildPreflightSummary(input) {
+  const hostState = pruneInactiveTaskLeases(readJsonIfExists(path.join(input.stateDir, "agent-host-state.json")), {
+    stateDir: input.stateDir,
+  });
   const queue = buildAgentQueue({
     motions: listMotions(),
     companies: listCompanies(),
@@ -26,6 +30,8 @@ export function buildPreflightSummary(input) {
     users: listUsers(),
     observations: listInboundObservations(),
     cues: listInboundCues(),
+    prospectBranches: listAgentQueueProspectBranches(),
+    hostState,
   });
   const draftTaskCount = queue.tasks.filter((task) => task.kind === "write_draft").length;
   const browserTasks = queue.tasks.filter((task) => BROWSER_TRANSPORT_TASK_KINDS.has(task.kind));
@@ -132,6 +138,16 @@ export function buildPreflightSummary(input) {
       chromeAppInstances,
     },
   };
+}
+
+/** @param {string} filePath */
+function readJsonIfExists(filePath) {
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 function buildBrowserTaskReadiness(input) {

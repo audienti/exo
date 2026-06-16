@@ -142,6 +142,7 @@ Rules:
         dueNowItems: data.dueNowItems,
         waitingItems: data.waitingItems,
         truthAccounts: data.truthAccounts,
+        rawMotions: listMotions(),
       });
 
       if (options.json) {
@@ -273,6 +274,7 @@ Rules:
         prospectPrepLanes: data.prospectPrepLanes,
         engagementLanes: data.engagementLanes,
         motionDetails: data.motionDetails,
+        rawMotions: listMotions(),
       });
 
       if (options.json) {

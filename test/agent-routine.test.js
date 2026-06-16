@@ -14,6 +14,7 @@ import {
   resolveRoutineScheduler,
   ROUTINE_ARTIFACT_VERSION,
 } from "../src/lib/agent-routine.js";
+import { buildAgentRunLockDir } from "../src/lib/agent-run-lock.js";
 import { buildNodeTestEnv } from "../scripts/node-test-runtime.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -88,7 +89,12 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
 
   const runner = plan.artifacts.find((artifact) => artifact.path.endsWith("run-agent-host.sh"))?.content ?? "";
   const prompt = plan.prompt;
+  const expectedLockDir = buildAgentRunLockDir({
+    username: "williamflanagan",
+    stateDir: "/tmp/exo/.exo",
+  });
   assert.match(runner, new RegExp(`# exo_agent_routine_version=${ROUTINE_ARTIFACT_VERSION}`));
+  assert.ok(runner.includes(`LOCK_DIR='${expectedLockDir}'`));
   assert.match(runner, /\/Applications\/Codex\.app\/Contents\/Resources\/codex/);
   assert.match(runner, /HOME="\$\{HOME:-\/Users\/tester\}"/);
   assert.match(runner, /USER="\$\{USER:-williamflanagan\}"/);
@@ -105,16 +111,15 @@ test("buildRoutinePlan emits a macOS host-local Codex runner and launch agent", 
   assert.match(runner, /rmdir "\$LOCK_DIR" 2>\/dev\/null \|\| true/);
   assert.match(runner, /trap 'release_lock' EXIT/);
   assert.match(runner, /PREFLIGHT_SCRIPT="\$ROOT\/scripts\/preflight-agent-runtime\.js"/);
-  assert.match(runner, /PASS_RUNNER_SCRIPT="\$ROOT\/scripts\/run-agent-host-pass\.js"/);
+  assert.match(runner, /LANE_BURST_SCRIPT="\$ROOT\/scripts\/run-agent-lane-burst\.js"/);
   assert.match(runner, /node "\$PREFLIGHT_SCRIPT" --json --write "\$PREFLIGHT_JSON"/);
-  assert.match(runner, /Starting deterministic host pass \(transport \+ research lanes\)/);
-  assert.match(runner, /EXO_AGENT_LANE=transport \/usr\/bin\/caffeinate -dimsu -t 7200 \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
-  assert.match(runner, /EXO_AGENT_LANE=research \/usr\/bin\/caffeinate -dimsu -t 7200 \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
+  assert.match(runner, /Starting deterministic host bursts \(transport \+ research lanes\)/);
+  assert.match(runner, /EXO_AGENT_LANE=transport \/usr\/bin\/caffeinate -dimsu -t 7200 \/usr\/bin\/env node "\$LANE_BURST_SCRIPT" &/);
+  assert.match(runner, /EXO_AGENT_LANE=research \/usr\/bin\/caffeinate -dimsu -t 7200 \/usr\/bin\/env node "\$LANE_BURST_SCRIPT" &/);
   assert.match(runner, /wait "\$transport_pid"/);
   assert.match(runner, /wait "\$research_pid"/);
   const postSpawnReleaseIndex = runner.indexOf("release_lock", runner.indexOf("research_pid=$!"));
-  assert.ok(postSpawnReleaseIndex > runner.indexOf("research_pid=$!"));
-  assert.ok(postSpawnReleaseIndex < runner.indexOf("wait \"$transport_pid\""));
+  assert.equal(postSpawnReleaseIndex, -1);
 
   assert.match(prompt, /Read \/tmp\/exo\/\.exo\/agent-preflight\.json first if it exists/);
   assert.match(prompt, /skip every browser-backed task in this pass/);
@@ -164,18 +169,22 @@ test("buildRoutinePlan falls back to cron and still emits the shared host runner
   assert.equal(plan.launchAgent, null);
   assert.equal(plan.artifacts.length, 2);
   const runner = plan.artifacts.find((artifact) => artifact.path.endsWith("run-agent-host.sh"))?.content ?? "";
+  const expectedLockDir = buildAgentRunLockDir({
+    username: "tester",
+    stateDir: "/tmp/exo/.exo",
+  });
+  assert.ok(runner.includes(`LOCK_DIR='${expectedLockDir}'`));
   assert.match(runner, /export HOME="\/Users\/tester"/);
   assert.match(runner, /export USER="tester"/);
   assert.match(runner, /export LOGNAME="tester"/);
   assert.match(runner, /LOCK_PID_FILE="\$LOCK_DIR\/pid"/);
   assert.match(runner, /Exo queue drainer already active/);
   assert.match(runner, /PREFLIGHT_SCRIPT="\$ROOT\/scripts\/preflight-agent-runtime\.js"/);
-  assert.match(runner, /PASS_RUNNER_SCRIPT="\$ROOT\/scripts\/run-agent-host-pass\.js"/);
-  assert.match(runner, /EXO_AGENT_LANE=transport \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
-  assert.match(runner, /EXO_AGENT_LANE=research \/usr\/bin\/env node "\$PASS_RUNNER_SCRIPT" &/);
+  assert.match(runner, /LANE_BURST_SCRIPT="\$ROOT\/scripts\/run-agent-lane-burst\.js"/);
+  assert.match(runner, /EXO_AGENT_LANE=transport \/usr\/bin\/env node "\$LANE_BURST_SCRIPT" &/);
+  assert.match(runner, /EXO_AGENT_LANE=research \/usr\/bin\/env node "\$LANE_BURST_SCRIPT" &/);
   const postSpawnReleaseIndex = runner.indexOf("release_lock", runner.indexOf("research_pid=$!"));
-  assert.ok(postSpawnReleaseIndex > runner.indexOf("research_pid=$!"));
-  assert.ok(postSpawnReleaseIndex < runner.indexOf("wait \"$transport_pid\""));
+  assert.equal(postSpawnReleaseIndex, -1);
   assert.doesNotMatch(runner, /claude -p|codex exec/);
 });
 
@@ -729,6 +738,9 @@ test("agent status surfaces current work, partial reason, throughput, and inboun
 
   try {
     fs.mkdirSync(stateDir, { recursive: true });
+    const sharedLockDir = buildAgentRunLockDir({ stateDir });
+    fs.mkdirSync(sharedLockDir, { recursive: true });
+    fs.writeFileSync(path.join(sharedLockDir, "pid"), `${process.pid}\n`, "utf8");
     fs.writeFileSync(path.join(stateDir, "agent-host-state.json"), JSON.stringify({
       taskLeases: [
         {
@@ -866,7 +878,7 @@ test("agent status surfaces current work, partial reason, throughput, and inboun
     assert.equal(report.current.tasks[0].lane, "transport");
     assert.equal(report.current.tasks[0].subject, "LinkedIn inbound truth");
     assert.equal(report.partial.active, true);
-    assert.match(report.partial.reason, /last pass completed available work/i);
+    assert.match(report.partial.reason, /last pass ended before the due queue drained/i);
     assert.equal(report.throughput.lastPass.resultCount, 2);
     assert.equal(report.throughput.last24Hours.recentMotionRunCount, 1);
     const following = report.inboundSurfaces.items.find((surface) => surface.surfaceKey === "linkedin-following-list");

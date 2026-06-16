@@ -34,11 +34,13 @@ import { evaluateOutboundDispatchGate } from "../src/core/outbound-dispatch-gate
  *   cues?: any[],
  *   cadenceState?: any,
  *   accountQueueState?: any,
+ *   prospectQueueState?: any,
  *   accountPacketState?: any,
  *   prospectPacketState?: any,
  *   accountDisposition?: string,
  *   prospectDisposition?: string,
  *   companyAssignment?: any,
+ *   motionAssignment?: any,
  *   personId?: string,
  *   targetTimezone?: string,
  *   motionStatus?: string,
@@ -46,17 +48,86 @@ import { evaluateOutboundDispatchGate } from "../src/core/outbound-dispatch-gate
  * }} prospectFields
  */
 function fixture(prospectFields) {
+  const normalizedDrafts = (prospectFields.drafts ?? []).map((draft, index) => ({
+    id: draft.id ?? `draft-${index + 1}`,
+    createdAt: draft.createdAt ?? "2026-06-01T00:00:00.000Z",
+    updatedAt: draft.updatedAt ?? draft.approvedAt ?? draft.createdAt ?? "2026-06-01T00:00:00.000Z",
+    authoredBy: draft.authoredBy ?? "operator",
+    editedByOperator: draft.editedByOperator ?? false,
+    approvedByOperator: draft.approvedByOperator ?? draft.status === "approved",
+    sentAt: draft.sentAt ?? null,
+    notes: draft.notes ?? null,
+    ...draft,
+  }));
+
   return {
     motions: [
       {
         id: "motion-1",
         name: "Motion One",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
         status: prospectFields.motionStatus ?? "active",
+        offer: {
+          sourceUrl: "https://example.com/product",
+          offerNotes: null,
+        },
+        premise: {
+          statement: "This matters when the buyer has a real coordination problem.",
+          notes: null,
+          source: "operator",
+          status: "defined",
+        },
+        targetingProfile: {
+          geolocations: [],
+          icpTypes: [],
+          industries: [],
+          companyTypes: [],
+          companyShapes: [],
+          companySizes: [],
+          targetTitles: [],
+          roleFamilies: [],
+          segmentVariants: [],
+          stakeholderTargetCount: 3,
+        },
+        suppressionPolicy: {
+          excludedAccounts: [],
+          excludedDomains: [],
+          excludedContacts: [],
+          doNotContactEntries: [],
+          doNotContactSources: [],
+          crmCustomerSuppressionEnabled: false,
+          crmOpportunitySuppressionEnabled: false,
+        },
+        offerThesis: {
+          sourceUrl: "https://example.com/product",
+          sourceTitle: null,
+          sourceDescription: null,
+          sourceSummary: "",
+          offerNotes: null,
+          problemThesis: null,
+          buyerImpactThesis: null,
+          likelyTriggerThesis: null,
+          likelyRoleThesis: null,
+          likelySegmentThesis: null,
+          status: "seeded",
+        },
+        audienceHypotheses: [],
+        signals: [],
+        engagementUserAssignment: prospectFields.motionAssignment ?? null,
+        engagementProfileAssignment: null,
         targetMap: {
+          status: "pending",
           accounts: [
             {
               companyId: "company-1",
               companyName: "Acme",
+              domain: "acme.example",
+              websiteUrl: "https://acme.example",
+              linkedinCompanyUrl: "https://linkedin.com/company/acme",
+              companyLogoSourceUrl: null,
+              companyLogoUrl: null,
+              signalMatches: [],
               queueState: prospectFields.accountQueueState ?? undefined,
               packetState: prospectFields.accountPacketState ?? undefined,
               disposition: prospectFields.accountDisposition ?? undefined,
@@ -65,14 +136,23 @@ function fixture(prospectFields) {
                   id: "prospect-1",
                   personId: prospectFields.personId ?? undefined,
                   name: "Princess",
+                  title: "VP Revenue",
                   linkedinProfileUrl: "https://linkedin.com/in/princess",
                   email: prospectFields.email ?? undefined,
+                  avatarSourceUrl: null,
+                  avatarUrl: null,
+                  buyingCommitteeRole: "other",
+                  decisionAuthority: "unknown",
+                  fitConfidence: "moderate",
+                  whyRelevant: "In scope for the governed queue fixture.",
                   sourceUrl: prospectFields.sourceUrl ?? undefined,
+                  observedAt: "2026-06-01T00:00:00.000Z",
                   linkedinProfileSnapshot: prospectFields.linkedinProfileSnapshot ?? { connectionDegree: null, isOpenProfile: null },
                   targetTimezone: prospectFields.targetTimezone ?? undefined,
                   publicEngagementSelection: prospectFields.publicEngagementSelection ?? null,
                   preConnectDecision: prospectFields.preConnectDecision ?? null,
-                  drafts: prospectFields.drafts ?? [],
+                  queueState: prospectFields.prospectQueueState ?? undefined,
+                  drafts: normalizedDrafts,
                   touches: prospectFields.touches ?? [],
                   cadenceState: {
                     status: "ready",
@@ -85,12 +165,41 @@ function fixture(prospectFields) {
                   ...(prospectFields.linkedinProfileUrl === null ? { linkedinProfileUrl: null } : {}),
                 },
               ],
+              lastResearchAt: null,
+              notes: null,
             },
           ],
+          segments: [],
         },
+        stakeholderMap: {
+          status: "pending",
+          stakeholders: [],
+        },
+        motionPlan: {
+          status: "pending",
+          variants: [],
+        },
+        nextSteps: [],
       },
     ],
-    companies: [{ id: "company-1", motionIds: ["motion-1"], engagementUserAssignment: prospectFields.companyAssignment ?? { accountRefs: [] } }],
+    companies: [
+      {
+        id: "company-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        name: "Acme",
+        domain: "acme.example",
+        websiteUrl: "https://acme.example",
+        linkedinCompanyUrl: "https://linkedin.com/company/acme",
+        logoSourceUrl: null,
+        logoUrl: null,
+        notes: null,
+        tags: [],
+        motionIds: ["motion-1"],
+        engagementUserAssignment: prospectFields.companyAssignment ?? null,
+        engagementProfileAssignment: null,
+      },
+    ],
     profiles: prospectFields.profiles,
     users: prospectFields.users ?? [],
     observations: prospectFields.observations ?? [],
@@ -341,6 +450,103 @@ function emailIdentityResolutionUserFixture() {
   };
 }
 
+function multiGmailSendUserFixture() {
+  return {
+    id: "user-1",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    label: "Operator",
+    owner: "operator",
+    notes: null,
+    workingHours: {
+      mode: "always",
+      timezone: "America/New_York",
+      weekdays: ["mon", "tue", "wed", "thu", "fri"],
+      startLocalTime: "09:00",
+      endLocalTime: "17:00",
+    },
+    accounts: [
+      {
+        id: "gmail-account-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "gmail",
+        handle: "operator@audienti.com",
+        label: null,
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-gmail-1",
+        providerAccountId: "acct-gmail-1",
+        preferred: false,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+      {
+        id: "gmail-account-2",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "gmail",
+        handle: "operator@knitit.ai",
+        label: null,
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-gmail-2",
+        providerAccountId: "acct-gmail-2",
+        preferred: false,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+      {
+        id: "linkedin-account-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        capability: "linkedin",
+        handle: "operator-linkedin",
+        label: null,
+        sourceType: "harness-connection",
+        browserProfileId: null,
+        harnessConnectionId: "harness-unipile-1",
+        providerAccountId: "provider-linkedin-1",
+        preferred: true,
+        notes: null,
+        inboundSync: { surfaces: [] },
+      },
+    ],
+    harnessConnections: [
+      {
+        id: "harness-gmail-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        runtime: "codex",
+        connector: "gmail",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+      {
+        id: "harness-gmail-2",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        runtime: "codex",
+        connector: "gmail",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+      {
+        id: "harness-unipile-1",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-01T00:00:00.000Z",
+        runtime: "codex",
+        connector: "unipile",
+        label: null,
+        status: "available",
+        notes: null,
+      },
+    ],
+  };
+}
+
 test("selectNextDraftSurface picks connection_request when no prior touches exist", () => {
   const surface = selectNextDraftSurface({
     linkedinProfileUrl: "https://linkedin.com/in/princess",
@@ -517,6 +723,66 @@ test("buildAgentQueue emits a full inbound sync task when an itemization gap exi
   assert.equal(task.maxPages, 1);
   assert.equal(task.pageSize, 100);
   assert.match(task.applyCommand, /exo inbound sync run user-1 --input <combined-inbound-sync\.json> --refresh --json/);
+});
+
+test("buildAgentQueue reuses precomputed inbound review itemization gaps when provided", () => {
+  const queue = buildAgentQueue({
+    motions: [],
+    companies: [],
+    users: [
+      inboundUserFixture({
+        capability: "linkedin",
+        surfaceKey: "linkedin-sent-invitations",
+        surfaceStateOverrides: {
+          lastRunStatus: "success",
+          lastItemCount: 2,
+          lastVisibleTotalCount: 2,
+          lastObservationCount: 2,
+          lastItemizationGapCount: 0,
+          lastRequestedMode: "quick",
+          lastActualMode: "quick",
+        },
+      }),
+    ],
+    inboundReviewsByUserId: new Map([[
+      "user-1",
+      {
+        itemizationGaps: [
+          {
+            accountId: "account-1",
+            capability: "linkedin",
+            handle: "operator-linkedin",
+            surfaceKey: "linkedin-sent-invitations",
+            label: "Sent invitations",
+            itemCount: 5,
+            itemizedCount: 2,
+            observationCount: 2,
+            missingObservationCount: 3,
+            captureCompleteness: "partial_visible_slice",
+            requestedMode: "quick",
+            actualMode: "quick",
+            reconcileRequired: null,
+            reconcileReason: null,
+            exhaustionStatus: null,
+            exhaustionReason: null,
+            summary: "Sent invitations reported more items than were itemized.",
+            recommendedAction: "Rerun Sent invitations in full mode.",
+          },
+        ],
+      },
+    ]]),
+    observations: [],
+    cues: [],
+    now: "2026-06-03T13:00:00.000Z",
+  });
+
+  const task = queue.tasks.find((item) =>
+    item.kind === "run_inbound_sync"
+    && item.surfaceKeys.includes("linkedin-sent-invitations")
+  );
+  assert.ok(task);
+  assert.equal(task.mode, "full");
+  assert.equal(task.reason, "itemization_gap");
 });
 
 test("buildAgentQueue exposes ready, waiting, partial, and blocked counts without treating waiting work as ready", () => {
@@ -766,6 +1032,77 @@ test("buildAgentQueue skips submitted account packets and requeues returned pack
   assert.equal(task.claimState, "claimable");
   assert.equal(task.reason, "returned_company_packet");
   assert.equal(task.notes, "Find a primary source before resubmitting.");
+});
+
+test("buildAgentQueue does not requeue completed account packets", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      accountQueueState: {
+        status: "researched",
+        source: "manual",
+        updatedAt: "2026-06-03T05:00:00.000Z",
+      },
+      accountPacketState: {
+        kind: "prospect_selection",
+        status: "completed",
+        workerLabel: "codex-research-1",
+        claimedAt: "2026-06-03T05:01:00.000Z",
+        completedAt: "2026-06-03T05:20:00.000Z",
+        notes: "Prospect selection completed.",
+      },
+    }),
+  );
+
+  assert.equal(queue.tasks.some((item) => item.kind === "prospect_selection"), false);
+});
+
+test("buildAgentQueue ignores stale claimed account packets after the account advances", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      accountQueueState: {
+        status: "selected",
+        source: "manual",
+        updatedAt: "2026-06-03T05:30:00.000Z",
+      },
+      accountPacketState: {
+        kind: "prospect_selection",
+        status: "claimed",
+        workerLabel: "codex-research-1",
+        claimedAt: "2026-06-03T05:01:00.000Z",
+        completedAt: null,
+        notes: "Stale account-level claim.",
+      },
+      prospectQueueState: {
+        status: "selected",
+        source: "manual",
+        updatedAt: "2026-06-03T05:31:00.000Z",
+      },
+    }),
+  );
+
+  assert.equal(queue.tasks.some((item) => item.kind === "prospect_selection"), false);
+});
+
+test("buildAgentQueue ignores stale claimed company-research packets after the account advances", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      accountQueueState: {
+        status: "researched",
+        source: "manual",
+        updatedAt: "2026-06-03T05:30:00.000Z",
+      },
+      accountPacketState: {
+        kind: "company_research",
+        status: "claimed",
+        workerLabel: "codex-research-1",
+        claimedAt: "2026-06-03T05:01:00.000Z",
+        completedAt: null,
+        notes: "Stale account-level claim.",
+      },
+    }),
+  );
+
+  assert.equal(queue.tasks.some((item) => item.kind === "company_research"), false);
 });
 
 test("buildAgentQueue emits company_research for linked companies missing from legacy targetMap", () => {
@@ -1669,6 +2006,28 @@ test("buildAgentQueue skips submitted prospect packets and requeues returned pro
   assert.equal(task.claimState, "claimable");
   assert.equal(task.reason, "returned_prospect_research_packet");
   assert.equal(task.notes, "Store the source-tried evidence before completion.");
+});
+
+test("buildAgentQueue does not requeue completed prospect packets", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      cadenceState: {
+        status: "pending",
+        currentStep: null,
+        updatedAt: "2026-06-03T05:00:00.000Z",
+      },
+      prospectPacketState: {
+        kind: "prospect_research",
+        status: "completed",
+        workerLabel: "codex-prospect-1",
+        claimedAt: "2026-06-03T05:01:00.000Z",
+        completedAt: "2026-06-03T05:20:00.000Z",
+        notes: "Prospect research completed.",
+      },
+    }),
+  );
+
+  assert.equal(queue.tasks.some((item) => item.kind === "prospect_research"), false);
 });
 
 test("buildAgentQueue can surface a waiting autonomous retrieval task when forced", () => {
@@ -2930,6 +3289,54 @@ test("buildAgentQueue preserves email sends as send_email instead of collapsing 
   assert.equal(queue.blockers.length, 0);
 });
 
+test("buildAgentQueue surfaces an exact Gmail inbox blocker when a motion-scoped user has multiple inboxes pinned only by capability", () => {
+  const queue = buildAgentQueue(
+    fixture({
+      linkedinProfileUrl: null,
+      email: "lpark@govpointeoffice.us",
+      sourceUrl: "https://mail.google.com/mail/#all/thread-1",
+      motionAssignment: {
+        userId: "user-1",
+        label: "Operator",
+        owner: "operator",
+        accountRefs: ["linkedin:operator-linkedin"],
+        assignedAt: "2026-06-01T00:00:00.000Z",
+        assignedBy: "test",
+        reason: "Use the governed connectors",
+        sticky: true,
+      },
+      users: [multiGmailSendUserFixture()],
+      profiles: [],
+      cadenceState: {
+        currentStep: "value-add-email",
+      },
+      drafts: [
+        {
+          surface: "email",
+          status: "approved",
+          subject: "Re: Fire department RFP",
+          body: "Thanks for sending this over. We're going to pass on this one.",
+          approvedAt: "2026-06-04T17:14:29.676Z",
+          channel: "email",
+        },
+      ],
+    }),
+  );
+
+  assert.equal(queue.tasks.some((task) => task.kind === "send_message" && task.surface === "email"), false);
+  assert.equal(queue.blockers.length, 1);
+  assert.equal(queue.blockers[0].kind, "send_transport_blocked");
+  assert.equal(queue.blockers[0].reasonCode, "gmail_exact_inbox_required");
+  assert.equal(queue.blockers[0].reason, "Exact Gmail inbox required");
+  assert.equal(queue.blockers[0].blockType, "capability");
+  assert.equal(queue.blockers[0].channel, "email");
+  assert.equal(queue.blockers[0].resolveLabel, "Open motion settings");
+  assert.equal(queue.blockers[0].resolveMode, "detail");
+  assert.equal(queue.blockers[0].resolveHref, "/motions/motion-1/settings#execution");
+  assert.match(queue.blockers[0].transportReason ?? "", /Pick one exact inbox on this motion before email work can run/);
+  assert.match(queue.blockers[0].detail ?? "", /Pick one Exact Gmail inbox under Execution/);
+});
+
 test("buildAgentQueue preserves draft authorship on send tasks", () => {
   const queue = buildAgentQueue(
     fixture({
@@ -3004,9 +3411,87 @@ test("buildAgentQueue emits an autonomous public reaction before the first conne
   assert.ok(task, "expected an autonomous reaction task");
   assert.equal(task.surface, "like_post");
   assert.equal(task.via, "public-engagement");
+  assert.equal(task.queuedAt, null);
   assert.equal(task.recipientUrl, "https://www.linkedin.com/posts/princess_low-hook-post");
   assert.match(task.writeback, /--source-url https:\/\/www\.linkedin\.com\/posts\/princess_low-hook-post/);
   assert.equal(task.postSendDelayMs, 172800000);
+});
+
+test("buildAgentQueue moves autonomous public reactions to waiting during LinkedIn spacing", () => {
+  const input = fixture({
+    companyAssignment: LINKEDIN_ASSIGNMENT,
+    users: [managedLinkedinUserFixture()],
+    sourceUrl: "https://linkedin.com/in/princess",
+    linkedinProfileSnapshot: {
+      connectionDegree: 2,
+      isOpenProfile: null,
+      recentPosts: [
+        {
+          activityType: "own-post",
+          url: "https://www.linkedin.com/posts/princess_low-hook-post",
+          postedAt: "2026-06-02T10:00:00.000Z",
+          freshnessBand: "0-14-days",
+          summary: "Shared a team celebration update.",
+          snippet: "Proud of the team for shipping.",
+          targetKind: "post",
+          authoredByProspect: true,
+          hasOriginalCommentary: true,
+          businessRelevance: "low",
+          recommendedAction: "reaction",
+          rationale: "Positive but not business-relevant enough for a real comment.",
+        },
+      ],
+    },
+    publicEngagementSelection: {
+      url: "https://www.linkedin.com/posts/princess_low-hook-post",
+      targetKind: "post",
+      activityType: "own-post",
+      postedAt: "2026-06-02T10:00:00.000Z",
+      freshnessBand: "0-14-days",
+      summary: "Shared a team celebration update.",
+      businessRelevance: "low",
+      recommendedAction: "reaction",
+      rationale: "Positive but not business-relevant enough for a real comment.",
+      selectionReason: "No strong business hook was stored, so Exo should react lightly.",
+      selectedAt: "2026-06-02T10:05:00.000Z",
+    },
+  });
+  input.motions[0].targetMap.accounts[0].prospects.unshift({
+    ...input.motions[0].targetMap.accounts[0].prospects[0],
+    id: "prior-prospect",
+    name: "Prior Prospect",
+    linkedinProfileUrl: "https://linkedin.com/in/prior-prospect",
+    sourceUrl: "https://linkedin.com/in/prior-prospect",
+    publicEngagementSelection: null,
+    linkedinProfileSnapshot: { connectionDegree: 2, isOpenProfile: null, recentPosts: [] },
+    touches: [
+      {
+        id: "touch-like-1",
+        surface: "like_post",
+        action: "like_post",
+        direction: "outbound",
+        outcome: "sent",
+        occurredAt: "2026-06-03T11:59:00.000Z",
+        summary: "Liked the previous public post.",
+        providerAccountId: "provider-linkedin-1",
+      },
+    ],
+  });
+
+  const queue = buildAgentQueue({
+    ...input,
+    now: "2026-06-03T12:00:00.000Z",
+  });
+
+  assert.equal(
+    queue.tasks.some((item) => item.kind === "send_message" && item.action === "like_post"),
+    false,
+  );
+  const waitingTask = queue.waiting.find((item) => item.kind === "send_message" && item.action === "like_post");
+  assert.ok(waitingTask, "expected the public reaction to wait on LinkedIn spacing");
+  assert.equal(waitingTask.waitingReason, "randomized_spacing");
+  assert.equal(waitingTask.dispatchGate?.status, "wait");
+  assert.ok(String(waitingTask.dueAt) > "2026-06-03T12:00:00.000Z");
 });
 
 test("buildAgentQueue drafts a pre-connect comment when the stored authored post is labeled post", () => {

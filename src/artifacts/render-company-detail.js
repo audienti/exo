@@ -11,14 +11,16 @@ import {
   escapeAttr,
   escapeHtml,
   iconSvg,
+  liveActionBtn,
   ownerTag,
   renderShell,
   stateDot,
 } from "../lib/exo-ui-components.js";
+import { buildExactGmailPickerModel, renderExactGmailPicker } from "./render-assignment-controls.js";
 
 /**
  * @param {ReturnType<import("../core/build-company-view.js").buildCompanyViewModel>} model
- * @param {{ interactive?: boolean, user?: { label?: string } | null }} [meta]
+ * @param {{ interactive?: boolean, user?: { id?: string | null, label?: string | null, gmailOptions?: Array<{ ref?: string | null, handle?: string | null, label?: string | null }> | null } | null }} [meta]
  * @returns {string}
  */
 export function renderCompanyDetailPage(model, meta = {}) {
@@ -27,6 +29,17 @@ export function renderCompanyDetailPage(model, meta = {}) {
   const researchBriefHref = (motionId) =>
     meta.interactive ? `/companies/${encodeURIComponent(model.id)}/research-brief/${encodeURIComponent(motionId)}` : null;
   const queueHref = meta.interactive ? "/queue" : null;
+  const currentUserId = meta.user?.id ?? null;
+  const currentUserLabel = meta.user?.label ?? null;
+  const currentUserAssigned = Boolean(currentUserId) && model.ownerUserId === currentUserId;
+  const assignment = {
+    accountRefs: model.accountRefs,
+  };
+  const gmailPicker = buildExactGmailPickerModel(meta.user ?? null, assignment);
+  const gmailPickerHtml = renderExactGmailPicker(gmailPicker, {
+    helper: "Pick one exact inbox when this company should send or reconcile email from a specific mailbox. Leave it blank to keep Gmail unresolved at company scope.",
+  });
+  const needsScopedGmailPin = currentUserAssigned && gmailPicker.showPicker && !gmailPicker.selectedRef;
 
   const links =
     (model.websiteUrl
@@ -45,6 +58,54 @@ export function renderCompanyDetailPage(model, meta = {}) {
     `<h1 class="co-name">${escapeHtml(model.name)}</h1>` +
     `<div class="co-meta">${links}${ownerTag({ ownerName: model.ownerLabel })}</div>` +
     `</div>` +
+    `</div>`;
+
+  const assignmentSummary = model.ownerLabel
+    ? `${model.ownerLabel} is assigned to this company.`
+    : "No user is assigned to this company yet.";
+  const assignmentDetail = model.ownerLabel
+    ? `Execution will inherit ${model.accountRefs.length ? model.accountRefs.join(", ") : "the assigned user's mapped accounts"}.`
+    : "Assign one user here so company-scoped work can resolve one governed execution identity.";
+  const assignmentButton = meta.interactive && currentUserId && (!currentUserAssigned || gmailPicker.showPicker)
+    ? liveActionBtn({
+        writer: "assignCompanyUser",
+        args: {
+          companyId: model.id,
+          userId: currentUserId,
+          reason: "Keep one execution identity for this company",
+        },
+        variant: "primary",
+        icon: "check",
+        label: currentUserAssigned
+          ? "Save owner settings"
+          : (currentUserLabel ? `Assign ${currentUserLabel}` : "Assign current user"),
+        title: currentUserAssigned
+          ? "Save the current company owner and any exact Gmail inbox pin."
+          : "Assign the current workspace user to this company so execution can resolve one governed identity.",
+        fields: gmailPicker.showPicker ? "accountRef:accountRef?" : null,
+      })
+    : "";
+  const assignmentFooter = currentUserAssigned
+    ? `<p class="premise-note">${escapeHtml(
+        needsScopedGmailPin
+          ? "This company is already assigned to the current workspace user. Pick one exact Gmail inbox before email work should trust this scope."
+          : "This company is already assigned to the current workspace user."
+      )}</p>`
+    : currentUserLabel
+      ? `<p class="premise-note">Current workspace user: ${escapeHtml(currentUserLabel)}.</p>`
+      : `<p class="premise-note">Open the UI as a governed execution user to assign this company here.</p>`;
+  const assignmentSection =
+    `<div class="offer-card">` +
+    `<div class="offer-head">` +
+    `<span class="def-cap">${iconSvg("userPlus", 12)}Execution · who can work this company</span>` +
+    `</div>` +
+    `<div class="offer-title">${escapeHtml(model.ownerLabel ?? "Unassigned")}</div>` +
+    `<p class="offer-summary">${escapeHtml(assignmentSummary)}</p>` +
+    `<p class="offer-summary">${escapeHtml(assignmentDetail)}</p>` +
+    `<div class="premise-meta">${ownerTag({ ownerName: model.ownerLabel ?? null })}</div>` +
+    assignmentFooter +
+    gmailPickerHtml +
+    (assignmentButton ? `<div class="compose-actions">${assignmentButton}</div>` : "") +
     `</div>`;
 
   const motionsSection =
@@ -115,7 +176,7 @@ export function renderCompanyDetailPage(model, meta = {}) {
         `</div>`
       : emptyState({ icon: "users", message: "No tracked prospects at this company yet." }));
 
-  const body = `<div class="dom-wrap company-detail" id="co-${escapeAttr(model.id)}">${head}${researchSection}${motionsSection}${prospectsSection}</div>`;
+  const body = `<div class="dom-wrap company-detail" id="co-${escapeAttr(model.id)}">${head}${assignmentSection}${researchSection}${motionsSection}${prospectsSection}</div>`;
 
   return renderShell({
     title: `Exo — ${model.name}`,

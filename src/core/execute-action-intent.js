@@ -638,7 +638,7 @@ function runAssignCompanyUser(args) {
   const updated = assignCompanyUser(rawCompany, rawUser, listBrowserProfiles(), {
     assignedBy: "exo-ui",
     reason: args.reason ?? "Make ready outbound branches executable",
-    browserCapability: args.browserCapability ?? "linkedin",
+    accountRefs: resolveActionAccountRefs(args),
   });
   // updateCompany persists but does not return the record (unlike updateMotion),
   // so build the confirmation from the in-memory updated company.
@@ -660,6 +660,7 @@ function runAssignMotionUser(args) {
   const stored = updateMotionWithRetry(args.motionId, (motion) => assignMotionUser(motion, rawUser, listBrowserProfiles(), {
     assignedBy: "exo-ui",
     reason: args.reason ?? "Keep one execution identity for this motion",
+    accountRefs: resolveActionAccountRefs(args),
   }));
   return {
     ok: true,
@@ -694,6 +695,20 @@ function runRestartMotion(args) {
       ? `Set ${storedMotion.name} live.`
       : `${storedMotion.name} is already live.`,
   };
+}
+
+/**
+ * @param {Record<string, any>} args
+ */
+function resolveActionAccountRefs(args) {
+  const fromArray = Array.isArray(args.accountRefs)
+    ? args.accountRefs
+    : [];
+  const fromSingle = typeof args.accountRef === "string" ? [args.accountRef] : [];
+  const refs = [...fromArray, ...fromSingle]
+    .map((value) => typeof value === "string" ? value.trim() : "")
+    .filter(Boolean);
+  return refs.length ? refs : null;
 }
 
 /** @param {Record<string, any>} args */

@@ -10,7 +10,12 @@
 // and src/artifacts/render-queue.js turn this into HTML using the shared UI
 // primitives.
 
-import { getRuntimeUsageLimit, listActiveBrowserBackoffs } from "../lib/agent-host-state.js";
+import {
+  getRuntimeUsageLimit,
+  findActiveAgentHold,
+  buildAgentBackoffDetail,
+} from "../lib/agent-host-state.js";
+import { normalizeRecordedPassSummary, isVerifyModeHoldingSends } from "../lib/agent-result-status.js";
 import { formatUsageLimitResumeLabel } from "../lib/runtime-usage-limit.js";
 import { isCleanupLaneItem } from "./cleanup-lane.js";
 
@@ -36,7 +41,7 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {number} agendaLeft
  *
  * @typedef {Object} OperatorAgentRuntime
- * @property {"off" | "running" | "on"} state
+ * @property {"off" | "running" | "on" | "paused"} state
  * @property {string} headline
  * @property {string} detail
  * @property {string | null} cadenceLabel
@@ -66,6 +71,7 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {string | null} personId
  * @property {string | null} avatarUrl
  * @property {string | null} subtitle
+ * @property {string | null} motionId
  * @property {string | null} motionName
  * @property {string | null} motionStatus
  * @property {string} truth
@@ -93,7 +99,9 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {string | null} role
  * @property {string | null} company
  * @property {string | null} roleLine
+ * @property {string | null} motionId
  * @property {string | null} motionName
+ * @property {string | null} ownerLabel
  * @property {"high" | "block" | "medium" | null} stakes
  * @property {string} summary
  * @property {string} truth
@@ -121,11 +129,18 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  * @property {string | null} taskKind
  * @property {string | null} dueAt
  * @property {string | null} dueAtIso
+ * @property {string | null | undefined} [queuedAtIso]
  * @property {string | null} waitingFor
+ * @property {string | null | undefined} [dueIn]
  * @property {"checked_out" | null} checkoutState
  * @property {string | null} checkedOutBy
  * @property {string | null} checkedOutAt
  * @property {string | null} href
+ * @property {string | null | undefined} [actionKey]
+ * @property {string | null | undefined} [surface]
+ * @property {string | null | undefined} [channel]
+ * @property {string | null | undefined} [via]
+ * @property {string[] | undefined} [surfaceKeys]
  * @property {string | null} [queueRole]
  * @property {string | null} [reviewLabel]
  *
@@ -179,11 +194,17 @@ import { isCleanupLaneItem } from "./cleanup-lane.js";
  *   waitingItems?: any[],
  *   truthAccounts: any[],
  *   agentRuntime?: any,
+ *   rawMotions?: any[],
  * }} input
  * @returns {OperatorViewModel}
  */
 export function buildOperatorViewModel(input) {
   const now = input.generatedAt ? new Date(input.generatedAt) : new Date();
+  const motionOwnerById = new Map(
+    (input.rawMotions ?? [])
+      .filter((motion) => motion && typeof motion.id === "string")
+      .map((motion) => [motion.id, motion.engagementUserAssignment?.label ?? null]),
+  );
   // Items the operator has already resolved must not show as "Need decision".
   // Once a first message is approved/queued (now the agent's to send), already
   // sent, steer-excluded, or the invite is resolved/declined, there's nothing
@@ -214,7 +235,10 @@ export function buildOperatorViewModel(input) {
   const nextMove = shapeNextMove(input.operatorSummary ?? null, promotedDecision);
   const promotedId = nextMove && promotedDecision ? promotedDecision.id : null;
 
-  const decisions = shapeDecisions(operatorItems.filter((item) => item.id !== promotedId));
+  const decisions = shapeDecisions(
+    operatorItems.filter((item) => item.id !== promotedId),
+    motionOwnerById,
+  );
   const queue = shapeQueue(input.agentQueue?.items ?? []);
   const blocked = shapeBlocked(input.blockedQueue?.items ?? input.agentQueue?.blockers ?? []);
   const stale = shapeStale(input.truthAccounts ?? []);
@@ -263,6 +287,7 @@ function shapeNextMove(summary, topDecision) {
     personId: resolveOperatorPersonId(topDecision),
     avatarUrl: pickItemAvatarUrl(topDecision),
     subtitle: composeSubtitle(topDecision.actorTitle, topDecision.actorCompanyName ?? topDecision.companyName),
+    motionId: topDecision.motionId ?? null,
     motionName: topDecision.motionName,
     motionStatus: "active",
     truth: pickDecisionTruth(topDecision),
@@ -380,11 +405,12 @@ function normalizeDecisionMatch(value) {
  * @param {any[]} items
  * @returns {OperatorDecisionCard[]}
  */
-function shapeDecisions(items) {
+function shapeDecisions(items, motionOwnerById = new Map()) {
   return items.map((item) => {
     const stakes = item.priority === "high" ? "high" : null;
     const actions = shapeDecisionActions(item);
     const primaryAction = actions[0] ?? null;
+    const motionId = item.motionId ?? null;
     return {
       id: String(item.id),
       person: item.subject ?? "Unknown",
@@ -395,7 +421,9 @@ function shapeDecisions(items) {
       role: item.actorTitle ?? null,
       company: item.actorCompanyName ?? item.companyName ?? null,
       roleLine: composeSubtitle(item.actorTitle ?? null, item.actorCompanyName ?? item.companyName ?? null),
+      motionId,
       motionName: item.motionName ?? null,
+      ownerLabel: item.ownerLabel ?? motionOwnerById.get(motionId) ?? null,
       stakes,
       summary: item.recommendedAction ?? item.summary ?? "",
       truth: pickDecisionTruth(item),
@@ -543,10 +571,16 @@ function shapeQueue(items) {
       taskKind: normalizeQueueTaskKind(item),
       dueAt: relativeFromIso(item.dueAt),
       dueAtIso: item.dueAt ?? null,
-      // How long the agent has been holding this — measured from when it became
-      // due-now. Past tense ("5m") for already-overdue items, future tense for
-      // items still ramping up.
-      waitingFor: waitingLabel(item.dueAt),
+      queuedAtIso: item.queuedAt ?? null,
+      actionKey: normalizeQueueString(item.action),
+      surface: normalizeQueueString(item.surface),
+      channel: normalizeQueueString(item.channel),
+      via: normalizeQueueString(item.via),
+      surfaceKeys: normalizeQueueStringArray(item.surfaceKeys),
+      // Queue age should stay anchored to when the task entered the queue,
+      // even if pacing/gating later moves the next due time forward.
+      waitingFor: queuedLabel(item.queuedAt),
+      dueIn: dueInLabel(item.dueAt),
       checkoutState: item.checkoutState === "checked_out" ? "checked_out" : null,
       checkedOutBy: item.checkedOutBy ?? null,
       checkedOutAt: item.checkedOutAt ?? null,
@@ -714,7 +748,7 @@ function queueTaskLooksLikePublicWarmup(task) {
 function normalizePlannerActionItem(item) {
   const prospectId = normalizeUuid(item?.prospect?.id);
   const companyId = normalizeUuid(item?.company?.id);
-  const motionId = normalizeUuid(item?.motion?.id);
+  const motionId = normalizeOpaqueId(item?.motion?.id);
   const href = plannerItemHref(item);
   const composeReady = isPlannerComposeReady(item, prospectId);
   const recommendedAction = item?.recommendedAction ?? item?.cadence?.nextAction ?? plannerActionLabel(item);
@@ -738,6 +772,7 @@ function normalizePlannerActionItem(item) {
     avatarUrl: item?.prospect?.avatarUrl ?? null,
     actorTitle: item?.prospect?.title ?? null,
     actorCompanyName: item?.company?.name ?? null,
+    motionId,
     motionName: item?.motion?.name ?? null,
     summary: recommendedAction,
     recommendedAction,
@@ -748,6 +783,13 @@ function normalizePlannerActionItem(item) {
     surfaceKey: String(item?.source?.type ?? "cadence").replaceAll("_", "-"),
     operatorActions,
   };
+}
+
+/** @param {unknown} value */
+function normalizeOpaqueId(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length ? normalized : null;
 }
 
 /** @param {any} item */
@@ -961,9 +1003,9 @@ function shapeAgentRuntime(runtime, queueCount, checkedAt = null) {
   const lock = runtime.lock ?? null;
   const scheduler = runtime.scheduler ?? null;
   const routine = runtime.routine ?? null;
-  const lastPass = runtime.lastPass ?? null;
+  const lastPass = normalizeRecordedPassSummary(runtime.lastPass ?? null);
   const cadence = runtime.cadence ?? null;
-  const activeBackoff = findActiveAgentBackoff(runtime, queueCount);
+  const activeHold = findActiveAgentHold(runtime, queueCount, checkedAt);
   const cadenceLabel = formatCadenceLabel(scheduler?.runIntervalSeconds ?? null);
   const sendMode = typeof routine?.sendMode === "string" && routine.sendMode.trim()
     ? routine.sendMode.trim().toLowerCase()
@@ -971,7 +1013,8 @@ function shapeAgentRuntime(runtime, queueCount, checkedAt = null) {
   const verificationSendCount = Number.isFinite(runtime.verificationSendCount)
     ? Number(runtime.verificationSendCount)
     : queueCount;
-  const lastPassSummary = summarizeLastPass(lastPass);
+  const passActive = Boolean(lock?.active || scheduler?.running);
+  const lastPassSummary = summarizeLastPass(lastPass, { previous: passActive });
   const statusFacts = buildAgentStatusFacts({ lock, scheduler, lastPassSummary });
   const verifyHoldingSends = isVerifyModeHoldingSends({ sendMode, lastPass, verificationSendCount });
   // Far agents have been observed re-installing the runner under a different
@@ -988,6 +1031,27 @@ function shapeAgentRuntime(runtime, queueCount, checkedAt = null) {
     && queueCount > 0
     && Boolean(cadence?.overdue)
     && overdueBySeconds > 0;
+
+  if (activeHold) {
+    const pidLabel = Number.isInteger(lock?.pid) ? ` (pid ${lock.pid})` : "";
+    return {
+      state: passActive ? "running" : "off",
+      headline: passActive ? "Agent pass running with blocked work" : "Agent is blocked",
+      detail: passActive
+        ? `A queue pass is already in progress${pidLabel}. ${buildAgentBackoffDetail(activeHold, cadenceLabel, Boolean(scheduler?.loaded), true)}`
+        : buildAgentBackoffDetail(activeHold, cadenceLabel, Boolean(scheduler?.loaded)),
+      cadenceLabel,
+      sendMode,
+      lastPassSummary,
+      statusFacts,
+      nextAction: activeHold.kind === "send_circuit_breaker"
+        ? "Resolve the active send hold, then let the agent continue."
+        : "Fix the blocked connector path, then run the agent again.",
+      queueCount,
+      canRunNow: !passActive,
+      runLabel: passActive ? null : "Run agent now",
+    };
+  }
 
   if (lock?.active) {
     const pidLabel = Number.isInteger(lock.pid) ? ` (pid ${lock.pid})` : "";
@@ -1032,33 +1096,17 @@ function shapeAgentRuntime(runtime, queueCount, checkedAt = null) {
     };
   }
 
-  if (activeBackoff) {
-    return {
-      state: scheduler?.loaded ? "on" : "off",
-      headline: "Agent is blocked",
-      detail: buildAgentBackoffDetail(activeBackoff, cadenceLabel, Boolean(scheduler?.loaded)),
-      cadenceLabel,
-      sendMode,
-      lastPassSummary,
-      statusFacts,
-      nextAction: "Fix the blocked connector path, then run the agent again.",
-      queueCount,
-      canRunNow: true,
-      runLabel: "Run agent now",
-    };
-  }
-
   if (verifyHoldingSends) {
-    const queueLabel = `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"}`;
+    const queueLabel = `${verificationSendCount} unreviewed copy send${verificationSendCount === 1 ? "" : "s"}`;
     return {
       state: scheduler?.loaded ? "on" : "off",
-      headline: "Agent-authored drafts are waiting in review only",
-      detail: `${queueLabel} already have fresh proof. Review only will not auto-send those agent-authored drafts. Operator-authored, edited, or approved drafts still send live.`,
+      headline: "Unreviewed outbound copy is waiting in review only",
+      detail: `${queueLabel} already have fresh proof. Review only will not auto-send unreviewed outbound copy. Operator-authored, edited, or approved copy, non-copy actions, and retrieval still run live.`,
       cadenceLabel,
       sendMode,
       lastPassSummary,
       statusFacts,
-      nextAction: "Switch the agent out of review only when you want the next pass to auto-send proved agent-authored drafts.",
+      nextAction: "Switch the agent out of review only when you want proved unreviewed outbound copy to send automatically.",
       queueCount,
       verificationSendCount,
       canRunNow: true,
@@ -1298,22 +1346,16 @@ function relativeFromIso(iso) {
   return past ? `${days}d ago` : `in ${days}d`;
 }
 
-/** @param {any} lastPass */
-function summarizeLastPass(lastPass) {
+/**
+ * @param {any} lastPass
+ * @param {{ previous?: boolean }} [options]
+ */
+function summarizeLastPass(lastPass, options = {}) {
   if (!lastPass?.endedAt) return null;
   const when = relativeFromIso(lastPass.endedAt) ?? "recently";
   const status = String(lastPass.status ?? "finished").replaceAll("_", " ");
-  return `Last pass ${status} ${when}`;
-}
-
-/**
- * @param {{ sendMode: string | null, lastPass: any, verificationSendCount: number }} input
- */
-function isVerifyModeHoldingSends(input) {
-  if (input.sendMode !== "verify" || input.verificationSendCount <= 0) return false;
-  const status = String(input.lastPass?.status ?? "").trim().toLowerCase();
-  const reason = String(input.lastPass?.reason ?? "").trim().toLowerCase();
-  return status === "noop" && /no unverified send_message tasks left to prove/.test(reason);
+  const prefix = options.previous ? "Previous pass" : "Last pass";
+  return `${prefix} ${status} ${when}`;
 }
 
 /**
@@ -1323,11 +1365,12 @@ function buildAgentStatusFacts(input) {
   const installed = input.scheduler?.installed ? "yes" : "no";
   const loaded = input.scheduler?.loaded ? "yes" : "no";
   const running = input.lock?.active || input.scheduler?.running ? "yes" : "no";
+  const passLabel = running === "yes" ? "Previous pass" : "Last pass";
   const facts = [
     `Installed: ${installed}`,
     `Loaded: ${loaded}`,
     `Running: ${running}`,
-    `Last pass: ${input.lastPassSummary ?? "none"}`,
+    input.lastPassSummary ?? `${passLabel}: none`,
   ];
   const foreignLabels = Array.isArray(input.scheduler?.foreignAgents)
     ? input.scheduler.foreignAgents
@@ -1377,33 +1420,6 @@ function isAgentHeartbeatFresh(lastPass, cadence, scheduler, checkedAt) {
   return age >= 0 && age <= freshWindowMs;
 }
 
-/**
- * @param {any} runtime
- * @param {number} queueCount
- */
-function findActiveAgentBackoff(runtime, queueCount) {
-  if (!runtime || queueCount <= 0) return null;
-  const active = listActiveBrowserBackoffs(runtime.hostState ?? null);
-  return active.find((entry) => entry.lane === "execution")
-    ?? active.find((entry) => entry.lane === "retrieval")
-    ?? null;
-}
-
-/**
- * @param {{ lane?: string | null }} backoff
- * @param {string | null} cadenceLabel
- * @param {boolean} schedulerLoaded
- */
-function buildAgentBackoffDetail(backoff, cadenceLabel, schedulerLoaded) {
-  const laneLabel = backoff?.lane === "retrieval" ? "Inbound refresh work" : "Send work";
-  const schedulerLabel = schedulerLoaded
-    ? cadenceLabel
-      ? `Background draining is enabled ${cadenceLabel}.`
-      : "Background draining is enabled."
-    : "No pass is running right now.";
-  return `${schedulerLabel} ${laneLabel} is blocked right now.`;
-}
-
 /** @param {number | null | undefined} seconds */
 function formatDelayLabel(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) return "0s";
@@ -1415,34 +1431,62 @@ function formatDelayLabel(seconds) {
 }
 
 /**
- * Format how long the queue has been holding this item. Past-due items return
- * "waiting 5m" / "waiting 3h"; not-yet-due items return "due in 5m".
- * Null when no dueAt is available so the renderer can omit the chip.
+ * Format how long the queue has been holding this item. This only uses a real
+ * queue-entry timestamp; derived due times are rendered separately via
+ * `dueInLabel` so the UI does not invent fake queue age.
  *
+ * @param {string | null | undefined} queuedAtIso
+ * @returns {string | null}
+ */
+function queuedLabel(queuedAtIso) {
+  const target = firstPastIso([queuedAtIso]);
+  if (!target) return null;
+  const parsed = new Date(target);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const abs = Math.max(0, Date.now() - parsed.getTime());
+  const unit = durationBucket(abs);
+  return `queued ${unit}`;
+}
+
+/**
  * @param {string | null | undefined} iso
  * @returns {string | null}
  */
-function waitingLabel(iso) {
+function dueInLabel(iso) {
   if (!iso) return null;
   const target = new Date(iso);
   if (Number.isNaN(target.getTime())) return null;
-  const diffMs = Date.now() - target.getTime();
-  const past = diffMs >= 0;
-  const abs = Math.abs(diffMs);
+  const diffMs = target.getTime() - Date.now();
+  if (diffMs <= 0) return null;
+  return `due in ${durationBucket(diffMs)}`;
+}
+
+/**
+ * @param {number} abs
+ * @returns {string}
+ */
+function durationBucket(abs) {
   const minute = 60_000;
   const hour = 60 * minute;
   const day = 24 * hour;
-  let unit;
-  if (abs < minute) {
-    unit = "<1m";
-  } else if (abs < hour) {
-    unit = `${Math.round(abs / minute)}m`;
-  } else if (abs < day) {
-    unit = `${Math.round(abs / hour)}h`;
-  } else {
-    unit = `${Math.round(abs / day)}d`;
+  if (abs < minute) return "<1m";
+  if (abs < hour) return `${Math.round(abs / minute)}m`;
+  if (abs < day) return `${Math.round(abs / hour)}h`;
+  return `${Math.round(abs / day)}d`;
+}
+
+/**
+ * @param {Array<string | null | undefined>} candidates
+ * @returns {string | null}
+ */
+function firstPastIso(candidates) {
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || !candidate.trim().length) continue;
+    const parsed = Date.parse(candidate);
+    if (!Number.isFinite(parsed)) continue;
+    if (parsed <= Date.now()) return new Date(parsed).toISOString();
   }
-  return past ? `waiting ${unit}` : `due in ${unit}`;
+  return null;
 }
 
 /** @param {string | null | undefined} iso */
@@ -1509,6 +1553,21 @@ function normalizeQueueTaskKind(item) {
   const value = item?.taskKind ?? item?.kind ?? null;
   if (typeof value !== "string" || !value.trim()) return null;
   return value.trim().toLowerCase();
+}
+
+/** @param {unknown} value */
+function normalizeQueueString(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length ? normalized.toLowerCase() : null;
+}
+
+/** @param {unknown} value */
+function normalizeQueueStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => normalizeQueueString(entry))
+    .filter(Boolean);
 }
 
 /** @param {any} blocker */

@@ -1283,6 +1283,8 @@ function buildMotionDetailModels(reports, motionSummaries, daily, inboundReview)
         reviewCount: reviewCountsByMotion[motion.id] ?? 0,
         readyToSendCount: report.execution?.readyToSendCount ?? summary?.readyToSendCount ?? 0,
         messageTestReadyCount: report.execution?.messageTestReadyCount ?? 0,
+        recentPostReadyCount: report.execution?.recentPostReadyCount ?? 0,
+        emailFallbackCount: report.execution?.emailFallbackCount ?? 0,
         companyCount: report.execution?.companyCount ?? summary?.companyCount ?? 0,
         prospectCount: report.execution?.prospectCount ?? summary?.prospectCount ?? 0,
       },
@@ -2017,21 +2019,44 @@ function buildBlockedQueue(agentQueue, executionBacklog) {
       })),
   }));
 
-  const queueBlockers = toArray(agentQueue?.blockers).map((item, index) => ({
-    id: `queue-blocker-${index}-${item.prospectId ?? item.motionId ?? "draft"}`,
-    subject: item.prospectName ?? item.companyName ?? "Queued draft",
-    meta: item.companyName ?? item.motionName ?? "Agent queue",
-    reason: "Queued draft needs re-review",
-    detail: item.nextSurface
-      ? `${humanizeQueueSurface(item.sendReadySurface)} was queued, but the branch moved to ${humanizeQueueSurface(item.nextSurface)}.`
-      : `${humanizeQueueSurface(item.sendReadySurface)} was queued, but the branch no longer exposes a writeable surface.`,
-    blockType: "stale_draft",
-    channel: "linkedin",
-    resolveLabel: "Review draft",
-    stateActions: [],
-    actions: [],
-    prospectId: item.prospectId ?? null,
-  }));
+  const queueBlockers = toArray(agentQueue?.blockers).map((item, index) => {
+    if (item?.blockType && item?.reason && item?.detail) {
+      return {
+        id: item.id ?? `queue-blocker-${index}-${item.prospectId ?? item.motionId ?? "blocked"}`,
+        subject: item.subject ?? item.prospectName ?? item.companyName ?? "Queued blocker",
+        meta: item.companyName ?? item.motionName ?? titleizeStatus(item.channel ?? "agent queue"),
+        reason: item.reason,
+        detail: item.detail,
+        reasonCode: item.reasonCode ?? null,
+        blockType: item.blockType,
+        channel: item.channel ?? "",
+        resolveLabel: item.resolveLabel ?? (item.blockType === "stale_draft" ? "Review draft" : "Review"),
+        resolveHint: item.resolveHint ?? null,
+        resolveHref: item.resolveHref ?? null,
+        resolveMode: item.resolveMode ?? null,
+        stateActions: toArray(item.stateActions),
+        actions: toArray(item.actions),
+        prospectId: item.prospectId ?? null,
+        personId: item.personId ?? null,
+      };
+    }
+
+    return {
+      id: `queue-blocker-${index}-${item.prospectId ?? item.motionId ?? "draft"}`,
+      subject: item.prospectName ?? item.companyName ?? "Queued draft",
+      meta: item.companyName ?? item.motionName ?? "Agent queue",
+      reason: "Queued draft needs re-review",
+      detail: item.nextSurface
+        ? `${humanizeQueueSurface(item.sendReadySurface)} was queued, but the branch moved to ${humanizeQueueSurface(item.nextSurface)}.`
+        : `${humanizeQueueSurface(item.sendReadySurface)} was queued, but the branch no longer exposes a writeable surface.`,
+      blockType: "stale_draft",
+      channel: "linkedin",
+      resolveLabel: "Review draft",
+      stateActions: [],
+      actions: [],
+      prospectId: item.prospectId ?? null,
+    };
+  });
 
   return {
     itemCount: assignmentItems.length + queueBlockers.length,
@@ -2379,31 +2404,44 @@ function renderOperatorBlockedCards(blockedQueue, interactive) {
   }
 
   return blockedQueue.items
-    .map((item) => `
-      <article class="card blk-card stakes-block">
-        <div class="row-top">
-          ${renderAvatar(item.subject ?? item.channel, null, "person")}
-          <div class="row-id">
-            <div class="row-name">${escapeHtml(item.subject ?? titleizeStatus(item.channel))}</div>
-            <div class="row-role">${escapeHtml(item.meta ?? titleizeStatus(item.channel))}</div>
-          </div>
-          ${renderOperatorActionTag(
-            item.blockType === "assignment" ? "blocked · assignment" : "blocked · re-review",
-            "danger",
-          )}
-        </div>
-        <p class="row-summary"><strong class="blk-reason">${escapeHtml(item.reason)}.</strong> ${escapeHtml(item.detail)}</p>
-        <div class="row-actions">
-          ${toArray(item.stateActions).slice(0, 2).map((action, index) => renderOperatorActionButton({
+    .map((item) => {
+      const status = item.blockType === "assignment"
+        ? "blocked · assignment"
+        : item.blockType === "capability"
+          ? "blocked · capability"
+          : item.blockType === "stale_draft"
+            ? "blocked · re-review"
+            : "failed";
+      const stateActions = toArray(item.stateActions);
+      const actions = stateActions.length > 0
+        ? stateActions.slice(0, 2).map((action, index) => renderOperatorActionButton({
             action,
             label: action.companyName ? `Assign ${action.companyName}` : action.label,
             variant: index === 0 ? "secondary" : "ghost",
             busyLabel: "Assigning...",
             doneLabel: "Assigned",
-          })).join("")}
-        </div>
-      </article>
-    `)
+          })).join("")
+        : item.resolveHref
+          ? renderOperatorLinkButton(item.resolveLabel ?? "Review", item.resolveHref, "secondary")
+          : "";
+
+      return `
+        <article class="card blk-card stakes-block">
+          <div class="row-top">
+            ${renderAvatar(item.subject ?? item.channel, null, "person")}
+            <div class="row-id">
+              <div class="row-name">${escapeHtml(item.subject ?? titleizeStatus(item.channel))}</div>
+              <div class="row-role">${escapeHtml(item.meta ?? titleizeStatus(item.channel))}</div>
+            </div>
+            ${renderOperatorActionTag(status, "danger")}
+          </div>
+          <p class="row-summary"><strong class="blk-reason">${escapeHtml(item.reason)}.</strong> ${escapeHtml(item.detail)}</p>
+          <div class="row-actions">
+            ${actions}
+          </div>
+        </article>
+      `;
+    })
     .join("");
 }
 
@@ -7269,6 +7307,90 @@ function renderPage({
  *   interactive?: { enabled?: boolean, actionEndpoint?: string, workerLabel?: string } | null
  * }} input
  */
+/**
+ * Lightweight motion-route payload for the interactive UI. This keeps the
+ * motions surfaces on the same derived models as the full workspace without
+ * paying for truth, queue, and operator rollups they do not render.
+ *
+ * @param {{
+ *   user: any,
+ *   inboundReview: any,
+ *   daily: any,
+ *   reports: any[],
+ *   regenerateCommand?: string,
+ *   agentStatus?: any,
+ * }} input
+ */
+export function buildMotionProjectionData(input) {
+  const {
+    user,
+    inboundReview,
+    daily,
+    reports,
+    regenerateCommand = DEFAULT_REGENERATE_COMMAND,
+    agentStatus = null,
+  } = input;
+
+  const now = parseDate(daily.generatedAt) ?? new Date();
+  const motionSummaries = buildMotionSummaries(reports, daily, inboundReview).sort((left, right) => {
+    const leftUpdated = parseDate(left.updatedAt)?.getTime() ?? 0;
+    const rightUpdated = parseDate(right.updatedAt)?.getTime() ?? 0;
+    return rightUpdated - leftUpdated;
+  });
+  const motionDetails = buildMotionDetailModels(reports, motionSummaries, daily, inboundReview);
+  const reviewItems = toArray(inboundReview.reviewItems).slice().sort((left, right) => {
+    const leftObserved = parseDate(left.observedAt)?.getTime() ?? 0;
+    const rightObserved = parseDate(right.observedAt)?.getTime() ?? 0;
+    return rightObserved - leftObserved;
+  });
+
+  return {
+    generatedAt: now.toISOString(),
+    user: {
+      id: user.id,
+      label: user.label,
+      owner: user.owner ?? null,
+    },
+    regenerateCommand,
+    motionSummaries,
+    motionDetails,
+    reviewItems,
+    agentStatus,
+  };
+}
+
+export function buildQueueProjectionData(input) {
+  const {
+    user,
+    generatedAt = null,
+    agentQueue: rawAgentQueue = null,
+    agentStatus: rawAgentStatus = null,
+    regenerateCommand = DEFAULT_REGENERATE_COMMAND,
+    rawMotions = [],
+  } = input;
+  const now = parseDate(generatedAt) ?? new Date();
+
+  return {
+    generatedAt: now.toISOString(),
+    user: {
+      id: user.id,
+      label: user.label,
+      owner: user.owner ?? null,
+    },
+    regenerateCommand,
+    operatorSummary: null,
+    decisionQueue: { itemCount: 0, items: [] },
+    agentQueue: buildWorkspaceAgentQueue(rawAgentQueue),
+    agentStatus: rawAgentStatus,
+    blockedQueue: null,
+    dueNowItems: [],
+    waitingItems: [],
+    truthAccounts: [],
+    rawMotions,
+    reviewItems: [],
+  };
+}
+
 export function buildWorkspaceModel(input) {
   const {
     user,

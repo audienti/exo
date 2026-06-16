@@ -3,7 +3,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { applyCompleteMotionProspectPacket } from "../src/lib/motion-packets.js";
+import {
+  applyClaimMotionProspectPacket,
+  applyClaimTargetAccountPacket,
+  applyCompleteMotionProspectPacket,
+} from "../src/lib/motion-packets.js";
 
 function buildProspect(overrides = {}) {
   return {
@@ -70,6 +74,113 @@ function buildProspect(overrides = {}) {
     ...overrides,
   };
 }
+
+function buildAccount(overrides = {}) {
+  return {
+    companyId: "company-1",
+    companyName: "Acme",
+    domain: "acme.example",
+    websiteUrl: "https://acme.example",
+    linkedinCompanyUrl: "https://linkedin.com/company/acme",
+    companyLogoSourceUrl: null,
+    companyLogoUrl: null,
+    signalMatches: [],
+    queueState: {
+      status: "researched",
+      source: "derived",
+      updatedAt: "2026-06-05T13:00:00.000Z",
+      notes: null,
+    },
+    packetState: null,
+    prospects: [],
+    disposition: "active",
+    lastResearchAt: "2026-06-05T13:00:00.000Z",
+    notes: null,
+    ...overrides,
+  };
+}
+
+test("applyClaimTargetAccountPacket rejects completed account packets", () => {
+  assert.throws(
+    () => applyClaimTargetAccountPacket(
+      buildAccount({
+        packetState: {
+          kind: "prospect_selection",
+          status: "completed",
+          workerLabel: "worker-1",
+          claimedAt: "2026-06-05T13:01:00.000Z",
+          completedAt: "2026-06-05T13:05:00.000Z",
+          notes: "Already selected.",
+        },
+      }),
+      { workerLabel: "worker-2" },
+      "2026-06-05T13:10:00.000Z",
+    ),
+    /Prospect selection packet is already completed/i,
+  );
+});
+
+test("applyClaimTargetAccountPacket allows returned account packets to be reclaimed", () => {
+  const claimed = applyClaimTargetAccountPacket(
+    buildAccount({
+      packetState: {
+        kind: "prospect_selection",
+        status: "returned",
+        workerLabel: "worker-1",
+        claimedAt: "2026-06-05T13:01:00.000Z",
+        completedAt: "2026-06-05T13:05:00.000Z",
+        returnNotes: "Redo this.",
+        returnedAt: "2026-06-05T13:07:00.000Z",
+      },
+    }),
+    { workerLabel: "worker-2" },
+    "2026-06-05T13:10:00.000Z",
+  );
+
+  assert.equal(claimed.packetState?.status, "claimed");
+  assert.equal(claimed.packetState?.workerLabel, "worker-2");
+});
+
+test("applyClaimMotionProspectPacket rejects completed prospect packets", () => {
+  assert.throws(
+    () => applyClaimMotionProspectPacket(
+      buildProspect({
+        packetState: {
+          kind: "prospect_research",
+          status: "completed",
+          workerLabel: "worker-1",
+          claimedAt: "2026-06-05T13:01:00.000Z",
+          completedAt: "2026-06-05T13:05:00.000Z",
+          notes: "Already researched.",
+        },
+      }),
+      { workerLabel: "worker-2" },
+      "2026-06-05T13:10:00.000Z",
+    ),
+    /Prospect research packet is already completed/i,
+  );
+});
+
+test("applyClaimMotionProspectPacket allows returned prospect packets to be reclaimed", () => {
+  const claimed = applyClaimMotionProspectPacket(
+    buildProspect({
+      packetState: {
+        kind: "prospect_research",
+        status: "returned",
+        workerLabel: "worker-1",
+        claimedAt: "2026-06-05T13:01:00.000Z",
+        completedAt: "2026-06-05T13:05:00.000Z",
+        returnNotes: "Redo this.",
+        returnedAt: "2026-06-05T13:07:00.000Z",
+      },
+    }),
+    { workerLabel: "worker-2" },
+    "2026-06-05T13:10:00.000Z",
+  );
+
+  assert.equal(claimed.packetState?.status, "claimed");
+  assert.equal(claimed.packetState?.workerLabel, "worker-2");
+});
 
 test("applyCompleteMotionProspectPacket rejects exhausted when no reachable channel exists and governed LinkedIn search was not attempted", () => {
   assert.throws(

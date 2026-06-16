@@ -11,6 +11,7 @@ import {
   avatar,
   btn,
   card,
+  countChip,
   emptyState,
   escapeAttr,
   escapeHtml,
@@ -25,32 +26,31 @@ import {
 
 /**
  * @param {import("../core/build-operator-view.js").OperatorViewModel} model
- * @param {{ interactive?: boolean }} [meta]
+ * @param {{
+ *   interactive?: boolean,
+ *   activeView?: "queue" | "blocked" | "motions" | null,
+ *   selectedMotionId?: string | null,
+ *   motionChoices?: Array<{ id: string, name: string, offerLabel?: string | null, offerHost?: string | null, icpSummary?: string | null }>,
+ *   returnTo?: string | null,
+ *   agentRuntime?: any
+ * }} [meta]
  * @returns {string}
  */
 export function renderOperatorPage(model, meta = {}) {
-  const sections = [
-    renderSection(
-      "dec",
-      "queue",
-      "Action queue",
-      model.counts.decisions,
-      "amber",
-      "One queue of operator work across inbound review and due-now planner actions. Background agent work is separate.",
-      renderDecisions(model.decisions, meta, { hasPromoted: Boolean(model.nextMove) }),
-    ),
-  ];
-  if (model.counts.blocked > 0) {
-    sections.push(renderSection("blk", "alert", "Blocked", model.counts.blocked, "red", null, renderBlocked(model.blocked, meta)));
-  }
-  if (model.counts.stale > 0) {
-    sections.push(renderSection("stale", "eye", "Stale or incomplete", model.counts.stale, "amber", null, renderStale(model.stale)));
-  }
+  const motionGroups = collectMotionGroups(model);
+  const motionOptions = collectMotionOptions(motionGroups, meta.motionChoices ?? [], meta.selectedMotionId);
+  const activeView = normalizeOperatorView(meta.activeView, motionOptions, model.counts, meta.selectedMotionId);
+  const operatorMeta = {
+    ...meta,
+    activeView,
+  };
   const body =
     `<div class="op-wrap feed">` +
-    renderIntro(model) +
-    renderNextMove(model.nextMove, meta) +
-    sections.join("") +
+    renderIntro(model, operatorMeta) +
+    renderWorkViews(model, motionGroups, motionOptions, operatorMeta) +
+    (model.counts.stale > 0
+      ? renderSection("stale", "eye", "Stale or incomplete", model.counts.stale, "amber", null, renderStale(model.stale))
+      : "") +
     renderFooter(model) +
     `</div>`;
 
@@ -67,8 +67,11 @@ export function renderOperatorPage(model, meta = {}) {
   });
 }
 
-/** @param {import("../core/build-operator-view.js").OperatorViewModel} model */
-function renderIntro(model) {
+/**
+ * @param {import("../core/build-operator-view.js").OperatorViewModel} model
+ * @param {{ activeView?: "queue" | "blocked" | "motions" | null }} [meta]
+ */
+function renderIntro(model, meta = {}) {
   const c = model.counts;
   const summaryParts = ["What needs action"];
   if (c.blocked > 0) summaryParts.push("what is blocked");
@@ -80,8 +83,8 @@ function renderIntro(model) {
     summaryLine = `${summaryParts.slice(0, -1).join(", ")}, and ${summaryParts.at(-1)}.`;
   }
   const stats = [
-    `<span><b>${c.decisions}</b> in operator queue</span>`,
-    c.blocked > 0 ? `<span><b>${c.blocked}</b> blocked</span>` : "",
+    renderIntroStat(c.decisions, "queued", operatorViewHref("queue"), meta.activeView === "queue"),
+    c.blocked > 0 ? renderIntroStat(c.blocked, "blocked", operatorViewHref("blocked"), meta.activeView === "blocked") : "",
     c.stale > 0 ? `<span><b>${c.stale}</b> stale</span>` : "",
   ].filter(Boolean);
   return (
@@ -95,6 +98,649 @@ function renderIntro(model) {
     `</div>` +
     `</div>`
   );
+}
+
+/**
+ * @param {number} count
+ * @param {string} label
+ * @param {string} href
+ * @param {boolean} active
+ */
+function renderIntroStat(count, label, href, active) {
+  return `<a class="op-stat-link${active ? " is-active" : ""}" href="${escapeAttr(href)}"><b>${count}</b> ${escapeHtml(label)}</a>`;
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorViewModel} model
+ * @param {Array<{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   offerLabel?: string | null,
+ *   offerHost?: string | null,
+ *   icpSummary?: string | null,
+ *   count: number,
+ *   hasPromoted: boolean,
+ *   decisions: import("../core/build-operator-view.js").OperatorDecisionCard[],
+ * }>} motionGroups
+ * @param {{
+ *   interactive?: boolean,
+ *   activeView?: "queue" | "blocked" | "motions" | null,
+ *   selectedMotionId?: string | null,
+ *   returnTo?: string | null,
+ * }} [meta]
+ */
+function renderWorkViews(model, motionGroups, motionOptions, meta = {}) {
+  const activeView = normalizeOperatorView(meta.activeView, motionOptions, model.counts, meta.selectedMotionId);
+  return (
+    `<section class="op-sec" data-sec="operator-views">` +
+    `<div class="sec-head">` +
+    iconSvg("layers", 16, "sec-ic") +
+    renderWorkViewNav(model, motionOptions, { activeView, selectedMotionId: meta.selectedMotionId ?? null }) +
+    `<span class="sec-sub">Focus operator work by lane.</span>` +
+    `</div>` +
+    `<div id="operator-views-panel-queue" class="op-view-panel" role="tabpanel" aria-labelledby="operator-views-tab-queue" data-tab-panel="queue"${activeView !== "queue" ? " hidden" : ""}>${activeView === "queue" ? renderQueuePanel(model, meta) : ""}</div>` +
+    (model.counts.blocked > 0
+      ? `<div id="operator-views-panel-blocked" class="op-view-panel" role="tabpanel" aria-labelledby="operator-views-tab-blocked" data-tab-panel="blocked"${activeView !== "blocked" ? " hidden" : ""}>${activeView === "blocked" ? renderBlockedPanel(model, meta) : ""}</div>`
+      : "") +
+    (motionOptions.length > 0
+      ? `<div id="operator-views-panel-motions" class="op-view-panel" role="tabpanel" aria-labelledby="operator-views-tab-motions" data-tab-panel="motions"${activeView !== "motions" ? " hidden" : ""}>${activeView === "motions" ? renderMotionPanel(model, motionGroups, motionOptions, meta) : ""}</div>`
+      : "") +
+    `</section>`
+  );
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorViewModel} model
+ * @param {Array<{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   offerLabel?: string | null,
+ *   offerHost?: string | null,
+ *   icpSummary?: string | null,
+ *   count: number,
+ *   hasPromoted: boolean,
+ * }>} motionOptions
+ * @param {{ activeView: "queue" | "blocked" | "motions", selectedMotionId?: string | null }} meta
+ */
+function renderWorkViewNav(model, motionOptions, meta) {
+  return (
+    `<div class="seg seg-tabs op-view-tabs" aria-label="Operator work views">` +
+    renderWorkViewLink("queue", "Queue", model.counts.decisions, "amber", meta.activeView === "queue") +
+    (model.counts.blocked > 0
+      ? renderWorkViewLink("blocked", "Blocked", model.counts.blocked, "red", meta.activeView === "blocked")
+      : "") +
+    (motionOptions.length > 0
+      ? renderMotionPicker(motionOptions, { activeView: meta.activeView, selectedMotionId: meta.selectedMotionId ?? null })
+      : "") +
+    `</div>`
+  );
+}
+
+/**
+ * @param {"queue" | "blocked"} view
+ * @param {string} label
+ * @param {number} count
+ * @param {"amber" | "red"} tone
+ * @param {boolean} active
+ */
+function renderWorkViewLink(view, label, count, tone, active) {
+  return (
+    `<a class="seg-tab${active ? " is-active" : ""}" id="operator-views-tab-${escapeAttr(view)}" href="${escapeAttr(operatorViewHref(view))}">` +
+    escapeHtml(label) +
+    countChip(count, tone) +
+    `</a>`
+  );
+}
+
+/**
+ * @param {Array<{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   offerLabel?: string | null,
+ *   offerHost?: string | null,
+ *   icpSummary?: string | null,
+ *   count: number,
+ *   hasPromoted: boolean,
+ * }>} motionOptions
+ * @param {{ activeView?: "queue" | "blocked" | "motions" | null, selectedMotionId?: string | null }} [meta]
+ */
+function renderMotionPicker(motionOptions, meta = {}) {
+  const selected = findMotionOption(motionOptions, meta.selectedMotionId);
+  const currentLabel = selected?.offerLabel ?? selected?.label ?? "All motions";
+  return (
+    `<details class="seg-motion-picker${meta.activeView === "motions" ? " is-active" : ""}">` +
+    `<summary class="seg-tab seg-motion-trigger${meta.activeView === "motions" ? " is-active" : ""}" id="operator-views-tab-motions" aria-haspopup="menu">` +
+    `<span class="seg-motion-trigger-copy">` +
+    `<span class="seg-motion-trigger-label">By motion</span>` +
+    `<span class="seg-motion-trigger-current">${escapeHtml(currentLabel)}</span>` +
+    `</span>` +
+    countChip(motionOptions.length, "blue") +
+    `<span class="seg-motion-trigger-chev">${iconSvg("chevron", 12)}</span>` +
+    `</summary>` +
+    `<div class="seg-motion-menu" role="menu" aria-label="Choose an active motion">` +
+    renderMotionMenuOption({
+      href: operatorViewHref("motions"),
+      title: "All motions",
+      meta: "Show operator work grouped across every active motion.",
+      metaLabel: null,
+      motionName: null,
+      offerHost: null,
+      count: motionOptions.length,
+      current: !selected,
+    }) +
+    motionOptions.map((option) =>
+      renderMotionMenuOption({
+        href: operatorViewHref("motions", option.filterValue),
+        title: option.offerLabel ?? option.label,
+        meta: option.icpSummary ?? null,
+        metaLabel: option.icpSummary ? "ICP" : null,
+        motionName: option.label,
+        offerHost: option.offerHost ?? null,
+        count: option.count,
+        current: selected?.key === option.key,
+      })).join("") +
+    `</div>` +
+    `</details>`
+  );
+}
+
+/**
+ * @param {{
+ *   href: string,
+ *   title: string,
+ *   meta?: string | null,
+ *   metaLabel?: string | null,
+ *   motionName?: string | null,
+ *   offerHost?: string | null,
+ *   count: number,
+ *   current?: boolean,
+ * }} opts
+ */
+function renderMotionMenuOption(opts) {
+  const showMotionName = Boolean(
+    opts.motionName
+    && opts.motionName.trim()
+    && opts.motionName.trim() !== opts.title.trim(),
+  );
+  return (
+    `<a class="motion-menu-opt${opts.current ? " is-current" : ""}" href="${escapeAttr(opts.href)}" role="menuitem">` +
+    `<span class="motion-menu-copy">` +
+    (opts.offerHost
+      ? `<span class="motion-menu-host">${iconSvg("link", 11)}<span>${escapeHtml(opts.offerHost)}</span></span>`
+      : `<span class="motion-menu-host motion-menu-host-all">${iconSvg("layers", 11)}<span>All active motions</span></span>`) +
+    `<span class="motion-menu-title">${escapeHtml(opts.title)}</span>` +
+    (opts.meta
+      ? `<span class="motion-menu-meta">${escapeHtml(opts.metaLabel ? `${opts.metaLabel} · ${opts.meta}` : opts.meta)}</span>`
+      : "") +
+    (showMotionName ? `<span class="motion-menu-code">${escapeHtml(opts.motionName ?? "")}</span>` : "") +
+    `</span>` +
+    countChip(opts.count, "blue") +
+    `</a>`
+  );
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorViewModel} model
+ * @param {{ interactive?: boolean, returnTo?: string | null }} [meta]
+ */
+function renderQueuePanel(model, meta = {}) {
+  return (
+    renderNextMove(model.nextMove, meta) +
+    renderSection(
+      "dec",
+      "queue",
+      "Action queue",
+      model.counts.decisions,
+      "amber",
+      "One queue of operator work across inbound review and due-now planner actions. Background agent work is separate.",
+      renderDecisions(model.decisions, meta, { hasPromoted: Boolean(model.nextMove) }),
+    )
+  );
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorViewModel} model
+ * @param {{ interactive?: boolean, returnTo?: string | null }} [meta]
+ */
+function renderBlockedPanel(model, meta = {}) {
+  return renderSection(
+    "blk",
+    "alert",
+    "Blocked",
+    model.counts.blocked,
+    "red",
+    "Issues that need a real unblock before governed work resumes.",
+    renderBlocked(model.blocked, meta),
+  );
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorViewModel} model
+ * @param {Array<{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   count: number,
+ *   hasPromoted: boolean,
+ *   decisions: import("../core/build-operator-view.js").OperatorDecisionCard[],
+ * }>} motionGroups
+ * @param {Array<{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   offerLabel?: string | null,
+ *   offerHost?: string | null,
+ *   icpSummary?: string | null,
+ *   count: number,
+ *   hasPromoted: boolean,
+ * }>} motionOptions
+ * @param {{
+ *   interactive?: boolean,
+ *   selectedMotionId?: string | null,
+ *   returnTo?: string | null,
+ * }} [meta]
+ */
+function renderMotionPanel(model, motionGroups, motionOptions, meta = {}) {
+  const selectedOption = findMotionOption(motionOptions, meta.selectedMotionId);
+  const selected = selectedOption
+    ? (findMotionGroup(motionGroups, selectedOption.filterValue) ?? motionGroups.find((group) => group.label === selectedOption.label) ?? null)
+    : null;
+  if (!selectedOption) {
+    if (!motionGroups.length) {
+      return renderSection(
+        "motion-work",
+        "layers",
+        "All motions",
+        motionOptions.length,
+        "blue",
+        "No motion-scoped operator work is queued right now.",
+        emptyState({ icon: "check", message: "No motion-scoped operator work is queued right now." }),
+      );
+    }
+    return motionGroups.map((group) =>
+      renderMotionGroupSection(
+        model,
+        group,
+        resolveMotionGroupOption(motionOptions, group),
+        meta,
+        { filtered: false },
+      )).join("");
+  }
+  if (!selected) {
+    return (
+      renderSection(
+        "motion-work",
+        "layers",
+        selectedOption.offerLabel ?? selectedOption.label,
+        0,
+        "blue",
+        "No operator work is queued for this motion right now.",
+        emptyState({ icon: "check", message: "No operator work is queued for this motion right now." }),
+      ) +
+      renderMotionClearAction()
+    );
+  }
+  return renderMotionGroupSection(model, selected, selectedOption, meta, { filtered: true });
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorViewModel} model
+ * @param {{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   count: number,
+ *   hasPromoted: boolean,
+ *   decisions: import("../core/build-operator-view.js").OperatorDecisionCard[],
+ * }} group
+ * @param {{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   offerLabel?: string | null,
+ *   offerHost?: string | null,
+ *   icpSummary?: string | null,
+ *   count: number,
+ *   hasPromoted: boolean,
+ * }} option
+ * @param {{ interactive?: boolean, returnTo?: string | null }} meta
+ * @param {{ filtered?: boolean }} [view]
+ */
+function renderMotionGroupSection(model, group, option, meta, view = {}) {
+  const filtered = Boolean(view.filtered);
+  const title = option.offerLabel ?? option.label;
+  const descriptor = buildMotionDescriptor(option);
+  const promotedDecision = filtered && !group.hasPromoted
+    ? (group.decisions[0] ?? null)
+    : null;
+  const nextMove = group.hasPromoted
+    ? model.nextMove
+    : decisionCardToNextMove(promotedDecision);
+  const visibleDecisions = promotedDecision
+    ? group.decisions.slice(1)
+    : group.decisions;
+  const hasPromoted = group.hasPromoted || Boolean(promotedDecision);
+  const sub = filtered
+    ? `${descriptor ? `${descriptor} · ` : ""}${group.hasPromoted
+      ? "Promoted next move included. Everything below stays inside this motion."
+      : hasPromoted
+        ? "Motion-scoped next move included. Everything below stays inside this motion."
+        : "Only this motion's operator work is shown."}`
+    : descriptor || "Operator work grouped under this motion.";
+  return (
+    (nextMove ? renderNextMove(nextMove, meta) : "") +
+    renderSection(
+      filtered ? "motion-work" : `motion-work-${group.key}`,
+      "layers",
+      title,
+      group.count,
+      "blue",
+      sub,
+      renderDecisions(visibleDecisions, meta, { hasPromoted }),
+    ) +
+    (filtered ? renderMotionClearAction() : "")
+  );
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorDecisionCard | null | undefined} decision
+ * @returns {import("../core/build-operator-view.js").OperatorNextMove | null}
+ */
+function decisionCardToNextMove(decision) {
+  if (!decision) return null;
+  return {
+    title: decision.summary,
+    subject: decision.person,
+    prospectId: decision.prospectId ?? null,
+    personId: decision.personId ?? null,
+    avatarUrl: decision.avatarUrl ?? null,
+    subtitle: decision.roleLine ?? ([decision.role, decision.company].filter(Boolean).join(" · ") || null),
+    motionId: decision.motionId ?? null,
+    motionName: decision.motionName ?? null,
+    motionStatus: "active",
+    truth: decision.truth,
+    truthAt: decision.truthAt ?? null,
+    surface: decision.surface ?? null,
+    action: decision.primaryActionLabel,
+    actionMode: decision.primaryActionMode,
+    actionStatus: decision.actionStatus ?? null,
+    actionWriter: null,
+    actionArgs: null,
+    actionHref: decision.primaryHref ?? null,
+    why: decision.why ?? null,
+    previewLabel: decision.previewLabel ?? null,
+    previewSubject: decision.previewSubject ?? null,
+    previewText: decision.previewText ?? null,
+    backlogCompanies: null,
+    actions: decision.actions ?? [],
+  };
+}
+
+/**
+ * @param {{
+ *   label: string,
+ *   offerLabel?: string | null,
+ *   offerHost?: string | null,
+ *   icpSummary?: string | null,
+ * }} option
+ */
+function buildMotionDescriptor(option) {
+  const parts = [];
+  if (option.offerHost) {
+    parts.push(option.offerHost);
+  }
+  if (option.icpSummary) {
+    parts.push(`ICP: ${option.icpSummary}`);
+  }
+  if (option.label && option.label !== (option.offerLabel ?? option.label)) {
+    parts.push(option.label);
+  }
+  return parts.join(" · ");
+}
+
+function renderMotionClearAction() {
+  return `<div class="op-motion-clear">${btn({ variant: "ghost", size: "sm", icon: "refresh", label: "Clear to all motions", href: operatorViewHref("motions") })}</div>`;
+}
+
+/**
+ * @param {Array<{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   offerLabel?: string | null,
+ *   offerHost?: string | null,
+ *   icpSummary?: string | null,
+ *   count: number,
+ *   hasPromoted: boolean,
+ * }>} motionOptions
+ * @param {{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   count: number,
+ *   hasPromoted: boolean,
+ * }} group
+ */
+function resolveMotionGroupOption(motionOptions, group) {
+  return motionOptions.find((option) =>
+    (group.motionId && option.motionId === group.motionId)
+    || option.filterValue === group.filterValue
+    || option.label === group.label) ?? {
+    key: group.key,
+    filterValue: group.filterValue,
+    motionId: group.motionId,
+    label: group.label,
+    offerLabel: group.label,
+    offerHost: null,
+    icpSummary: null,
+    count: group.count,
+    hasPromoted: group.hasPromoted,
+  };
+}
+
+/**
+ * @param {import("../core/build-operator-view.js").OperatorViewModel} model
+ */
+function collectMotionGroups(model) {
+  /** @type {Map<string, {
+   *   key: string,
+   *   filterValue: string,
+   *   motionId: string | null,
+   *   label: string,
+   *   count: number,
+   *   hasPromoted: boolean,
+   *   decisions: import("../core/build-operator-view.js").OperatorDecisionCard[],
+   * }>} */
+  const groups = new Map();
+
+  const ensure = (motionId, motionName) => {
+    const label = normalizeMotionLabel(motionName, motionId);
+    if (!label) return null;
+    const filterValue = motionId ?? `name:${label}`;
+    const key = motionId ? `motion:${motionId}` : `name:${label}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        filterValue,
+        motionId: motionId ?? null,
+        label,
+        count: 0,
+        hasPromoted: false,
+        decisions: [],
+      });
+    }
+    return groups.get(key) ?? null;
+  };
+
+  if (model.nextMove) {
+    const group = ensure(model.nextMove.motionId ?? null, model.nextMove.motionName ?? null);
+    if (group) {
+      group.hasPromoted = true;
+      group.count += 1;
+    }
+  }
+
+  for (const decision of model.decisions) {
+    const group = ensure(decision.motionId ?? null, decision.motionName ?? null);
+    if (!group) continue;
+    group.count += 1;
+    group.decisions.push(decision);
+  }
+
+  return [...groups.values()].sort((left, right) =>
+    Number(Boolean(right.hasPromoted)) - Number(Boolean(left.hasPromoted))
+    || right.count - left.count
+    || left.label.localeCompare(right.label));
+}
+
+/**
+ * @param {Array<{
+ *   key: string,
+ *   filterValue: string,
+ *   motionId: string | null,
+ *   label: string,
+ *   offerLabel?: string | null,
+ *   offerHost?: string | null,
+ *   icpSummary?: string | null,
+ *   count: number,
+ *   hasPromoted: boolean,
+ * }>} motionGroups
+ * @param {Array<{ id: string, name: string, offerLabel?: string | null, offerHost?: string | null, icpSummary?: string | null }>} motionChoices
+ * @param {string | null | undefined} selectedMotionId
+ */
+function collectMotionOptions(motionGroups, motionChoices, selectedMotionId) {
+  if (!Array.isArray(motionChoices) || motionChoices.length === 0) {
+    return motionGroups.map((group) => ({
+      key: group.key,
+      filterValue: group.filterValue,
+      motionId: group.motionId,
+      label: group.label,
+      count: group.count,
+      hasPromoted: group.hasPromoted,
+    }));
+  }
+
+  const groupByMotionId = new Map(motionGroups.filter((group) => group.motionId).map((group) => [group.motionId, group]));
+  const groupByLabel = new Map(motionGroups.map((group) => [group.label, group]));
+  const options = motionChoices
+    .filter((choice) => typeof choice?.id === "string" && choice.id.trim() && typeof choice?.name === "string" && choice.name.trim())
+    .map((choice) => {
+      const motionId = choice.id.trim();
+      const label = choice.name.trim();
+      const group = groupByMotionId.get(motionId) ?? groupByLabel.get(label) ?? null;
+      return {
+        key: `motion:${motionId}`,
+        filterValue: motionId,
+        motionId,
+        label,
+        offerLabel: normalizeMotionLabel(choice.offerLabel, label),
+        offerHost: normalizeMotionLabel(choice.offerHost, null),
+        icpSummary: normalizeMotionLabel(choice.icpSummary, null),
+        count: group?.count ?? 0,
+        hasPromoted: group?.hasPromoted ?? false,
+      };
+    });
+
+  const selectedGroup = findMotionGroup(motionGroups, selectedMotionId);
+  if (selectedGroup && !options.some((option) => option.filterValue === selectedGroup.filterValue)) {
+    options.push({
+      key: selectedGroup.key,
+      filterValue: selectedGroup.filterValue,
+      motionId: selectedGroup.motionId,
+      label: selectedGroup.label,
+      offerLabel: selectedGroup.label,
+      offerHost: null,
+      icpSummary: null,
+      count: selectedGroup.count,
+      hasPromoted: selectedGroup.hasPromoted,
+    });
+  }
+
+  return options.sort((left, right) =>
+    Number(Boolean(right.hasPromoted)) - Number(Boolean(left.hasPromoted))
+    || (left.offerLabel ?? left.label).localeCompare(right.offerLabel ?? right.label));
+}
+
+/**
+ * @param {string | null | undefined} value
+ * @param {string | null | undefined} fallbackId
+ */
+function normalizeMotionLabel(value, fallbackId) {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof fallbackId === "string" && fallbackId.trim()) {
+    return fallbackId.trim();
+  }
+  return null;
+}
+
+/**
+ * @param {Array<{ key: string, filterValue: string }>} motionGroups
+ * @param {string | null | undefined} selectedMotionId
+ */
+function findMotionGroup(motionGroups, selectedMotionId) {
+  if (!selectedMotionId) return null;
+  return motionGroups.find((group) => group.filterValue === selectedMotionId || group.key === selectedMotionId) ?? null;
+}
+
+/**
+ * @param {Array<{ key: string, filterValue: string }>} motionOptions
+ * @param {string | null | undefined} selectedMotionId
+ */
+function findMotionOption(motionOptions, selectedMotionId) {
+  if (!selectedMotionId) return null;
+  return motionOptions.find((option) => option.filterValue === selectedMotionId || option.key === selectedMotionId) ?? null;
+}
+
+/**
+ * @param {"queue" | "blocked" | "motions" | null | undefined} requested
+ * @param {Array<any>} motionOptions
+ * @param {{ blocked: number }} counts
+ * @param {string | null | undefined} selectedMotionId
+ */
+function normalizeOperatorView(requested, motionOptions, counts, selectedMotionId) {
+  const preferred = selectedMotionId ? "motions" : requested ?? "queue";
+  if (preferred === "blocked") {
+    return counts.blocked > 0 ? "blocked" : "queue";
+  }
+  if (preferred === "motions") {
+    return motionOptions.length > 0 ? "motions" : "queue";
+  }
+  return "queue";
+}
+
+/**
+ * Canonical operator deep-link: `/operator?view=…&motion=…#view`. `view` is
+ * omitted from the query when it's the default "queue", and `motion` is only
+ * attached on the motions view. Exported so the server's returnTo links stay in
+ * lock-step with the in-page tab links.
+ *
+ * @param {"queue" | "blocked" | "motions"} view
+ * @param {string | null | undefined} [motionId]
+ */
+export function operatorViewHref(view, motionId) {
+  const params = new URLSearchParams();
+  if (view !== "queue") {
+    params.set("view", view);
+  }
+  if (view === "motions" && motionId) {
+    params.set("motion", motionId);
+  }
+  const search = params.toString();
+  return `/operator${search ? `?${search}` : ""}#${view}`;
 }
 
 /**
@@ -353,7 +999,7 @@ function renderDecisionCard(d, meta = {}) {
     d.motionName ? stateDot("active", d.motionName) : null,
     truthTag(d.truth, d.truthAt ?? null),
     d.surface ? `<span class="surface-ref">${iconSvg("inbox", 11)}${escapeHtml(d.surface)}</span>` : null,
-    ownerTag({ ownerName: null }),
+    ownerTag({ ownerName: d.ownerLabel ?? null }),
   ]
     .filter(Boolean)
     .join("");
@@ -422,7 +1068,7 @@ function renderBlockedCard(b, meta = {}) {
   const href = b.resolveMode === "compose"
     ? composeHref(b.prospectId, b.personId, b.resolveHref, meta)
     : b.resolveMode === "detail"
-      ? detailHref(b.prospectId, b.personId, b.resolveHref, meta)
+      ? (b.resolveHref ? withReturn(b.resolveHref, meta) : detailHref(b.prospectId, b.personId, b.resolveHref, meta))
       : undefined;
   // When the blocker carries typed actions (one per company that needs an owner
   // pinned), render them as live exo-writer buttons so the client dispatcher

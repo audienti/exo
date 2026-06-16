@@ -6,11 +6,113 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { buildWorkspaceModel } from "../prototype/build-motion-workspace.mjs";
+import { buildMotionRoutesReviewViewFromInbox } from "../src/cli/workspace-runtime.js";
+import { buildAgentRunLockDir } from "../src/lib/agent-run-lock.js";
 import { offerUrl, runCliJson } from "./support/live-runtime.js";
 
 function flattenLaneItems(lanes) {
   return (lanes ?? []).flatMap((lane) => lane.items ?? []);
 }
+
+test("motion route review view reuses actionable inbox items", () => {
+  const review = buildMotionRoutesReviewViewFromInbox({
+    user: { id: "user-1", label: "Route User", owner: "William" },
+    items: [
+      {
+        id: "obs-1",
+        reviewState: "needs_reply",
+        kind: "private_message_received",
+        observedAt: "2026-06-15T17:00:00.000Z",
+        motion: { id: "motion-1", name: "Motion One" },
+        company: { id: "company-1", name: "Acme" },
+        prospect: { id: "prospect-1", name: "Pat Prospect", title: "VP Revenue" },
+        account: { id: "account-1", capability: "linkedin" },
+        actorName: "Pat Prospect",
+        whyItMatters: "A live reply is waiting.",
+        recommendedAction: "Reply now.",
+      },
+      {
+        id: "obs-2",
+        reviewState: "claimed_elsewhere",
+        kind: "private_message_received",
+        observedAt: "2026-06-15T16:00:00.000Z",
+        motion: null,
+        company: null,
+        prospect: null,
+        account: { id: "account-1", capability: "linkedin" },
+        actorName: "Elsewhere Prospect",
+        whyItMatters: "Do not route locally.",
+        recommendedAction: "Leave it alone.",
+      },
+    ],
+  });
+
+  assert.equal(review.reviewItems.length, 1);
+  assert.equal(review.reviewItems[0].state, "needs_reply");
+  assert.equal(review.reviewItems[0].motion?.id, "motion-1");
+  assert.equal(review.counts.reviewItemCount, 1);
+});
+
+test("workspace model preserves typed queue blockers for the operator surface", () => {
+  const workspace = buildWorkspaceModel({
+    user: {
+      id: "user-1",
+      label: "william-main",
+      owner: "William",
+      accounts: [],
+    },
+    observations: [],
+    inboundReview: {
+      surfaces: { accounts: [] },
+      reviewItems: [],
+      itemizationGaps: [],
+    },
+    inbox: {
+      surfaces: { accounts: [] },
+    },
+    daily: {
+      generatedAt: "2026-06-15T17:00:00.000Z",
+      items: [],
+    },
+    agentQueue: {
+      tasks: [],
+      waiting: [],
+      blockers: [
+        {
+          kind: "send_transport_blocked",
+          reason: "Exact Gmail inbox required",
+          reasonCode: "gmail_exact_inbox_required",
+          motionId: "motion-1",
+          motionName: "Motion One",
+          companyId: "company-1",
+          companyName: "Acme",
+          prospectId: "prospect-1",
+          prospectName: "Princess",
+          subject: "Acme · Princess",
+          channel: "email",
+          detail: "william-main has multiple managed Gmail inboxes, so this motion cannot trust one sender implicitly. Pick one Exact Gmail inbox under Execution before email work can run.",
+          blockType: "capability",
+          transportReason: "Multiple Gmail inboxes are mapped for william-main. Pick one exact inbox on this motion before email work can run.",
+          resolveHint: "Open motion settings and pick one Exact Gmail inbox under Execution.",
+          resolveHref: "/motions/motion-1/settings#execution",
+          resolveLabel: "Open motion settings",
+          resolveMode: "detail",
+        },
+      ],
+    },
+    reports: [],
+    regenerateCommand: "exo report workspace --json",
+  });
+
+  assert.equal(workspace.data.blockedQueue.itemCount, 1);
+  assert.equal(workspace.data.blockedQueue.items[0].reason, "Exact Gmail inbox required");
+  assert.equal(workspace.data.blockedQueue.items[0].reasonCode, "gmail_exact_inbox_required");
+  assert.equal(workspace.data.blockedQueue.items[0].blockType, "capability");
+  assert.equal(workspace.data.blockedQueue.items[0].resolveLabel, "Open motion settings");
+  assert.equal(workspace.data.blockedQueue.items[0].resolveHref, "/motions/motion-1/settings#execution");
+  assert.equal(workspace.data.blockedQueue.items[0].resolveMode, "detail");
+});
 
 test("report workspace exposes the unified agent queue separately from blockers and backlog", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-workspace-runtime-"));
@@ -124,6 +226,9 @@ test("report workspace exposes the unified agent queue separately from blockers 
     const finishedAt = new Date(nowMs - 60 * 1000).toISOString();
     const expiresAt = new Date(nowMs + 30 * 60 * 1000).toISOString();
     fs.mkdirSync(stateDir, { recursive: true });
+    const sharedLockDir = buildAgentRunLockDir({ stateDir });
+    fs.mkdirSync(sharedLockDir, { recursive: true });
+    fs.writeFileSync(path.join(sharedLockDir, "pid"), `${process.pid}\n`, "utf8");
     fs.writeFileSync(path.join(stateDir, "agent-host-state.json"), JSON.stringify({
       taskLeases: [
         {

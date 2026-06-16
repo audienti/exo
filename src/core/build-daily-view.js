@@ -9,7 +9,10 @@ import { buildPlannerGuidance } from "../lib/planner-guidance.js";
 import { selectParallelSupportAction } from "./planner-support-actions.js";
 import { isPlannerEligibleMotionStatus } from "../lib/motion-status.js";
 import { hasUsableEmailFallback } from "../lib/prospect-contacts.js";
-import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
+import {
+  isConnectionRequestInFlight,
+  summarizeObservedConnectionRequestState,
+} from "../lib/cadence-helpers.js";
 import { buildPacketReviewView } from "./build-packet-review-view.js";
 import { buildOutboundCapacityView } from "./build-outbound-capacity-view.js";
 import { buildMotionCompanyScopeKey, buildUserAssignedExecutionScopeIndex } from "./user-execution-scope.js";
@@ -25,6 +28,8 @@ import { isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
  *   now?: string | null | undefined,
  *   rawCues?: unknown[] | undefined,
  *   rawUsers?: unknown[] | undefined,
+ *   inbox?: ReturnType<typeof buildInboxView> | undefined,
+ *   inboundReview?: ReturnType<typeof buildInboundReviewView> | undefined,
  *   motionId?: string | null | undefined,
  *   companyId?: string | null | undefined,
  *   prospectId?: string | null | undefined,
@@ -42,17 +47,24 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
   const profiles = rawProfiles;
   const allUsers = (options.rawUsers ?? [rawUser]).map((item) => userSchema.parse(item));
   const now = options.now ?? new Date().toISOString();
-  const inbox = buildInboxView(user, rawObservations, motions, companies);
-  const inboundReview = buildInboundReviewView(user, rawObservations, motions, companies, {
+  const inbox = options.inbox ?? buildInboxView(user, rawObservations, motions, companies);
+  const inboundReview = options.inboundReview ?? buildInboundReviewView(user, rawObservations, motions, companies, {
     motionId: options.motionId ?? null,
     companyId: options.companyId ?? null,
     prospectId: options.prospectId ?? null
   });
   const inboxByProspectId = new Map();
+  const inboxItemsByProspectId = new Map();
 
   for (const item of inbox.items) {
     const prospectId = item.prospect?.id ?? null;
-    if (prospectId && !inboxByProspectId.has(prospectId)) {
+    if (!prospectId) {
+      continue;
+    }
+    const items = inboxItemsByProspectId.get(prospectId) ?? [];
+    items.push(item);
+    inboxItemsByProspectId.set(prospectId, items);
+    if (!inboxByProspectId.has(prospectId)) {
       inboxByProspectId.set(prospectId, item);
     }
   }
@@ -105,6 +117,7 @@ export function buildDailyView(rawUser, rawMotions, rawCompanies, rawProfiles, r
       prospect,
       motionSupportProspects: supportProspectsByMotionId.get(motion.id) ?? [],
       latestInboxItem: inboxByProspectId.get(prospect.id) ?? null,
+      prospectInboxItems: inboxItemsByProspectId.get(prospect.id) ?? [],
       now
     }))
   ])
@@ -546,12 +559,14 @@ function inboundReviewPlannerMeta(state) {
  *   prospect: import("../schema/target-account.js").prospectSchema._type,
  *   motionSupportProspects: ReturnType<typeof toSupportProspect>[],
  *   latestInboxItem: ReturnType<typeof buildInboxView>["items"][number] | null,
+ *   prospectInboxItems: ReturnType<typeof buildInboxView>["items"],
  *   now: string
  * }} context
  */
-function buildDailyItem({ motion, account, prospect, motionSupportProspects, latestInboxItem, now }) {
+function buildDailyItem({ motion, account, prospect, motionSupportProspects, latestInboxItem, prospectInboxItems, now }) {
   const cadence = prospect.cadenceState;
   const cadenceNotes = cadence.notes?.toLowerCase() ?? "";
+  const observedConnectionState = summarizeObservedConnectionRequestState(prospectInboxItems);
   const currentSupportProspect = toSupportProspect(account, prospect);
   const guidanceContext = {
     motionId: motion.id,
@@ -708,6 +723,57 @@ function buildDailyItem({ motion, account, prospect, motionSupportProspects, lat
       source: {
         type: "cadence",
         kind: "held_in_reserve"
+      }
+    };
+  }
+
+  if (
+    cadence.currentStep === "connection-request"
+    && !cadence.lastTouchOutcome
+    && observedConnectionState
+  ) {
+    if (observedConnectionState.state === "accepted") {
+      return null;
+    }
+
+    const attentionAfterTouch = observedConnectionState.state === "attention_after_touch";
+    const needsStatusReconciliation = observedConnectionState.state === "needs_status_reconciliation";
+    const notAccepted = observedConnectionState.state === "not_accepted";
+    const waitingWhy = needsStatusReconciliation
+      ? `${prospect.name}'s LinkedIn invite already left the pending list, so Exo should reconcile the relationship state before surfacing another first-touch send.`
+      : notAccepted
+        ? `${prospect.name}'s LinkedIn invite already failed to open a connection, so this stale first-touch branch should not send another connection request as if nothing happened.`
+        : attentionAfterTouch
+          ? `${prospect.name} viewed your profile after the connection request. Attention already happened, so the branch should stay patient while you work another ready branch.`
+          : `${prospect.name} already has a connection request in flight, so the primary branch is waiting on an external trigger.`;
+    const waitingNextMove = needsStatusReconciliation
+      ? `Do not send another connection request to ${prospect.name} until Exo reconciles whether the prior invite was accepted, declined, or otherwise resolved.`
+      : notAccepted
+        ? `Do not treat ${prospect.name} as an untouched first-touch branch. Replan the next move instead of resending the same connection request.`
+        : attentionAfterTouch
+          ? `Do not add another touch to ${prospect.name} right now. Keep the invite patient and move to the next ready branch.`
+          : `Wait for ${prospect.name} to accept or reply to the connection request before escalating.`;
+    return {
+      ...base,
+      state: "waiting_until",
+      priority: "wait",
+      priorityRank: 3,
+      cadenceEffect: "waiting_on_outbound",
+      dueAt: cadence.nextActionDueAt ?? observedConnectionState.observedAt ?? now,
+      whyItMatters: waitingWhy,
+      recommendedAction: waitingNextMove,
+      guidance: buildPlannerGuidance(
+        (observedConnectionState.state === "pending" || attentionAfterTouch) ? "wait_for_connection_response" : "wait_for_response",
+        {
+          ...guidanceContext,
+          recommendedAction: waitingNextMove,
+          dueAt: cadence.nextActionDueAt ?? observedConnectionState.observedAt ?? now,
+          whyItMatters: waitingWhy
+        }
+      ),
+      source: {
+        type: "inbound_observation",
+        kind: observedConnectionState.state
       }
     };
   }

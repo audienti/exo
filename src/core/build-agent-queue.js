@@ -122,6 +122,7 @@ const PUBLIC_ENGAGEMENT_DRAFT_SURFACES = new Set(["public_comment", "comment_rep
  *   users?: any[],
  *   observations?: any[],
  *   cues?: any[],
+ *   inboundReviewsByUserId?: Map<string, ReturnType<typeof buildInboundReviewView>> | Record<string, ReturnType<typeof buildInboundReviewView>>,
  *   hostState?: any,
  *   includeWaitingRetrieval?: boolean,
  *   now?: string | null
@@ -202,7 +203,8 @@ export function buildAgentQueue(input) {
 
   for (const rawUser of input.users ?? []) {
     const syncView = buildUserInboundSyncView(rawUser);
-    const review = buildInboundReviewView(rawUser, input.observations ?? [], activeMotions, input.companies ?? []);
+    const review = lookupPrecomputedInboundReview(input.inboundReviewsByUserId, syncView.user.id)
+      ?? buildInboundReviewView(rawUser, input.observations ?? [], activeMotions, input.companies ?? []);
     const itemizationGapsByAccountId = groupBy(review.itemizationGaps, (gap) => gap.accountId);
     const openCuesByAccountId = groupBy(
       normalizedCues.filter((cue) => cue.userId === syncView.user.id && cue.status === "open"),
@@ -548,7 +550,7 @@ export function buildAgentQueue(input) {
         ?? senderPremiumByCompany.get(account.companyId)
         ?? false;
       if (
-        (account?.packetState?.kind === "company_research" && account.packetState?.status === "claimed")
+        isAccountCompanyResearchClaimed(account)
         || isClaimableCompanyResearchAccount(account)
       ) {
         placeTask(buildCompanyResearchTask({
@@ -557,7 +559,7 @@ export function buildAgentQueue(input) {
         }), { now, tasks, waiting });
       }
       if (
-        (account?.packetState?.kind === "prospect_selection" && account.packetState?.status === "claimed")
+        isAccountProspectSelectionClaimed(account)
         || isClaimableProspectSelectionAccount(account)
       ) {
         placeTask(buildProspectSelectionTask({
@@ -595,9 +597,12 @@ export function buildAgentQueue(input) {
           prospect,
           publicEngagementPlan,
           drafts,
+          senderAccount: senderLinkedinAccountByScope.get(`${motion.id}:${account.companyId}`) ?? null,
+          branches: queueProspectBranches,
           now,
           tasks,
           waiting,
+          blockers,
         });
         const publicDraftSurface = publicEngagementPlan.kind === "draft"
           ? publicEngagementPlan.selection?.surface ?? null
@@ -706,9 +711,10 @@ export function buildAgentQueue(input) {
                   reason: `Company ${account.companyName} is not available for governed send resolution.`,
                 };
             if (sendContract && sendContract.status !== "ready") {
-              blockers.push({
+              const sendTransportBlocker = {
                 kind: "send_transport_blocked",
-                reason: "execution_path_blocked",
+                reason: sendContract.operatorReason ?? "Capability not ready",
+                reasonCode: sendContract.reasonCode ?? "execution_path_blocked",
                 motionId: motion.id,
                 motionName: motion.name,
                 companyId: account.companyId,
@@ -719,9 +725,18 @@ export function buildAgentQueue(input) {
                 nextSurface,
                 queuedAt: draft.approvedAt ?? null,
                 draftStatus: draft.status,
+                channel: sendContract.channel ?? draft.channel ?? null,
+                subject: `${account.companyName} · ${prospect.name}`,
+                detail: sendContract.detail
+                  ?? `${sendContract.reason ?? "No governed send path is currently available."}`,
+                blockType: sendContract.blockType ?? "capability",
                 transportReason: sendContract.reason ?? "No governed send path is currently available.",
-                resolveHint: sendContract.reason ?? "Repair the execution path before retrying this send.",
-              });
+                resolveHint: sendContract.resolveHint ?? sendContract.reason ?? "Repair the execution path before retrying this send.",
+                resolveHref: sendContract.resolveHref ?? null,
+                resolveLabel: sendContract.resolveLabel ?? "Fix capability",
+                resolveMode: sendContract.resolveMode ?? null,
+              };
+              blockers.push(sendTransportBlocker);
               continue;
             }
           }
@@ -802,6 +817,26 @@ export function buildAgentQueue(input) {
     waiting: annotatedWaiting,
     blockers,
   };
+}
+
+/**
+ * @param {Map<string, ReturnType<typeof buildInboundReviewView>> | Record<string, ReturnType<typeof buildInboundReviewView>> | null | undefined} reviewsByUserId
+ * @param {string | null | undefined} userId
+ */
+function lookupPrecomputedInboundReview(reviewsByUserId, userId) {
+  if (!userId || !reviewsByUserId) {
+    return null;
+  }
+
+  if (reviewsByUserId instanceof Map) {
+    return reviewsByUserId.get(userId) ?? null;
+  }
+
+  if (typeof reviewsByUserId === "object") {
+    return reviewsByUserId[userId] ?? null;
+  }
+
+  return null;
 }
 
 /**
@@ -937,6 +972,17 @@ function isClaimableCompanyResearchAccount(account) {
 }
 
 /**
+ * @param {any} account
+ */
+function isAccountCompanyResearchClaimed(account) {
+  const queueStatus = account?.queueState?.status ?? "discovered";
+  return isActiveDisposition(account?.disposition)
+    && account?.packetState?.kind === "company_research"
+    && account.packetState?.status === "claimed"
+    && ["discovered", "queued_for_research"].includes(queueStatus);
+}
+
+/**
  * Preserve stored account-level queue state and packet ownership, but derive
  * prospect queue state when older state snapshots or tests left it implicit.
  *
@@ -1008,8 +1054,10 @@ function isClaimableProspectSelectionAccount(account) {
  * @param {any} account
  */
 function isAccountProspectSelectionClaimed(account) {
-  return account?.packetState?.kind === "prospect_selection"
-    && account?.packetState?.status === "claimed";
+  return isActiveDisposition(account?.disposition)
+    && account?.packetState?.kind === "prospect_selection"
+    && account?.packetState?.status === "claimed"
+    && account?.queueState?.status === "researched";
 }
 
 /**
@@ -1161,7 +1209,8 @@ function buildProspectResearchTask({ motion, account, prospect }) {
  * @param {any} packetState
  */
 function isPacketUnavailableForWorker(packetState) {
-  return packetState?.status === "claimed" || packetState?.status === "submitted";
+  if (!packetState?.status) return false;
+  return packetState.status !== "returned";
 }
 
 /**
@@ -1224,12 +1273,27 @@ function prospectResearchTaskReason(prospect, claimState, returned) {
  *   prospect: any,
  *   publicEngagementPlan: any,
  *   drafts: any[],
+ *   senderAccount?: any,
+ *   branches?: any[],
  *   now: string,
  *   tasks: Array<Record<string, any>>,
  *   waiting: Array<Record<string, any>>,
+ *   blockers?: Array<Record<string, any>>,
  * }} input
  */
-function handlePublicEngagementPlan({ motion, account, prospect, publicEngagementPlan, drafts, now, tasks, waiting }) {
+function handlePublicEngagementPlan({
+  motion,
+  account,
+  prospect,
+  publicEngagementPlan,
+  drafts,
+  senderAccount = null,
+  branches = [],
+  now,
+  tasks,
+  waiting,
+  blockers = [],
+}) {
   if (!publicEngagementPlan || publicEngagementPlan.kind === "none" || publicEngagementPlan.kind === "skip") {
     return;
   }
@@ -1265,6 +1329,27 @@ function handlePublicEngagementPlan({ motion, account, prospect, publicEngagemen
     }
 
     if (isAutonomousSendReadyDraft(activeDraft)) {
+      const dispatchGate = evaluateOutboundDispatchGate({
+        now,
+        motion,
+        account,
+        prospect,
+        draft: activeDraft,
+        action: selection.actionKey,
+        senderAccount,
+        branches,
+      });
+      if (dispatchGate.status === "block") {
+        blockers.push(buildPublicEngagementDispatchBlocker({
+          motion,
+          account,
+          prospect,
+          selection,
+          dispatchGate,
+        }));
+        return;
+      }
+      const gateWaiting = dispatchGate.status === "wait";
       placeTask(buildSendMessageTask({
         motion,
         account,
@@ -1272,8 +1357,11 @@ function handlePublicEngagementPlan({ motion, account, prospect, publicEngagemen
         draft: activeDraft,
         action: selection.actionKey,
         via: "public-engagement",
-        dueAt: publicEngagementPlan.dueAt ?? activeDraft.approvedAt ?? now,
-        waitingReason: null,
+        dueAt: gateWaiting
+          ? (dispatchGate.nextDueAt ?? publicEngagementPlan.dueAt ?? activeDraft.approvedAt ?? now)
+          : (publicEngagementPlan.dueAt ?? activeDraft.approvedAt ?? now),
+        waitingReason: gateWaiting ? dispatchGate.waitingReason : null,
+        dispatchGate,
         recipientUrl: selection.targetUrl,
         postSendNextAction: publicEngagementPlan.phase === "pre_connect"
           ? "Wait 48 hours, then queue the connection-request draft for review."
@@ -1349,6 +1437,27 @@ function handlePublicEngagementPlan({ motion, account, prospect, publicEngagemen
         }),
       });
     }
+    const dispatchGate = evaluateOutboundDispatchGate({
+      now,
+      motion,
+      account,
+      prospect,
+      draft: { surface: selection.surface, channel: "linkedin" },
+      action: selection.actionKey,
+      senderAccount,
+      branches,
+    });
+    if (dispatchGate.status === "block") {
+      blockers.push(buildPublicEngagementDispatchBlocker({
+        motion,
+        account,
+        prospect,
+        selection,
+        dispatchGate,
+      }));
+      return;
+    }
+    const gateWaiting = dispatchGate.status === "wait";
     placeTask(buildSendMessageTask({
       motion,
       account,
@@ -1359,9 +1468,12 @@ function handlePublicEngagementPlan({ motion, account, prospect, publicEngagemen
       channel: "linkedin",
       body: "",
       subject: null,
-      queuedAt: publicEngagementPlan.dueAt ?? now,
-      dueAt: publicEngagementPlan.dueAt ?? now,
-      waitingReason: null,
+      queuedAt: null,
+      dueAt: gateWaiting
+        ? (dispatchGate.nextDueAt ?? publicEngagementPlan.dueAt ?? now)
+        : (publicEngagementPlan.dueAt ?? now),
+      waitingReason: gateWaiting ? dispatchGate.waitingReason : null,
+      dispatchGate,
       recipientUrl: selection.targetUrl,
       postSendNextAction: publicEngagementPlan.phase === "pre_connect"
         ? "Wait 48 hours, then queue the connection-request draft for review."
@@ -1382,6 +1494,34 @@ function handlePublicEngagementPlan({ motion, account, prospect, publicEngagemen
       }),
     }), { now, tasks, waiting });
   }
+}
+
+/**
+ * @param {{
+ *   motion: any,
+ *   account: any,
+ *   prospect: any,
+ *   selection: any,
+ *   dispatchGate: any,
+ * }} input
+ */
+function buildPublicEngagementDispatchBlocker({ motion, account, prospect, selection, dispatchGate }) {
+  return {
+    kind: "send_dispatch_blocked",
+    reason: dispatchGate.reasonCode,
+    blockReason: dispatchGate.blockReason,
+    motionId: motion.id,
+    motionName: motion.name,
+    companyId: account.companyId,
+    companyName: account.companyName,
+    prospectId: prospect.id,
+    prospectName: prospect.name,
+    sendReadySurface: selection.surface,
+    queuedAt: null,
+    draftStatus: null,
+    dispatchGate,
+    resolveHint: dispatchGate.reason,
+  };
 }
 
 /**

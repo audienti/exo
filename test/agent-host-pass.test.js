@@ -19,6 +19,7 @@ import {
   buildDraftOutputSchema,
   buildProspectResearchPrompt,
   buildProspectSelectionPrompt,
+  buildWaitingInboundIdentityResolutionResult,
   createTaskVerificationFingerprint,
   buildDraftPrompt,
   buildInboundCapturePrompt,
@@ -31,12 +32,14 @@ import {
   extractDraftBodyFromCodexResponse,
   extractDraftOutputFromCodexResponse,
   getPreflightTaskGate,
+  isInboundAutomationRolloutGatedSendTask,
   normalizeInboundCaptureForWriteback,
   requiresBrowserAttachForInboundCapture,
   sanitizeCodexOutputSchema,
   summarizePassStatus,
   summarizeVerificationOutput,
   shouldStopAfterTaskResult,
+  isCodexTaskTimeoutResult,
   terminalPacketCompletionMatchesQueueState,
   isBrowserMaintenanceTaskKind,
   getInboundAutomationRolloutBlockReason,
@@ -47,6 +50,7 @@ import {
   resolveResearchTaskTimeoutMs,
   resolveCodexConnectorRuntimeConfig,
   resolveInboundExoCommandTimeoutMs,
+  runBoundedSubprocessWithWatchdog,
   shouldAbortPassAfterTaskProblem,
   shouldIgnoreCodexUserConfig,
   shouldPreferBackfillSlice,
@@ -528,6 +532,121 @@ test("runSendTask uses deterministic Unipile HTTP first for connection requests"
   assert.deepEqual(writebacks, ["exo actions result --json"]);
 });
 
+test("runSendTask uses deterministic Unipile HTTP first for post reactions", () => {
+  const directCalls = [];
+  const connectorCalls = [];
+  const writebacks = [];
+  const task = {
+    kind: "send_message",
+    id: "send-like-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "like_post",
+    action: "like_post",
+    recipientUrl: "https://www.linkedin.com/posts/jordan-example_signal-activity-7332661864792854528-hcGT",
+    body: "",
+    writeback: "exo actions result --json",
+    _selectedSendMode: "live",
+  };
+
+  const result = runSendTask(task, {
+    runExoJsonArgs: () => buildReadyConnectionRequestSendHandoff({
+      action: "like_post",
+      surface: "like_post",
+      message: "",
+      publicTarget: {
+        url: "https://www.linkedin.com/posts/jordan-example_signal-activity-7332661864792854528-hcGT",
+        targetKind: "post",
+      },
+    }),
+    runLinkedinSendWithUnipile: (handoff, options = {}) => {
+      directCalls.push({
+        action: handoff.action,
+        allowDirectUnipileHttp: options.allowDirectUnipileHttp,
+      });
+      return {
+        status: "sent",
+        provider: "unipile",
+        responseStatus: 201,
+        usedTargetUrl: "https://www.linkedin.com/posts/jordan-example_signal-activity-7332661864792854528-hcGT",
+      };
+    },
+    runConnectorCodexTask: () => {
+      connectorCalls.push("connector");
+      throw new Error("Connector worker should not run after deterministic post reaction succeeds.");
+    },
+    runShellText: (command) => {
+      writebacks.push(command);
+      return "";
+    },
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.detail.transport, "unipile_http_same_credentials");
+  assert.equal(result.detail.responseStatus, 201);
+  assert.deepEqual(directCalls, [
+    {
+      action: "like_post",
+      allowDirectUnipileHttp: true,
+    },
+  ]);
+  assert.deepEqual(connectorCalls, []);
+  assert.deepEqual(writebacks, ["exo actions result --json"]);
+});
+
+test("runSendTask writes unavailable public reaction results from deterministic Unipile checks", () => {
+  const connectorCalls = [];
+  const writebacks = [];
+  const task = {
+    kind: "send_message",
+    id: "send-like-unavailable",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "like_post",
+    action: "like_post",
+    recipientUrl: "https://www.linkedin.com/posts/jordan-example_signal-activity-7332661864792854528-hcGT",
+    body: "",
+    writeback: "exo actions result --json",
+    unavailableWriteback: "exo actions result --action like_post --result unavailable --json",
+    _selectedSendMode: "live",
+  };
+
+  const result = runSendTask(task, {
+    runExoJsonArgs: () => buildReadyConnectionRequestSendHandoff({
+      action: "like_post",
+      surface: "like_post",
+      message: "",
+      publicTarget: {
+        url: "https://www.linkedin.com/posts/jordan-example_signal-activity-7332661864792854528-hcGT",
+        targetKind: "post",
+      },
+    }),
+    runLinkedinSendWithUnipile: () => ({
+      status: "unavailable",
+      provider: "unipile",
+      responseStatus: 200,
+      reason: "Unipile reports that the stored LinkedIn post cannot be reacted to by the governed account.",
+      usedTargetUrl: "https://www.linkedin.com/posts/jordan-example_signal-activity-7332661864792854528-hcGT",
+    }),
+    runConnectorCodexTask: () => {
+      connectorCalls.push("connector");
+      throw new Error("Connector worker should not run for deterministic unavailable public reactions.");
+    },
+    runShellText: (command) => {
+      writebacks.push(command);
+      return "";
+    },
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.detail.publicTargetUnavailable, true);
+  assert.equal(result.detail.transport, "unipile_http_same_credentials");
+  assert.deepEqual(connectorCalls, []);
+  assert.deepEqual(writebacks, ["exo actions result --action like_post --result unavailable --json"]);
+});
+
 test("runSendTask falls back to connector handoff after deterministic provider failure", () => {
   const directCalls = [];
   const connectorCalls = [];
@@ -579,6 +698,76 @@ test("runSendTask falls back to connector handoff after deterministic provider f
   assert.deepEqual(writebacks, ["exo actions result --json"]);
 });
 
+test("runSendTask bypasses dispatch gating when proving a verify-mode send", () => {
+  const connectorCalls = [];
+  const task = {
+    kind: "send_message",
+    id: "send-proof-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "like_post",
+    action: "like_post",
+    recipientUrl: "https://www.linkedin.com/posts/example",
+    body: "",
+    writeback: "exo actions result --json",
+    _selectedSendMode: "verify",
+  };
+
+  const result = runSendTask(task, {
+    runExoJsonArgs: (args) => {
+      assert.ok(args.includes("--ignore-dispatch-gate"));
+      return buildReadyConnectionRequestSendHandoff({
+        action: "like_post",
+        surface: "like_post",
+        message: "",
+      });
+    },
+    runConnectorCodexTask: () => {
+      connectorCalls.push("connector");
+      return {
+        status: "ready_to_send",
+      };
+    },
+    runShellText: () => {
+      throw new Error("Verification should not write back a real send.");
+    },
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.detail?.verificationOnly, true);
+  assert.deepEqual(connectorCalls, ["connector"]);
+});
+
+test("chooseNextQueueTask does not let verify fallback starve due transport maintenance work", () => {
+  const selected = chooseNextQueueTask({
+    tasks: [
+      {
+        kind: "send_message",
+        companyId: "company-1",
+        motionId: "motion-1",
+        prospectId: "prospect-1",
+        surface: "follow_up_direct_message",
+        action: "send_direct_message",
+        body: "Agent wrote this.",
+        waitingReason: null,
+      },
+      {
+        kind: "withdraw_connection",
+        companyId: "company-2",
+        observationId: "obs-1",
+        waitingReason: null,
+      },
+    ],
+    waiting: [],
+    blockers: [],
+  }, true, {}, "2026-06-15T21:00:00.000Z", false, "verify", [], [], false, {
+    failedTaskFingerprints: new Set(),
+  });
+
+  assert.equal(selected?.kind, "withdraw_connection");
+});
+
 test("runSendTask does not record local success when direct and connector sends both fail", () => {
   const writebacks = [];
   const result = runSendTask(
@@ -620,7 +809,44 @@ test("runSendTask does not record local success when direct and connector sends 
   assert.deepEqual(writebacks, []);
 });
 
-test("runSendTask keeps non-connection LinkedIn sends connector-required", () => {
+test("runSendTask preserves direct fallback details when connector send times out", () => {
+  const result = runSendTask(
+    {
+      kind: "send_message",
+      id: "send-connection-timeout",
+      motionId: "motion-1",
+      companyId: "company-1",
+      prospectId: "prospect-1",
+      surface: "connection_request",
+      action: "send_connection_request",
+      recipientUrl: "https://www.linkedin.com/in/jordan-example/",
+      body: "Jordan, worth connecting.",
+      writeback: "exo actions result --json",
+      _selectedSendMode: "live",
+    },
+    {
+      runExoJsonArgs: () => buildReadyConnectionRequestSendHandoff(),
+      runLinkedinSendWithUnipile: () => ({
+        status: "unsupported",
+        provider: "unipile",
+        reason: "send_connection_request requires recipient.providerId from synced LinkedIn profile truth.",
+      }),
+      runConnectorCodexTask: () => {
+        throw new Error("Codex task failed: spawnSync /Applications/Codex.app/Contents/Resources/codex ETIMEDOUT");
+      },
+      runShellText: () => {
+        throw new Error("Timed-out sends must not write back.");
+      },
+    },
+  );
+
+  assert.equal(result.status, "failed");
+  assert.match(result.detail.reason, /ETIMEDOUT/);
+  assert.equal(result.detail.fallbackFrom, "unipile_http_same_credentials");
+  assert.match(result.detail.directUnipileUnsupportedReason, /providerId/i);
+});
+
+test("runSendTask keeps non-directable LinkedIn sends connector-required", () => {
   const directCalls = [];
   const connectorCalls = [];
   const writebacks = [];
@@ -1118,12 +1344,13 @@ test("send verification fingerprints stay stable when queue metadata is regenera
     motionId: "motion-1",
     companyId: "company-1",
     prospectId: "prospect-1",
-    surface: "like_post",
-    recipientUrl: "https://www.linkedin.com/posts/example-activity-123",
+    surface: "follow_up_direct_message",
+    action: "send_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-one/",
     queuedAt: "2026-06-03T05:00:00.000Z",
     dueAt: "2026-06-03T05:00:00.000Z",
-    body: "",
-    writeback: "exo actions result --action like_post --result sent --prospect prospect-1 --generated-at first",
+    body: "Agent wrote this.",
+    writeback: "exo actions result --action send_direct_message --result sent --prospect prospect-1 --generated-at first",
     checkoutFingerprint: "first-checkout",
   };
   const regeneratedTask = {
@@ -1154,12 +1381,13 @@ test("send verification fingerprints stay stable when queue metadata is regenera
             motionId: "motion-1",
             companyId: "company-2",
             prospectId: "prospect-2",
-            surface: "like_post",
-            recipientUrl: "https://www.linkedin.com/posts/example-activity-456",
+            surface: "follow_up_direct_message",
+            action: "send_direct_message",
+            recipientUrl: "https://www.linkedin.com/in/example-two/",
             queuedAt: "2026-06-03T05:15:00.000Z",
             dueAt: "2026-06-03T05:15:00.000Z",
-            body: "",
-            writeback: "exo actions result --action like_post --result sent --prospect prospect-2",
+            body: "Agent wrote this too.",
+            writeback: "exo actions result --action send_direct_message --result sent --prospect prospect-2",
           },
         ],
       },
@@ -1317,6 +1545,82 @@ test("chooseNextQueueTask runs operator-approved sends live even in verify mode"
   assert.equal(selected?._selectedSendMode, "operator_live");
 });
 
+test("chooseNextQueueTask runs deterministic public reactions live even in verify mode", () => {
+  for (const surface of ["like_post", "create_comment_reaction"]) {
+    const publicReactionTask = {
+      kind: "send_message",
+      id: `send-${surface}`,
+      motionId: "motion-1",
+      companyId: "company-1",
+      prospectId: "prospect-1",
+      surface,
+      action: surface,
+      recipientUrl: "https://www.linkedin.com/posts/example/",
+      queuedAt: "2026-06-03T05:00:00.000Z",
+      body: "",
+      authoredBy: "agent",
+      editedByOperator: false,
+      approvedByOperator: false,
+      writeback: "exo actions result ...prospect-1",
+    };
+
+    const selected = chooseNextQueueTask(
+      { tasks: [publicReactionTask] },
+      true,
+      { recentTaskVerifications: [] },
+      "2026-06-03T05:15:00.000Z",
+      false,
+      "verify",
+    );
+
+    assert.equal(selected?.id, `send-${surface}`);
+    assert.equal(selected?._selectedSendMode, "live");
+  }
+});
+
+test("chooseNextQueueTask still sends public reactions live in verify mode when inbound retrieval is stale", () => {
+  const publicReactionTask = {
+    kind: "send_message",
+    id: "send-public-reaction",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "like_post",
+    action: "like_post",
+    recipientUrl: "https://www.linkedin.com/posts/example/",
+    queuedAt: "2026-06-03T05:00:00.000Z",
+    body: "",
+    authoredBy: "agent",
+    editedByOperator: false,
+    approvedByOperator: false,
+    writeback: "exo actions result ...prospect-1",
+  };
+  const fullSyncTask = {
+    kind: "run_inbound_sync",
+    id: "sync-full",
+    mode: "full",
+    dueAt: "2026-06-03T05:01:00.000Z",
+    queuedAt: "2026-06-03T05:01:00.000Z",
+  };
+  const healthWarnings = [
+    { capability: "linkedin", handle: "operator-linkedin", surfaceLabel: "Messaging Inbox", freshnessState: "warning" },
+  ];
+
+  const selected = chooseNextQueueTask(
+    { tasks: [publicReactionTask, fullSyncTask] },
+    true,
+    { recentTaskVerifications: [] },
+    "2026-06-03T05:15:00.000Z",
+    false,
+    "verify",
+    [],
+    healthWarnings,
+  );
+
+  assert.equal(selected?.id, "send-public-reaction");
+  assert.equal(selected?._selectedSendMode, "live");
+});
+
 test("chooseNextQueueTask prefers operator-live sends over proof-only agent sends in verify mode", () => {
   const agentTask = {
     kind: "send_message",
@@ -1461,10 +1765,10 @@ test("chooseNextQueueTask prefers retrieval recovery over proof-only agent sends
     motionId: "motion-1",
     companyId: "company-1",
     prospectId: "prospect-2",
-    surface: "create_comment_reaction",
-    recipientUrl: "https://www.linkedin.com/posts/example-two/",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-two/",
     queuedAt: "2026-06-03T05:00:00.000Z",
-    body: "",
+    body: "Agent wrote this.",
     authoredBy: "agent",
     editedByOperator: false,
     approvedByOperator: false,
@@ -1495,12 +1799,15 @@ test("chooseNextQueueTask prefers retrieval recovery over proof-only agent sends
   assert.equal(selected?.id, "sync-full");
 });
 
-test("chooseNextQueueTask prefers send work over due retrieval even if retrieval is older", () => {
+test("chooseNextQueueTask lets due retrieval outrank proof-only sends in verify mode", () => {
   const queue = {
     tasks: [
       {
         kind: "send_message",
         id: "send-1",
+        surface: "follow_up_direct_message",
+        action: "send_direct_message",
+        body: "Agent wrote this.",
         dueAt: "2026-06-03T05:01:00.000Z",
         queuedAt: "2026-06-03T05:00:00.000Z",
       },
@@ -1515,7 +1822,7 @@ test("chooseNextQueueTask prefers send work over due retrieval even if retrieval
 
   assert.equal(
     chooseNextQueueTask(queue, true, {}, "2026-06-03T05:15:00.000Z", false, "verify")?.id,
-    "send-1",
+    "sync-1",
   );
 });
 
@@ -1855,6 +2162,38 @@ test("standard passes stop once their time budget is exhausted", () => {
       },
     ),
     false,
+  );
+});
+
+test("standard passes stop starting new work when the cadence reserve is gone", () => {
+  assert.equal(
+    canRunTaskInCurrentPass(
+      "send_message",
+      Array.from({ length: 8 }, () => ({ kind: "send_message", status: "completed" })),
+      8,
+      0,
+      {
+        elapsedMs: 10 * 60 * 1000,
+        standardPassBudgetMs: 14 * 60 * 1000,
+        standardTaskStartReserveMs: 5 * 60 * 1000,
+      },
+    ),
+    false,
+  );
+
+  assert.equal(
+    canRunTaskInCurrentPass(
+      "send_message",
+      Array.from({ length: 8 }, () => ({ kind: "send_message", status: "completed" })),
+      8,
+      0,
+      {
+        elapsedMs: 9 * 60 * 1000,
+        standardPassBudgetMs: 14 * 60 * 1000,
+        standardTaskStartReserveMs: 5 * 60 * 1000,
+      },
+    ),
+    true,
   );
 });
 
@@ -2257,7 +2596,7 @@ test("explainNoopPass makes verify-mode no-op passes explicit once all due sends
       false,
       "verify",
     ),
-    "Verify mode had no unverified send_message tasks left to prove.",
+    "Verify mode had no unverified outbound copy send_message tasks left to prove.",
   );
   assert.equal(summarizePassStatus([]), "noop");
 });
@@ -2276,6 +2615,44 @@ test("summarizePassStatus marks completed results with remaining due work as par
       { tasks: [], waiting: [], blockers: [] },
     ),
     "completed",
+  );
+});
+
+test("buildWaitingInboundIdentityResolutionResult converts retriable identity failures into waiting work", () => {
+  assert.deepEqual(
+    buildWaitingInboundIdentityResolutionResult(
+      {
+        reason: "Codex task failed: spawnSync /Applications/Codex.app/Contents/Resources/codex ETIMEDOUT",
+        identityResolutionStatus: "blocked",
+      },
+      "2026-06-15T22:00:00.000Z",
+    ),
+    {
+      status: "waiting",
+      detail: {
+        reason: "Codex task failed: spawnSync /Applications/Codex.app/Contents/Resources/codex ETIMEDOUT",
+        identityResolutionStatus: "blocked",
+        waitingReason: "identity_retry_backoff",
+        nextDueAt: "2026-06-15T22:00:00.000Z",
+      },
+    },
+  );
+
+  assert.deepEqual(
+    buildWaitingInboundIdentityResolutionResult(
+      {
+        reason: "No managed LinkedIn connector path is currently available for automatic identity resolution.",
+        identityResolutionStatus: "blocked",
+      },
+      null,
+    ),
+    {
+      status: "blocked",
+      detail: {
+        reason: "No managed LinkedIn connector path is currently available for automatic identity resolution.",
+        identityResolutionStatus: "blocked",
+      },
+    },
   );
 });
 
@@ -2330,7 +2707,7 @@ test("explainNoopPass does not claim verify-only hold for operator-authored send
       false,
       "verify",
     ),
-    "Verify mode had no unverified send_message tasks left to prove.",
+    "Verify mode had no unverified outbound copy send_message tasks left to prove.",
   );
 });
 
@@ -2756,18 +3133,98 @@ test("chooseNextQueueTask drains inbound retrieval recovery before sends when in
   );
 });
 
-test("chooseNextQueueTask drains inbound retrieval recovery before bounded connection reconciliation in verify mode", () => {
+test("chooseNextQueueTask does not let inbound health recovery starve deterministic public reactions", () => {
+  const publicReactionTask = {
+    kind: "send_message",
+    id: "public-reaction-1",
+    motionId: "motion-1",
+    companyId: "company-1",
+    prospectId: "prospect-1",
+    surface: "create_comment_reaction",
+    action: "create_comment_reaction",
+    recipientUrl: "https://www.linkedin.com/posts/example-activity-7332661864792854528-hcGT",
+    dueAt: "2026-06-08T21:00:00.000Z",
+    queuedAt: null,
+    body: "",
+    writeback: "exo actions result ...prospect-1",
+  };
+  const dueRecoveryTask = {
+    kind: "run_inbound_sync",
+    mode: "quick",
+    id: "sync-due-1",
+    userId: "user-1",
+    accountId: "account-1",
+    capability: "linkedin",
+    surface: "linkedin-sent-invitations",
+    surfaceKeys: ["linkedin-sent-invitations"],
+    dueAt: "2026-06-08T20:30:00.000Z",
+    queuedAt: "2026-06-08T20:30:00.000Z",
+  };
+  const healthWarnings = [
+    {
+      capability: "linkedin",
+      handle: "williamflanagan",
+      surfaceLabel: "Sent Invitations",
+      freshnessState: "warning",
+    },
+  ];
+
+  assert.equal(
+    chooseNextQueueTask(
+      { tasks: [dueRecoveryTask, publicReactionTask] },
+      true,
+      {},
+      "2026-06-08T21:52:30.000Z",
+      false,
+      "live",
+      [],
+      healthWarnings,
+    )?.id,
+    "public-reaction-1",
+  );
+});
+
+test("public LinkedIn reactions bypass inbound automation rollout gate", () => {
+  assert.equal(
+    isInboundAutomationRolloutGatedSendTask({
+      kind: "send_message",
+      surface: "follow_up_direct_message",
+      authoredBy: "agent",
+    }),
+    true,
+  );
+  assert.equal(
+    isInboundAutomationRolloutGatedSendTask({
+      kind: "send_message",
+      surface: "like_post",
+      action: "like_post",
+      authoredBy: "agent",
+    }),
+    false,
+  );
+  assert.equal(
+    isInboundAutomationRolloutGatedSendTask({
+      kind: "send_message",
+      surface: "create_comment_reaction",
+      action: "create_comment_reaction",
+      authoredBy: "agent",
+    }),
+    false,
+  );
+});
+
+test("chooseNextQueueTask does not let verify retrieval recovery starve bounded connection reconciliation", () => {
   const sendTask = {
     kind: "send_message",
     id: "send-1",
     motionId: "motion-1",
     companyId: "company-1",
     prospectId: "prospect-1",
-    surface: "like_post",
-    recipientUrl: "https://www.linkedin.com/posts/example/",
+    surface: "follow_up_direct_message",
+    recipientUrl: "https://www.linkedin.com/in/example-one/",
     queuedAt: "2026-06-13T17:14:31.776Z",
     dueAt: "2026-06-13T17:14:31.776Z",
-    body: "",
+    body: "Agent wrote this.",
     authoredBy: "agent",
     editedByOperator: false,
     approvedByOperator: false,
@@ -2828,7 +3285,7 @@ test("chooseNextQueueTask drains inbound retrieval recovery before bounded conne
       [],
       healthWarnings,
     )?.id,
-    "sync-1",
+    "reconcile-1",
   );
 });
 
@@ -3124,6 +3581,32 @@ test("Codex task exec options hard-kill timed-out background subprocesses", () =
   assert.equal(options.cwd, process.cwd());
 });
 
+test("bounded subprocess watchdog reclaims timed-out Codex child work", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-bounded-subprocess-"));
+  const startedAt = Date.now();
+
+  try {
+    assert.throws(
+      () => runBoundedSubprocessWithWatchdog({
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => {}, 60_000)"],
+        cwd: repoRoot,
+        env: process.env,
+        stdinText: "ignored",
+        timeoutMs: 500,
+        tempDir,
+      }),
+      /timed out after .*configured 500ms/i,
+    );
+    assert.ok(Date.now() - startedAt < 5_000, "watchdog should not wait for the child script");
+    const result = readJsonFile(path.join(tempDir, "bounded-process-result.json"));
+    assert.equal(result.status, "timeout");
+    assert.equal(result.timedOut, true);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("buildCodexTaskEnv derives HOME from CODEX_HOME and forwards Unipile config", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-codex-task-env-"));
   const codexHome = path.join(tempDir, ".codex");
@@ -3359,6 +3842,22 @@ test("failed retrieval tasks do not abort the host pass, but other failed work s
 
   assert.equal(
     shouldAbortPassAfterTaskProblem(
+      { kind: "send_message", id: "send-timeout" },
+      { status: "failed", detail: { reason: "Codex task failed: spawnSync /Applications/Codex.app/Contents/Resources/codex ETIMEDOUT" } },
+    ),
+    false,
+  );
+
+  assert.equal(
+    isCodexTaskTimeoutResult({
+      status: "failed",
+      detail: { reason: "Codex task failed: spawnSync /Applications/Codex.app/Contents/Resources/codex ETIMEDOUT" },
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldAbortPassAfterTaskProblem(
       { kind: "send_message", id: "send-2" },
       { status: "blocked", detail: { reason: "Connection request is already pending for this LinkedIn profile on the pinned williamflanagan account." } },
     ),
@@ -3396,6 +3895,20 @@ test("prospect-scoped blocked sends are distinguished from transport-scoped fail
         detail: {
           reason: "This draft belongs to another active motion.",
           dispatchGate: { status: "block" },
+        },
+      },
+    ),
+    true,
+  );
+
+  assert.equal(
+    isProspectScopedBlockedSendResult(
+      { kind: "send_message", id: "send-2b" },
+      {
+        status: "blocked",
+        detail: {
+          reason: "Multiple Gmail inboxes are mapped for william-main. Pick one exact inbox on this motion before email work can run.",
+          reasonCode: "gmail_exact_inbox_required",
         },
       },
     ),

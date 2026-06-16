@@ -135,6 +135,7 @@ test("buildLinkedinSendHandoff accepts persisted public-engagement selections st
     handoff.publicTarget?.url,
     "https://www.linkedin.com/posts/aramex-australia_aramexau30-employer-activity-7132480227909218304-nyg0",
   );
+  assert.equal(handoff.publicTarget?.snippet, "Asked for an email contact.");
 });
 
 test("buildLinkedinSendHandoff exposes deterministic Unipile send identifiers for connection requests", () => {

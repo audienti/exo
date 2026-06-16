@@ -3,7 +3,13 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { pruneExpiredBrowserBackoffs } from "../lib/agent-host-state.js";
+import { pruneInactiveTaskLeases } from "../lib/agent-host-state.js";
+import {
+  coerceRecordedPassStatus,
+  getEffectiveAgentResultStatus,
+  summarizeEffectivePassReason,
+  summarizeEffectivePassStatus,
+} from "../lib/agent-result-status.js";
 import { getTaskExecutionLane } from "../lib/agent-task-lanes.js";
 
 const HOST_STATE_FILE = "agent-host-state.json";
@@ -54,7 +60,7 @@ export function buildAgentRunLog(input) {
 
   const hostState = readJsonArtifact(artifacts.hostState, warnings);
   if (hostState) {
-    entries.push(...buildHostStateEntries(hostState, artifacts.hostState.path, checkedAt));
+    entries.push(...buildHostStateEntries(hostState, artifacts.hostState.path, stateDir, checkedAt));
   }
 
   if (artifacts.agentLog.exists) {
@@ -164,7 +170,13 @@ function buildPassEntry(pass, sourceArtifact) {
     : taskKinds.length === 1
       ? taskKinds[0]
       : "multiple";
-  const status = normalizeText(pass?.status) ?? inferPassStatus(resultCounts);
+  const effectiveStatus = summarizeEffectivePassStatus(results, pass?.finalQueueCounts ?? null);
+  const rawStatus = normalizeText(pass?.status)?.toLowerCase() ?? null;
+  const status = coerceRecordedPassStatus(rawStatus, effectiveStatus, {
+    finalQueue: pass?.finalQueueCounts ?? null,
+    resultCounts,
+  })
+    ?? (effectiveStatus === "noop" ? (rawStatus ?? inferPassStatus(resultCounts)) : effectiveStatus);
 
   if (!timestamp && !status && resultCounts.total === 0) return null;
 
@@ -191,7 +203,8 @@ function buildPassEntry(pass, sourceArtifact) {
     resultCounts,
     queueCounts: normalizeQueueCounts(pass?.finalQueueCounts),
     runtimeTruth,
-    reason: normalizeText(pass?.reason),
+    reason: summarizeEffectivePassReason(results)
+      ?? (status === rawStatus ? normalizeText(pass?.reason) : null),
     sourceArtifact: source,
   };
 }
@@ -201,8 +214,8 @@ function buildPassEntry(pass, sourceArtifact) {
  * @param {string} artifactPath
  * @param {string} now
  */
-function buildHostStateEntries(hostState, artifactPath, now) {
-  const normalized = pruneExpiredBrowserBackoffs(hostState, now);
+function buildHostStateEntries(hostState, artifactPath, stateDir, now) {
+  const normalized = pruneInactiveTaskLeases(hostState, { stateDir, now });
   const entries = [];
 
   for (const lease of normalized.taskLeases ?? []) {
@@ -312,6 +325,7 @@ function buildAgentLogEntries(logPath, warnings) {
   const lines = readAgentLogTailLines(logPath);
   let buffer = [];
   let startLine = null;
+  let scanState = null;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -320,13 +334,26 @@ function buildAgentLogEntries(logPath, warnings) {
       if (!line.startsWith("{")) continue;
       buffer = [line];
       startLine = lineNumber;
+      scanState = createJsonScanState();
+      updateJsonScanState(scanState, line);
+    } else if (line.startsWith("{") && scanState?.depth > 0) {
+      warnings.push(buildMalformedLogWarning(logPath, startLine, lineNumber - 1));
+      buffer = [line];
+      startLine = lineNumber;
+      scanState = createJsonScanState();
+      updateJsonScanState(scanState, line);
     } else if (line.startsWith("{")) {
       warnings.push(buildMalformedLogWarning(logPath, startLine, lineNumber - 1));
       buffer = [line];
       startLine = lineNumber;
+      scanState = createJsonScanState();
+      updateJsonScanState(scanState, line);
     } else {
       buffer.push(line);
+      if (scanState) updateJsonScanState(scanState, line);
     }
+
+    if (!scanState || scanState.depth > 0) continue;
 
     try {
       const parsed = JSON.parse(buffer.join("\n"));
@@ -339,9 +366,12 @@ function buildAgentLogEntries(logPath, warnings) {
       if (entry) entries.push(entry);
       buffer = [];
       startLine = null;
+      scanState = null;
     } catch {
-      // The scheduled runner writes pretty JSON, so keep buffering until the
-      // object closes or a new top-level JSON object starts.
+      warnings.push(buildMalformedLogWarning(logPath, startLine, lineNumber));
+      buffer = [];
+      startLine = null;
+      scanState = null;
     }
   }
 
@@ -350,6 +380,41 @@ function buildAgentLogEntries(logPath, warnings) {
   }
 
   return entries;
+}
+
+function createJsonScanState() {
+  return {
+    depth: 0,
+    inString: false,
+    escaping: false,
+  };
+}
+
+/**
+ * @param {{ depth: number, inString: boolean, escaping: boolean }} state
+ * @param {string} line
+ */
+function updateJsonScanState(state, line) {
+  for (const char of line) {
+    if (state.escaping) {
+      state.escaping = false;
+      continue;
+    }
+    if (state.inString && char === "\\") {
+      state.escaping = true;
+      continue;
+    }
+    if (char === "\"") {
+      state.inString = !state.inString;
+      continue;
+    }
+    if (state.inString) continue;
+    if (char === "{") {
+      state.depth += 1;
+    } else if (char === "}") {
+      state.depth = Math.max(0, state.depth - 1);
+    }
+  }
 }
 
 /** @param {string} logPath */
@@ -479,6 +544,7 @@ function buildResultCounts(results) {
     completed: 0,
     blocked: 0,
     failed: 0,
+    waiting: 0,
     noop: 0,
     partial: 0,
     byKind: [],
@@ -488,7 +554,7 @@ function buildResultCounts(results) {
   const byStatus = new Map();
 
   for (const result of results) {
-    const status = result.status ?? "unknown";
+    const status = getEffectiveAgentResultStatus(result) ?? result.status ?? "unknown";
     const kind = result.kind ?? "unknown";
     byKind.set(kind, (byKind.get(kind) ?? 0) + 1);
     byStatus.set(status, (byStatus.get(status) ?? 0) + 1);

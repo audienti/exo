@@ -16,7 +16,7 @@ import { renderConnectionsPage } from "../artifacts/render-connections.js";
 import { renderExecutionPage, renderUserDetailPage } from "../artifacts/render-execution.js";
 import { renderMotionsPage, renderMotionDetailPage, renderMotionSettingsPage } from "../artifacts/render-motions.js";
 import { renderOnboardingPage } from "../artifacts/render-onboarding.js";
-import { renderOperatorPage } from "../artifacts/render-operator.js";
+import { renderOperatorPage, operatorViewHref } from "../artifacts/render-operator.js";
 import { renderQueuePage } from "../artifacts/render-queue.js";
 import { renderSettingsPage } from "../artifacts/render-settings.js";
 import { renderPersonPage } from "../artifacts/render-person.js";
@@ -24,6 +24,7 @@ import { renderProspectsPage, renderProspectDetailPage } from "../artifacts/rend
 import { renderCompanyDetailPage } from "../artifacts/render-company-detail.js";
 import { renderCompanyResearchBriefPage } from "../artifacts/render-company-research-brief-page.js";
 import { buildInboundReviewView } from "../core/build-inbound-review-view.js";
+import { buildAgentRunLog } from "../core/agent-run-log.js";
 import { buildCleanupViewModel } from "../core/build-cleanup-view.js";
 import { buildCompanyViewModel } from "../core/build-company-view.js";
 import { buildCompanyResearchBrief } from "../core/build-company-research-brief.js";
@@ -52,6 +53,7 @@ import { btn, card, countChip, escapeHtml, renderShell, sectionHead } from "../l
 import {
   findCompanyById,
   findMotionById,
+  findUserById,
   listAgentQueueProspectBranches,
   listBrowserProfiles,
   listCompanies,
@@ -61,18 +63,23 @@ import {
   listUsers,
 } from "../db/database.js";
 import { summarizeExecutionUsers } from "../lib/execution-users.js";
-import { buildWorkspaceProjection } from "./workspace-runtime.js";
+import { buildMotionRoutesProjection, buildQueueRoutesProjection, buildWorkspaceProjection } from "./workspace-runtime.js";
 import { buildSchedulerCadenceSummary, inspectAgentRoutineState, inspectAgentSchedulerState } from "./commands/agent.js";
 import { buildAgentRunLockDir, inspectAgentRunLock } from "../lib/agent-run-lock.js";
-import { pruneExpiredBrowserBackoffs } from "../lib/agent-host-state.js";
+import { pruneInactiveTaskLeases } from "../lib/agent-host-state.js";
 import { AGENT_EXECUTION_LANES } from "../lib/agent-task-lanes.js";
+import { requiresSendVerification } from "../lib/agent-send-verification.js";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4317;
-/** @type {{ key: string, projection: ReturnType<typeof buildWorkspaceProjection> } | null} */
-let cachedWorkspaceProjection = null;
-/** @type {{ key: string, promise: Promise<ReturnType<typeof buildWorkspaceProjection>> } | null} */
-let cachedWorkspaceProjectionBuild = null;
+const MAX_CACHED_WORKSPACE_PROJECTIONS = 8;
+const MAX_CACHED_AGENT_RUNTIME_SNAPSHOTS = 8;
+/** @type {Map<string, ReturnType<typeof buildWorkspaceProjection>>} */
+const cachedWorkspaceProjections = new Map();
+/** @type {Map<string, Promise<ReturnType<typeof buildWorkspaceProjection>>>} */
+const cachedWorkspaceProjectionBuilds = new Map();
+/** @type {Map<string, ReturnType<typeof buildAgentRuntimeSnapshot>>} */
+const cachedAgentRuntimeSnapshots = new Map();
 
 /**
  * @param {{ userId?: string | null, capability?: string | null, host?: string | null, port?: number | null }} input
@@ -186,22 +193,25 @@ export async function renderRoute(route, ctx, hooks = {}) {
   const renderPersonPageFn = hooks.renderPersonPage ?? renderPersonPage;
   const resolveWorkspaceProjectionForUiFn = hooks.resolveWorkspaceProjectionForUi ?? resolveWorkspaceProjectionForUi;
   const session = resolveUiRouteSession(ctx.userId);
-  const agentRuntime = {
-    ...buildAgentRuntimeSnapshot(session.userId ?? session.preferredUserId ?? null),
+  const runtimeUserId = session.userId ?? session.preferredUserId ?? null;
+  const buildRouteAgentRuntime = ({ userId = runtimeUserId, generatedAt, reviewItems } = {}) => ({
+    ...resolveAgentRuntimeSnapshotForUi(userId, { lightweight: true }),
     nav: resolveCleanupNavState({
-      userId: session.userId ?? session.preferredUserId ?? null,
+      userId,
       capability: ctx.capability,
+      generatedAt,
+      reviewItems,
       listInboundObservationsFn,
       listMotionsFn,
       listCompaniesFn,
     }),
-  };
+  });
   const meta = (regenerateCommand) => ({
     user: { label: undefined },
     generatedAt: new Date().toISOString(),
     regenerateCommand,
     interactive: true,
-    agentRuntime,
+    agentRuntime: buildRouteAgentRuntime(),
   });
   const runtimeAccountDiscovery = buildUiRuntimeAccountDiscovery();
 
@@ -247,7 +257,7 @@ export async function renderRoute(route, ctx, hooks = {}) {
         transition,
       );
       const routeAgentRuntime = {
-        ...buildAgentRuntimeSnapshot(user.id),
+        ...resolveAgentRuntimeSnapshotForUi(user.id),
         nav: resolveCleanupNavState({
           userId: user.id,
           capability: ctx.capability,
@@ -317,19 +327,85 @@ export async function renderRoute(route, ctx, hooks = {}) {
     });
   }
 
+  // Motion-scoped company research brief page only needs the canonical company,
+  // motion, and packet state. Do not block it on the full workspace projection.
+  if (pathname.startsWith("/companies/") && pathname.includes("/research-brief/")) {
+    const segments = pathname.split("/").filter(Boolean);
+    const companyId = decodeURIComponent(segments[1] ?? "");
+    const motionId = decodeURIComponent(segments[3] ?? "");
+    const company = findCompanyById(companyId);
+    if (!company) {
+      return renderNotFound("Company", companyId, "/prospects", "Prospects");
+    }
+    if (!motionId || !company.motionIds.includes(motionId)) {
+      return renderNotFound("Research brief", `${companyId}:${motionId || "missing-motion"}`, `/companies/${encodeURIComponent(companyId)}`, company.name);
+    }
+    const motion = findMotionById(motionId);
+    if (!motion) {
+      return renderNotFound("Motion", motionId, `/companies/${encodeURIComponent(companyId)}`, company.name);
+    }
+    const brief = buildCompanyResearchBrief(company, motion);
+    const packetSummary = buildMotionPacketSummary(motion, [company], { companyId });
+    const researchPacket = packetSummary.items.find((item) => item.packetKind === "company_research") ?? null;
+    return renderCompanyResearchBriefPage({
+      brief,
+      packet: researchPacket
+        ? {
+            claimState: researchPacket.claimState ?? null,
+            queueStatus: researchPacket.queueStatus ?? null,
+            workerLabel: researchPacket.workerLabel ?? null,
+          }
+        : {
+            claimState: null,
+            queueStatus:
+              (motion.targetMap?.accounts ?? []).find((account) => account.companyId === companyId)?.queueState?.status ?? null,
+            workerLabel: null,
+          },
+      interactive: true,
+      // This page is a read-only packet view. Do not stall it on global agent
+      // queue / cleanup scans just to render the header status pill.
+      agentRuntime: null,
+    });
+  }
+
+  // Canonical company detail only needs the stored company, its linked motions,
+  // and the prospects already carried on those motion accounts. Do not block
+  // it on the full workspace projection.
+  if (pathname.startsWith("/companies/") && pathname.split("/").filter(Boolean).length === 2) {
+    const segments = pathname.split("/").filter(Boolean);
+    const companyId = decodeURIComponent(segments[1] ?? "");
+    const company = findCompanyById(companyId);
+    if (!company) {
+      return renderNotFound("Company", companyId, "/prospects", "Prospects");
+    }
+    const currentUiUser = resolveCurrentUiUser(session, null);
+    const model = buildCompanyViewModel({
+      company,
+      motions: listMotions(),
+    });
+    return renderCompanyDetailPage(model, {
+      interactive: true,
+      user: currentUiUser ? buildUiCurrentUserMeta(currentUiUser, currentUiUser) : null,
+    });
+  }
+
   const projection = await resolveWorkspaceProjectionForUiFn({
     userId: session.userId,
     capability: ctx.capability,
     regenerateCommand: "exo ui",
-  });
+  }, resolveRouteProjectionOptions(pathname));
   const data = projection.data;
+  const currentUiUser = resolveCurrentUiUser(session, data.user);
+  const routeAgentRuntime = pathname === "/queue"
+    ? buildQueueRouteAgentRuntime(runtimeUserId, data.agentQueue)
+    : resolveAgentRuntimeSnapshotForUi(runtimeUserId, usesFullAgentRuntime(pathname) ? {} : { lightweight: true });
   const baseMeta = {
-    user: data.user,
+    user: buildUiCurrentUserMeta(currentUiUser, data.user),
     generatedAt: data.generatedAt,
     regenerateCommand: "exo ui",
     interactive: true,
     agentRuntime: {
-      ...agentRuntime,
+      ...routeAgentRuntime,
       nav: resolveCleanupNavState({
         userId: session.userId ?? session.preferredUserId ?? null,
         capability: ctx.capability,
@@ -375,6 +451,7 @@ export async function renderRoute(route, ctx, hooks = {}) {
       prospectPrepLanes: data.prospectPrepLanes,
       engagementLanes: data.engagementLanes,
       motionDetails: data.motionDetails,
+      rawMotions: listMotions(),
     });
     const person = model.details.find((candidate) => candidate.id === id);
     if (!person) {
@@ -461,67 +538,17 @@ export async function renderRoute(route, ctx, hooks = {}) {
     return renderProspectDetailPage(person, detailMeta);
   }
 
-  // Motion-scoped company research brief page.
-  if (pathname.startsWith("/companies/") && pathname.includes("/research-brief/")) {
-    const segments = pathname.split("/").filter(Boolean);
-    const companyId = decodeURIComponent(segments[1] ?? "");
-    const motionId = decodeURIComponent(segments[3] ?? "");
-    const company = findCompanyById(companyId);
-    if (!company) {
-      return renderNotFound("Company", companyId, "/prospects", "Prospects");
-    }
-    if (!motionId || !company.motionIds.includes(motionId)) {
-      return renderNotFound("Research brief", `${companyId}:${motionId || "missing-motion"}`, `/companies/${encodeURIComponent(companyId)}`, company.name);
-    }
-    const motion = findMotionById(motionId);
-    if (!motion) {
-      return renderNotFound("Motion", motionId, `/companies/${encodeURIComponent(companyId)}`, company.name);
-    }
-    const brief = buildCompanyResearchBrief(company, motion);
-    const packetSummary = buildMotionPacketSummary(motion, [company], { companyId });
-    const researchPacket = packetSummary.items.find((item) => item.packetKind === "company_research") ?? null;
-    return renderCompanyResearchBriefPage({
-      brief,
-      packet: researchPacket
-        ? {
-            claimState: researchPacket.claimState ?? null,
-            queueStatus: researchPacket.queueStatus ?? null,
-            workerLabel: researchPacket.workerLabel ?? null,
-          }
-        : {
-            claimState: null,
-            queueStatus:
-              (motion.targetMap?.accounts ?? []).find((account) => account.companyId === companyId)?.queueState?.status ?? null,
-            workerLabel: null,
-      },
-      interactive: true,
-      agentRuntime,
-    });
-  }
-
-  // Per-company detail page (the canonical company record).
-  if (pathname.startsWith("/companies/")) {
-    const id = decodeURIComponent(pathname.slice("/companies/".length));
-    const company = findCompanyById(id);
-    if (!company) {
-      return renderNotFound("Company", id, "/prospects", "Prospects");
-    }
-    const prospectsModel = buildProspectsViewModel({
-      prospectPrepLanes: data.prospectPrepLanes,
-      engagementLanes: data.engagementLanes,
-      motionDetails: data.motionDetails,
-    });
-    const model = buildCompanyViewModel({
-      company,
-      prospects: prospectsModel.all,
-      motions: listMotions(),
-      users: listUsers(),
-    });
-    return renderCompanyDetailPage(model, baseMeta);
-  }
-
   switch (pathname) {
     case "/operator": {
+      const requestedView = normalizeOperatorView(requestUrl.searchParams.get("view"));
+      const selectedMotionId = normalizeOperatorMotion(requestUrl.searchParams.get("motion"));
+      const operatorMeta = {
+        ...baseMeta,
+        activeView: selectedMotionId ? "motions" : requestedView,
+        selectedMotionId,
+        motionChoices: buildOperatorMotionChoices(data.motionSummaries ?? [], listMotions()),
+        returnTo: buildOperatorReturnTo({ view: requestedView, motionId: selectedMotionId }),
+      };
       const model = buildOperatorViewModel({
         user: data.user,
         generatedAt: data.generatedAt,
@@ -533,9 +560,10 @@ export async function renderRoute(route, ctx, hooks = {}) {
         dueNowItems: data.dueNowItems,
         waitingItems: data.waitingItems,
         truthAccounts: data.truthAccounts,
-        agentRuntime,
+        agentRuntime: baseMeta.agentRuntime,
+        rawMotions: listMotions(),
       });
-      return renderOperatorPage(model, baseMeta);
+      return renderOperatorPage(model, operatorMeta);
     }
     case "/queue": {
       const model = buildOperatorViewModel({
@@ -549,9 +577,18 @@ export async function renderRoute(route, ctx, hooks = {}) {
         dueNowItems: data.dueNowItems,
         waitingItems: data.waitingItems,
         truthAccounts: data.truthAccounts,
-        agentRuntime,
+        agentRuntime: baseMeta.agentRuntime,
+        rawMotions: data.rawMotions ?? listMotions(),
       });
-      return renderQueuePage(model, baseMeta);
+      const queueMeta = {
+        ...baseMeta,
+        agentRunLog: buildAgentRunLog({
+          stateDir: resolveStatePaths().homeStateDir,
+          limit: 18,
+          now: data.generatedAt,
+        }),
+      };
+      return renderQueuePage(model, queueMeta);
     }
     case "/cleanup": {
       const model = buildCleanupViewModel({
@@ -559,7 +596,7 @@ export async function renderRoute(route, ctx, hooks = {}) {
         generatedAt: data.generatedAt,
         regenerateCommand: "exo ui",
         reviewItems: data.reviewItems ?? [],
-        agentRuntime,
+        agentRuntime: baseMeta.agentRuntime,
       });
       return renderCleanupPage(model, { ...baseMeta, returnTo: "/cleanup" });
     }
@@ -575,6 +612,7 @@ export async function renderRoute(route, ctx, hooks = {}) {
         prospectPrepLanes: data.prospectPrepLanes,
         engagementLanes: data.engagementLanes,
         motionDetails: data.motionDetails,
+        rawMotions: listMotions(),
         query: searchQuery,
       });
       return renderProspectsPage(model, { ...baseMeta, searchQuery });
@@ -652,6 +690,41 @@ function normalizeRouteReturnTo(value) {
 }
 
 /**
+ * @param {string | null | undefined} value
+ * @returns {"queue" | "blocked" | "motions" | null}
+ */
+function normalizeOperatorView(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "queue" || normalized === "blocked" || normalized === "motions") {
+    return normalized;
+  }
+  return null;
+}
+
+/**
+ * @param {string | null | undefined} value
+ * @returns {string | null}
+ */
+function normalizeOperatorMotion(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+/**
+ * @param {{ view: "queue" | "blocked" | "motions" | null, motionId: string | null }} input
+ * @returns {string}
+ */
+function buildOperatorReturnTo(input) {
+  return operatorViewHref(input.motionId ? "motions" : (input.view ?? "queue"), input.motionId);
+}
+
+/**
  * @param {URL} requestUrl
  * @returns {boolean}
  */
@@ -704,42 +777,259 @@ function renderConnectionsView(input) {
  * @param {{ userId: string, capability?: string | null, regenerateCommand: string }} input
  * @param {{
  *   buildProjection?: typeof buildWorkspaceProjection,
+ *   cacheScope?: string,
  *   stateRevision?: string,
  * }} [options]
  */
 export async function resolveWorkspaceProjectionForUi(input, options = {}) {
-  const cacheKey = [
-    options.stateRevision ?? currentStateRev(),
-    input.userId,
-    input.capability ?? "linkedin",
-    input.regenerateCommand,
-  ].join("|");
+  const stateRevision = options.stateRevision ?? currentStateRev();
+  const cacheScope = options.cacheScope ?? "workspace";
+  const cacheKey = buildWorkspaceProjectionCacheKey(input, cacheScope, stateRevision);
 
-  if (cachedWorkspaceProjection?.key === cacheKey) {
-    return cachedWorkspaceProjection.projection;
+  const cachedProjection = cachedWorkspaceProjections.get(cacheKey);
+  if (cachedProjection) {
+    return cachedProjection;
   }
-  if (cachedWorkspaceProjectionBuild?.key === cacheKey) {
-    return cachedWorkspaceProjectionBuild.promise;
+  const cachedBuild = cachedWorkspaceProjectionBuilds.get(cacheKey);
+  if (cachedBuild) {
+    return cachedBuild;
+  }
+
+  const fallbackProjection = resolveWorkspaceProjectionCacheFallback(input, cacheScope, stateRevision);
+  if (fallbackProjection) {
+    cachedWorkspaceProjections.set(cacheKey, fallbackProjection);
+    trimWorkspaceProjectionCache();
+    return fallbackProjection;
+  }
+
+  const fallbackBuild = resolveWorkspaceProjectionBuildFallback(input, cacheScope, stateRevision);
+  if (fallbackBuild) {
+    const promise = fallbackBuild.then((projection) => {
+      cachedWorkspaceProjections.set(cacheKey, projection);
+      trimWorkspaceProjectionCache();
+      return projection;
+    });
+    cachedWorkspaceProjectionBuilds.set(cacheKey, promise);
+
+    try {
+      return await promise;
+    } finally {
+      cachedWorkspaceProjectionBuilds.delete(cacheKey);
+    }
   }
 
   const buildProjection = options.buildProjection ?? buildWorkspaceProjection;
   const promise = Promise.resolve().then(() => buildProjection(input));
-  cachedWorkspaceProjectionBuild = { key: cacheKey, promise };
+  cachedWorkspaceProjectionBuilds.set(cacheKey, promise);
 
   try {
     const projection = await promise;
-    cachedWorkspaceProjection = { key: cacheKey, projection };
+    cachedWorkspaceProjections.set(cacheKey, projection);
+    trimWorkspaceProjectionCache();
     return projection;
   } finally {
-    if (cachedWorkspaceProjectionBuild?.key === cacheKey) {
-      cachedWorkspaceProjectionBuild = null;
-    }
+    cachedWorkspaceProjectionBuilds.delete(cacheKey);
   }
 }
 
 function clearWorkspaceProjectionCache() {
-  cachedWorkspaceProjection = null;
-  cachedWorkspaceProjectionBuild = null;
+  cachedWorkspaceProjections.clear();
+  cachedWorkspaceProjectionBuilds.clear();
+  cachedAgentRuntimeSnapshots.clear();
+}
+
+function trimWorkspaceProjectionCache() {
+  trimBoundedCache(cachedWorkspaceProjections, MAX_CACHED_WORKSPACE_PROJECTIONS);
+}
+
+/**
+ * @param {{ userId: string, capability?: string | null, regenerateCommand: string }} input
+ * @param {string} cacheScope
+ * @param {string} stateRevision
+ */
+function buildWorkspaceProjectionCacheKey(input, cacheScope, stateRevision) {
+  return [
+    stateRevision,
+    cacheScope,
+    input.userId,
+    input.capability ?? "linkedin",
+    input.regenerateCommand,
+  ].join("|");
+}
+
+/**
+ * Let narrower route scopes reuse a broader projection that is already cached
+ * for the same state revision. This makes the motions tab cheap after the
+ * operator tab has already paid for the full workspace build.
+ *
+ * @param {{ userId: string, capability?: string | null, regenerateCommand: string }} input
+ * @param {string} cacheScope
+ * @param {string} stateRevision
+ * @returns {ReturnType<typeof buildWorkspaceProjection> | null}
+ */
+function resolveWorkspaceProjectionCacheFallback(input, cacheScope, stateRevision) {
+  if (cacheScope !== "motions") {
+    return null;
+  }
+
+  const workspaceKey = buildWorkspaceProjectionCacheKey(input, "workspace", stateRevision);
+  const cachedWorkspaceProjection = cachedWorkspaceProjections.get(workspaceKey);
+  return cachedWorkspaceProjection
+    ? deriveMotionsProjectionFromWorkspaceProjection(cachedWorkspaceProjection, input.regenerateCommand)
+    : null;
+}
+
+/**
+ * @param {{ userId: string, capability?: string | null, regenerateCommand: string }} input
+ * @param {string} cacheScope
+ * @param {string} stateRevision
+ * @returns {Promise<ReturnType<typeof buildWorkspaceProjection>> | null}
+ */
+function resolveWorkspaceProjectionBuildFallback(input, cacheScope, stateRevision) {
+  if (cacheScope !== "motions") {
+    return null;
+  }
+
+  const workspaceKey = buildWorkspaceProjectionCacheKey(input, "workspace", stateRevision);
+  const cachedWorkspaceBuild = cachedWorkspaceProjectionBuilds.get(workspaceKey);
+  if (!cachedWorkspaceBuild) {
+    return null;
+  }
+
+  return cachedWorkspaceBuild.then((workspaceProjection) => {
+    const derivedProjection = deriveMotionsProjectionFromWorkspaceProjection(
+      workspaceProjection,
+      input.regenerateCommand,
+    );
+    if (!derivedProjection) {
+      throw new Error("Cached workspace projection could not satisfy motions scope.");
+    }
+    return derivedProjection;
+  });
+}
+
+/**
+ * @param {ReturnType<typeof buildWorkspaceProjection>} workspaceProjection
+ * @param {string} regenerateCommand
+ * @returns {ReturnType<typeof buildWorkspaceProjection> | null}
+ */
+function deriveMotionsProjectionFromWorkspaceProjection(workspaceProjection, regenerateCommand) {
+  const data = workspaceProjection?.data ?? null;
+  if (!data || !Array.isArray(data.motionSummaries) || !Array.isArray(data.motionDetails)) {
+    return null;
+  }
+
+  return {
+    html: "",
+    data: {
+      generatedAt: data.generatedAt,
+      user: data.user,
+      regenerateCommand: data.regenerateCommand ?? regenerateCommand,
+      motionSummaries: data.motionSummaries,
+      motionDetails: data.motionDetails,
+      reviewItems: data.reviewItems ?? [],
+      agentStatus: data.agentStatus ?? null,
+    },
+  };
+}
+
+/**
+ * @param {string} pathname
+ * @returns {{ buildProjection: typeof buildWorkspaceProjection, cacheScope: string } | undefined}
+ */
+function resolveRouteProjectionOptions(pathname) {
+  if (isMotionRoute(pathname)) {
+    return {
+      buildProjection: buildMotionRoutesProjection,
+      cacheScope: "motions",
+    };
+  }
+  if (pathname === "/queue") {
+    return {
+      buildProjection: buildQueueRoutesProjection,
+      cacheScope: "queue",
+    };
+  }
+  return undefined;
+}
+
+/**
+ * @param {string | null} userId
+ * @param {{ stateRevision?: string }} [options]
+ */
+function resolveAgentRuntimeSnapshotForUi(userId = null, options = {}) {
+  const cacheKey = [
+    options.stateRevision ?? currentStateRev(),
+    userId ?? "all",
+    options.lightweight ? "light" : "full",
+  ].join("|");
+  const cached = cachedAgentRuntimeSnapshots.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const snapshot = options.lightweight
+    ? buildLightweightAgentRuntimeSnapshot(userId)
+    : buildAgentRuntimeSnapshot(userId);
+  cachedAgentRuntimeSnapshots.set(cacheKey, snapshot);
+  trimBoundedCache(cachedAgentRuntimeSnapshots, MAX_CACHED_AGENT_RUNTIME_SNAPSHOTS);
+  return snapshot;
+}
+
+/**
+ * @param {Map<string, unknown>} cache
+ * @param {number} maxSize
+ */
+function trimBoundedCache(cache, maxSize) {
+  while (cache.size > maxSize) {
+    const oldestKey = cache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
+/**
+ * @param {string} pathname
+ * @returns {boolean}
+ */
+function isMotionRoute(pathname) {
+  return pathname === "/motions" || pathname.startsWith("/motions/");
+}
+
+/**
+ * Full queue synthesis is only needed on queue-centric surfaces. Record/detail
+ * pages only need scheduler + lock state for the top-right agent pill.
+ *
+ * @param {string} pathname
+ */
+function usesFullAgentRuntime(_pathname) {
+  return false;
+}
+
+/**
+ * @param {string | null} userId
+ * @param {any} agentQueue
+ */
+function buildQueueRouteAgentRuntime(userId, agentQueue) {
+  const runtime = resolveAgentRuntimeSnapshotForUi(userId, { lightweight: true });
+  const tasks = Array.isArray(agentQueue?.tasks) ? agentQueue.tasks : [];
+  const sendTasks = tasks.filter((task) => task?.kind === "send_message");
+  const verificationSendCount = sendTasks.filter((task) => requiresSendVerification(task)).length;
+  return {
+    ...runtime,
+    queueCount: Number.isFinite(agentQueue?.count)
+      ? Number(agentQueue.count)
+      : Number(agentQueue?.itemCount ?? tasks.length),
+    sendQueueCount: sendTasks.length,
+    verificationSendCount,
+    operatorSendCount: sendTasks.length - verificationSendCount,
+    waitingCount: Number.isFinite(agentQueue?.waitingCount)
+      ? Number(agentQueue.waitingCount)
+      : Array.isArray(agentQueue?.waiting) ? agentQueue.waiting.length : 0,
+    blockerCount: Array.isArray(agentQueue?.blockers) ? agentQueue.blockers.length : 0,
+  };
 }
 
 /**
@@ -969,14 +1259,6 @@ function buildDatabaseFamilyRevisions(databasePath, label) {
   ].filter(Boolean);
 }
 
-/** @param {any} task */
-function isOperatorControlledQueueSendTask(task) {
-  if (task?.kind !== "send_message") return false;
-  return task?.authoredBy === "operator"
-    || task?.editedByOperator === true
-    || task?.approvedByOperator === true;
-}
-
 /**
  * Human label for the LinkedIn identity the execution resolution actually
  * landed on: "user-label (handle)" when both are known. Returns null when the
@@ -1004,9 +1286,46 @@ function describeResolvedLinkedinIdentity(execution) {
   return profileLabel;
 }
 
-function buildAgentRuntimeSnapshot(userId = null) {
+/**
+ * Reads the agent runtime state shared by both the full and lightweight
+ * snapshots: pruned host state, run locks, scheduler/routine state, the last
+ * pass, and the derived cadence summary. Queue-derived counts are layered on by
+ * the caller.
+ */
+function readAgentRuntimeBase() {
   const stateDir = resolveStatePaths().homeStateDir;
-  const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")));
+  const checkedAt = new Date().toISOString();
+  const hostState = pruneInactiveTaskLeases(readJsonIfExists(path.join(stateDir, "agent-host-state.json")), {
+    stateDir,
+    now: checkedAt,
+  });
+  const { lock, laneLocks } = inspectAgentRuntimeLocks(stateDir);
+  const scheduler = inspectAgentSchedulerState(stateDir);
+  const routine = inspectAgentRoutineState(stateDir);
+  const lastPass = readJsonIfExists(path.join(stateDir, "agent-last-pass.json"));
+  return {
+    checkedAt,
+    lock,
+    laneLocks,
+    scheduler,
+    routine,
+    hostState,
+    lastPass,
+    cadence: buildSchedulerCadenceSummary(scheduler, lastPass, checkedAt),
+  };
+}
+
+const ZERO_AGENT_RUNTIME_COUNTS = {
+  queueCount: 0,
+  sendQueueCount: 0,
+  verificationSendCount: 0,
+  operatorSendCount: 0,
+  waitingCount: 0,
+  blockerCount: 0,
+};
+
+function buildAgentRuntimeSnapshot(userId = null) {
+  const base = readAgentRuntimeBase();
   const motions = listMotions();
   const companies = listCompanies();
   const users = userId ? listUsers().filter((user) => user.id === userId) : listUsers();
@@ -1019,23 +1338,13 @@ function buildAgentRuntimeSnapshot(userId = null) {
     observations,
     cues,
     prospectBranches: listAgentQueueProspectBranches(userId ? { executionUserId: userId } : {}),
-    hostState,
+    hostState: base.hostState,
   });
   const sendTasks = Array.isArray(queue?.tasks) ? queue.tasks.filter((task) => task?.kind === "send_message") : [];
-  const verificationSendCount = sendTasks.filter((task) => !isOperatorControlledQueueSendTask(task)).length;
+  const verificationSendCount = sendTasks.filter((task) => requiresSendVerification(task)).length;
   const operatorSendCount = sendTasks.length - verificationSendCount;
-  const { lock, laneLocks } = inspectAgentRuntimeLocks(stateDir);
-  const scheduler = inspectAgentSchedulerState(stateDir);
-  const routine = inspectAgentRoutineState(stateDir);
-  const lastPass = readJsonIfExists(path.join(stateDir, "agent-last-pass.json"));
   return {
-    lock,
-    laneLocks,
-    scheduler,
-    routine,
-    hostState,
-    lastPass,
-    cadence: buildSchedulerCadenceSummary(scheduler, lastPass, new Date().toISOString()),
+    ...base,
     queueCount: Number.isFinite(queue?.count) ? Number(queue.count) : Number(queue?.itemCount ?? 0),
     sendQueueCount: sendTasks.length,
     verificationSendCount,
@@ -1043,6 +1352,17 @@ function buildAgentRuntimeSnapshot(userId = null) {
     waitingCount: Number.isFinite(queue?.waitingCount) ? Number(queue.waitingCount) : 0,
     blockerCount: Array.isArray(queue?.blockers) ? queue.blockers.length : 0,
   };
+}
+
+/**
+ * Most surfaces only need scheduler + lock state for the header pill. The
+ * queue page gets its counts from the queue-only projection instead of
+ * rebuilding the queue through this helper.
+ *
+ * @param {string | null} _userId
+ */
+function buildLightweightAgentRuntimeSnapshot(_userId = null) {
+  return { ...readAgentRuntimeBase(), ...ZERO_AGENT_RUNTIME_COUNTS };
 }
 
 /**
@@ -1227,6 +1547,34 @@ function buildClaimMotionChoices(motions, transition) {
 }
 
 /**
+ * @param {Array<any>} motionSummaries
+ * @param {Array<any>} rawMotions
+ * @returns {Array<{ id: string, name: string, offerLabel: string, offerHost: string | null, icpSummary: string | null }>}
+ */
+function buildOperatorMotionChoices(motionSummaries, rawMotions) {
+  const rawById = new Map((rawMotions ?? [])
+    .filter((motion) => motion && typeof motion.id === "string")
+    .map((motion) => [motion.id, motion]));
+  const summaries = Array.isArray(motionSummaries) && motionSummaries.length > 0
+    ? motionSummaries
+    : (rawMotions ?? []);
+
+  return summaries
+    .filter((motion) => motion?.status === "active" && typeof motion?.id === "string" && typeof motion?.name === "string")
+    .map((summary) => {
+      const raw = rawById.get(summary.id) ?? summary;
+      const name = normalizeClaimText(summary?.name) ?? normalizeClaimText(raw?.name) ?? "untitled-motion";
+      return {
+        id: String(summary.id),
+        name,
+        offerLabel: claimMotionOfferLabel(raw, name),
+        offerHost: claimMotionOfferHost(raw?.offer?.sourceUrl ?? raw?.offerThesis?.sourceUrl ?? null),
+        icpSummary: buildOperatorMotionIcpSummary(raw),
+      };
+    });
+}
+
+/**
  * @param {any} motion
  * @returns {{ id: string, name: string, offerLabel: string, premise: string, status: string | null, statusLabel: string | null }}
  */
@@ -1245,19 +1593,101 @@ function shapeClaimMotionChoice(motion) {
 
 /**
  * @param {any} motion
+ * @returns {string | null}
+ */
+function buildOperatorMotionIcpSummary(motion) {
+  const audienceLabels = Array.isArray(motion?.audienceHypotheses)
+    ? motion.audienceHypotheses
+      .map((audience) => typeof audience === "string"
+        ? normalizeClaimText(audience)
+        : normalizeClaimText(audience?.name))
+      .filter(Boolean)
+    : [];
+  const icpTypes = Array.isArray(motion?.targetingProfile?.icpTypes)
+    ? motion.targetingProfile.icpTypes
+      .map((value) => normalizeClaimText(value))
+      .filter(Boolean)
+    : [];
+  const labels = [];
+  for (const label of [...audienceLabels, ...icpTypes]) {
+    if (!label || labels.includes(label)) {
+      continue;
+    }
+    labels.push(label);
+    if (labels.length >= 2) {
+      break;
+    }
+  }
+  if (labels.length === 0) {
+    return null;
+  }
+  const compactLabels = labels
+    .map((label) => compactOperatorMotionText(label, 56) ?? label)
+    .filter(Boolean);
+  return compactOperatorMotionText(compactLabels.join(" · "), 88);
+}
+
+/**
+ * @param {any} motion
  * @param {string} fallback
  * @returns {string}
  */
 function claimMotionOfferLabel(motion, fallback) {
-  const sourceTitle = normalizeClaimText(motion?.offerThesis?.sourceTitle);
-  if (sourceTitle) {
-    return sourceTitle;
-  }
   if (isTransitionMotion(motion)) {
     return "Transition backlog";
   }
   const host = claimMotionOfferHost(motion?.offer?.sourceUrl ?? motion?.offerThesis?.sourceUrl ?? null);
+  const sourceTitle = compactOperatorMotionOfferTitle(motion?.offerThesis?.sourceTitle, host);
+  if (sourceTitle) {
+    return sourceTitle;
+  }
   return host ?? fallback;
+}
+
+/**
+ * @param {unknown} value
+ * @param {string | null | undefined} host
+ * @returns {string | null}
+ */
+function compactOperatorMotionOfferTitle(value, host) {
+  const title = normalizeClaimText(value);
+  if (!title) {
+    return null;
+  }
+  const segments = title
+    .split(/\s(?:\||•|·|—|-)\s/g)
+    .map((segment) => normalizeClaimText(segment))
+    .filter(Boolean);
+  if (segments.length > 1) {
+    const lead = segments[0] ?? null;
+    const tail = segments.at(-1) ?? null;
+    if (lead && tail) {
+      if (normalizeOperatorMotionCompare(lead) === normalizeOperatorMotionCompare(tail)) {
+        return compactOperatorMotionText(lead, 72);
+      }
+      if (host && operatorMotionTitleMatchesHost(tail, host)) {
+        return compactOperatorMotionText(lead, 72);
+      }
+    }
+  }
+  return compactOperatorMotionText(title, 72);
+}
+
+/**
+ * @param {unknown} value
+ * @param {number} max
+ * @returns {string | null}
+ */
+function compactOperatorMotionText(value, max) {
+  const text = normalizeClaimText(value)?.replace(/[.,;:!?]+$/g, "");
+  if (!text) {
+    return null;
+  }
+  if (text.length <= max) {
+    return text;
+  }
+  const clipped = text.slice(0, Math.max(1, max - 1)).replace(/\s+[^\s]*$/, "").trim();
+  return `${clipped || text.slice(0, Math.max(1, max - 1)).trim()}…`;
 }
 
 /**
@@ -1310,6 +1740,94 @@ function normalizeClaimText(value) {
   }
   const text = value.replace(/\s+/g, " ").trim();
   return text ? text : null;
+}
+
+/**
+ * @param {string} text
+ * @returns {string}
+ */
+function normalizeOperatorMotionCompare(text) {
+  return text.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/[^a-z0-9]+/g, "");
+}
+
+/**
+ * @param {string} title
+ * @param {string} host
+ * @returns {boolean}
+ */
+function operatorMotionTitleMatchesHost(title, host) {
+  const normalizedTitle = normalizeOperatorMotionCompare(title);
+  const hostRoot = normalizeOperatorMotionCompare(host.split(".")[0] ?? host);
+  return Boolean(
+    normalizedTitle
+    && hostRoot
+    && (normalizedTitle === hostRoot || normalizedTitle.includes(hostRoot) || hostRoot.includes(normalizedTitle)),
+  );
+}
+
+/**
+ * @param {{ userId?: string | null, preferredUserId?: string | null }} session
+ * @param {{ id?: string | null } | null | undefined} projectedUser
+ */
+function resolveCurrentUiUser(session, projectedUser) {
+  const userId = session.userId ?? session.preferredUserId ?? projectedUser?.id ?? null;
+  return userId ? findUserById(userId) : null;
+}
+
+/**
+ * @param {any} rawUser
+ * @param {any} projectedUser
+ */
+function buildUiCurrentUserMeta(rawUser, projectedUser) {
+  const gmailOptions = buildUiScopedGmailOptions(rawUser);
+  return {
+    ...(projectedUser ?? {}),
+    id: rawUser?.id ?? projectedUser?.id ?? null,
+    label: rawUser?.label ?? projectedUser?.label ?? null,
+    gmailOptions,
+  };
+}
+
+/**
+ * @param {any} rawUser
+ */
+function buildUiScopedGmailOptions(rawUser) {
+  if (!rawUser || !Array.isArray(rawUser.accounts)) {
+    return [];
+  }
+
+  const connectorByHarnessId = new Map(
+    Array.isArray(rawUser.harnessConnections)
+      ? rawUser.harnessConnections.map((connection) => [connection.id, connection.connector ?? null])
+      : [],
+  );
+  const seenRefs = new Set();
+  const options = [];
+
+  for (const account of rawUser.accounts) {
+    if (account?.capability !== "gmail" || typeof account.handle !== "string" || !account.handle.trim()) {
+      continue;
+    }
+
+    const ref = `gmail:${account.handle.trim()}`;
+    if (seenRefs.has(ref)) {
+      continue;
+    }
+
+    seenRefs.add(ref);
+    const connector = account.harnessConnectionId
+      ? connectorByHarnessId.get(account.harnessConnectionId) ?? null
+      : null;
+    options.push({
+      ref,
+      handle: account.handle.trim(),
+      label: connector && connector !== "gmail"
+        ? `${account.handle.trim()} (${connector})`
+        : account.handle.trim(),
+    });
+  }
+
+  return options;
 }
 
 function lookupProspectDrafts(motionId, companyId, prospectId) {

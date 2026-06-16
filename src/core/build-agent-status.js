@@ -2,7 +2,13 @@
 
 import path from "node:path";
 
-import { pruneExpiredBrowserBackoffs } from "../lib/agent-host-state.js";
+import { pruneInactiveTaskLeases } from "../lib/agent-host-state.js";
+import {
+  coerceRecordedPassStatus,
+  getEffectiveAgentResultStatus,
+  summarizeEffectivePassReason,
+  summarizeEffectivePassStatus,
+} from "../lib/agent-result-status.js";
 import { inspectAgentRunLock } from "../lib/agent-run-lock.js";
 import { AGENT_EXECUTION_LANES, getTaskExecutionLane } from "../lib/agent-task-lanes.js";
 import { buildUserInboundSyncView } from "./user-inbound-sync.js";
@@ -22,12 +28,16 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export function buildAgentStatusReport(input) {
   const now = normalizeIsoDatetime(input.now) ?? new Date().toISOString();
   const queue = normalizeQueue(input.queue);
-  const hostState = pruneExpiredBrowserBackoffs(input.hostState ?? null, now);
+  const hostState = pruneInactiveTaskLeases(input.hostState ?? null, {
+    stateDir: input.stateDir,
+    now,
+  });
   const activeTasks = buildActiveTaskSummaries(queue, hostState, now);
   const lockSummary = buildRunLockSummary(input.stateDir, activeTasks);
   const backlog = buildBacklogSummary(queue);
-  const throughput = buildThroughputSummary(input.lastPass ?? null, hostState, now);
-  const partial = buildPartialSummary(input.lastPass ?? null, backlog);
+  const lastPassSummary = summarizePassThroughput(input.lastPass ?? null);
+  const throughput = buildThroughputSummary(lastPassSummary, hostState, now);
+  const partial = buildPartialSummary(input.lastPass ?? null, lastPassSummary, backlog);
   const inboundSurfaces = buildInboundSurfaceSummaries(input.users ?? []);
   const holds = buildHostHoldSummary(hostState, now);
 
@@ -275,7 +285,8 @@ function buildRunLockSummary(stateDir, activeTasks) {
   });
 
   return {
-    active: agentLock.active || lanes.some((lane) => lane.active),
+    active: lanes.some((lane) => lane.active || lane.activeTaskCount > 0),
+    wrapperActive: agentLock.active,
     agent: agentLock,
     lanes,
   };
@@ -384,6 +395,7 @@ function buildInboundSurfaceSummaries(users) {
           accountHandle: account.handle,
           surfaceKey: surface.key,
           surfaceLabel: surface.label,
+          syncTrustStatus: surface.syncTrustStatus ?? null,
           lastRunStatus: surface.lastRunStatus,
           lastSyncedAt: surface.lastSyncedAt,
           lastObservedAt: surface.lastObservedAt,
@@ -415,12 +427,11 @@ function buildInboundSurfaceSummaries(users) {
 }
 
 /**
- * @param {any} lastPass
+ * @param {ReturnType<typeof summarizePassThroughput>} lastPassSummary
  * @param {any} hostState
  * @param {string} now
  */
-function buildThroughputSummary(lastPass, hostState, now) {
-  const lastPassSummary = summarizePassThroughput(lastPass);
+function buildThroughputSummary(lastPassSummary, hostState, now) {
   const cutoffMs = Date.parse(now) - DAY_MS;
   const nowMs = Date.parse(now);
   const lastPassEndedMs = lastPassSummary?.endedAt ? Date.parse(lastPassSummary.endedAt) : null;
@@ -462,25 +473,38 @@ function summarizePassThroughput(pass) {
       : [];
   const startedAt = normalizeIsoDatetime(pass.startedAt);
   const endedAt = normalizeIsoDatetime(pass.endedAt);
+  const normalizedStatuses = results.map((result) => getEffectiveAgentResultStatus(result) ?? "unknown");
+  const effectiveStatus = summarizeEffectivePassStatus(results, pass.finalQueueCounts ?? null);
+  const rawStatus = normalizeText(pass.status)?.toLowerCase() ?? null;
+  const status = coerceRecordedPassStatus(rawStatus, effectiveStatus, {
+    finalQueue: pass.finalQueueCounts ?? null,
+    resultCounts: {
+      blocked: normalizedStatuses.filter((statusItem) => statusItem === "blocked").length,
+      failed: normalizedStatuses.filter((statusItem) => statusItem === "failed").length,
+    },
+  })
+    ?? (effectiveStatus === "noop" ? rawStatus : effectiveStatus);
+  const reason = summarizeEffectivePassReason(results)
+    ?? (status === rawStatus ? normalizeText(pass.reason) : null);
   return {
-    status: pass.status ?? null,
-    reason: pass.reason ?? null,
+    status,
+    reason,
     startedAt,
     endedAt,
     durationSeconds: startedAt && endedAt
       ? Math.max(0, Math.floor((Date.parse(endedAt) - Date.parse(startedAt)) / 1000))
       : null,
     resultCount: results.length,
-    completedCount: results.filter((result) => result?.status === "completed").length,
-    blockedCount: results.filter((result) => result?.status === "blocked").length,
-    failedCount: results.filter((result) => result?.status === "failed").length,
-    discardedCount: results.filter((result) => result?.status === "discarded").length,
+    completedCount: normalizedStatuses.filter((statusItem) => statusItem === "completed").length,
+    blockedCount: normalizedStatuses.filter((statusItem) => statusItem === "blocked").length,
+    failedCount: normalizedStatuses.filter((statusItem) => statusItem === "failed").length,
+    discardedCount: normalizedStatuses.filter((statusItem) => statusItem === "discarded").length,
     byKind: groupCount(results, (result) => result?.kind ?? "unknown", "kind"),
     lanes: Array.isArray(pass.lanes)
       ? pass.lanes.map((lane) => ({
         lane: lane?.lane ?? null,
-        status: lane?.status ?? null,
-        reason: lane?.reason ?? null,
+        status: summarizeEffectivePassStatus(Array.isArray(lane?.results) ? lane.results : [], lane?.finalQueueCounts ?? null),
+        reason: summarizeEffectivePassReason(Array.isArray(lane?.results) ? lane.results : []),
         resultCount: Array.isArray(lane?.results) ? lane.results.length : 0,
       }))
       : [],
@@ -489,13 +513,19 @@ function summarizePassThroughput(pass) {
 
 /**
  * @param {any} lastPass
+ * @param {ReturnType<typeof summarizePassThroughput>} lastPassSummary
  * @param {ReturnType<typeof buildBacklogSummary>} backlog
  */
-function buildPartialSummary(lastPass, backlog) {
-  if (lastPass?.status !== "partial") {
+function buildPartialSummary(lastPass, lastPassSummary, backlog) {
+  const queueIsPartiallyBlocked = backlog.dueTaskCount > 0 && backlog.blockerCount > 0;
+  const lastPassStatus = lastPassSummary?.status
+    ?? normalizeText(lastPass?.status)?.toLowerCase()
+    ?? null;
+  const lastPassWasPartial = lastPassStatus === "partial";
+  if (!lastPassWasPartial && !queueIsPartiallyBlocked) {
     return {
       active: false,
-      status: lastPass?.status ?? null,
+      status: lastPassStatus,
       reason: null,
       nextAction: null,
     };
@@ -503,15 +533,18 @@ function buildPartialSummary(lastPass, backlog) {
   return {
     active: true,
     status: "partial",
-    reason: normalizeText(lastPass.reason) ?? describePartialReason(backlog),
+    reason: describePartialReason(backlog),
     nextAction: describeNextAction(backlog),
   };
 }
 
 /** @param {ReturnType<typeof buildBacklogSummary>} backlog */
 function describePartialReason(backlog) {
+  if (backlog.dueTaskCount > 0 && backlog.blockerCount > 0) {
+    return `The queue still has ${backlog.dueTaskCount} due task${backlog.dueTaskCount === 1 ? "" : "s"} that can run, but ${backlog.blockerCount} blocker${backlog.blockerCount === 1 ? " needs" : "s need"} operator attention.`;
+  }
   if (backlog.dueTaskCount > 0) {
-    return `The last pass completed available work, but ${backlog.dueTaskCount} due task${backlog.dueTaskCount === 1 ? "" : "s"} remain.`;
+    return `The last pass ended before the due queue drained; ${backlog.dueTaskCount} due task${backlog.dueTaskCount === 1 ? "" : "s"} remain.`;
   }
   if (backlog.blockerCount > 0) {
     return `The last pass stopped with ${backlog.blockerCount} blocker${backlog.blockerCount === 1 ? "" : "s"} still visible.`;
@@ -524,6 +557,9 @@ function describePartialReason(backlog) {
 
 /** @param {ReturnType<typeof buildBacklogSummary>} backlog */
 function describeNextAction(backlog) {
+  if (backlog.dueTaskCount > 0 && backlog.blockerCount > 0) {
+    return `Let the agent keep draining ${backlog.dueTaskCount} due task${backlog.dueTaskCount === 1 ? "" : "s"} while you resolve the visible blocker.`;
+  }
   if (backlog.dueTaskCount > 0) {
     return `Continue the agent pass to drain ${backlog.dueTaskCount} due task${backlog.dueTaskCount === 1 ? "" : "s"}.`;
   }
@@ -593,8 +629,9 @@ function buildHostHoldSummary(hostState, now) {
  * }} input
  */
 function resolveAgentStatusState(input) {
+  if (input.holds.count > 0) return "blocked";
   if (input.activeTasks.length > 0 || input.lockSummary.active) return "running";
-  if (input.holds.count > 0 || input.backlog.blockerCount > 0) return "blocked";
+  if (input.backlog.blockerCount > 0 && input.backlog.dueTaskCount <= 0) return "blocked";
   if (input.partial.active) return "partial";
   if (input.backlog.dueTaskCount > 0) return "queued";
   if (input.backlog.waitingTaskCount > 0) return "waiting";

@@ -7,7 +7,12 @@
 // are plain string-template functions so other view renderers (Motions,
 // Prospects, etc.) can reuse them without a JS runtime.
 
-import { getRuntimeUsageLimit, listActiveBrowserBackoffs } from "./agent-host-state.js";
+import {
+  getRuntimeUsageLimit,
+  findActiveAgentHold,
+  buildAgentBackoffDetail,
+} from "./agent-host-state.js";
+import { normalizeRecordedPassSummary, isVerifyModeHoldingSends } from "./agent-result-status.js";
 import { classifyRuntimeUsageLimitFailure, formatUsageLimitResumeLabel } from "./runtime-usage-limit.js";
 
 /** @param {string | number | null | undefined} value */
@@ -381,7 +386,7 @@ export function renderNextMoveAlert(opts) {
 
 /**
  * Wrap a button in a live action host the shared client dispatcher POSTs to /act.
- * @param {{ writer: string, args: Record<string, any>, variant?: "primary" | "secondary" | "ghost" | "danger", size?: "sm" | "md", label: string, icon?: string, title?: string, className?: string, fields?: string | null }} opts
+ * @param {{ writer: string, args: Record<string, any>, variant?: "primary" | "secondary" | "ghost" | "danger", size?: "sm" | "md", label: string, icon?: string, title?: string, className?: string, fields?: string | null, revealField?: { name: string, placeholder?: string | null } | null }} opts
  */
 export function liveActionBtn(opts) {
   const inner = btn({
@@ -393,7 +398,13 @@ export function liveActionBtn(opts) {
   });
   const className = ["exo-action", "exo-action-flat", opts.className].filter(Boolean).join(" ");
   const fieldsAttr = opts.fields ? ` data-exo-fields="${escapeAttr(opts.fields)}"` : "";
-  return `<span class="${escapeAttr(className)}" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}"${fieldsAttr}>${inner}</span>`;
+  const revealFieldAttr = opts.revealField?.name
+    ? ` data-exo-reveal-field="${escapeAttr(opts.revealField.name)}"`
+    : "";
+  const revealPlaceholderAttr = opts.revealField?.placeholder
+    ? ` data-exo-reveal-placeholder="${escapeAttr(opts.revealField.placeholder)}"`
+    : "";
+  return `<span class="${escapeAttr(className)}" data-exo-writer="${escapeAttr(opts.writer)}" data-exo-args="${escapeAttr(JSON.stringify(opts.args))}"${fieldsAttr}${revealFieldAttr}${revealPlaceholderAttr}>${inner}</span>`;
 }
 
 /**
@@ -588,6 +599,24 @@ export function navAside({ activeId, interactive, nav = null }) {
 // result, and reload so the surface reflects the new governed state.
 export const EXO_CLIENT_JS = `
 (function(){
+  function revealInlineField(host){
+    var fieldName = host.getAttribute('data-exo-reveal-field');
+    if(!fieldName) return false;
+    var selector = '[name="' + fieldName.replace(/"/g, '\\"') + '"]';
+    var scope = host.closest('[data-exo-field-scope]') || host;
+    var field = scope ? scope.querySelector(selector) : null;
+    if(!field) return false;
+    var placeholder = host.getAttribute('data-exo-reveal-placeholder');
+    if(placeholder) field.setAttribute('placeholder', placeholder);
+    if(!field.hasAttribute('hidden')) return false;
+    field.hidden = false;
+    field.removeAttribute('aria-hidden');
+    try {
+      field.focus();
+      if(typeof field.select === 'function') field.select();
+    } catch(_){}
+    return true;
+  }
   function toast(msg, ok){
     var wrap = document.getElementById('exo-toasts');
     if(!wrap){ wrap = document.createElement('div'); wrap.id='exo-toasts'; document.body.appendChild(wrap); }
@@ -609,6 +638,7 @@ export const EXO_CLIENT_JS = `
     var btn = e.target.closest('button');
     if (!btn) return;
     e.preventDefault();
+    if (revealInlineField(host)) return;
     var writer = host.getAttribute('data-exo-writer');
     var args;
     try { args = JSON.parse(host.getAttribute('data-exo-args')); } catch(_) { return; }
@@ -1080,12 +1110,16 @@ export function formatOperatorSendModeLabel(sendMode) {
   }
 }
 
-/** @param {any} lastPass */
-function summarizeAgentLastPass(lastPass) {
+/**
+ * @param {any} lastPass
+ * @param {{ previous?: boolean }} [options]
+ */
+function summarizeAgentLastPass(lastPass, options = {}) {
   if (!lastPass?.endedAt) return null;
   const when = formatRelative(lastPass.endedAt) ?? "recently";
   const status = String(lastPass.status ?? "finished").replaceAll("_", " ");
-  return `Last pass ${status} ${when}`;
+  const prefix = options.previous ? "Previous pass" : "Last pass";
+  return `${prefix} ${status} ${when}`;
 }
 
 /**
@@ -1095,11 +1129,12 @@ function buildAgentRuntimeFacts(input) {
   const installed = input.scheduler?.installed ? "yes" : "no";
   const loaded = input.scheduler?.loaded ? "yes" : "no";
   const running = input.lock?.active || input.scheduler?.running ? "yes" : "no";
+  const passLabel = running === "yes" ? "Previous pass" : "Last pass";
   return [
     `Installed: ${installed}`,
     `Loaded: ${loaded}`,
     `Running: ${running}`,
-    `Last pass: ${input.lastPassSummary ?? "none"}`,
+    input.lastPassSummary ?? `${passLabel}: none`,
   ];
 }
 
@@ -1109,10 +1144,10 @@ function summarizeAgentHeaderRuntime(runtime) {
   const lock = runtime.lock ?? null;
   const scheduler = runtime.scheduler ?? null;
   const routine = runtime.routine ?? null;
-  const lastPass = runtime.lastPass ?? null;
+  const lastPass = normalizeRecordedPassSummary(runtime.lastPass ?? null);
   const cadenceState = runtime.cadence ?? null;
   const queueCount = Number.isFinite(runtime.queueCount) ? Number(runtime.queueCount) : 0;
-  const activeBackoff = findActiveAgentBackoff(runtime, queueCount);
+  const activeHold = findActiveAgentHold(runtime, queueCount, runtime.checkedAt ?? null);
   const blockerCount = Number.isFinite(runtime.blockerCount) ? Number(runtime.blockerCount) : 0;
   const cadence = humanizeCadence(scheduler?.runIntervalSeconds ?? null);
   const sendMode = typeof routine?.sendMode === "string" && routine.sendMode.trim()
@@ -1122,7 +1157,8 @@ function summarizeAgentHeaderRuntime(runtime) {
     ? Number(runtime.verificationSendCount)
     : queueCount;
   const lastStatus = typeof lastPass?.status === "string" ? lastPass.status.trim().toLowerCase() : null;
-  const lastPassSummary = summarizeAgentLastPass(lastPass);
+  const passActive = Boolean(lock?.active || scheduler?.running);
+  const lastPassSummary = summarizeAgentLastPass(lastPass, { previous: passActive });
   const lastReason = summarizeAgentFailureReason(runtime, {
     cadence,
     lastPass,
@@ -1147,6 +1183,42 @@ function summarizeAgentHeaderRuntime(runtime) {
     && queueCount > 0
     && Boolean(cadenceState?.overdue)
     && overdueBySeconds > 0;
+
+  if (activeHold && passActive) {
+    const pidLabel = Number.isInteger(lock?.pid) ? ` (pid ${lock.pid})` : "";
+    return {
+      health: "yellow",
+      label: "Degraded",
+      headline: "Agent pass running with blocked work",
+      detail: `A queue pass is already in progress${pidLabel}. ${buildAgentBackoffDetail(activeHold, cadence, Boolean(scheduler?.loaded), true)}`,
+      cadence,
+      sendMode,
+      statusFacts,
+      nextAction: activeHold.kind === "send_circuit_breaker"
+        ? "Resolve the active send hold, then let the running pass continue."
+        : "Fix the blocked connector path and let the running pass continue.",
+      canRunNow: false,
+      runLabel: null,
+      passiveLabel: "Background pass in progress",
+    };
+  }
+
+  if (activeHold) {
+    return {
+      health: "yellow",
+      label: "Blocked",
+      headline: "Agent is blocked",
+      detail: buildAgentBackoffDetail(activeHold, cadence, Boolean(scheduler?.loaded)),
+      cadence,
+      sendMode,
+      statusFacts,
+      nextAction: activeHold.kind === "send_circuit_breaker"
+        ? "Resolve the active send hold, then run the agent again."
+        : "Fix the blocked connector path, then run the agent again.",
+      canRunNow: true,
+      runLabel: "Run agent now",
+    };
+  }
 
   if (lock?.active) {
     return {
@@ -1197,21 +1269,6 @@ function summarizeAgentHeaderRuntime(runtime) {
     };
   }
 
-  if (activeBackoff) {
-    return {
-      health: "yellow",
-      label: "Blocked",
-      headline: "Agent is blocked",
-      detail: buildAgentBackoffDetail(activeBackoff, cadence, Boolean(scheduler?.loaded)),
-      cadence,
-      sendMode,
-      statusFacts,
-      nextAction: "Fix the blocked connector path, then run the agent again.",
-      canRunNow: true,
-      runLabel: "Run agent now",
-    };
-  }
-
   if (lastStatus === "failed") {
     return {
       health: "red",
@@ -1246,12 +1303,12 @@ function summarizeAgentHeaderRuntime(runtime) {
     return {
       health: "yellow",
       label: "Review only",
-      headline: "Agent-authored drafts are waiting in review only",
-      detail: `${verificationSendCount} queued agent-authored send${verificationSendCount === 1 ? "" : "s"} already have fresh proof. Review only will not auto-send those agent-authored drafts. Operator-authored, edited, or approved drafts still send live.`,
+      headline: "Unreviewed outbound copy is waiting in review only",
+      detail: `${verificationSendCount} unreviewed copy send${verificationSendCount === 1 ? "" : "s"} already have fresh proof. Review only will not auto-send unreviewed outbound copy. Operator-authored, edited, or approved copy, non-copy actions, and retrieval still run live.`,
       cadence,
       sendMode,
       statusFacts,
-      nextAction: "Switch the agent out of review only when you want the next pass to auto-send proved agent-authored drafts.",
+      nextAction: "Switch the agent out of review only when you want proved unreviewed outbound copy to send automatically.",
       canRunNow: true,
       runLabel: "Run review pass",
     };
@@ -1428,48 +1485,6 @@ function stripAgentFailureLanePrefix(clause) {
   return clause.replace(/^[a-z][a-z0-9_-]*:\s*/i, "").trim();
 }
 
-/**
- * @param {{ sendMode: string | null, lastPass: any, verificationSendCount: number }} input
- */
-function isVerifyModeHoldingSends(input) {
-  if (input.sendMode !== "verify" || input.verificationSendCount <= 0) return false;
-  const status = String(input.lastPass?.status ?? "").trim().toLowerCase();
-  const reason = String(input.lastPass?.reason ?? "").trim().toLowerCase();
-  return status === "noop" && /no unverified send_message tasks left to prove/.test(reason);
-}
-
-/**
- * @param {any} runtime
- * @param {number} queueCount
- */
-function findActiveAgentBackoff(runtime, queueCount) {
-  if (!runtime || queueCount <= 0) return null;
-  const active = listActiveBrowserBackoffs(runtime.hostState ?? null);
-  return active.find((entry) => entry.lane === "execution")
-    ?? active.find((entry) => entry.lane === "retrieval")
-    ?? null;
-}
-
-/**
- * @param {{ lane?: string | null }} backoff
- * @param {string | null} cadence
- * @param {boolean} schedulerLoaded
- */
-function buildAgentBackoffDetail(backoff, cadence, schedulerLoaded) {
-  const laneLabel = backoff?.lane === "retrieval" ? "Inbound refresh work" : "Send work";
-  const reason = typeof backoff?.reason === "string" && backoff.reason.trim()
-    ? backoff.reason.trim()
-    : null;
-  const schedulerLabel = schedulerLoaded
-    ? cadence
-      ? `Background draining is enabled ${cadence}.`
-      : "Background draining is enabled."
-    : "No pass is running right now.";
-  return reason
-    ? `${schedulerLabel} ${laneLabel} is blocked right now. ${reason}`
-    : `${schedulerLabel} ${laneLabel} is blocked right now.`;
-}
-
 // ---------------------------------------------------------------------------
 // Shared CSS — design tokens + the base styles for primitives + shell. Inline
 // into the rendered HTML so the page is self-contained.
@@ -1505,7 +1520,7 @@ button{font-family:inherit;color:inherit}
 a{color:inherit;text-decoration:none}
 
 /* shell */
-.exo-root{display:grid;grid-template-columns:212px 1fr;height:100vh}
+.exo-root{display:grid;grid-template-columns:212px 1fr;height:100vh;--exo-nav-width:212px}
 .nav{background:var(--bg-1);border-right:1px solid var(--border);display:flex;flex-direction:column;
   padding:14px 10px;gap:1px;overflow-y:auto}
 .nav-brand{display:flex;align-items:center;gap:9px;padding:4px 6px 14px}
@@ -1518,7 +1533,7 @@ a{color:inherit;text-decoration:none}
 .nav-collapse .ic{transition:transform .15s}
 .exo-root.nav-collapsed .nav-collapse .ic{transform:rotate(180deg)}
 /* collapsed sidebar */
-.exo-root.nav-collapsed{grid-template-columns:58px 1fr}
+.exo-root.nav-collapsed{grid-template-columns:58px 1fr;--exo-nav-width:58px}
 .exo-root.nav-collapsed .brand-name{display:none}
 .exo-root.nav-collapsed .nav-brand{flex-direction:column;gap:10px;padding:2px 0 14px}
 .exo-root.nav-collapsed .nav-collapse{margin:0}
@@ -1603,6 +1618,8 @@ a{color:inherit;text-decoration:none}
   background:var(--bg-1);border:1px solid var(--border);border-radius:10px;padding:9px 14px;white-space:nowrap}
 .op-stat b{color:var(--text);font-weight:700;font-size:14px}
 .op-stat i{width:1px;height:14px;background:var(--border-2)}
+.op-stat-link{display:inline-flex;align-items:center;gap:5px;color:inherit;text-decoration:none}
+.op-stat-link:hover,.op-stat-link.is-active{color:var(--text)}
 
 /* inert status primitives */
 .state-dot{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--text-2);
@@ -1686,6 +1703,8 @@ a{color:inherit;text-decoration:none}
 
 /* sections */
 .op-sec{margin-bottom:calc(18px * var(--space-scale))}
+.op-view-panel{display:flex;flex-direction:column;gap:calc(18px * var(--space-scale))}
+.op-view-panel[hidden]{display:none}
 .sec-head{display:flex;align-items:center;gap:9px;margin-bottom:calc(11px * var(--space-scale))}
 .sec-ic{color:var(--text-3)}
 .sec-head h2{font-size:15px;font-weight:700;letter-spacing:-.01em;white-space:nowrap}
@@ -1800,7 +1819,7 @@ body.view-settings .exec-policy-card{max-width:none}
 .mc-link{display:block;color:inherit;text-decoration:none}
 .mc-link:hover .mc-name{color:var(--accent)}
 .mc-top{display:flex;align-items:center;gap:8px;margin-bottom:11px}
-.mc-ready-tag{margin-left:auto;font-size:10px;color:var(--text-4);font-family:var(--mono);letter-spacing:.04em}
+.mc-ready-tag{margin-left:auto;max-width:170px;text-align:right;font-size:10px;line-height:1.35;color:var(--text-4);font-family:var(--mono);letter-spacing:.04em}
 .mc-name{font-size:17px;font-weight:700;letter-spacing:-.02em;margin-bottom:12px;color:var(--text)}
 .mc-ready{font-size:11px;color:var(--text-3);font-family:var(--mono);margin-top:6px}
 .mc-cap{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;letter-spacing:.12em;
@@ -1842,12 +1861,39 @@ body.view-settings .exec-policy-card{max-width:none}
 .motion-settings{max-width:1040px}
 .seg-tabs{width:fit-content;max-width:100%;overflow-x:auto}
 .seg-tabs.settings-tabs{margin:6px 0 18px}
+.seg-tabs.motion-workviews-tabs{margin:10px 0 18px}
 .seg-tab{border:none;background:none;color:var(--text-3);padding:5px 14px;border-radius:7px;cursor:pointer;
-  font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;user-select:none}
+  font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;user-select:none;text-decoration:none}
 .seg-tab:hover{color:var(--text)}
 .seg-tab[aria-selected="true"],.seg-tab.is-active{background:var(--bg-hover);color:var(--text)}
 .seg-tab:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:2px}
 .seg-tabs .count-chip{font-size:10.5px}
+.op-view-tabs{overflow:visible;flex-wrap:wrap;align-items:stretch}
+.seg-motion-picker{position:relative;display:flex;min-width:0}
+.seg-motion-picker summary{list-style:none}
+.seg-motion-picker summary::-webkit-details-marker{display:none}
+.seg-motion-trigger{min-height:100%}
+.seg-motion-trigger-copy{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0}
+.seg-motion-trigger-label{line-height:1.05}
+.seg-motion-trigger-current{max-width:220px;font-size:10px;line-height:1.15;color:var(--text-4);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.seg-motion-picker.is-active .seg-motion-trigger-current,.seg-motion-trigger.is-active .seg-motion-trigger-current{color:var(--text-2)}
+.seg-motion-trigger-chev{display:inline-flex;color:var(--text-4);transition:transform .15s;flex:none}
+.seg-motion-picker[open] .seg-motion-trigger-chev{transform:rotate(180deg)}
+.seg-motion-menu{position:absolute;top:calc(100% + 8px);left:0;right:auto;width:min(430px,calc(100vw - var(--exo-nav-width) - 40px));
+  min-width:min(340px,calc(100vw - var(--exo-nav-width) - 40px));max-width:calc(100vw - var(--exo-nav-width) - 40px);
+  background:var(--bg-1);border:1px solid var(--border-2);border-radius:12px;padding:8px;box-shadow:0 16px 32px rgba(0,0,0,.32);
+  display:flex;flex-direction:column;gap:6px;z-index:60}
+.motion-menu-opt{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:10px 12px;background:var(--bg-2);
+  border:1px solid var(--border);border-radius:10px;color:var(--text-2);text-decoration:none}
+.motion-menu-opt:hover,.motion-menu-opt.is-current{background:var(--bg-hover);border-color:var(--border-3);color:var(--text)}
+.motion-menu-copy{display:flex;flex-direction:column;gap:5px;min-width:0}
+.motion-menu-host{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;letter-spacing:.05em;color:var(--text-4)}
+.motion-menu-host .ic{color:var(--text-4)}
+.motion-menu-host-all{color:var(--text-3)}
+.motion-menu-title{font-size:13px;font-weight:700;line-height:1.35;color:var(--text);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.motion-menu-meta{font-size:11.5px;line-height:1.4;color:var(--text-3);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.motion-menu-code{font-family:var(--mono);font-size:10.5px;line-height:1.35;color:var(--text-4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.op-motion-clear{display:flex;justify-content:flex-start;margin:-4px 0 calc(18px * var(--space-scale))}
 .settings-stack{display:flex;flex-direction:column;gap:14px}
 .settings-pane{scroll-margin-top:78px}
 .settings-pane[hidden]{display:none}
@@ -1880,6 +1926,13 @@ body.view-settings .exec-policy-card{max-width:none}
 .pm-cap{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-4)}
 .pm-src{font-size:11.5px;color:var(--text-2)}
 .pm-div{width:1px;height:13px;background:var(--border-2)}
+.motion-workspace-stack{display:flex;flex-direction:column;gap:2px}
+.motion-workspace-pane[hidden]{display:none!important}
+.motion-workspace-pane .md-list,
+.motion-workspace-pane .activity-note,
+.motion-workspace-pane .motion-activity-timeline,
+.motion-workspace-pane .plan-note,
+.motion-workspace-pane .plan-facts{max-width:none;width:100%}
 .md-section{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:700;margin:20px 0 11px}
 .md-section>span{font-family:var(--mono);font-size:11px;color:var(--text-3);background:var(--bg-3);padding:1px 8px;border-radius:10px}
 .sig-section{align-items:baseline}
@@ -1922,6 +1975,11 @@ body.view-settings .exec-policy-card{max-width:none}
 .md-co-id{flex:1;min-width:0}
 .md-co-name{display:block;font-size:13px;font-weight:600}
 .md-co-sub{display:block;font-size:11.5px;color:var(--text-3)}
+.md-co-tail{display:flex;align-items:center;justify-content:flex-end;gap:12px 14px;flex:1 1 420px;min-width:0;flex-wrap:wrap}
+.md-co-facts{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.md-co-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;min-width:0;margin-left:auto}
+.md-co-backlog,.md-co-person{align-items:flex-start}
+.md-co-backlog .md-co-id,.md-co-person .md-co-id{flex:0 1 240px}
 .md-co-meta{font-size:11.5px;color:var(--text-3);font-family:var(--mono)}
 .match-sig{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--text-3);
   background:var(--bg-1);border:1px solid var(--border);padding:2px 8px;border-radius:6px;white-space:nowrap;
@@ -1932,6 +1990,7 @@ body.view-settings .exec-policy-card{max-width:none}
 .activity-note{display:flex;align-items:flex-start;gap:9px;font-size:12px;line-height:1.5;color:var(--text-2);
   background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:12px;max-width:900px}
 .activity-note .ic{color:var(--text-4);flex:none;margin-top:1px}
+.activity-subnote{margin:0 0 10px;font-size:10.5px;line-height:1.45;color:var(--text-4);font-family:var(--mono);letter-spacing:.04em}
 .motion-activity-timeline{background:var(--bg-1);border:1px solid var(--border);border-radius:12px;padding:14px 16px;max-width:900px}
 .motion-activity-timeline .tl{margin:0}
 .plan-list{display:flex;flex-direction:column;background:var(--bg-2);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:14px}
@@ -1939,14 +1998,22 @@ body.view-settings .exec-policy-card{max-width:none}
 .plan-row:not(:last-child){border-bottom:1px solid var(--border)}
 .plan-ic{color:var(--text-4)}
 .plan-text{flex:1;font-size:12.5px}
+.plan-note{display:flex;flex-direction:column;gap:7px;background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;margin-bottom:14px;max-width:900px}
+.plan-note p{font-size:12px;line-height:1.5;color:var(--text-2)}
 .md-stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px}
 .md-tile{display:flex;flex-direction:column;gap:5px;align-items:flex-start;background:var(--bg-2);border:1px solid var(--border);
   border-radius:11px;padding:13px 18px;min-width:96px}
 .md-tile b{font-size:23px;font-weight:800;letter-spacing:-.03em}
 .md-tile em{font-style:normal;font-size:10.5px;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;font-family:var(--mono)}
+.md-tile-stage{min-width:190px}
+.md-tile-stage b{font-size:15px;line-height:1.15;letter-spacing:-.01em}
 .plan-stats .md-ready{display:flex;align-items:center;gap:8px}
 .plan-stats .md-ready .ready-bar{width:60px}
 .plan-stats .md-ready em{font-style:normal;font-size:13px;font-weight:800;color:var(--text)}
+.plan-stats .md-tile-stage .md-ready{width:100%;justify-content:space-between;align-items:center}
+.plan-stats .md-tile-stage .md-ready .ready-bar{flex:1 1 auto;min-width:76px}
+.plan-stats .md-tile-stage .md-ready em{font-size:11.5px;font-weight:700;color:var(--text-2)}
+.plan-facts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;max-width:900px;margin-top:10px}
 
 /* ---------- prospects ---------- */
 .seg{display:flex;background:var(--bg-2);border:1px solid var(--border);border-radius:9px;padding:2px}
@@ -2151,6 +2218,16 @@ body.view-settings .exec-policy-card{max-width:none}
 .md-co.is-link{width:100%;background:none;border:none;border-bottom:1px solid var(--border);cursor:pointer;text-align:left;font:inherit}
 .md-co.is-link:last-child{border-bottom:none}
 .md-co.is-link:hover .md-co-go{color:var(--accent);transform:translateX(2px)}
+@media (max-width:1400px){
+  .md-co-backlog,.md-co-person{flex-wrap:wrap}
+  .md-co-backlog .md-co-id,.md-co-person .md-co-id{flex:1 1 280px}
+  .md-co-backlog .md-co-tail,.md-co-person .md-co-tail{flex-basis:100%;padding-left:27px;justify-content:space-between}
+  .md-co-backlog .md-co-actions,.md-co-person .md-co-actions{margin-left:0;justify-content:flex-start}
+}
+@media (max-width:1040px){
+  .md-co-backlog .md-co-tail,.md-co-person .md-co-tail{padding-left:0;flex-direction:column;align-items:flex-start}
+  .md-co-backlog .md-co-actions,.md-co-person .md-co-actions{width:100%}
+}
 
 /* ---------- queued Exo action affordance ---------- */
 .exo-actions{display:flex;flex-direction:column;gap:8px;max-width:900px}

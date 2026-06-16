@@ -8,7 +8,11 @@ import { userSchema } from "../schema/user.js";
 import { isPlannerEligibleMotionStatus } from "../lib/motion-status.js";
 import { buildMotionQueueSummary, isReadyConnectionRequestProspect } from "../lib/motion-queue.js";
 import { buildMotionPacketSummary } from "../lib/motion-packets.js";
-import { isConnectionRequestInFlight } from "../lib/cadence-helpers.js";
+import {
+  hasObservedPendingConnectionRequest,
+  isConnectionRequestInFlight,
+  summarizeObservedConnectionRequestState,
+} from "../lib/cadence-helpers.js";
 import { readWorkspaceSettings, resolveWorkspaceLinkedinConnectionRequestTarget } from "../lib/workspace-settings.js";
 import { buildUserInboundSyncView } from "./user-inbound-sync.js";
 import {
@@ -46,6 +50,14 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
   const profiles = rawProfiles.map((item) => browserProfileSchema.parse(item));
   const allUsers = (options.rawUsers ?? [rawUser]).map((item) => userSchema.parse(item));
   const observations = (options.rawObservations ?? []).map((item) => inboundObservationSchema.parse(item));
+  const observationsByProspectId = new Map();
+  for (const observation of observations) {
+    const prospectId = observation.prospectId ?? null;
+    if (!prospectId) continue;
+    const items = observationsByProspectId.get(prospectId) ?? [];
+    items.push(observation);
+    observationsByProspectId.set(prospectId, items);
+  }
   const workspaceSettings = options.workspaceSettings ?? readWorkspaceSettings();
   const workspaceDailyInvitationsTarget = resolveWorkspaceLinkedinConnectionRequestTarget(workspaceSettings);
   const now = new Date(options.now ?? new Date().toISOString());
@@ -100,15 +112,27 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
 
   const scopedMotionBranches = buildCapacityMotionBranches(scopedAccounts)
     .filter(({ motion }) => assignedMotionIds.has(motion.id));
-  const queueSummaries = scopedMotionBranches.map(({ motion, companies: branchCompanies }) =>
-    buildMotionQueueSummary(
+  const queueSummaries = scopedMotionBranches.map(({ motion, companies: branchCompanies }) => {
+    const summary = buildMotionQueueSummary(
       motion,
       branchCompanies,
       {
         companyId: options.companyId ?? null
       }
-    )
-  );
+    );
+    const items = summary.items.map((item) => ({
+      ...item,
+      readyToSendCount: item.prospects.filter((prospect) =>
+        isReadyConnectionRequestProspect(prospect)
+        && !summarizeObservedConnectionRequestState(observationsByProspectId.get(prospect.id))
+      ).length,
+    }));
+    return {
+      ...summary,
+      items,
+      readyToSendCount: items.reduce((sum, item) => sum + item.readyToSendCount, 0),
+    };
+  });
   const packetSummaries = scopedMotionBranches.map(({ motion, companies: branchCompanies }) =>
     buildMotionPacketSummary(
       motion,
@@ -138,7 +162,10 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
       && isSameLocalDate(touch.occurredAt, now)
     ).length
   ), 0);
-  const trackedPendingInvitations = executableScopedProspects.filter(({ prospect }) => isPendingInvitationFromPriorWork(prospect, now)).length;
+  const trackedPendingInvitations = executableScopedProspects.filter(({ prospect }) => (
+    isPendingInvitationFromPriorWork(prospect, now)
+    || isObservedPendingInvitationFromPriorWork(observationsByProspectId.get(prospect.id), now)
+  )).length;
   const itemizedPendingInvitations = sentInvitationsSurface
     && (sentInvitationsSurface.lastRunStatus === "success" || sentInvitationsSurface.lastRunStatus === "warning")
     ? sentInvitationsSurface.lastItemCount ?? null
@@ -167,7 +194,10 @@ export function buildOutboundCapacityView(rawUser, rawMotions, rawCompanies, raw
   const pendingInvitations = Math.max(trackedPendingInvitations, observedPendingInvitations ?? 0);
   const pendingInvitationReconciliationBlocked = pendingInvitationReconcileRequired === true
     || (pendingInvitationItemizationGapCount ?? 0) > 0;
-  const readyConnectionRequests = executableScopedProspects.filter(({ prospect }) => isReadyConnectionRequestProspect(prospect)).length;
+  const readyConnectionRequests = executableScopedProspects.filter(({ prospect }) => (
+    isReadyConnectionRequestProspect(prospect)
+    && !summarizeObservedConnectionRequestState(observationsByProspectId.get(prospect.id))
+  )).length;
   const assignmentBlockedReadyConnectionRequests = assignmentBlockedReadyProspects.length;
   const assignmentBlockedCompanyCount = new Set(assignmentBlockedReadyProspects.map(({ account }) => account.companyId)).size;
   const assignmentBlockedCompanies = [...new Map(
@@ -888,6 +918,21 @@ function isPendingInvitationFromPriorWork(prospect, now) {
   const referenceAt = latestOutboundInviteTouch?.occurredAt ?? prospect.cadenceState.lastTouchAt ?? null;
 
   return referenceAt ? !isSameLocalDate(referenceAt, now) : true;
+}
+
+/**
+ * @param {Array<{ kind?: string | null | undefined, observedAt?: string | null | undefined, eventAt?: string | null | undefined }> | null | undefined} observations
+ * @param {Date} now
+ */
+function isObservedPendingInvitationFromPriorWork(observations, now) {
+  if (!hasObservedPendingConnectionRequest(observations)) {
+    return false;
+  }
+  const latest = summarizeObservedConnectionRequestState(observations);
+  if (!latest?.observedAt) {
+    return true;
+  }
+  return !isSameLocalDate(latest.observedAt, now);
 }
 
 /**

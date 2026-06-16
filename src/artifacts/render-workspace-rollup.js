@@ -145,7 +145,7 @@ function renderMotions(motions, meta = {}) {
             `<a class="ws-motion" href="${escapeAttr(motionHref(m.id))}">` +
             `<div class="wm-top">${stateDot(m.state)}<span class="wm-name">${escapeHtml(m.name)}</span>${truthTag(m.truth)}</div>` +
             readinessBar(m.readiness) +
-            `<div class="wm-meta">${Math.round(m.readiness * 100)}% ready · ${m.companyCount} co · ${m.prospectCount} prospects · ${m.actionCount} actions</div>` +
+            `<div class="wm-meta">${escapeHtml(formatWorkspaceMotionStage(m))} · ${m.companyCount} co · ${m.prospectCount} prospects · ${m.actionCount} actions</div>` +
             (m.blocker ? `<div class="wm-blocker">${iconSvg("alert", 11)}${escapeHtml(m.blocker)}</div>` : "") +
             `</a>`,
         )
@@ -154,10 +154,18 @@ function renderMotions(motions, meta = {}) {
 
   return (
     `<div class="ws-panel span-2">` +
-    `<div class="ws-panel-head">${iconSvg("layers", 15)}<h3>Motions readiness</h3><span class="ws-head-right"><span class="rb-lab" style="font-family:var(--mono);font-size:10.5px;color:var(--text-3)">avg ${avgPct}</span></span></div>` +
+    `<div class="ws-panel-head">${iconSvg("layers", 15)}<h3>Motions readiness</h3><span class="ws-head-right"><span class="rb-lab" style="font-family:var(--mono);font-size:10.5px;color:var(--text-3)">avg loop ${avgPct}</span></span></div>` +
     `<div class="ws-motions">${rows}</div>` +
     `</div>`
   );
+}
+
+/** @param {{ stageLabel?: string | null, stagePosition?: number | null, stageTotal?: number | null }} motion */
+function formatWorkspaceMotionStage(motion) {
+  if (motion.stageLabel && motion.stagePosition && motion.stageTotal) {
+    return `${motion.stageLabel} · ${motion.stagePosition}/${motion.stageTotal}`;
+  }
+  return motion.stageLabel ?? "Stage unknown";
 }
 
 /** @param {any} surfaces */

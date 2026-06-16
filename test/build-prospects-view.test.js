@@ -302,3 +302,41 @@ test("buildProspectsViewModel carries owner labels from motion people and backlo
 
   assert.equal(model.details[0]?.owner, "william-main");
 });
+
+test("buildProspectsViewModel falls back to the motion assignment when prospect and company owners are absent", () => {
+  const model = buildProspectsViewModel({
+    prospectPrepLanes: [{
+      key: "selected",
+      items: [buildRawProspect({
+        prospectId: "prospect-1",
+        name: "Anthony Rose",
+        companyName: "The Pitch",
+        motionId: "motion-1",
+        motionName: "transition-inbound-backlog",
+      })],
+    }],
+    engagementLanes: [],
+    motionDetails: [{
+      motionId: "motion-1",
+      motionName: "transition-inbound-backlog",
+      motionStatus: "active",
+      premise: { statement: "Reconcile transition relationships.", status: "defined" },
+      signals: [],
+      companies: [],
+      backlogCompanies: [],
+      people: [{
+        prospectId: "prospect-1",
+      }],
+    }],
+    rawMotions: [{
+      id: "motion-1",
+      engagementUserAssignment: {
+        userId: "user-1",
+        label: "william-main",
+      },
+    }],
+    now: "2026-06-05T13:00:00Z",
+  });
+
+  assert.equal(model.details[0]?.owner, "william-main");
+});

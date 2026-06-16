@@ -3,6 +3,8 @@
 import os from "node:os";
 import path from "node:path";
 
+import { buildStateDirSuffix } from "./state-dir-suffix.js";
+
 const HOME_DIR = os.homedir();
 const DEFAULT_PATH = [
   "/opt/homebrew/bin",
@@ -17,7 +19,7 @@ const DEFAULT_PATH = [
   "/sbin",
 ].join(":");
 const DEFAULT_CODEX_BIN = "/Applications/Codex.app/Contents/Resources/codex";
-export const ROUTINE_ARTIFACT_VERSION = "2026-06-10-1";
+export const ROUTINE_ARTIFACT_VERSION = "2026-06-15-2";
 
 /**
  * @param {string} interval
@@ -298,7 +300,7 @@ export function buildCodexHostRunner(input) {
     "LOCK_PID_FILE=\"$LOCK_DIR/pid\"",
     `RUNNER_PATH=${quoteShell(input.runnerPath)}`,
     "PREFLIGHT_SCRIPT=\"$ROOT/scripts/preflight-agent-runtime.js\"",
-    "PASS_RUNNER_SCRIPT=\"$ROOT/scripts/run-agent-host-pass.js\"",
+    "LANE_BURST_SCRIPT=\"$ROOT/scripts/run-agent-lane-burst.js\"",
     `PREFLIGHT_JSON=${quoteShell(preflightPath)}`,
     `CODEX_BIN=${quoteShell(codexBin)}`,
     `HOME=\"\${HOME:-${escapeShellDoubleQuoted(input.homeDir)}}\"`,
@@ -332,8 +334,8 @@ export function buildCodexHostRunner(input) {
     "  echo \"Missing Exo host preflight script: $PREFLIGHT_SCRIPT\" >&2",
     "  exit 2",
     "fi",
-    "if [[ ! -f \"$PASS_RUNNER_SCRIPT\" ]]; then",
-    "  echo \"Missing Exo host pass runner: $PASS_RUNNER_SCRIPT\" >&2",
+    "if [[ ! -f \"$LANE_BURST_SCRIPT\" ]]; then",
+    "  echo \"Missing Exo lane burst runner: $LANE_BURST_SCRIPT\" >&2",
     "  exit 2",
     "fi",
     "",
@@ -392,16 +394,12 @@ export function buildCodexHostRunner(input) {
     "  exit 0",
     "fi",
     "",
-    "echo \"Starting deterministic host pass (transport + research lanes)...\"",
-    "# The shell lock only guards lane-worker spawn; each child owns its lane",
-    "# lock and refreshes the merged legacy summary when it exits.",
+    "echo \"Starting deterministic host bursts (transport + research lanes)...\"",
     "set +e",
-    "EXO_AGENT_LANE=transport /usr/bin/caffeinate -dimsu -t 7200 /usr/bin/env node \"$PASS_RUNNER_SCRIPT\" &",
+    "EXO_AGENT_LANE=transport /usr/bin/caffeinate -dimsu -t 7200 /usr/bin/env node \"$LANE_BURST_SCRIPT\" &",
     "transport_pid=$!",
-    "EXO_AGENT_LANE=research /usr/bin/caffeinate -dimsu -t 7200 /usr/bin/env node \"$PASS_RUNNER_SCRIPT\" &",
+    "EXO_AGENT_LANE=research /usr/bin/caffeinate -dimsu -t 7200 /usr/bin/env node \"$LANE_BURST_SCRIPT\" &",
     "research_pid=$!",
-    "release_lock",
-    "trap - EXIT",
     "wait \"$transport_pid\"",
     "transport_status=$?",
     "wait \"$research_pid\"",
@@ -450,7 +448,7 @@ function buildDeterministicHostRunner(input) {
     "LOCK_PID_FILE=\"$LOCK_DIR/pid\"",
     `RUNNER_PATH=${quoteShell(input.runnerPath)}`,
     "PREFLIGHT_SCRIPT=\"$ROOT/scripts/preflight-agent-runtime.js\"",
-    "PASS_RUNNER_SCRIPT=\"$ROOT/scripts/run-agent-host-pass.js\"",
+    "LANE_BURST_SCRIPT=\"$ROOT/scripts/run-agent-lane-burst.js\"",
     `PREFLIGHT_JSON=${quoteShell(preflightPath)}`,
     `export PATH=${quoteShell(input.pathEnv || DEFAULT_PATH)}`,
     `export HOME="${escapeShellDoubleQuoted(homeDir)}"`,
@@ -473,8 +471,8 @@ function buildDeterministicHostRunner(input) {
     "  echo \"Missing Exo host preflight script: $PREFLIGHT_SCRIPT\" >&2",
     "  exit 2",
     "fi",
-    "if [[ ! -f \"$PASS_RUNNER_SCRIPT\" ]]; then",
-    "  echo \"Missing Exo host pass runner: $PASS_RUNNER_SCRIPT\" >&2",
+    "if [[ ! -f \"$LANE_BURST_SCRIPT\" ]]; then",
+    "  echo \"Missing Exo lane burst runner: $LANE_BURST_SCRIPT\" >&2",
     "  exit 2",
     "fi",
     "",
@@ -532,16 +530,12 @@ function buildDeterministicHostRunner(input) {
     "  exit 0",
     "fi",
     "",
-    "echo \"Starting deterministic host pass (transport + research lanes)...\"",
-    "# The shell lock only guards lane-worker spawn; each child owns its lane",
-    "# lock and refreshes the merged legacy summary when it exits.",
+    "echo \"Starting deterministic host bursts (transport + research lanes)...\"",
     "set +e",
-    "EXO_AGENT_LANE=transport /usr/bin/env node \"$PASS_RUNNER_SCRIPT\" &",
+    "EXO_AGENT_LANE=transport /usr/bin/env node \"$LANE_BURST_SCRIPT\" &",
     "transport_pid=$!",
-    "EXO_AGENT_LANE=research /usr/bin/env node \"$PASS_RUNNER_SCRIPT\" &",
+    "EXO_AGENT_LANE=research /usr/bin/env node \"$LANE_BURST_SCRIPT\" &",
     "research_pid=$!",
-    "release_lock",
-    "trap - EXIT",
     "wait \"$transport_pid\"",
     "transport_status=$?",
     "wait \"$research_pid\"",
@@ -603,7 +597,7 @@ export function buildRoutinePlan(input) {
   const routinePath = path.join(input.stateDir, "agent-routine.md");
   const logPath = path.join(input.stateDir, "agent.log");
   const hostRunnerPath = path.join(input.stateDir, "run-agent-host.sh");
-  const lockDir = path.join("/tmp", `${label}.lock`);
+  const lockDir = path.join("/tmp", `${label}${buildStateDirSuffix(input.stateDir)}.lock`);
   const prompt = buildDrainPrompt({ repo: input.repo, runtime, scheduler, stateDir: input.stateDir, sendMode });
   const artifacts = [
     { path: routinePath, content: prompt, mode: 0o644 },

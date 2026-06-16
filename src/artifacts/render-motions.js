@@ -23,6 +23,7 @@ import {
   stateDot,
   truthTag,
 } from "../lib/exo-ui-components.js";
+import { buildExactGmailPickerModel, renderExactGmailPicker } from "./render-assignment-controls.js";
 import { MOTION_INTAKE_PROMPTS } from "../core/build-motion-intake.js";
 import { isTransitionMotion } from "../core/ensure-transition-motion.js";
 import {
@@ -33,7 +34,7 @@ import {
 
 /**
  * @param {{ motions: any[], details: any[] }} model
- * @param {{ user?: { label?: string } | null, generatedAt?: string, regenerateCommand?: string }} [meta]
+ * @param {{ user?: { label?: string, gmailOptions?: Array<{ ref?: string | null, handle?: string | null, label?: string | null }> | null } | null, generatedAt?: string, regenerateCommand?: string }} [meta]
  * @returns {string}
  */
 export function renderMotionsPage(model, meta = {}) {
@@ -68,7 +69,7 @@ export function renderMotionsPage(model, meta = {}) {
  * Render one motion as its own routed detail page (interactive UI).
  *
  * @param {any} motion
- * @param {{ user?: { label?: string } | null, generatedAt?: string, regenerateCommand?: string, interactive?: boolean }} [meta]
+ * @param {{ user?: { label?: string, gmailOptions?: Array<{ ref?: string | null, handle?: string | null, label?: string | null }> | null } | null, generatedAt?: string, regenerateCommand?: string, interactive?: boolean }} [meta]
  * @returns {string}
  */
 export function renderMotionDetailPage(motion, meta = {}) {
@@ -89,7 +90,7 @@ export function renderMotionDetailPage(motion, meta = {}) {
  * Render the motion configuration/settings page (interactive UI).
  *
  * @param {any} motion
- * @param {{ user?: { label?: string } | null, generatedAt?: string, regenerateCommand?: string, interactive?: boolean }} [meta]
+ * @param {{ user?: { id?: string | null, label?: string | null, gmailOptions?: Array<{ ref?: string | null, handle?: string | null, label?: string | null }> | null } | null, generatedAt?: string, regenerateCommand?: string, interactive?: boolean }} [meta]
  * @returns {string}
  */
 export function renderMotionSettingsPage(motion, meta = {}) {
@@ -349,7 +350,7 @@ function renderList(motions, meta) {
           `<article class="motion-card">` +
           `<a class="mc-link" href="${escapeAttr(motionDetailHref(m.id, meta))}">` +
           `<div class="mc-top">${stateDot(m.state)}${truthTag(m.truth)}` +
-          `<span class="mc-ready-tag">${Math.round(m.readiness * 100)}% ready</span></div>` +
+          `<span class="mc-ready-tag">${escapeHtml(formatMotionStageBadge(m))}</span></div>` +
           `<div class="mc-name">${escapeHtml(m.name)}</div>` +
           // Offer — what this motion is for, in one line.
           (m.offerTitle
@@ -644,12 +645,136 @@ function renderOperationalDetail(m, meta = {}) {
     `<section class="dom-wrap motion-detail" id="m-${escapeAttr(m.id)}">` +
     renderHead(m, meta) +
     renderAudiences(m.audiences) +
-    renderMatches(m, meta) +
-    renderPacketReviews(m, meta) +
-    renderActivity(m.activity) +
-    renderPlan(m) +
+    renderOperationalWorkspaceTabs(m, meta) +
     `</section>`
   );
+}
+
+/**
+ * @param {any} m
+ * @param {{ interactive?: boolean, asPage?: boolean }} [meta]
+ */
+function renderOperationalWorkspaceTabs(m, meta = {}) {
+  const tabsetId = `motion-workviews-${m.id}`;
+  const activeKey = defaultOperationalTabKey(m);
+  const tabs = [
+    {
+      key: "companies",
+      label: "Companies",
+      count: m.companies.length,
+      countTone: m.companies.length ? "blue" : "neutral",
+    },
+    {
+      key: "backlog",
+      label: "Backlog",
+      count: m.backlogCompanies.length,
+      countTone: m.backlogCompanies.length ? "amber" : "neutral",
+    },
+    {
+      key: "people",
+      label: "People",
+      count: m.people.length,
+      countTone: m.people.length ? "blue" : "neutral",
+    },
+    {
+      key: "activity",
+      label: "Activity",
+      count: totalActivityEntries(m.activity),
+      countTone: totalActivityEntries(m.activity) ? "blue" : "neutral",
+    },
+    {
+      key: "execution",
+      label: "Execution",
+      count: (m.plan?.actionsRun ?? 0) + (m.reviewPackets?.length ?? 0),
+      countTone: (m.plan?.actionsRun ?? 0) + (m.reviewPackets?.length ?? 0) ? "amber" : "neutral",
+    },
+  ].map((tab) => ({
+    target: operationalTabTarget(m.id, tab.key),
+    panelId: operationalTabPanelId(m.id, tab.key),
+    active: tab.key === activeKey,
+    ...tab,
+  }));
+
+  return (
+    segTabs({
+      tabsetId,
+      ariaLabel: "Motion work views",
+      className: "motion-workviews-tabs",
+      tabs,
+    }) +
+    `<div class="motion-workspace-stack">` +
+    renderOperationalTabPanel({
+      motionId: m.id,
+      key: "companies",
+      active: activeKey === "companies",
+      body: renderMatchedCompanies(m, meta, { includeEvidenceRule: true }),
+    }) +
+    renderOperationalTabPanel({
+      motionId: m.id,
+      key: "backlog",
+      active: activeKey === "backlog",
+      body: renderBacklogCompanies(m, meta),
+    }) +
+    renderOperationalTabPanel({
+      motionId: m.id,
+      key: "people",
+      active: activeKey === "people",
+      body: renderMatchedPeople(m, meta),
+    }) +
+    renderOperationalTabPanel({
+      motionId: m.id,
+      key: "activity",
+      active: activeKey === "activity",
+      body: renderActivity(m.activity),
+    }) +
+    renderOperationalTabPanel({
+      motionId: m.id,
+      key: "execution",
+      active: activeKey === "execution",
+      body: renderPlan(m) + renderPacketReviews(m, meta),
+    }) +
+    `</div>`
+  );
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} key
+ */
+function operationalTabTarget(motionId, key) {
+  return `motion-${motionId}-${key}`;
+}
+
+/**
+ * @param {string} motionId
+ * @param {string} key
+ */
+function operationalTabPanelId(motionId, key) {
+  return `motion-${motionId}-panel-${key}`;
+}
+
+/**
+ * @param {{ motionId: string, key: string, active: boolean, body: string }} input
+ */
+function renderOperationalTabPanel(input) {
+  const target = operationalTabTarget(input.motionId, input.key);
+  const panelId = operationalTabPanelId(input.motionId, input.key);
+  return (
+    `<section class="motion-workspace-pane" id="${escapeAttr(panelId)}" role="tabpanel"` +
+    ` aria-labelledby="${escapeAttr(`motion-workviews-${input.motionId}-tab-${target}`)}"` +
+    ` data-tab-panel="${escapeAttr(target)}"${input.active ? "" : " hidden"}>` +
+    input.body +
+    `</section>`
+  );
+}
+
+/** @param {any} m */
+function defaultOperationalTabKey(m) {
+  if (totalActivityEntries(m.activity) > 0) return "activity";
+  if ((m.backlogCompanies?.length ?? 0) > 0) return "backlog";
+  if ((m.people?.length ?? 0) > 0) return "people";
+  if ((m.companies?.length ?? 0) > 0) return "companies";
+  return "execution";
 }
 
 /**
@@ -883,13 +1008,18 @@ function renderExecutionSettings(motion, meta = {}) {
   const currentUserId = meta.user?.id ?? null;
   const currentUserLabel = meta.user?.label ?? null;
   const currentUserAssigned = Boolean(currentUserId) && assignment?.userId === currentUserId;
+  const gmailPicker = buildExactGmailPickerModel(meta.user ?? null, assignment);
+  const gmailPickerHtml = renderExactGmailPicker(gmailPicker, {
+    helper: "Pick one exact inbox when this motion should send or reconcile email from a specific mailbox. Leave it blank to keep Gmail unresolved at motion scope.",
+  });
+  const needsScopedGmailPin = currentUserAssigned && gmailPicker.showPicker && !gmailPicker.selectedRef;
   const assignmentSummary = assignment
     ? `${assignment.label} is assigned to this motion.`
     : "No user is assigned to this motion yet.";
   const assignmentDetail = assignment
     ? `Launch will inherit ${Array.isArray(assignment.accountRefs) && assignment.accountRefs.length ? assignment.accountRefs.join(", ") : "the assigned user's mapped accounts"}.`
     : "Assign one user here so Exo can resolve one governed launch path.";
-  const button = meta.interactive && currentUserId && !currentUserAssigned
+  const button = meta.interactive && currentUserId && (!currentUserAssigned || gmailPicker.showPicker)
     ? liveActionBtn({
         writer: "assignMotionUser",
         args: {
@@ -899,12 +1029,21 @@ function renderExecutionSettings(motion, meta = {}) {
         },
         variant: "primary",
         icon: "check",
-        label: currentUserLabel ? `Assign ${currentUserLabel}` : "Assign current user",
-        title: "Assign the current workspace user to this motion so launch can resolve one governed execution identity.",
+        label: currentUserAssigned
+          ? "Save launch settings"
+          : (currentUserLabel ? `Assign ${currentUserLabel}` : "Assign current user"),
+        title: currentUserAssigned
+          ? "Save the current motion owner and any exact Gmail inbox pin."
+          : "Assign the current workspace user to this motion so launch can resolve one governed execution identity.",
+        fields: gmailPicker.showPicker ? "accountRef:accountRef?" : null,
       })
     : "";
   const footer = currentUserAssigned
-    ? `<p class="premise-note">This motion is already assigned to the current workspace user.</p>`
+    ? `<p class="premise-note">${escapeHtml(
+        needsScopedGmailPin
+          ? "This motion is already assigned to the current workspace user. Pick one exact Gmail inbox before email work should trust this scope."
+          : "This motion is already assigned to the current workspace user."
+      )}</p>`
     : currentUserLabel
       ? `<p class="premise-note">Current workspace user: ${escapeHtml(currentUserLabel)}.</p>`
       : `<p class="premise-note">Open the UI as a governed execution user to assign this motion here.</p>`;
@@ -934,6 +1073,7 @@ function renderExecutionSettings(motion, meta = {}) {
     ownerTag({ ownerName: assignment?.label ?? null, initials: assignment?.label?.slice(0, 1)?.toUpperCase() ?? null }) +
     `</div>` +
     footer +
+    gmailPickerHtml +
     (button ? `<div class="compose-actions">${button}</div>` : "") +
     `</div>` +
     deleteCard
@@ -967,10 +1107,21 @@ function renderAudiences(audiences) {
  * @param {{ interactive?: boolean }} [meta]
  */
 function renderMatches(m, meta = {}) {
-  const divider = `<div class="evidence-rule">${iconSvg("arrowR", 13)}Below: where these signals actually fired — evidence generated by the motion.</div>`;
+  return (
+    renderMatchedCompanies(m, meta, { includeEvidenceRule: true }) +
+    renderBacklogCompanies(m, meta) +
+    renderMatchedPeople(m, meta)
+  );
+}
 
-  const coHead = `<div class="md-section">Matched companies <span>${m.companies.length}</span></div>`;
-  const coBody = m.companies.length
+/**
+ * @param {any} m
+ * @param {{ interactive?: boolean }} [meta]
+ * @param {{ includeEvidenceRule?: boolean }} [options]
+ */
+function renderMatchedCompanies(m, meta = {}, options = {}) {
+  const head = `<div class="md-section">Matched companies <span>${m.companies.length}</span></div>`;
+  const body = m.companies.length
     ? `<div class="md-list">` +
       m.companies
         .map(
@@ -993,29 +1144,50 @@ function renderMatches(m, meta = {}) {
         .join("") +
       `</div>`
     : emptyState({ icon: "building", message: "No companies have lit a signal yet." });
-  const backlogHead = `<div class="md-section">Research backlog <span>${m.backlogCompanies.length}</span></div>`;
-  const backlogBody = m.backlogCompanies.length
+
+  return (
+    (options.includeEvidenceRule
+      ? `<div class="evidence-rule">${iconSvg("arrowR", 13)}Below: where these signals actually fired — evidence generated by the motion.</div>`
+      : "") +
+    head +
+    body
+  );
+}
+
+/**
+ * @param {any} m
+ * @param {{ interactive?: boolean }} [meta]
+ */
+function renderBacklogCompanies(m, meta = {}) {
+  const head = `<div class="md-section">Research backlog <span>${m.backlogCompanies.length}</span></div>`;
+  const body = m.backlogCompanies.length
     ? `<div class="md-list">` +
       m.backlogCompanies
         .map((c) => {
           const startHref = researchBriefHref(c.id, m.id, meta);
           const companyLink = companyHref(c.id, meta);
           const queueHref = meta.interactive ? "/queue" : null;
+          const facts = [
+            `<span class="match-sig">${iconSvg("refresh", 11)}${escapeHtml(titleizeQueueStage(c.stage))}</span>`,
+            `<span class="md-co-meta">${c.prospectCount} people</span>`,
+            stateDot(c.enrichment, c.enrichmentLabel),
+          ].join("");
+          const actions = [
+            renderAccountLifecycleActions(c, m.id, meta),
+            queueHref ? btn({ variant: "primary", size: "sm", icon: "cpu", label: "Open queue", href: queueHref }) : "",
+            startHref ? btn({ variant: "ghost", size: "sm", icon: "flag", label: "Open brief", href: startHref }) : "",
+          ].join("");
           return (
-            `<div class="md-co">` +
+            `<div class="md-co md-co-backlog">` +
             iconSvg("building", 15, "md-co-ic") +
             `<div class="md-co-id">` +
             `<a class="md-co-name" href="${escapeAttr(companyLink)}">${escapeHtml(c.name)}</a>` +
             `<span class="md-co-sub">${escapeHtml(c.industry)}</span>` +
             `</div>` +
-            `<span class="match-sig">${iconSvg("refresh", 11)}${escapeHtml(titleizeQueueStage(c.stage))}</span>` +
-            `<span class="md-co-meta">${c.prospectCount} people</span>` +
-            stateDot(c.enrichment, c.enrichmentLabel) +
-            renderAccountLifecycleActions(c, m.id, meta) +
-            (queueHref
-              ? btn({ variant: "primary", size: "sm", icon: "cpu", label: "Open queue", href: queueHref })
-              : "") +
-            (startHref ? btn({ variant: "ghost", size: "sm", icon: "flag", label: "Open brief", href: startHref }) : "") +
+            `<div class="md-co-tail">` +
+            `<div class="md-co-facts">${facts}</div>` +
+            `<div class="md-co-actions">${actions}</div>` +
+            `</div>` +
             `</div>`
           );
         })
@@ -1023,32 +1195,49 @@ function renderMatches(m, meta = {}) {
       `</div>`
     : emptyState({ icon: "building", message: "No research backlog is exposed right now." });
 
-  const peopleHead = `<div class="md-section">Matched people <span>${m.people.length}</span></div>`;
-  const peopleBody = m.people.length
+  return head + body;
+}
+
+/**
+ * @param {any} m
+ * @param {{ interactive?: boolean }} [meta]
+ */
+function renderMatchedPeople(m, meta = {}) {
+  const head = `<div class="md-section">Matched people <span>${m.people.length}</span></div>`;
+  const body = m.people.length
     ? `<div class="md-list">` +
       m.people
-        .map(
-          (p) =>
-            `<div class="md-co">` +
+        .map((p) => {
+          const facts = [
+            p.signal
+              ? `<span class="match-sig" title="${escapeAttr(p.signal)}">${iconSvg("activity", 11)}${escapeHtml(truncate(p.signal, 40))}</span>`
+              : "",
+            stateDot(p.branch, p.branchLabel ?? undefined),
+            ownerTag({ ownerName: p.owner }),
+          ].join("");
+          const actions = [
+            renderMotionProspectLifecycleActions(p, m.id, meta),
+            `<a class="md-co-go" href="${escapeAttr(prospectHref(p.id, meta))}" aria-label="Open ${escapeAttr(p.name)}">${iconSvg("chevronR", 13)}</a>`,
+          ].join("");
+          return (
+            `<div class="md-co md-co-person">` +
             avatar({ src: p.avatarUrl, initials: p.initials, name: p.name, size: 30 }) +
             `<div class="md-co-id">` +
             `<a class="md-co-name" href="${escapeAttr(prospectHref(p.id, meta))}">${escapeHtml(p.name)}</a>` +
             `<span class="md-co-sub">${escapeHtml([p.title, p.company].filter(Boolean).join(" · "))}</span>` +
             `</div>` +
-            (p.signal
-              ? `<span class="match-sig" title="${escapeAttr(p.signal)}">${iconSvg("activity", 11)}${escapeHtml(truncate(p.signal, 40))}</span>`
-              : "") +
-            stateDot(p.branch, p.branchLabel ?? undefined) +
-            ownerTag({ ownerName: p.owner }) +
-            renderMotionProspectLifecycleActions(p, m.id, meta) +
-            `<a class="md-co-go" href="${escapeAttr(prospectHref(p.id, meta))}" aria-label="Open ${escapeAttr(p.name)}">${iconSvg("chevronR", 13)}</a>` +
-            `</div>`,
-        )
+            `<div class="md-co-tail">` +
+            `<div class="md-co-facts">${facts}</div>` +
+            `<div class="md-co-actions">${actions}</div>` +
+            `</div>` +
+            `</div>`
+          );
+        })
         .join("") +
       `</div>`
     : emptyState({ icon: "users", message: "No people have lit a signal yet." });
 
-  return divider + coHead + coBody + backlogHead + backlogBody + peopleHead + peopleBody;
+  return head + body;
 }
 
 /**
@@ -1069,7 +1258,7 @@ function renderAccountLifecycleActions(company, motionId, meta = {}) {
     : renderAccountDispositionButton({ motionId, companyId: company.id, disposition: "active", label: "Reactivate", icon: "check", variant: "primary" });
   return (
     `<span class="lifecycle-inline" data-exo-field-scope>` +
-    (active ? `<input class="compose-input lifecycle-reason lifecycle-reason-compact" name="lifecycleReason" placeholder="Reason" autocomplete="off" />` : "") +
+    (active ? `<input class="compose-input lifecycle-reason lifecycle-reason-compact" name="lifecycleReason" placeholder="Reason" autocomplete="off" hidden aria-hidden="true" />` : "") +
     buttons +
     `</span>`
   );
@@ -1100,6 +1289,7 @@ function renderAccountDispositionButton(input) {
     label: input.label,
     title: intent.command,
     fields: input.disposition === "active" ? null : "lifecycleReason:reason",
+    revealField: input.disposition === "active" ? null : { name: "lifecycleReason", placeholder: "Reason" },
   });
 }
 
@@ -1121,7 +1311,7 @@ function renderMotionProspectLifecycleActions(prospect, motionId, meta = {}) {
     : renderMotionProspectDispositionButton({ motionId, companyId: prospect.companyId, prospectId: prospect.id, disposition: "active", label: "Reactivate", icon: "check", variant: "primary" });
   return (
     `<span class="lifecycle-inline" data-exo-field-scope>` +
-    (active ? `<input class="compose-input lifecycle-reason lifecycle-reason-compact" name="lifecycleReason" placeholder="Reason" autocomplete="off" />` : "") +
+    (active ? `<input class="compose-input lifecycle-reason lifecycle-reason-compact" name="lifecycleReason" placeholder="Reason" autocomplete="off" hidden aria-hidden="true" />` : "") +
     buttons +
     `</span>`
   );
@@ -1154,6 +1344,7 @@ function renderMotionProspectDispositionButton(input) {
     label: input.label,
     title: intent.command,
     fields: input.disposition === "active" ? null : "lifecycleReason:reason",
+    revealField: input.disposition === "active" ? null : { name: "lifecycleReason", placeholder: "Reason" },
   });
 }
 
@@ -1210,13 +1401,13 @@ function renderPacketReviewActions(packet, motionId, meta = {}) {
   const returned = buildPacketReviewActionIntent({ motionId, packetId: packet.packetId, action: "returned" });
   return (
     `<span class="packet-review-actions">` +
-    `<input class="compose-input lifecycle-reason lifecycle-reason-compact" name="packetReviewReason" placeholder="Reason or return note" autocomplete="off" />` +
+    `<input class="compose-input lifecycle-reason lifecycle-reason-compact" name="packetReviewReason" placeholder="Reason or return note" autocomplete="off" hidden aria-hidden="true" />` +
     liveActionBtn({ writer: accept.writer, args: accept.args, variant: "primary", size: "sm", icon: "check", label: "Accept", title: accept.command }) +
     `<span class="lifecycle-sep">Amend</span>` +
-    liveActionBtn({ writer: nurture.writer, args: nurture.args, variant: "secondary", size: "sm", icon: "clock", label: "Nurture", title: nurture.command, fields: "packetReviewReason:reason" }) +
-    liveActionBtn({ writer: terminal.writer, args: terminal.args, variant: "danger", size: "sm", icon: "x", label: terminalOutcome === "not_a_fit" ? "Not a fit" : "No longer target", title: terminal.command, fields: "packetReviewReason:reason" }) +
-    liveActionBtn({ writer: exhausted.writer, args: exhausted.args, variant: "ghost", size: "sm", icon: "flag", label: "Exhausted", title: exhausted.command, fields: "packetReviewReason:reason" }) +
-    liveActionBtn({ writer: returned.writer, args: returned.args, variant: "ghost", size: "sm", icon: "refresh", label: "Return", title: returned.command, fields: "packetReviewReason:notes" }) +
+    liveActionBtn({ writer: nurture.writer, args: nurture.args, variant: "secondary", size: "sm", icon: "clock", label: "Nurture", title: nurture.command, fields: "packetReviewReason:reason", revealField: { name: "packetReviewReason", placeholder: "Reason" } }) +
+    liveActionBtn({ writer: terminal.writer, args: terminal.args, variant: "danger", size: "sm", icon: "x", label: terminalOutcome === "not_a_fit" ? "Not a fit" : "No longer target", title: terminal.command, fields: "packetReviewReason:reason", revealField: { name: "packetReviewReason", placeholder: "Reason" } }) +
+    liveActionBtn({ writer: exhausted.writer, args: exhausted.args, variant: "ghost", size: "sm", icon: "flag", label: "Exhausted", title: exhausted.command, fields: "packetReviewReason:reason", revealField: { name: "packetReviewReason", placeholder: "Reason" } }) +
+    liveActionBtn({ writer: returned.writer, args: returned.args, variant: "ghost", size: "sm", icon: "refresh", label: "Return", title: returned.command, fields: "packetReviewReason:notes", revealField: { name: "packetReviewReason", placeholder: "Return note" } }) +
     `</span>`
   );
 }
@@ -1231,6 +1422,7 @@ function normalizeDisposition(value) {
 function renderPlan(m) {
   const head = `<div class="md-section">Motion plan &amp; execution</div>`;
   const gap = m.blocker ? `<div class="rel-gap">${iconSvg("alert", 13)}${escapeHtml(m.blocker)}</div>` : "";
+  const note = renderPlanNote(m);
   const steps = m.plan.nextSteps.length
     ? `<div class="plan-list">` +
       m.plan.nextSteps
@@ -1243,14 +1435,88 @@ function renderPlan(m) {
         .join("") +
       `</div>`
     : "";
+  const packetLabel = m.plan.prospectCount > 0
+    ? `${m.plan.readyToSend} / ${m.plan.prospectCount}`
+    : "0";
   const tiles =
     `<div class="md-stats plan-stats">` +
-    `<div class="md-tile"><b>${m.plan.actionsRun}</b><em>Actions due</em></div>` +
-    `<div class="md-tile"><b>${m.plan.readyToSend}</b><em>Ready to send</em></div>` +
-    `<div class="md-tile"><span class="md-ready">${readinessBar(m.plan.readiness)}<em>${Math.round(m.plan.readiness * 100)}%</em></span><em>Readiness</em></div>` +
-    `<div class="md-tile">${stateDot(m.plan.packet === "ready" ? "ready" : m.plan.packet === "partial" ? "waiting" : "draft", m.plan.packet)}<em>Packet</em></div>` +
+    `<div class="md-tile"><b>${m.plan.actionsRun}</b><em>Due now</em></div>` +
+    `<div class="md-tile"><b>${m.plan.readyToSend}</b><em>Ready now</em></div>` +
+    `<div class="md-tile"><b>${m.plan.drafts}</b><em>Message-ready</em></div>` +
+    `<div class="md-tile md-tile-stage"><b>${escapeHtml(m.plan.stageLabel ?? "Unknown stage")}</b><span class="md-ready">${readinessBar(m.plan.readiness)}<em>${escapeHtml(formatStageLoopPosition(m.plan.stagePosition, m.plan.stageTotal))}</em></span><em>Motion stage</em></div>` +
+    `<div class="md-tile"><b>${escapeHtml(packetLabel)}</b><em>Prospect packets</em></div>` +
     `</div>`;
-  return head + gap + steps + tiles;
+  const facts = renderPlanFacts(m.plan);
+  return head + gap + note + steps + tiles + facts;
+}
+
+/** @param {any} m */
+function renderPlanNote(m) {
+  const lines = [
+    describeStageProgress(m.plan),
+    describeStageConstraint(m),
+    describePacketReadiness(m.plan),
+  ].filter(Boolean);
+  if (!lines.length) return "";
+  return (
+    `<div class="plan-note">` +
+    lines.map((line) => `<p>${escapeHtml(line)}</p>`).join("") +
+    `</div>`
+  );
+}
+
+/** @param {any} plan */
+function renderPlanFacts(plan) {
+  const facts = [];
+  if (plan.drafts > 0) facts.push(`${plan.drafts} message-ready`);
+  if (plan.recentPostReadyCount > 0) facts.push(`${plan.recentPostReadyCount} recent-activity hooks`);
+  if (plan.emailFallbackCount > 0) facts.push(`${plan.emailFallbackCount} email fallbacks`);
+  if (plan.waitingCount > 0) facts.push(`${plan.waitingCount} waiting`);
+  if (plan.reviewCount > 0) facts.push(`${plan.reviewCount} review`);
+  if (!facts.length) return "";
+  return `<div class="plan-facts">${facts.map((fact) => `<span class="match-sig">${escapeHtml(fact)}</span>`).join("")}</div>`;
+}
+
+/** @param {any} plan */
+function describeStageProgress(plan) {
+  const stageLabel = plan.stageLabel ?? "Unknown stage";
+  if (plan.stagePosition && plan.stageTotal) {
+    return `Current stage: ${stageLabel} (${plan.stagePosition} of ${plan.stageTotal} in the targeting loop).`;
+  }
+  return `Current stage: ${stageLabel}.`;
+}
+
+/** @param {any} m */
+function describeStageConstraint(m) {
+  const backlogCount = m.backlogCompanies?.length ?? 0;
+  switch (m.plan.stage) {
+    case "needs-company-research":
+      return backlogCount > 0
+        ? `Why it is still here: ${backlogCount} backlog ${backlogCount === 1 ? "company still needs work" : "companies still need work"} before Exo can move to ${nextStageLabel(m.plan.stage)}.`
+        : `Why it is still here: company research still needs to clear before Exo can move to ${nextStageLabel(m.plan.stage)}.`;
+    case "needs-prospect-selection":
+      return `Why it is still here: company research is in place, but more people still need to be selected before Exo can move to ${nextStageLabel(m.plan.stage)}.`;
+    case "needs-cadence":
+      return `Why it is still here: people are selected, but more branches still need cadence or launch setup before Exo can move to ${nextStageLabel(m.plan.stage)}.`;
+    case "targeting-ready":
+      return "What this means: targeting is in place and execution can focus on ready branches.";
+    default:
+      return "This stage reflects where the motion sits in the targeting loop, not a literal percent complete score.";
+  }
+}
+
+/** @param {any} plan */
+function describePacketReadiness(plan) {
+  if ((plan.prospectCount ?? 0) <= 0) {
+    return "No prospect packets are ready yet because this motion does not have matched people in branch.";
+  }
+  if (plan.packet === "ready") {
+    return `All ${plan.prospectCount} prospect packets are ready to send.`;
+  }
+  if (plan.packet === "partial") {
+    return `Prospect packets are partial because ${plan.readyToSend} of ${plan.prospectCount} people are ready.`;
+  }
+  return `No prospect packets are ready yet because ${plan.readyToSend} of ${plan.prospectCount} people are ready.`;
 }
 
 /** @param {any} activity */
@@ -1267,7 +1533,8 @@ function renderMotionCardActivity(activity) {
 
 /** @param {any} activity */
 function renderActivity(activity) {
-  const head = `<div class="md-section">Motion activity <span>${escapeHtml(String(activity?.touchCount ?? 0))}</span></div>`;
+  const totalEntries = totalActivityEntries(activity);
+  const head = `<div class="md-section">Motion activity <span>${escapeHtml(String(totalEntries))}</span></div>`;
   if (!activity || (!activity.touchCount && !activity.stagedDraftCount)) {
     return head + emptyState({ icon: "activity", message: "No touches or staged drafts are recorded on this motion yet." });
   }
@@ -1285,10 +1552,13 @@ function renderActivity(activity) {
     `<div class="md-tile"><b>${activity.outboundTouchCount}</b><em>Outbound</em></div>` +
     `<div class="md-tile"><b>${activity.stagedDraftCount}</b><em>Staged drafts</em></div>` +
     `</div>`;
+  const recentWindow = activity.events?.length && totalEntries > activity.events.length
+    ? `<p class="activity-subnote">Showing latest ${activity.events.length} of ${totalEntries} recorded items.</p>`
+    : "";
   const timeline = activity.events?.length
     ? `<div class="motion-activity-timeline"><ol class="tl">${activity.events.map(renderActivityEvent).join("")}</ol></div>`
     : "";
-  return head + note + tiles + timeline;
+  return head + note + tiles + recentWindow + timeline;
 }
 
 /** @param {any} event */
@@ -1357,6 +1627,47 @@ function motionActivityLongNote(activity) {
   return `Exo has staged work here, but live engagement has not started yet: ${motionActivityNote(activity)}`;
 }
 
+/** @param {{ stageLabel?: string | null, stagePosition?: number | null, stageTotal?: number | null }} motion */
+function formatMotionStageBadge(motion) {
+  const label = motion.stageLabel ?? "Unknown stage";
+  const position = formatStageLoopPosition(motion.stagePosition, motion.stageTotal);
+  return position ? `${label} · ${position}` : label;
+}
+
+/**
+ * @param {number | null | undefined} position
+ * @param {number | null | undefined} total
+ */
+function formatStageLoopPosition(position, total) {
+  if (position && total) return `${position} of ${total}`;
+  return null;
+}
+
+/** @param {string | null | undefined} stage */
+function nextStageLabel(stage) {
+  switch (stage) {
+    case "needs-motion-definition":
+      return "Company targeting";
+    case "needs-company-targeting":
+      return "Company identity";
+    case "needs-company-identity":
+      return "Company research";
+    case "needs-company-research":
+      return "Prospect selection";
+    case "needs-prospect-selection":
+      return "Cadence setup";
+    case "needs-cadence":
+      return "Targeting ready";
+    default:
+      return "the next stage";
+  }
+}
+
+/** @param {any} activity */
+function totalActivityEntries(activity) {
+  return Number(activity?.totalEventCount ?? ((activity?.touchCount ?? 0) + (activity?.stagedDraftCount ?? 0)));
+}
+
 /** @param {string | null | undefined} status */
 function activityStatusClass(status) {
   if (status === "blocked") return "tl-status-blocked";
@@ -1376,8 +1687,15 @@ function activityStatusLabel(status) {
 /** @param {string | null | undefined} value */
 function formatActivityStamp(value) {
   if (!value) return "unknown";
-  const match = String(value).match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
-  return match ? `${match[1]} ${match[2]}Z` : String(value);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
 }
 
 /** @param {{ generatedAt?: string, regenerateCommand?: string }} meta */

@@ -2826,6 +2826,83 @@ test("users harness probe can discover runtime connectors without attaching them
   }
 });
 
+test("users harness probe treats Codex MCP servers without an explicit enabled flag as available", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-harness-probe-mcp-default-enabled-"));
+  const codexHome = path.join(tempDir, ".codex");
+
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(
+    path.join(codexHome, "config.toml"),
+    [
+      "[mcp_servers.unipile]",
+      'command = "npx"',
+      'args = ["-y", "mcp-remote@latest", "https://developer.unipile.com/mcp?branch=v1.0"]',
+      "",
+      "[mcp_servers.unipile.env]",
+      'UNIPILE_API_KEY = "test-key"',
+      'UNIPILE_DSN = "https://api14.unipile.com:14465"',
+      ""
+    ].join("\n")
+  );
+
+  try {
+    const user = JSON.parse(
+      execFileSync("node", [cliPath, "users", "add", "--label", "runtime-default-enabled-user", "--owner", "william", "--json"], {
+        cwd: tempDir,
+        encoding: "utf8"
+      })
+    );
+
+    execFileSync(
+      "node",
+      [
+        cliPath,
+        "users",
+        "harness",
+        "add",
+        user.id,
+        "--runtime",
+        "codex",
+        "--connector",
+        "unipile",
+        "--status",
+        "unknown",
+        "--json"
+      ],
+      {
+        cwd: tempDir,
+        encoding: "utf8"
+      }
+    );
+
+    const env = {
+      ...process.env,
+      CODEX_HOME: codexHome
+    };
+
+    const probe = JSON.parse(
+      execFileSync(
+        "node",
+        [cliPath, "users", "harness", "probe", user.id, "--runtime", "codex", "--json"],
+        {
+          cwd: tempDir,
+          encoding: "utf8",
+          env
+        }
+      )
+    );
+
+    assert.equal(probe.counts.connectionCount, 1);
+    assert.equal(probe.counts.availableCount, 1);
+    assert.equal(probe.counts.unknownCount, 0);
+    assert.equal(probe.probes[0].connector, "unipile");
+    assert.equal(probe.probes[0].detectedStatus, "available");
+    assert.match(probe.probes[0].reason, /MCP server unipile is enabled/i);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("users working-hours can be configured and shown", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "exo-users-working-hours-"));
 

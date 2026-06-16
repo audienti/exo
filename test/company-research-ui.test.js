@@ -85,7 +85,20 @@ test("company and motion surfaces expose a start research button and research br
       prospects: [],
       motions: [motionWithBacklog],
     });
-    const companyHtml = renderCompanyDetailPage(companyModel, { interactive: true });
+    const userMeta = {
+      id: user.id,
+      label: user.label,
+      gmailOptions: [
+        { ref: "gmail:research@audienti.com", handle: "research@audienti.com", label: "research@audienti.com" },
+        { ref: "gmail:research@knitit.ai", handle: "research@knitit.ai", label: "research@knitit.ai (unipile)" },
+      ],
+    };
+    const companyHtml = renderCompanyDetailPage(companyModel, { interactive: true, user: userMeta });
+    assert.match(companyHtml, /who can work this company/i);
+    assert.match(companyHtml, /No user is assigned to this company yet\./);
+    assert.match(companyHtml, /Exact Gmail inbox/i);
+    assert.match(companyHtml, /data-exo-writer="assignCompanyUser"/);
+    assert.match(companyHtml, /data-exo-fields="accountRef:accountRef\?"/);
     assert.match(companyHtml, /Open queue/);
     assert.match(companyHtml, /Open brief/);
     assert.match(companyHtml, new RegExp(`href="\\/companies\\/${company.id}\\/research-brief\\/${motion.id}"`));
@@ -145,11 +158,44 @@ test("company and motion surfaces expose a start research button and research br
               queueStatus: "discovered",
             },
           ],
-          people: [],
+          people: [
+            {
+              companyId: company.id,
+              companyName: company.name,
+              prospectId: "prospect-1",
+              name: "Alex Backlog",
+              title: "VP Sales",
+              ownerLabel: user.label,
+              signalLabel: "New VP Sales role now owns pipeline design pressure.",
+              signalQuestion: "Is there recent evidence a new revenue leader now owns that pressure?",
+              branchState: {
+                key: "ready",
+                label: "Ready",
+              },
+            },
+            {
+              companyId: company.id,
+              companyName: company.name,
+              prospectId: "prospect-2",
+              name: "Morgan Queue",
+              title: "CRO",
+              ownerLabel: user.label,
+              signalLabel: "Pipeline design changes are now being owned by the CRO.",
+              signalQuestion: "Is there recent evidence this company is changing how pipeline is built?",
+              branchState: {
+                key: "waiting",
+                label: "Waiting",
+              },
+            },
+          ],
           plan: {
             nextSteps: [],
-            dueNowCount: 0,
-            readyToSendCount: 0,
+            dueNowCount: 1,
+            waitingCount: 1,
+            readyToSendCount: 1,
+            messageTestReadyCount: 2,
+            companyCount: 1,
+            prospectCount: 2,
           },
         },
       ],
@@ -157,19 +203,31 @@ test("company and motion surfaces expose a start research button and research br
     const motionHtml = renderMotionDetailPage(motionsModel.details[0], { interactive: true });
     assert.match(motionHtml, new RegExp(`href="\\/motions\\/${motion.id}\\/settings"`));
     assert.match(motionHtml, /Audience hypotheses/);
+    assert.match(motionHtml, new RegExp(`data-tabset="motion-workviews-${motion.id}"`));
+    assert.match(motionHtml, new RegExp(`role="tab"[^>]*data-tab-target="motion-${motion.id}-companies"`));
+    assert.match(motionHtml, new RegExp(`role="tab"[^>]*data-tab-target="motion-${motion.id}-backlog"`));
+    assert.match(motionHtml, new RegExp(`role="tab"[^>]*data-tab-target="motion-${motion.id}-people"`));
+    assert.match(motionHtml, new RegExp(`role="tab"[^>]*data-tab-target="motion-${motion.id}-activity"`));
+    assert.match(motionHtml, new RegExp(`role="tab"[^>]*data-tab-target="motion-${motion.id}-execution"`));
+    assert.match(motionHtml, new RegExp(`role="tabpanel"[^>]*data-tab-panel="motion-${motion.id}-backlog"`));
     assert.match(motionHtml, /Research backlog/);
     assert.match(motionHtml, /Open queue/);
     assert.match(motionHtml, /Open brief/);
     assert.match(motionHtml, new RegExp(`href="\\/companies\\/${company.id}\\/research-brief\\/${motion.id}"`));
-    assert.ok(motionHtml.indexOf("Audience hypotheses") < motionHtml.indexOf("Matched companies"));
-    assert.ok(motionHtml.indexOf("Matched companies") < motionHtml.indexOf("Matched people"));
+    assert.match(motionHtml, /Message-ready/);
+    assert.match(motionHtml, /Prospect packets/);
+    assert.match(motionHtml, /Motion stage/);
+    assert.match(motionHtml, /Company research/);
+    assert.match(motionHtml, /4 of 7/);
+    assert.match(motionHtml, /1 of 2 people are ready/);
+    assert.doesNotMatch(motionHtml, /Stage readiness/);
     assert.doesNotMatch(motionHtml, /PREMISE · WHY THIS OFFER MATTERS HERE/);
     assert.doesNotMatch(motionHtml, /Set live/i);
     assert.doesNotMatch(motionHtml, /data-exo-writer="restartMotion"/);
 
     const settingsHtml = renderMotionSettingsPage(motionsModel.details[0], {
       interactive: true,
-      user: { id: user.id, label: user.label },
+      user: userMeta,
     });
     assert.match(settingsHtml, /role="tablist"/);
     assert.match(settingsHtml, /role="tab"[^>]*data-tab-target="premise"/);
@@ -190,7 +248,9 @@ test("company and motion surfaces expose a start research button and research br
     assert.match(settingsHtml, /data-exo-writer="removeMotionSignal"/);
     assert.match(settingsHtml, /who can launch this motion/i);
     assert.match(settingsHtml, /No user is assigned to this motion yet\./);
+    assert.match(settingsHtml, /Exact Gmail inbox/i);
     assert.match(settingsHtml, /data-exo-writer="assignMotionUser"/);
+    assert.match(settingsHtml, /data-exo-fields="accountRef:accountRef\?"/);
     assert.match(settingsHtml, /Delete motion/i);
     assert.match(settingsHtml, /data-exo-writer="deleteMotion"/);
     assert.match(settingsHtml, /Prospects will move into the transition backlog/i);
@@ -209,7 +269,8 @@ test("company and motion surfaces expose a start research button and research br
     assert.match(briefHtml, /Back to company/);
     assert.match(briefHtml, /Open queue/);
     assert.match(briefHtml, /Agent queue/);
-    assert.match(briefHtml, /View governed brief details/);
+    assert.match(briefHtml, /Premise/);
+    assert.match(briefHtml, /Brief details/);
     assert.match(briefHtml, new RegExp(`href="\\/companies\\/${company.id}"`));
     assert.match(briefHtml, new RegExp(`href="\\/motions\\/${motion.id}"`));
     assert.match(briefHtml, /Start on the company site at https:\/\/backlogco\.example/);

@@ -7,11 +7,14 @@ import { isAutonomousSendReadyDraft } from "../lib/draft-policy.js";
 import { buildUserInboundSyncView, hasMixedInboundBaseline } from "./user-inbound-sync.js";
 import { CONNECTION_REQUEST_RECONCILIATION_REQUIRED_REASON } from "./connection-request-reconciliation.js";
 import {
+  buildInboundObservationLinkContext,
+  resolveInboundObservationLinks,
+} from "./resolve-inbound-observation-links.js";
+import {
   classifyPrivateInboundMessage,
   describePrivateInboundResponse,
 } from "./private-inbound-message-classification.js";
 import { buildPacketReviewView } from "./build-packet-review-view.js";
-import { resolveInboundObservationLinks } from "./resolve-inbound-observation-links.js";
 
 /**
  * @param {unknown} rawUser
@@ -37,22 +40,11 @@ export function buildInboxView(rawUser, rawObservations, rawMotions, rawCompanie
       .filter((item) => item && typeof item === "object" && !Array.isArray(item))
       .map((item) => [item.id, item])
   );
-  const prospectContextById = new Map();
-
-  for (const motion of motions) {
-    for (const account of motion.targetMap.accounts) {
-      for (const prospect of account.prospects) {
-        prospectContextById.set(prospect.id, {
-          motion,
-          account,
-          prospect
-        });
-      }
-    }
-  }
+  const linkContext = buildInboundObservationLinkContext(motions);
+  const prospectContextById = linkContext.prospectContextById;
 
   const items = observations
-    .map((observation) => buildInboxItem(observation, motions, companiesById, prospectContextById))
+    .map((observation) => buildInboxItem(observation, motions, companiesById, prospectContextById, linkContext))
     .sort(compareInboxItems);
   const packetReview = buildPacketReviewView(motions, rawCompanies, {
     now: options.now ?? null,
@@ -177,9 +169,10 @@ export function isPrivateModeAggregateProfileViewObservation(observation) {
  * @param {import("../schema/motion.js").motionSchema._type[]} motions
  * @param {Map<string, any>} companiesById
  * @param {Map<string, { motion: import("../schema/motion.js").motionSchema._type, account: any, prospect: any }>} prospectContextById
+ * @param {ReturnType<typeof buildInboundObservationLinkContext>} linkContext
  */
-function buildInboxItem(observation, motions, companiesById, prospectContextById) {
-  const workspaceContext = resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById);
+function buildInboxItem(observation, motions, companiesById, prospectContextById, linkContext) {
+  const workspaceContext = resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById, linkContext);
   const { claimState, motion, account, company, prospect } = workspaceContext;
   const messageContext = classifyPrivateInboundMessage(observation);
   if (claimState === "claimed_elsewhere") {
@@ -234,19 +227,23 @@ function buildInboxItem(observation, motions, companiesById, prospectContextById
  * @param {import("../schema/motion.js").motionSchema._type[]} motions
  * @param {Map<string, any>} companiesById
  * @param {Map<string, { motion: import("../schema/motion.js").motionSchema._type, account: any, prospect: any }>} prospectContextById
+ * @param {ReturnType<typeof buildInboundObservationLinkContext> | null} [linkContext]
  */
-export function resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById) {
+export function resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById, linkContext = null) {
   const inferredLinks = shouldInferInboundLinks(observation)
-    ? resolveInboundObservationLinks(motions, observation)
+    ? resolveInboundObservationLinks(motions, observation, linkContext)
     : null;
   const motionId = observation.motionId ?? inferredLinks?.motionId ?? null;
   const companyId = observation.companyId ?? inferredLinks?.companyId ?? null;
   const prospectId = observation.prospectId ?? inferredLinks?.prospectId ?? null;
-  const prospectContext = prospectId ? prospectContextById.get(prospectId) ?? null : null;
+  const resolvedProspectContextById = linkContext?.prospectContextById ?? prospectContextById;
+  const prospectContext = prospectId ? resolvedProspectContextById.get(prospectId) ?? null : null;
   const motion = motionId
-    ? motions.find((candidate) => candidate.id === motionId) ?? prospectContext?.motion ?? null
+    ? linkContext?.motionById?.get(motionId) ?? motions.find((candidate) => candidate.id === motionId) ?? prospectContext?.motion ?? null
     : prospectContext?.motion ?? null;
-  const account = prospectContext?.account ?? (motion && companyId
+  const account = prospectContext?.account ?? ((motionId && companyId)
+    ? linkContext?.accountByMotionCompanyKey?.get(`${motionId}:${companyId}`) ?? null
+    : null) ?? (motion && companyId
     ? motion.targetMap.accounts.find((candidate) => candidate.companyId === companyId) ?? null
     : null);
   const company = companyId

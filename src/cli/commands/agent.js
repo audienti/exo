@@ -25,12 +25,13 @@ import {
   listUsers,
 } from "../../db/database.js";
 import { getHomeStateDir } from "../../db/paths.js";
-import { createTaskVerificationFingerprint, getCanaryCooldown, getRecentTaskVerification, getSendCircuitBreaker, listActiveBrowserBackoffs, pruneExpiredBrowserBackoffs } from "../../lib/agent-host-state.js";
+import { createTaskVerificationFingerprint, getCanaryCooldown, getRecentTaskVerification, getSendCircuitBreaker, listActiveBrowserBackoffs, pruneInactiveTaskLeases } from "../../lib/agent-host-state.js";
 import { releaseAgentRunLock, tryAcquireAgentRunLock } from "../../lib/agent-run-lock.js";
 import { AGENT_EXECUTION_LANES, normalizeAgentExecutionLane } from "../../lib/agent-task-lanes.js";
 import { mergeLanePassSummaries, writeAgentPassSummary } from "../../lib/agent-pass-summary.js";
 import { buildPreflightSummary } from "../../lib/agent-preflight.js";
 import { buildLaunchAgentLabel, buildRoutinePlan, ROUTINE_ARTIFACT_VERSION } from "../../lib/agent-routine.js";
+import { requiresSendVerification } from "../../lib/agent-send-verification.js";
 import { buildMotionPacketSummary } from "../../lib/motion-packets.js";
 import { runCliRepairableContract } from "../repairable-contracts.js";
 
@@ -384,6 +385,7 @@ invites. Nothing in this queue needs operator input.
     .requiredOption("--prospect <prospect-id>", "Prospect to message")
     .option("--surface <surface>", "Which send-ready draft surface to send (defaults to the single send-ready draft)")
     .option("--runtime <runtime>", "Runtime driving this send: codex | claude (the contract is runtime-agnostic)", "any")
+    .option("--ignore-dispatch-gate", "Bypass pacing/window gating when building a proof-only send contract")
     .option("--json", "Emit machine-readable JSON")
     .action((companyId, options) => {
       const motion = findMotionById(options.motion);
@@ -397,6 +399,7 @@ invites. Nothing in this queue needs operator input.
         runtime: options.runtime ?? "codex",
         branches: listAgentQueueProspectBranches(),
         now: new Date().toISOString(),
+        ignoreDispatchGate: Boolean(options.ignoreDispatchGate),
       });
       if (options.json) {
         console.log(JSON.stringify(handoff, null, 2));
@@ -485,7 +488,7 @@ invites. Nothing in this queue needs operator input.
         currentInstalledSendMode: existingRoutine?.sendMode ?? null,
         intervalLabel: plan.interval.label,
         queue: hasExistingStateStore ? loadAgentQueue() : { tasks: [] },
-        hostState: pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json"))),
+        hostState: pruneInactiveTaskLeases(readJsonIfExists(path.join(stateDir, "agent-host-state.json")), { stateDir }),
         automationWarnings,
         automationHealthWarnings,
       });
@@ -682,8 +685,9 @@ invites. Nothing in this queue needs operator input.
         console.log(`  - the '${plan.runtime}' CLI installed and authenticated`);
       }
       if (plan.sendMode === "verify") {
-        console.log("  - verification-only send mode is enabled for agent-authored sends, so those tasks will stop at ready_to_send until you switch modes");
-        console.log("  - operator-authored, edited, or approved drafts still count as explicit send authorization and can send live");
+        console.log("  - review-only send mode is enabled for unreviewed outbound copy, so those copy tasks stop at ready_to_send until you switch modes");
+        console.log("  - operator-authored, edited, or approved copy still counts as explicit send authorization and can send live");
+        console.log("  - retrieval, maintenance, public reactions, and other non-copy actions are not limited by review-only mode");
       } else if (plan.sendMode === "canary") {
         console.log("  - canary send mode is enabled, so each pass will send at most one previously verified send, or prove one new send-ready task");
       }
@@ -953,7 +957,7 @@ function sleep(ms) {
 
 function buildAgentQueueInput() {
   const stateDir = getHomeStateDir();
-  const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")));
+  const hostState = pruneInactiveTaskLeases(readJsonIfExists(path.join(stateDir, "agent-host-state.json")), { stateDir });
   return {
     motions: listMotions(),
     companies: listCompanies(),
@@ -968,7 +972,7 @@ function buildAgentQueueInput() {
 
 function buildAgentStatusInput() {
   const stateDir = getHomeStateDir();
-  const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")));
+  const hostState = pruneInactiveTaskLeases(readJsonIfExists(path.join(stateDir, "agent-host-state.json")), { stateDir });
   const users = listUsers();
   return {
     stateDir,
@@ -995,7 +999,7 @@ function loadAgentQueue() {
 function buildAgentDoctorReport() {
   const stateDir = getHomeStateDir();
   const queueModel = loadAgentQueue();
-  const hostState = pruneExpiredBrowserBackoffs(readJsonIfExists(path.join(stateDir, "agent-host-state.json")));
+  const hostState = pruneInactiveTaskLeases(readJsonIfExists(path.join(stateDir, "agent-host-state.json")), { stateDir });
   const preflight = buildPreflightSummary({
     stateDir,
     codexHome: process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"),
@@ -1120,7 +1124,7 @@ export function formatAgentDoctorReport(report) {
   }
   if (routine?.exists) {
     if (routine.sendMode === "verify") {
-      lines.push("Send mode: verify. Agent-authored sends stop at ready_to_send, but operator-authored, edited, or approved drafts can still send live.");
+      lines.push("Send mode: verify. Unreviewed outbound copy stops at ready_to_send, but operator-authored, edited, or approved copy, non-copy actions, and retrieval can still run live.");
     } else if (routine.sendMode === "canary") {
       lines.push("Send mode: canary. Each pass may send at most one previously verified send. Unverified due sends stop at ready_to_send first.");
     } else if (routine.sendMode === "live") {
@@ -1986,7 +1990,8 @@ function buildRoutineInstallReadiness(input) {
   }
 
   const dueSendTasks = input.queue.tasks.filter((task) => task.kind === "send_message");
-  const unverifiedDueSendCount = dueSendTasks.filter((task) => !getRecentTaskVerification(
+  const verificationRequiredDueSendTasks = dueSendTasks.filter((task) => requiresSendVerification(task));
+  const unverifiedDueSendCount = verificationRequiredDueSendTasks.filter((task) => !getRecentTaskVerification(
     input.hostState,
     task.kind,
     createTaskVerificationFingerprint(task),
@@ -2092,13 +2097,14 @@ export function buildSchedulerCadenceSummary(scheduler, lastPass, checkedAt) {
  */
 function buildAgentSendRolloutSummary(queue, hostState, routine, scheduler, automationWarnings = [], automationHealthWarnings = []) {
   const dueSendTasks = queue.tasks.filter((task) => task.kind === "send_message");
+  const verificationRequiredDueSendTasks = dueSendTasks.filter((task) => requiresSendVerification(task));
   const now = new Date().toISOString();
   const sendCircuitBreaker = getSendCircuitBreaker(hostState, now);
   const canaryCooldown = getCanaryCooldown(hostState, now);
   const verified = [];
   const unverified = [];
 
-  for (const task of dueSendTasks) {
+  for (const task of verificationRequiredDueSendTasks) {
     const verification = getRecentTaskVerification(
       hostState,
       task.kind,
@@ -2135,7 +2141,7 @@ function buildAgentSendRolloutSummary(queue, hostState, routine, scheduler, auto
     automationHealthWarnings,
     sendCircuitBreaker,
     canaryCooldown,
-    dueSendCount: dueSendTasks.length,
+    dueSendCount: verificationRequiredDueSendTasks.length,
     verifiedDueSendCount: verified.length,
     unverifiedDueSendCount: unverified.length,
     nextCanaryCandidate: verified[0] ?? null,
@@ -2143,10 +2149,10 @@ function buildAgentSendRolloutSummary(queue, hostState, routine, scheduler, auto
 
   return {
     sendMode: routine?.sendMode ?? null,
-    dueSendCount: dueSendTasks.length,
+    dueSendCount: verificationRequiredDueSendTasks.length,
     verifiedDueSendCount: verified.length,
     unverifiedDueSendCount: unverified.length,
-    allDueSendsVerified: dueSendTasks.length > 0 && unverified.length === 0,
+    allDueSendsVerified: verificationRequiredDueSendTasks.length > 0 && unverified.length === 0,
     nextCanaryCandidate: verified[0] ?? null,
     nextVerifyCandidate: unverified[0] ?? null,
     verifiedDueSends: verified,

@@ -529,6 +529,10 @@ function readCodexConfigSummary(configPath) {
     const mcpMatch = line.match(/^\[mcp_servers\.([^.]+)\]$/);
     if (mcpMatch) {
       currentSection = { kind: "mcp", name: mcpMatch[1] };
+      mcpServers.set(currentSection.name.toLowerCase(), {
+        serverName: currentSection.name,
+        enabled: true
+      });
       continue;
     }
 

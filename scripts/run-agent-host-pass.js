@@ -12,6 +12,7 @@ import { buildStalePacketReviewWarnings } from "../src/core/build-stale-packet-r
 import {
   applyInboundIdentityResolutionResult,
   buildInboundIdentityResolutionCompanyProfile,
+  computeInboundIdentityResolutionDueAt,
   needsInboundIdentityResolution,
   resolveManagedLinkedinAccount,
 } from "../src/core/inbound-identity-resolution.js";
@@ -86,6 +87,16 @@ import { extractLinkedinPublicId } from "../src/lib/prospect-contacts.js";
 import { readUnipileConfig } from "../src/lib/unipile-config.js";
 import { withAgentHostStateLock } from "../src/lib/agent-host-state-lock.js";
 import { writeAgentPassSummary } from "../src/lib/agent-pass-summary.js";
+import {
+  getEffectiveAgentResultStatus,
+  summarizeEffectivePassReason,
+  summarizeEffectivePassStatus,
+} from "../src/lib/agent-result-status.js";
+import {
+  isAutonomousLiveSendAllowedInVerifyMode,
+  isOperatorControlledSendTask,
+  requiresSendVerification,
+} from "../src/lib/agent-send-verification.js";
 
 const CODEX_BIN = process.env.EXO_CODEX_BIN || "/Applications/Codex.app/Contents/Resources/codex";
 const ROOT = process.cwd();
@@ -102,6 +113,7 @@ const TEMP_ROOT = path.join(STATE_DIR, "automation-tmp");
 const MAX_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_TASKS, 1000);
 const MAX_MAINTENANCE_TASKS_PER_PASS = normalizePositiveInteger(process.env.EXO_AGENT_MAX_MAINTENANCE_TASKS, 25);
 const STANDARD_PASS_BUDGET_MS = normalizePositiveInteger(process.env.EXO_AGENT_STANDARD_PASS_BUDGET_MS, 14 * 60 * 1000);
+const STANDARD_TASK_START_RESERVE_MS = normalizePositiveInteger(process.env.EXO_AGENT_STANDARD_TASK_START_RESERVE_MS, 5 * 60 * 1000);
 // After this many non-backfill standard tasks, the pass prefers one full-sync
 // backfill slice so backfill keeps progressing even when motion work would
 // otherwise fill the whole pass budget (and vice versa: rank ordering keeps
@@ -327,7 +339,8 @@ function runUnlockedAgentHostPass() {
         hostState = mutateHostState((state) => releaseCheckedOutTask(state, executableTask));
       }
       results.push(result);
-      if (result.status === "failed" || result.status === "blocked") {
+      const effectiveResultStatus = getEffectiveAgentResultStatus(result);
+      if (effectiveResultStatus === "failed" || effectiveResultStatus === "blocked") {
         failedTaskFingerprints.add(createTaskLeaseFingerprint(executableTask));
       }
       if (shouldRecordMotionTaskRun(executableTask)) {
@@ -549,7 +562,9 @@ export function shouldStopAfterTaskResult(task, result) {
 /**
  * Retrieval failures should not monopolize the whole host pass. A single flaky
  * inbound surface can fail while other governed work still completes safely in
- * the same pass. Send and maintenance failures still stop the pass.
+ * the same pass. Connector send timeouts are also allowed to continue so the
+ * send circuit breaker can trip inside this pass instead of waiting for another
+ * scheduled cadence. Other send and maintenance failures still stop the pass.
  *
  * @param {any} task
  * @param {any} result
@@ -563,7 +578,21 @@ export function shouldAbortPassAfterTaskProblem(task, result) {
     return false;
   }
 
+  if (task?.kind === "send_message" && isCodexTaskTimeoutResult(result)) {
+    return false;
+  }
+
   return task?.kind !== "run_inbound_sync" && task?.kind !== "resolve_inbound_identity";
+}
+
+/** @param {any} result */
+export function isCodexTaskTimeoutResult(result) {
+  const status = getEffectiveAgentResultStatus(result);
+  if (status !== "failed" && status !== "blocked") {
+    return false;
+  }
+  const reason = normalizeNullableString(result?.detail?.reason) ?? "";
+  return /Codex task failed: .*ETIMEDOUT/i.test(reason);
 }
 
 /**
@@ -579,6 +608,12 @@ export function isProspectScopedBlockedSendResult(task, result) {
     return false;
   }
 
+  const reasonCode = normalizeNullableString(result?.detail?.reasonCode)?.toLowerCase() ?? "";
+  const blockReason = normalizeNullableString(result?.detail?.blockReason)?.toLowerCase() ?? "";
+  if (reasonCode === "gmail_exact_inbox_required" || blockReason === "gmail_exact_inbox_required") {
+    return true;
+  }
+
   const dispatchGateStatus = normalizeNullableString(result?.detail?.dispatchGate?.status)?.toLowerCase() ?? null;
   if (dispatchGateStatus === "block" || dispatchGateStatus === "wait") {
     return true;
@@ -591,7 +626,8 @@ export function isProspectScopedBlockedSendResult(task, result) {
 
   return reason.includes("already pending")
     || reason.includes("already connected")
-    || reason.includes("connection request is already pending");
+    || reason.includes("connection request is already pending")
+    || (reason.includes("multiple gmail inboxes are mapped") && reason.includes("pick one exact inbox"));
 }
 
 /**
@@ -633,7 +669,7 @@ export function isBrowserMaintenanceTaskKind(taskKind) {
  * @param {Array<Record<string, any>>} results
  * @param {number} standardTaskCount
  * @param {number} maintenanceTaskCount
- * @param {{ elapsedMs?: number | null, standardPassBudgetMs?: number | null }} [options]
+ * @param {{ elapsedMs?: number | null, standardPassBudgetMs?: number | null, standardTaskStartReserveMs?: number | null }} [options]
  */
 export function canRunTaskInCurrentPass(taskKind, results, standardTaskCount, maintenanceTaskCount, options = {}) {
   const maintenanceTask = isBrowserMaintenanceTaskKind(taskKind);
@@ -647,6 +683,9 @@ export function canRunTaskInCurrentPass(taskKind, results, standardTaskCount, ma
   const standardPassBudgetMs = Number.isFinite(options?.standardPassBudgetMs)
     ? Math.max(0, Number(options.standardPassBudgetMs))
     : STANDARD_PASS_BUDGET_MS;
+  const standardTaskStartReserveMs = Number.isFinite(options?.standardTaskStartReserveMs)
+    ? Math.max(0, Number(options.standardTaskStartReserveMs))
+    : STANDARD_TASK_START_RESERVE_MS;
 
   if (maintenanceTask) {
     if (passHasNonMaintenanceWork || maintenanceTaskCount >= MAX_MAINTENANCE_TASKS_PER_PASS) {
@@ -658,6 +697,11 @@ export function canRunTaskInCurrentPass(taskKind, results, standardTaskCount, ma
     return true;
   }
   if (elapsedMs >= standardPassBudgetMs) {
+    return false;
+  }
+  const remainingPassMs = standardPassBudgetMs - elapsedMs;
+  const requiredStartReserveMs = Math.min(standardTaskStartReserveMs, standardPassBudgetMs);
+  if (remainingPassMs < requiredStartReserveMs) {
     return false;
   }
   return !passHasMaintenanceWork && standardTaskCount < MAX_TASKS_PER_PASS;
@@ -707,46 +751,16 @@ function shouldRecordMotionTaskRun(task) {
 }
 
 /**
- * @param {{ tasks?: any[], blockers?: any[], dueTaskCount?: number | null, blockerCount?: number | null } | null | undefined} queue
- */
-function hasRemainingDueBacklog(queue) {
-  if (!queue || typeof queue !== "object") return false;
-  const dueTaskCount = Number.isFinite(queue.dueTaskCount) ? Number(queue.dueTaskCount) : null;
-  if (dueTaskCount !== null) return dueTaskCount > 0;
-  const blockerCount = Number.isFinite(queue.blockerCount) ? Number(queue.blockerCount) : null;
-  if (blockerCount !== null && blockerCount > 0) return true;
-  return (Array.isArray(queue.tasks) && queue.tasks.length > 0)
-    || (Array.isArray(queue.blockers) && queue.blockers.length > 0);
-}
-
-/**
  * @param {any[]} results
  * @param {{ tasks?: any[], blockers?: any[], dueTaskCount?: number | null, blockerCount?: number | null } | null | undefined} [finalQueue]
  */
 export function summarizePassStatus(results, finalQueue = null) {
-  if (!Array.isArray(results) || results.length === 0) {
-    return "noop";
-  }
-  if (results.some((result) => result?.status === "failed")) {
-    return "failed";
-  }
-  if (results.some((result) => result?.status === "blocked")) {
-    return "blocked";
-  }
-  if (results.every((result) => result?.status === "completed" || result?.status === "discarded")) {
-    if (hasRemainingDueBacklog(finalQueue)) {
-      return "partial";
-    }
-    return "completed";
-  }
-  return "mixed";
+  return summarizeEffectivePassStatus(results, finalQueue);
 }
 
 /** @param {any[]} results */
 export function summarizePassReason(results) {
-  if (!Array.isArray(results) || results.length === 0) return null;
-  const firstProblem = results.find((result) => result?.status === "failed" || result?.status === "blocked");
-  return firstProblem?.detail?.reason ?? null;
+  return summarizeEffectivePassReason(results);
 }
 
 /** @param {string | null | undefined} taskKind */
@@ -770,6 +784,32 @@ export function buildBlockedCodexTaskResult(error, detail = {}) {
     detail: {
       ...detail,
       reason,
+    },
+  };
+}
+
+/**
+ * Identity-resolution retries already land a future due time back into the
+ * governed observation state. Surface that as waiting so one timed-out or
+ * temporarily blocked resolution does not poison the whole transport pass.
+ *
+ * @param {Record<string, any>} detail
+ * @param {string | null | undefined} nextDueAt
+ */
+export function buildWaitingInboundIdentityResolutionResult(detail, nextDueAt) {
+  const normalizedNextDueAt = normalizeNullableString(nextDueAt);
+  if (!normalizedNextDueAt) {
+    return {
+      status: "blocked",
+      detail,
+    };
+  }
+  return {
+    status: "waiting",
+    detail: {
+      ...detail,
+      waitingReason: "identity_retry_backoff",
+      nextDueAt: normalizedNextDueAt,
     },
   };
 }
@@ -909,16 +949,27 @@ function buildTaskCheckoutSubject(task) {
 }
 
 /** @param {any} task */
-function isOperatorControlledSendTask(task) {
-  if (task?.kind !== "send_message") return false;
-  return task?.authoredBy === "operator"
-    || task?.editedByOperator === true
-    || task?.approvedByOperator === true;
+function shouldBypassAutomationRolloutGate(task) {
+  return isOperatorControlledSendTask(task);
 }
 
 /** @param {any} task */
-function shouldBypassAutomationRolloutGate(task) {
-  return isOperatorControlledSendTask(task);
+export function isInboundAutomationRolloutGatedSendTask(task) {
+  if (task?.kind !== "send_message") return false;
+  if (shouldBypassAutomationRolloutGate(task)) return false;
+  if (!requiresSendVerification(task)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * @param {{ tasks?: any[] } | null | undefined} queue
+ * @param {{ passLane?: "standard" | "maintenance" | null }} [passState]
+ */
+function hasRolloutGatedDueSendTask(queue, passState = {}) {
+  return (Array.isArray(queue?.tasks) ? queue.tasks : []).some((task) =>
+    taskMatchesPassLane(task, passState) && isInboundAutomationRolloutGatedSendTask(task));
 }
 
 /**
@@ -960,7 +1011,8 @@ export function chooseNextQueueTask(
   // task (operator must disable the surface), so they are not promoted.
   const healthGatePromotesRetrieval = Boolean(automationBlockReason)
     && Array.isArray(automationHealthWarnings)
-    && automationHealthWarnings.length > 0;
+    && automationHealthWarnings.length > 0
+    && hasRolloutGatedDueSendTask(queue, passState);
   const effectiveForceRetrieval = forceRetrieval || healthGatePromotesRetrieval;
   const orderedTasks = getQueueTasksForExecution(queue, effectiveForceRetrieval, hostState, now);
   const candidateTasks = shouldPreferBackfillSlice(passState)
@@ -1006,19 +1058,20 @@ export function chooseNextQueueTask(
 
     if (verifyModePrefersRetrievalRecovery
       && task.kind !== "run_inbound_sync"
-      && !isOperatorControlledSendTask(task)) {
+      && requiresSendVerification(task)) {
       continue;
     }
 
     if (task.kind === "send_message") {
       const operatorControlled = isOperatorControlledSendTask(task);
-      if (verifyModePrefersRetrievalRecovery && !operatorControlled) {
+      const verifyLiveAllowed = operatorControlled || isAutonomousLiveSendAllowedInVerifyMode(task);
+      if (verifyModePrefersRetrievalRecovery && !verifyLiveAllowed) {
         continue;
       }
-      if (automationBlockReason && !operatorControlled) {
+      if (automationBlockReason && isInboundAutomationRolloutGatedSendTask(task)) {
         continue;
       }
-      if ((sendMode !== "verify" || operatorControlled) && sendCircuitBreaker.active) {
+      if ((sendMode !== "verify" || verifyLiveAllowed) && sendCircuitBreaker.active) {
         continue;
       }
       const verification = getRecentTaskVerification(
@@ -1035,6 +1088,15 @@ export function chooseNextQueueTask(
           return {
             ...task,
             _selectedSendMode: "operator_live",
+            _recentVerification: verification ?? null,
+          };
+        }
+        if (isAutonomousLiveSendAllowedInVerifyMode(task)) {
+          // Public reactions do not send generated message copy, so review-only
+          // mode can execute them while still proving unreviewed outbound copy.
+          return {
+            ...task,
+            _selectedSendMode: "live",
             _recentVerification: verification ?? null,
           };
         }
@@ -1074,9 +1136,6 @@ export function chooseNextQueueTask(
       };
     }
 
-    if (verifyFallback) {
-      return verifyFallback;
-    }
     return task;
   }
 
@@ -1340,11 +1399,11 @@ export function explainNoopPass(
   const sendTasks = tasks.filter((task) => task.kind === "send_message");
   if (sendTasks.length > 0) {
     const automationBlockReason = getInboundAutomationRolloutBlockReason(automationWarnings, sendMode, automationHealthWarnings);
-    const rolloutGatedSendTasks = sendTasks.filter((task) => !shouldBypassAutomationRolloutGate(task));
+    const rolloutGatedSendTasks = sendTasks.filter((task) => isInboundAutomationRolloutGatedSendTask(task));
     if (automationBlockReason && rolloutGatedSendTasks.length > 0) {
       return automationBlockReason;
     }
-    const verificationRequiredSendTasks = sendTasks.filter((task) => !isOperatorControlledSendTask(task));
+    const verificationRequiredSendTasks = sendTasks.filter((task) => requiresSendVerification(task));
     const verifiedSendTasks = verificationRequiredSendTasks.filter((task) => getRecentTaskVerification(
       hostState,
       task.kind,
@@ -1354,7 +1413,7 @@ export function explainNoopPass(
     if (sendMode === "verify"
       && verificationRequiredSendTasks.length > 0
       && verifiedSendTasks.length === verificationRequiredSendTasks.length) {
-      return "Verify mode had no unverified send_message tasks left to prove.";
+      return "Verify mode had no unverified outbound copy send_message tasks left to prove.";
     }
     if (sendMode !== "verify") {
       const sendCircuitBreaker = getSendCircuitBreaker(hostState, now);
@@ -1511,13 +1570,13 @@ function executeTask(task, preflight, options = {}, executionContext = null) {
     }
 
     if (task.kind === "send_message") {
-      const rolloutBlockReason = shouldBypassAutomationRolloutGate(task)
-        ? null
-        : getInboundAutomationRolloutBlockReason(
+      const rolloutBlockReason = isInboundAutomationRolloutGatedSendTask(task)
+        ? getInboundAutomationRolloutBlockReason(
           options.automationWarnings ?? [],
           typeof task?._selectedSendMode === "string" ? task._selectedSendMode : options.sendMode ?? "live",
           options.automationHealthWarnings ?? [],
-        );
+        )
+        : null;
       if (rolloutBlockReason) {
         return {
           ...base,
@@ -2199,13 +2258,11 @@ function runInboundIdentityResolutionTask(task) {
     for (const updatedObservation of applied.updatedObservations) {
       upsertInboundObservation(updatedObservation);
     }
-    return {
-      status: "blocked",
-      detail: {
-        reason,
-        identityResolutionStatus: "blocked",
-      },
-    };
+    const nextDueAt = resolveInboundIdentityResolutionRetryDueAt(applied.updatedObservations, observation);
+    return buildWaitingInboundIdentityResolutionResult({
+      reason,
+      identityResolutionStatus: "blocked",
+    }, nextDueAt);
   }
 
   const resolution = normalizeInboundIdentityResolutionResult(rawResolution);
@@ -2226,17 +2283,43 @@ function runInboundIdentityResolutionTask(task) {
     upsertInboundObservation(updatedObservation);
   }
 
-  return {
-    status: resolution.status === "blocked" ? "blocked" : "completed",
-    detail: {
-      reason: resolution.reason ?? null,
-      identityResolutionStatus: resolution.status,
-      matchedObservationCount: applied.updatedObservations.length,
-      linkedinProfileUrl: resolution.linkedinProfileUrl ?? null,
-      linkedinPublicId: resolution.linkedinPublicId ?? null,
-      companyDomain: resolution.companyDomain ?? null,
-    },
+  const resultDetail = {
+    reason: resolution.reason ?? null,
+    identityResolutionStatus: resolution.status,
+    matchedObservationCount: applied.updatedObservations.length,
+    linkedinProfileUrl: resolution.linkedinProfileUrl ?? null,
+    linkedinPublicId: resolution.linkedinPublicId ?? null,
+    companyDomain: resolution.companyDomain ?? null,
   };
+  if (resolution.status === "blocked") {
+    const nextDueAt = resolveInboundIdentityResolutionRetryDueAt(applied.updatedObservations, observation);
+    return buildWaitingInboundIdentityResolutionResult(resultDetail, nextDueAt);
+  }
+
+  return {
+    status: "completed",
+    detail: resultDetail,
+  };
+}
+
+/**
+ * @param {any[]} updatedObservations
+ * @param {any} seedObservation
+ */
+function resolveInboundIdentityResolutionRetryDueAt(updatedObservations, seedObservation) {
+  const seedId = normalizeNullableString(seedObservation?.id);
+  const candidate = (updatedObservations ?? []).find((observation) => observation?.id === seedId)
+    ?? (updatedObservations ?? [])[0]
+    ?? seedObservation
+    ?? null;
+  if (!candidate) {
+    return null;
+  }
+  const nextDueAt = computeInboundIdentityResolutionDueAt(candidate, new Date().toISOString());
+  if (!nextDueAt) {
+    return null;
+  }
+  return Date.parse(nextDueAt) > Date.now() ? nextDueAt : null;
 }
 
 /** @param {any} task */
@@ -2794,8 +2877,15 @@ export function runSendTask(task, dependencies = {}) {
     task.prospectId,
     "--surface",
     task.surface,
+    ...(dryRun ? ["--ignore-dispatch-gate"] : []),
     "--json",
   ]);
+  if (handoff.status === "waiting") {
+    return {
+      status: "waiting",
+      detail: buildBlockedSendHandoffDetail(handoff),
+    };
+  }
   if (handoff.status !== "ready") {
     return {
       status: "blocked",
@@ -2817,7 +2907,7 @@ export function runSendTask(task, dependencies = {}) {
     };
   }
 
-  const directUnipileSendResult = !dryRun && shouldAttemptDirectUnipileConnectionRequestSend(handoff)
+  const directUnipileSendResult = !dryRun && shouldAttemptDirectUnipileSend(handoff)
     ? runLinkedinSendWithUnipileImpl(handoff, {
         codexHome,
         allowDirectUnipileHttp: true,
@@ -2836,15 +2926,42 @@ export function runSendTask(task, dependencies = {}) {
       },
     };
   }
+  if (directUnipileSendResult?.status === "unavailable") {
+    const handledUnavailable = maybeHandleUnavailableLinkedinPublicEngagementTask(task, handoff, directUnipileSendResult, {
+      dryRun,
+      runShellText: runShellTextImpl,
+    });
+    if (handledUnavailable) {
+      return {
+        ...handledUnavailable,
+        detail: {
+          ...handledUnavailable.detail,
+          transport: "unipile_http_same_credentials",
+          responseStatus: directUnipileSendResult.responseStatus ?? null,
+        },
+      };
+    }
+  }
   const directFallbackDetail = buildDirectUnipileSendFallbackDetail(directUnipileSendResult);
 
-  const result = runConnectorCodexTaskImpl({
-    prompt: buildSendPrompt(handoff, { dryRun }),
-    outputName: `send-${task.motionId}-${task.prospectId}-${task.surface}.json`,
-    timeoutMs: BROWSER_TIMEOUT_MS,
-    enabledPlugins: resolveCodexConnectorPluginIds(handoff.connector ?? handoff.channel ?? null),
-    enabledMcpServers: resolveCodexConnectorMcpServerIds(handoff.connector ?? handoff.channel ?? null),
-  });
+  let result;
+  try {
+    result = runConnectorCodexTaskImpl({
+      prompt: buildSendPrompt(handoff, { dryRun }),
+      outputName: `send-${task.motionId}-${task.prospectId}-${task.surface}.json`,
+      timeoutMs: BROWSER_TIMEOUT_MS,
+      enabledPlugins: resolveCodexConnectorPluginIds(handoff.connector ?? handoff.channel ?? null),
+      enabledMcpServers: resolveCodexConnectorMcpServerIds(handoff.connector ?? handoff.channel ?? null),
+    });
+  } catch (error) {
+    return {
+      status: "failed",
+      detail: {
+        reason: error instanceof Error ? error.message : String(error),
+        ...directFallbackDetail,
+      },
+    };
+  }
 
   if (dryRun && (result.status === "ready_to_send" || result.status === "sent")) {
     return {
@@ -2869,7 +2986,10 @@ export function runSendTask(task, dependencies = {}) {
   if (handledUnavailable) {
     return handledUnavailable;
   }
-  const handledPublicUnavailable = maybeHandleUnavailableLinkedinPublicEngagementTask(task, handoff, result, { dryRun });
+  const handledPublicUnavailable = maybeHandleUnavailableLinkedinPublicEngagementTask(task, handoff, result, {
+    dryRun,
+    runShellText: runShellTextImpl,
+  });
   if (handledPublicUnavailable) {
     return handledPublicUnavailable;
   }
@@ -2897,8 +3017,8 @@ export function runSendTask(task, dependencies = {}) {
 }
 
 /** @param {any} handoff */
-function shouldAttemptDirectUnipileConnectionRequestSend(handoff) {
-  return handoff?.action === "send_connection_request"
+function shouldAttemptDirectUnipileSend(handoff) {
+  return ["send_connection_request", "like_post", "create_comment_reaction"].includes(String(handoff?.action ?? ""))
     && handoff?.channel === "linkedin"
     && normalizeConnectorPluginKey(handoff?.connector) === "unipile"
     && usesConnectorNativeSend(handoff);
@@ -2931,7 +3051,7 @@ function buildDispatchGateBlockedSendResult(handoff) {
   const gate = handoff?.dispatchGate ?? null;
   if (!gate || gate.status === "allow") return null;
   return {
-    status: "blocked",
+    status: gate.status === "wait" ? "waiting" : "blocked",
     detail: buildBlockedSendHandoffDetail(handoff),
   };
 }
@@ -3129,7 +3249,7 @@ function maybeHandleAlreadyPendingLinkedinConnectionRequestTask(task, handoff, r
  * @param {any} task
  * @param {any} handoff
  * @param {any} result
- * @param {{ dryRun?: boolean }} [options]
+ * @param {{ dryRun?: boolean, runShellText?: ((command: string) => string) | null }} [options]
  */
 function maybeHandleUnavailableLinkedinPublicEngagementTask(task, handoff, result, options = {}) {
   if (options.dryRun === true) {
@@ -3146,7 +3266,8 @@ function maybeHandleUnavailableLinkedinPublicEngagementTask(task, handoff, resul
     return null;
   }
 
-  runShellText(task.unavailableWriteback);
+  const runShellTextImpl = options.runShellText ?? runShellText;
+  runShellTextImpl(task.unavailableWriteback);
   return {
     status: "completed",
     detail: {
@@ -3796,6 +3917,239 @@ export function buildCodexTaskExecOptions(input) {
 }
 
 /**
+ * @param {Record<string, any>} env
+ */
+function serializeProcessEnv(env) {
+  return Object.fromEntries(
+    Object.entries(env)
+      .filter(([, value]) => value !== null && value !== undefined)
+      .map(([key, value]) => [key, String(value)])
+  );
+}
+
+const BOUNDED_PROCESS_RUNNER_SOURCE = `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const specPath = process.argv[2];
+const spec = JSON.parse(fs.readFileSync(specPath, "utf8"));
+const startedAt = Date.now();
+const timeoutMs = Number.isFinite(Number(spec.timeoutMs)) && Number(spec.timeoutMs) > 0
+  ? Math.floor(Number(spec.timeoutMs))
+  : 1;
+
+function writeResult(result) {
+  fs.writeFileSync(spec.resultPath, JSON.stringify({
+    ...result,
+    elapsedMs: Date.now() - startedAt,
+  }, null, 2));
+}
+
+function killChildGroup(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try { process.kill(-pid, "SIGKILL"); } catch {}
+  try { process.kill(pid, "SIGKILL"); } catch {}
+}
+
+let stdinFd = null;
+let stdoutFd = null;
+let stderrFd = null;
+let child = null;
+let timedOut = false;
+let settled = false;
+
+function closeFd(fd) {
+  if (fd === null || fd === undefined) return;
+  try { fs.closeSync(fd); } catch {}
+}
+
+try {
+  stdinFd = fs.openSync(spec.stdinPath, "r");
+  stdoutFd = fs.openSync(spec.stdoutPath, "w");
+  stderrFd = fs.openSync(spec.stderrPath, "w");
+  child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
+    env: spec.env,
+    stdio: [stdinFd, stdoutFd, stderrFd],
+    detached: true,
+  });
+} catch (error) {
+  closeFd(stdinFd);
+  closeFd(stdoutFd);
+  closeFd(stderrFd);
+  writeResult({
+    status: "spawn_error",
+    error: error instanceof Error ? error.message : String(error),
+    timedOut: false,
+  });
+  process.exit(1);
+}
+
+const timer = setTimeout(() => {
+  timedOut = true;
+  killChildGroup(child?.pid);
+}, timeoutMs);
+
+child.on("error", (error) => {
+  if (settled) return;
+  settled = true;
+  clearTimeout(timer);
+  closeFd(stdinFd);
+  closeFd(stdoutFd);
+  closeFd(stderrFd);
+  writeResult({
+    status: "error",
+    error: error instanceof Error ? error.message : String(error),
+    timedOut,
+  });
+  process.exit(timedOut ? 124 : 1);
+});
+
+child.on("exit", (code, signal) => {
+  if (settled) return;
+  settled = true;
+  clearTimeout(timer);
+  closeFd(stdinFd);
+  closeFd(stdoutFd);
+  closeFd(stderrFd);
+  writeResult({
+    status: timedOut ? "timeout" : "exited",
+    code,
+    signal,
+    timedOut,
+  });
+  if (timedOut) {
+    process.exit(124);
+  }
+  process.exit(code === null ? 1 : code);
+});
+`;
+
+/**
+ * @param {{
+ *   command: string,
+ *   args: string[],
+ *   cwd: string,
+ *   env: Record<string, any>,
+ *   stdinText: string,
+ *   timeoutMs: number,
+ *   tempDir: string,
+ * }} input
+ */
+export function runBoundedSubprocessWithWatchdog(input) {
+  const timeoutMs = normalizePositiveInteger(input.timeoutMs, 1);
+  const promptPath = path.join(input.tempDir, "prompt.txt");
+  const stdoutPath = path.join(input.tempDir, "codex.stdout.log");
+  const stderrPath = path.join(input.tempDir, "codex.stderr.log");
+  const resultPath = path.join(input.tempDir, "bounded-process-result.json");
+  const runnerPath = path.join(input.tempDir, "bounded-process-runner.mjs");
+  const specPath = path.join(input.tempDir, "bounded-process-spec.json");
+
+  fs.writeFileSync(promptPath, input.stdinText);
+  fs.writeFileSync(runnerPath, BOUNDED_PROCESS_RUNNER_SOURCE);
+  fs.writeFileSync(specPath, JSON.stringify({
+    command: input.command,
+    args: input.args,
+    cwd: input.cwd,
+    env: serializeProcessEnv(input.env),
+    stdinPath: promptPath,
+    stdoutPath,
+    stderrPath,
+    resultPath,
+    timeoutMs,
+  }, null, 2));
+
+  const startedAt = Date.now();
+  try {
+    execFileSync(process.execPath, [runnerPath, specPath], {
+      cwd: input.cwd,
+      env: process.env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: timeoutMs + 15_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch (error) {
+    const result = readOptionalJsonFile(resultPath);
+    const stdout = readOptionalTextFile(stdoutPath);
+    const stderr = readOptionalTextFile(stderrPath);
+    const elapsedMs = Number.isFinite(result?.elapsedMs) ? result.elapsedMs : Date.now() - startedAt;
+    const timedOut = result?.timedOut === true
+      || result?.status === "timeout"
+      || (error instanceof Error && /ETIMEDOUT/i.test(error.message));
+    throw Object.assign(new Error(buildBoundedSubprocessErrorMessage({
+      error,
+      result,
+      stdout,
+      stderr,
+      timeoutMs,
+      elapsedMs,
+      timedOut,
+    })), {
+      stdout,
+      stderr,
+      result,
+      elapsedMs,
+      timeoutMs,
+      timedOut,
+    });
+  }
+
+  return {
+    stdout: readOptionalTextFile(stdoutPath),
+    stderr: readOptionalTextFile(stderrPath),
+    result: readOptionalJsonFile(resultPath),
+  };
+}
+
+/**
+ * @param {string} filePath
+ */
+function readOptionalTextFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * @param {string} filePath
+ */
+function readOptionalJsonFile(filePath) {
+  try {
+    return parseJsonLoose(fs.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {{
+ *   error: unknown,
+ *   result: any,
+ *   stdout: string,
+ *   stderr: string,
+ *   timeoutMs: number,
+ *   elapsedMs: number,
+ *   timedOut: boolean,
+ * }} input
+ */
+function buildBoundedSubprocessErrorMessage(input) {
+  const status = input.timedOut
+    ? `timed out after ${input.elapsedMs}ms (configured ${input.timeoutMs}ms)`
+    : `failed after ${input.elapsedMs}ms`;
+  const resultDetail = input.result
+    ? `runner=${truncate(JSON.stringify(input.result), 500)}`
+    : null;
+  const stderr = input.stderr.trim() ? `stderr=${truncate(input.stderr, 1000)}` : null;
+  const stdout = input.stdout.trim() ? `stdout=${truncate(input.stdout, 1000)}` : null;
+  const error = input.error instanceof Error ? input.error.message : String(input.error);
+  return [status, resultDetail, stderr, stdout, error].filter(Boolean).join(" | ");
+}
+
+/**
  * @param {{
  *   prompt: string,
  *   schema: unknown,
@@ -3821,10 +4175,17 @@ function runCodexTask(input) {
   const args = buildCodexTaskArgs(input, outputPath, schemaPath);
 
   try {
-    execFileSync(CODEX_BIN, args, buildCodexTaskExecOptions(input));
+    runBoundedSubprocessWithWatchdog({
+      command: CODEX_BIN,
+      args,
+      cwd: ROOT,
+      env: buildCodexTaskEnv(process.env),
+      stdinText: input.prompt,
+      timeoutMs: input.timeoutMs,
+      tempDir,
+    });
   } catch (error) {
-    const message = buildExecErrorMessage(error);
-    throw new Error(`Codex task failed: ${message}`);
+    throw new Error(`Codex task failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   const raw = fs.readFileSync(outputPath, "utf8");

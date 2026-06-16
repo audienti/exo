@@ -85,6 +85,9 @@ export function applyClaimTargetAccountPacket(rawAccount, input, now) {
   if (existingClaim) {
     throw new Error(`${formatPacketKind(existingClaim.kind)} packet is already claimed by ${existingClaim.workerLabel ?? "another worker"}.`);
   }
+  if (account.packetState?.status && account.packetState.status !== "returned") {
+    throw new Error(`${formatPacketKind(account.packetState.kind)} packet is already ${account.packetState.status}.`);
+  }
 
   const queueStatus = account.queueState?.status ?? "discovered";
 
@@ -208,6 +211,9 @@ export function applyClaimMotionProspectPacket(rawProspect, input, now) {
   const existingClaim = prospect.packetState?.status === "claimed" ? prospect.packetState : null;
   if (existingClaim) {
     throw new Error(`${formatPacketKind(existingClaim.kind)} packet is already claimed by ${existingClaim.workerLabel ?? "another worker"}.`);
+  }
+  if (prospect.packetState?.status && prospect.packetState.status !== "returned") {
+    throw new Error(`${formatPacketKind(prospect.packetState.kind)} packet is already ${prospect.packetState.status}.`);
   }
 
   const queueStatus = prospect.queueState?.status ?? "selected";

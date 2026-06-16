@@ -197,11 +197,14 @@ test("prospect detail exposes governed lifecycle and packet review actions", () 
   assert.match(html, /Lifecycle/);
   assert.match(html, /data-exo-writer="setProspectDisposition"/);
   assert.match(html, /data-exo-fields="lifecycleReason:reason"/);
+  assert.match(html, /name="lifecycleReason"[^>]*hidden[^>]*aria-hidden="true"/);
+  assert.match(html, /data-exo-reveal-field="lifecycleReason"/);
   assert.match(html, /Nurture/);
   assert.match(html, /Not a fit/);
   assert.match(html, /Exhausted/);
   assert.match(html, /Packet review/);
   assert.match(html, /data-exo-writer="resolvePacketReview"/);
+  assert.match(html, /Return note/);
   assert.match(html, /Accept packet/);
   assert.match(html, /Return packet/);
   assert.match(html, /\.lifecycle-panel\{[^}]*max-width:none\}/s);

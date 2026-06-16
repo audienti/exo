@@ -21,6 +21,7 @@ import {
   needsInboundIdentityResolution,
   resolveManagedLinkedinAccount,
 } from "./inbound-identity-resolution.js";
+import { buildInboundObservationLinkContext } from "./resolve-inbound-observation-links.js";
 import { summarizeSentInvitationSurfaceReconciliation } from "./connection-request-reconciliation.js";
 
 /**
@@ -54,19 +55,8 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
       .filter((item) => item && typeof item === "object" && !Array.isArray(item))
       .map((item) => [item.id, item])
   );
-  const prospectContextById = new Map();
-
-  for (const motion of motions) {
-    for (const account of motion.targetMap.accounts) {
-      for (const prospect of account.prospects) {
-        prospectContextById.set(prospect.id, {
-          motion,
-          account,
-          prospect
-        });
-      }
-    }
-  }
+  const linkContext = buildInboundObservationLinkContext(motions);
+  const prospectContextById = linkContext.prospectContextById;
 
   const syncView = buildUserInboundSyncView(rawUser, {
     capability: options.capability ?? null
@@ -157,6 +147,7 @@ export function buildInboundReviewView(rawUser, rawObservations, rawMotions, raw
       motions,
       companiesById,
       prospectContextById,
+      linkContext,
       { backgroundIdentityResolutionAvailable },
     ))
     .sort(compareReviewItems);
@@ -313,10 +304,11 @@ function surfaceNeedsReconciliation(surface, missingObservationCount) {
  * @param {import("../schema/motion.js").motionSchema._type[]} motions
  * @param {Map<string, any>} companiesById
  * @param {Map<string, { motion: import("../schema/motion.js").motionSchema._type, account: any, prospect: any }>} prospectContextById
+ * @param {ReturnType<typeof buildInboundObservationLinkContext>} linkContext
  * @param {{ backgroundIdentityResolutionAvailable?: boolean }} [options]
  */
-function buildReviewItem(observation, motions, companiesById, prospectContextById, options = {}) {
-  const workspaceContext = resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById);
+function buildReviewItem(observation, motions, companiesById, prospectContextById, linkContext, options = {}) {
+  const workspaceContext = resolveInboundWorkspaceContext(observation, motions, companiesById, prospectContextById, linkContext);
   const { claimState, motion, account, company, prospect } = workspaceContext;
   const ageDays = calculateAgeDays(observation.observedAt);
   if (claimState === "claimed_elsewhere") {

@@ -2,6 +2,9 @@
 
 import { createHash } from "node:crypto";
 
+import { inspectAgentRunLock } from "./agent-run-lock.js";
+import { AGENT_EXECUTION_LANES, getTaskExecutionLane } from "./agent-task-lanes.js";
+
 export const BROWSER_TASK_LANE_BY_KIND = {
 };
 
@@ -85,6 +88,16 @@ export function normalizeAgentHostState(state) {
     lastTaskFingerprint: normalizeReason(state?.sendCircuitBreaker?.lastTaskFingerprint),
     lastTaskLabel: normalizeReason(state?.sendCircuitBreaker?.lastTaskLabel),
   };
+  if (shouldClearScopeLocalSendCircuitBreaker(normalized.sendCircuitBreaker?.reason)) {
+    normalized.sendCircuitBreaker = {
+      consecutiveFailures: 0,
+      unavailableUntil: null,
+      reason: null,
+      lastFailureAt: null,
+      lastTaskFingerprint: null,
+      lastTaskLabel: null,
+    };
+  }
 
   normalized.canaryCooldown = {
     unavailableUntil: normalizeIsoDatetime(state?.canaryCooldown?.unavailableUntil),
@@ -192,6 +205,46 @@ export function pruneExpiredBrowserBackoffs(state, now = new Date().toISOString(
 }
 
 /**
+ * Drop task leases that no longer have a live runner lock behind them. This
+ * prevents stale checkout entries from keeping the UI in a false "active"
+ * state after a crashed or completed pass failed to release its lease.
+ *
+ * @param {any} state
+ * @param {{ stateDir?: string | null, now?: string }} [input]
+ */
+export function pruneInactiveTaskLeases(state, input = {}) {
+  const now = input.now ?? new Date().toISOString();
+  const normalized = pruneExpiredBrowserBackoffs(state, now);
+  const stateDir = typeof input.stateDir === "string" && input.stateDir.trim().length
+    ? input.stateDir.trim()
+    : null;
+  if (!stateDir || !normalized.taskLeases.length) {
+    return normalized;
+  }
+
+  const sharedLock = inspectAgentRunLock({ stateDir });
+  const laneLocks = new Map(
+    AGENT_EXECUTION_LANES.map((lane) => [lane, inspectAgentRunLock({ stateDir, lane })]),
+  );
+  const hasLaneLockArtifacts = [...laneLocks.values()].some((lock) => lock.exists);
+
+  normalized.taskLeases = normalized.taskLeases.filter((entry) => {
+    const lane = getTaskExecutionLane(entry?.taskKind);
+    if (!lane) {
+      return sharedLock.active;
+    }
+    const laneLock = laneLocks.get(lane);
+    if (laneLock?.active) {
+      return true;
+    }
+    return sharedLock.active && !hasLaneLockArtifacts;
+  });
+  normalized.taskLeases = keepNewestTaskLeasePerLane(normalized.taskLeases);
+
+  return normalized;
+}
+
+/**
  * @param {any} state
  * @param {string | null | undefined} taskKind
  * @param {string} [now]
@@ -263,6 +316,102 @@ export function listActiveBrowserBackoffs(state) {
       unavailableUntil: entry.unavailableUntil,
       reason: entry.reason,
     }));
+}
+
+/**
+ * Active-only view of the send circuit breaker, read straight off raw host
+ * state for the UI hold-detection path. Returns null when no breaker is
+ * currently tripped. (Distinct from `getSendCircuitBreaker`, which normalizes
+ * and always returns a full `{active,...}` record.)
+ *
+ * @param {any} hostState
+ * @param {string | null | undefined} [checkedAt]
+ * @returns {{ unavailableUntil: string, reason: string | null } | null}
+ */
+export function activeSendCircuitBreaker(hostState, checkedAt = null) {
+  const unavailableUntil = typeof hostState?.sendCircuitBreaker?.unavailableUntil === "string"
+    ? hostState.sendCircuitBreaker.unavailableUntil.trim()
+    : "";
+  if (!unavailableUntil) return null;
+  const untilMs = Date.parse(unavailableUntil);
+  if (!Number.isFinite(untilMs)) return null;
+  const nowMs = checkedAt ? Date.parse(checkedAt) : Date.now();
+  if (!Number.isFinite(nowMs) || nowMs >= untilMs) return null;
+  return {
+    unavailableUntil,
+    reason: typeof hostState?.sendCircuitBreaker?.reason === "string"
+      ? hostState.sendCircuitBreaker.reason.trim() || null
+      : null,
+  };
+}
+
+/**
+ * Highest-priority active agent hold (browser backoff, then send circuit
+ * breaker) for a runtime that still has queued work, or null when nothing is
+ * holding the queue. Shared by the operator view-builder and the header pill so
+ * both classify holds identically.
+ *
+ * @param {any} runtime
+ * @param {number} queueCount
+ * @param {string | null} [checkedAt]
+ */
+export function findActiveAgentHold(runtime, queueCount, checkedAt = null) {
+  if (!runtime || queueCount <= 0) return null;
+  const active = listActiveBrowserBackoffs(runtime.hostState ?? null);
+  const browserHold = active.find((entry) => entry.lane === "execution")
+    ?? active.find((entry) => entry.lane === "retrieval")
+    ?? null;
+  if (browserHold) {
+    return {
+      kind: "browser_backoff",
+      lane: browserHold.lane ?? null,
+      unavailableUntil: browserHold.unavailableUntil ?? null,
+      reason: browserHold.reason ?? null,
+    };
+  }
+  const sendCircuitBreaker = activeSendCircuitBreaker(runtime.hostState ?? null, checkedAt);
+  if (sendCircuitBreaker) {
+    return {
+      kind: "send_circuit_breaker",
+      lane: "execution",
+      unavailableUntil: sendCircuitBreaker.unavailableUntil,
+      reason: sendCircuitBreaker.reason,
+    };
+  }
+  return null;
+}
+
+/**
+ * Render an agent hold (from `findActiveAgentHold`) into the operator-facing
+ * sentence shown on the queue page and header pill.
+ *
+ * @param {{ kind?: string | null, lane?: string | null, reason?: string | null }} backoff
+ * @param {string | null} cadence
+ * @param {boolean} schedulerLoaded
+ * @param {boolean} [passActive]
+ */
+export function buildAgentBackoffDetail(backoff, cadence, schedulerLoaded, passActive = false) {
+  const laneLabel = backoff?.kind === "send_circuit_breaker"
+    ? "Send work"
+    : backoff?.lane === "retrieval"
+      ? "Inbound refresh work"
+      : "Send work";
+  const reason = typeof backoff?.reason === "string" && backoff.reason.trim()
+    ? backoff.reason.trim()
+    : null;
+  const schedulerLabel = schedulerLoaded
+    ? passActive
+      ? "Background draining is active."
+      : cadence
+      ? `Background draining is enabled ${cadence}.`
+      : "Background draining is enabled."
+    : "No pass is running right now.";
+  const holdLabel = backoff?.kind === "send_circuit_breaker"
+    ? `${laneLabel} is paused right now.`
+    : `${laneLabel} is blocked right now.`;
+  return reason
+    ? `${schedulerLabel} ${holdLabel} ${reason}`
+    : `${schedulerLabel} ${holdLabel}`;
 }
 
 /**
@@ -715,6 +864,15 @@ function inferLegacyBackoffLanes(reason) {
   return ["retrieval", "execution"];
 }
 
+/** @param {string | null} reason */
+function shouldClearScopeLocalSendCircuitBreaker(reason) {
+  if (!reason) return false;
+  const lower = reason.toLowerCase();
+  return (lower.includes("multiple gmail inboxes are mapped") && lower.includes("pick one exact inbox"))
+    || lower.includes("connection request is already pending")
+    || lower.includes("already connected");
+}
+
 /** @param {unknown} value */
 function normalizeIsoDatetime(value) {
   if (typeof value !== "string" || !value.trim().length) return null;
@@ -826,4 +984,21 @@ function normalizeMaintenanceTaskCooldownEntry(entry) {
 /** @param {unknown} value */
 function normalizeIdentity(value) {
   return typeof value === "string" && value.trim().length ? value.trim() : null;
+}
+
+/** @param {any[]} taskLeases */
+function keepNewestTaskLeasePerLane(taskLeases) {
+  const newestByLane = new Map();
+  for (const entry of taskLeases) {
+    const lane = getTaskExecutionLane(entry?.taskKind) ?? "__shared__";
+    const existing = newestByLane.get(lane);
+    if (!existing) {
+      newestByLane.set(lane, entry);
+      continue;
+    }
+    if (String(entry?.acquiredAt ?? "") >= String(existing?.acquiredAt ?? "")) {
+      newestByLane.set(lane, entry);
+    }
+  }
+  return [...newestByLane.values()];
 }

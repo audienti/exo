@@ -307,6 +307,187 @@ test("runLinkedinSendWithUnipile returns provider failure without local writebac
   assert.match(result.reason ?? "", /send_connection_request through Unipile failed \(HTTP 429\): Provider rate limit/i);
 });
 
+test("runLinkedinSendWithUnipile reacts to a LinkedIn post through Unipile", () => {
+  const seenRequests = [];
+  const result = runLinkedinSendWithUnipile(
+    {
+      action: "like_post",
+      channel: "linkedin",
+      connector: "codex:unipile",
+      senderAccount: {
+        providerAccountId: "provider-linkedin-1",
+      },
+      publicTarget: {
+        url: "https://www.linkedin.com/posts/unipile_nocode-automation-solopreneurs-activity-7332661864792854528-hcGT",
+        targetKind: "post",
+      },
+    },
+    {
+      baseUrl: TEST_UNIPILE_BASE_URL,
+      apiKey: "test-key",
+      httpGetImpl: (url) => {
+        seenRequests.push({ method: "GET", url });
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            object: "Post",
+            social_id: "urn:li:activity:7332661864792854528",
+            permissions: {
+              can_react: true,
+            },
+          }),
+        };
+      },
+      httpPostImpl: (url, _headers, bodyText) => {
+        seenRequests.push({ method: "POST", url, body: JSON.parse(bodyText) });
+        return {
+          status: 201,
+          bodyText: JSON.stringify({
+            object: "Reaction",
+            id: "reaction-1",
+          }),
+        };
+      },
+    },
+  );
+
+  assert.equal(result.status, "sent");
+  assert.equal(result.provider, "unipile");
+  assert.equal(result.responseStatus, 201);
+  assert.equal(result.usedTargetUrl, "https://www.linkedin.com/posts/unipile_nocode-automation-solopreneurs-activity-7332661864792854528-hcGT");
+  assert.equal(new URL(seenRequests[0]?.url ?? "").pathname, "/api/v1/posts/7332661864792854528");
+  assert.equal(new URL(seenRequests[0]?.url ?? "").searchParams.get("account_id"), "provider-linkedin-1");
+  assert.equal(new URL(seenRequests[1]?.url ?? "").pathname, "/api/v1/posts/reaction");
+  assert.deepEqual(seenRequests[1]?.body, {
+    account_id: "provider-linkedin-1",
+    post_id: "urn:li:activity:7332661864792854528",
+    reaction_type: "like",
+  });
+});
+
+test("runLinkedinSendWithUnipile resolves and reacts to a LinkedIn comment through Unipile", () => {
+  const seenRequests = [];
+  const result = runLinkedinSendWithUnipile(
+    {
+      action: "create_comment_reaction",
+      channel: "linkedin",
+      connector: "codex:unipile",
+      senderAccount: {
+        providerAccountId: "provider-linkedin-1",
+      },
+      publicTarget: {
+        url: "https://www.linkedin.com/posts/unipile_nocode-automation-solopreneurs-activity-7332661864792854528-hcGT",
+        targetKind: "comment",
+        summary: "Commented asking for an email contact for courier services.",
+        snippet: "Asked for an email contact for a courier services business opportunity.",
+      },
+    },
+    {
+      baseUrl: TEST_UNIPILE_BASE_URL,
+      apiKey: "test-key",
+      httpGetImpl: (url) => {
+        seenRequests.push({ method: "GET", url });
+        if (new URL(url).pathname.endsWith("/comments")) {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              object: "CommentList",
+              items: [
+                {
+                  id: "comment-not-it",
+                  text: "Great team in BNE!",
+                },
+                {
+                  id: "comment-target-1",
+                  text: "Kindly share mail ID need to connect for business opportunity with our company for courier services.",
+                },
+              ],
+            }),
+          };
+        }
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            object: "Post",
+            social_id: "urn:li:activity:7332661864792854528",
+            permissions: {
+              can_react: true,
+            },
+          }),
+        };
+      },
+      httpPostImpl: (url, _headers, bodyText) => {
+        seenRequests.push({ method: "POST", url, body: JSON.parse(bodyText) });
+        return {
+          status: 201,
+          bodyText: JSON.stringify({
+            object: "Reaction",
+            id: "reaction-1",
+          }),
+        };
+      },
+    },
+  );
+
+  assert.equal(result.status, "sent");
+  assert.equal(result.commentId, "comment-target-1");
+  assert.equal(new URL(seenRequests[1]?.url ?? "").pathname, "/api/v1/posts/urn%3Ali%3Aactivity%3A7332661864792854528/comments");
+  assert.deepEqual(seenRequests[2]?.body, {
+    account_id: "provider-linkedin-1",
+    post_id: "urn:li:activity:7332661864792854528",
+    reaction_type: "like",
+    comment_id: "comment-target-1",
+  });
+});
+
+test("runLinkedinSendWithUnipile leaves ambiguous comment reactions to connector handoff", () => {
+  const result = runLinkedinSendWithUnipile(
+    {
+      action: "create_comment_reaction",
+      channel: "linkedin",
+      connector: "codex:unipile",
+      senderAccount: {
+        providerAccountId: "provider-linkedin-1",
+      },
+      publicTarget: {
+        url: "https://www.linkedin.com/posts/unipile_nocode-automation-solopreneurs-activity-7332661864792854528-hcGT",
+        targetKind: "comment",
+        snippet: "Asked about courier services business opportunity.",
+      },
+    },
+    {
+      baseUrl: TEST_UNIPILE_BASE_URL,
+      apiKey: "test-key",
+      httpGetImpl: (url) => {
+        if (new URL(url).pathname.endsWith("/comments")) {
+          return {
+            status: 200,
+            bodyText: JSON.stringify({
+              items: [
+                { id: "comment-1", text: "Courier services business opportunity." },
+                { id: "comment-2", text: "Courier services business opportunity." },
+              ],
+            }),
+          };
+        }
+        return {
+          status: 200,
+          bodyText: JSON.stringify({
+            social_id: "urn:li:activity:7332661864792854528",
+            permissions: { can_react: true },
+          }),
+        };
+      },
+      httpPostImpl: () => {
+        throw new Error("Ambiguous comment resolution must not post a reaction.");
+      },
+    },
+  );
+
+  assert.equal(result.status, "unsupported");
+  assert.match(result.reason ?? "", /matched multiple LinkedIn comments/i);
+});
+
 test("runLinkedinSendWithUnipile makes missing deterministic config loud before HTTP", () => {
   let httpCalled = false;
   const result = runLinkedinSendWithUnipile(
@@ -364,7 +545,7 @@ test("runLinkedinSendWithUnipile leaves non-connection sends to connector handof
   );
 
   assert.equal(result.status, "unsupported");
-  assert.match(result.reason ?? "", /only supports send_connection_request/i);
+  assert.match(result.reason ?? "", /supports send_connection_request and resolvable public LinkedIn reactions/i);
   assert.equal(httpCalled, false);
 });
 

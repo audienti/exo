@@ -125,12 +125,29 @@ export function renderAgentRuntimeMeta(runtime, options = {}) {
   if (!runtime) return "";
   const className = options.className ?? "nm-chips";
   const iconSize = Number.isFinite(options.iconSize) ? Number(options.iconSize) : 12;
+  const lastPassSummary = formatRuntimeLastPassSummary(runtime);
   const chips = [
     runtime.cadenceLabel ? `<span class="surface-ref">${iconSvg("clock", iconSize)}${escapeHtml(runtime.cadenceLabel)}</span>` : null,
     runtime.sendMode ? `<span class="cap-ref">${iconSvg("cpu", iconSize)}${escapeHtml(formatOperatorSendModeLabel(runtime.sendMode))}</span>` : null,
-    runtime.lastPassSummary ? `<span class="surface-ref">${iconSvg("spark", iconSize)}${escapeHtml(runtime.lastPassSummary)}</span>` : null,
+    lastPassSummary ? `<span class="surface-ref">${iconSvg("spark", iconSize)}${escapeHtml(lastPassSummary)}</span>` : null,
   ]
     .filter(Boolean)
     .join("");
   return chips ? `<div class="${className}">${chips}</div>` : "";
+}
+
+/**
+ * When a new pass is already draining the queue, label the prior pass as
+ * previous so the chrome does not imply the stale failure is the current
+ * runtime state.
+ *
+ * @param {import("../core/build-operator-view.js").OperatorAgentRuntime | null | undefined} runtime
+ */
+function formatRuntimeLastPassSummary(runtime) {
+  const summary = typeof runtime?.lastPassSummary === "string" ? runtime.lastPassSummary.trim() : "";
+  if (!summary) return null;
+  if (runtime?.state === "running") {
+    return summary.replace(/^Last pass\b/i, "Previous pass");
+  }
+  return summary;
 }
